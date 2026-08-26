@@ -16,7 +16,7 @@ Cwd must be inside one git repo. `git rev-parse --show-toplevel` must succeed. I
 
 ## Pass 1. Interview
 
-Read-only tools first (`read`, `grep`, `find`, `ls`, `bash`). Then write `.pi/jig/interview.md` that answers every question in [interview.md](references/interview.md), including the extra five (nouns, import rights, placement crimes, score [failure-modes.md](references/failure-modes.md), giant files / legacy / inline imports / `any`).
+Read-only tools first (`read`, `grep`, `find`, `ls`, `bash`). Skip `private_key.pem`, `public_key.pem`, `.env`, `auth.json`, and other key material. Then write `.pi/jig/interview.md` that answers every question in [interview.md](references/interview.md), including the extra five (nouns, import rights, placement crimes, score [failure-modes.md](references/failure-modes.md), giant files / legacy / inline imports / `any`).
 
 Score every failure id. `absent`, `present-unencoded`, or `already-guarded`. Cite `file:line` for `present-*`.
 

@@ -46,6 +46,6 @@ if [[ ${#parts[@]} -gt 0 ]]; then
 	flagstr="${parts[*]}"
 fi
 
-prompt="Read ${skill} in full, including references/interview.md, references/failure-modes.md, and references/lexicon-style.md. Then execute that skill in this git repo. Working tree: ${repo}. Flags: ${flagstr}. Do not git add, git commit, or git mv. Do not write .github/. Never apply refactor.md."
+prompt="Read ${skill} in full, including references/interview.md, references/failure-modes.md, and references/lexicon-style.md. Then execute that skill in this git repo. Working tree: ${repo}. Flags: ${flagstr}. Do not git add, git commit, or git mv. Do not write .github/. Never apply refactor.md. Do not read private_key.pem, public_key.pem, .env, auth.json, or other key material."
 
 exec "$PI" -p --approve --no-session --tools read,grep,find,ls,bash,write,edit "$prompt"
