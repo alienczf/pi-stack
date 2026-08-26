@@ -4,7 +4,7 @@ User-level overlay for [Pi](https://github.com/badlogic/pi-mono) plus two skills
 
 ## How to install
 
-Clone this repo, then run the installer from the checkout.
+Clone this repo, then run the installer from the checkout. If `PSTACK` is unset, the installer sparse-clones [pstack](https://github.com/cursor/plugins/tree/main/pstack) into `$HOME/.pistack`.
 
 ```bash
 git clone https://github.com/alienczf/pi-stack.git
@@ -22,19 +22,26 @@ curl -fsSL https://raw.githubusercontent.com/alienczf/pi-stack/main/install.sh
 
 The installer writes `$HOME/.pi/agent/`. It merges `defaultTools` and `skills` into `settings.json`. It never writes `auth.json`, `models-store.json`, `private/`, or `sessions/`. Existing keys stay, including `packages`, `subagents`, `defaultModel`, and `enabledModels`.
 
-Set `PSTACK` to a pstack clone. If unset, install looks only at `$HOME/src/pstack`.
+A second run with the same inputs leaves owned files unchanged. It does not `git pull` `$HOME/.pistack`. Update pstack yourself, then rerun install:
+
+```bash
+git -C ~/.pistack pull --ff-only
+./install.sh
+```
+
+To reuse a pstack tree you already have:
 
 ```bash
 PSTACK=/path/to/pstack ./install.sh
 ```
 
-A second run with the same inputs leaves owned files unchanged.
+Do not vendor pstack skill bodies into this repo. Point at a live clone. A forked copy drifts from upstream.
 
 ## How to fit a repo
 
 ```bash
 cd /path/to/repo
-PSTACK=/path/to/pstack /path/to/pi-stack/bin/jig.sh
+/path/to/pi-stack/bin/jig.sh
 ```
 
 Put the pi-stack `bin` directory on `PATH` if you want `jig.sh` as a command. Install also writes `$HOME/.pi/agent/bin/jig` as a wrapper.

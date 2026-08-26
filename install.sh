@@ -10,9 +10,13 @@ Merges defaultTools and skills into settings.json.
 Never writes auth.json, models-store.json, private/, or sessions/.
 Does not search for git repositories. Fit a repo later with jig.sh.
 
+If PSTACK is unset, uses $HOME/.pistack/pstack. Clones cursor/plugins
+(sparse, pstack only) into $HOME/.pistack when that tree is missing.
+
 Environment
-  HOME     install target (default is your home)
-  PSTACK   live pstack clone. If unset, $HOME/src/pstack.
+  HOME        install target (default is your home)
+  PSTACK      pstack tree with skills/poteto-mode/SKILL.md
+  PSTACK_GIT  git URL for the clone (default https://github.com/cursor/plugins.git)
 EOF
 }
 
@@ -36,13 +40,27 @@ if [[ ! -f "$overlay/APPEND_SYSTEM.md" ]]; then
 	exit 1
 fi
 
+default_root="${HOME}/.pistack"
+default_pstack="${default_root}/pstack"
+pstack_git="${PSTACK_GIT:-https://github.com/cursor/plugins.git}"
 pstack="${PSTACK:-}"
 if [[ -z "$pstack" ]]; then
-	if [[ -f "${HOME}/src/pstack/skills/poteto-mode/SKILL.md" ]]; then
-		pstack="${HOME}/src/pstack"
+	if [[ -f "${default_pstack}/skills/poteto-mode/SKILL.md" ]]; then
+		pstack="$default_pstack"
 	else
-		printf 'PSTACK is unset. Export PSTACK to a pstack clone, or clone it at %s/src/pstack\n' "$HOME" >&2
-		exit 1
+		if [[ -e "$default_root" && ! -d "$default_root/.git" ]]; then
+			printf '%s exists and is not a git clone. Set PSTACK or remove it.\n' "$default_root" >&2
+			exit 1
+		fi
+		if ! command -v git >/dev/null 2>&1; then
+			printf 'git is required to clone pstack into %s, or set PSTACK\n' "$default_root" >&2
+			exit 1
+		fi
+		if [[ ! -d "$default_root/.git" ]]; then
+			git clone --depth 1 --filter=blob:none --sparse "$pstack_git" "$default_root"
+		fi
+		git -C "$default_root" sparse-checkout set pstack
+		pstack="$default_pstack"
 	fi
 fi
 if [[ ! -f "$pstack/skills/poteto-mode/SKILL.md" ]]; then

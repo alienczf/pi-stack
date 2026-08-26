@@ -34,6 +34,12 @@ printf '%s\n' "$help" | grep -qi trading && fail "install.sh --help must not nam
 if grep -qiE 'workspace|--repos|trading' install.sh; then
 	fail "install.sh source must not name workspace, --repos, or trading"
 fi
+if ! grep -q '.pistack' install.sh; then
+	fail "install.sh must clone into .pistack when PSTACK is unset"
+fi
+if ! grep -q 'git clone' install.sh; then
+	fail "install.sh must git clone pstack when the default tree is missing"
+fi
 if grep -R -E '/home/[^$]|workspace root' -- install.sh overlay skills/jig skills/cross-repo | grep -v '^Binary'; then
 	fail "hardcoded home path or workspace root in overlay files"
 fi
