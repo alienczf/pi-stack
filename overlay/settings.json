@@ -1,0 +1,4 @@
+{
+  "defaultTools": ["read", "write", "edit", "bash", "grep", "find", "ls"],
+  "skills": []
+}
