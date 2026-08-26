@@ -6,7 +6,10 @@ cd "$root"
 fail() { printf '%s\n' "$*" >&2; exit 1; }
 
 test -f skills/jig/SKILL.md || fail "missing skills/jig/SKILL.md"
-test -x bin/jig.sh || fail "bin/jig.sh must be executable"
+grep -q 'git rev-parse --show-toplevel' bin/jig.sh || fail "jig.sh must operate on git rev-parse --show-toplevel"
+if grep -qE 'find .*-name .git|workspace root|~/trading' bin/jig.sh; then
+	fail "jig.sh must not discover folder layout"
+fi
 grep -q 'disable-model-invocation: true' skills/jig/SKILL.md || fail "jig skill must disable model invocation"
 grep -q interview skills/jig/SKILL.md || fail "SKILL.md must mention interview"
 grep -q lexicon skills/jig/SKILL.md || fail "SKILL.md must mention lexicon"

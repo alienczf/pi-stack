@@ -1,25 +1,29 @@
 ---
 name: cross-repo
-description: Coordinate work across two or more git repos. One pi -p child per repo writes a report file. Parent owns briefs and synthesis, never child code. Use for /skill:cross-repo, two jigs, or a parent folder with more than one git root.
+description: Dispatch one pi -p per target listed in this git repo's registry.md or siblings.tsv. Parent owns briefs and synthesis, never child code. Use for /skill:cross-repo or a question that spans two git repos. Never auto-trigger.
 disable-model-invocation: true
 ---
 
 # Cross-repo
 
-You are the coordinator. You own briefs and the synthesis. You do not edit child trees.
+You are the coordinator in the current git repo. You own briefs and the synthesis. You do not edit other trees.
 
-This skill is for two or more git repos that must stay separate. Trading layouts often look like infra, research, and algo. Those domains do not share a jig. Do not copy nouns from one child into another.
+pi-stack does not know the user's folder layout. Targets come from a registry in this repository only.
 
 ## Dispatch
 
-1. Name each child git repo. The user listed them, or they sit one level under the current folder as their own `.git` roots. Do not walk `$HOME`.
-2. Write one brief per child under `.pi/cross-repo/` (create it at the parent). If that directory is not writable, write under `/tmp/pi-stack-cross-repo/`.
-3. Start one child per repo with `pi -p`. Set cwd with `cd "$repo"`. Do not pass `pi -c`. That flag continues a session.
-4. Give each child write tools only for its report file. The report path is `.pi/cross-repo/<name>.md` in the parent, or `/tmp/pi-stack-cross-repo/<name>.md`.
-5. Wait for every report. Then synthesize in `.pi/cross-repo/synthesis.md`. Quote report paths. Do not paste child trees.
+1. `git rev-parse --show-toplevel` must succeed. If it fails, stop.
+2. Look for `registry.md` or `siblings.tsv` at that git root, or `.pi/registry.md` / `.pi/siblings.tsv` under it. Do not read `../AGENTS.md`. Do not walk parent directories. Do not `find` sibling `.git` dirs.
+3. If none of those files exist, stop. Say there is no registry in this git repo. Tell the user to add `registry.md` here with explicit name and path rows. Do not invent paths.
+4. Parse only rows that name a path. Skip placeholders that still say `/absolute/path/to/`. If every row is a placeholder, stop and say the registry has no real targets.
+5. For each remaining row, start one child:
+   `cd "$path" && pi -p --approve --no-session --tools read,grep,find,ls,bash --append-system-prompt "Follow ./AGENTS.md in this repo only. Do not edit. Write the report to the path in the prompt using bash redirection."`
+   The report path is an absolute file under this coordinator repo, `.pi/cross-repo/<name>.md`. Create that directory first. The child may write only that file.
+6. Wait for every report. Synthesize in `.pi/cross-repo/synthesis.md` in this repo. Quote report paths. Do not paste child trees.
 
 ## Rules
 
-- Parent does not edit files inside a child git repo.
-- Each child reads its own jig and lexicon. A missing jig is a report finding, not a reason to invent a shared vocabulary.
+- Parent does not edit files inside a target git repo.
+- Each child reads its own jig. A missing jig is a report finding.
 - Stay in the foreground. Use tmux if a child must outlive one prompt. Do not background bash.
+- Never MCP.

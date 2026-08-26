@@ -8,11 +8,11 @@ Cite the source path when you recommend a fix so the next agent can read the rul
 
 | Id | Failure | What jig should look for | Recommendation shape |
 |---|---|---|---|
-| S1 | Mixing process rules with repo architecture | A parent AGENTS.md that contains coding standards | Split. Parent is a router. Child jig owns nouns and guards. |
+| S1 | Mixing process rules with repo architecture | Coding rules in a folder that is not a single product git root | Overlay is process. Each git repo has its own jig. |
 | S2 | Dumping a whole skill tree into discovery | `settings.json` skills pointing at a skills/ root | Allowlist. Principle leaves stay `disable-model-invocation`. |
 | S3 | Copying skill bodies (pstack-claude) | Vendored SKILL.md forks of pstack | Point at a live clone. Map Cursor verbs in one adapter. |
 | S4 | Sticky mode missing on Pi | No APPEND_SYSTEM.md | User overlay, not a repo jig. |
-| S5 | Ancestor AGENTS.md leak | Fat file above the git root | Router-only ancestors. No hot-path or notebook rules there. |
+| S5 | Ancestor AGENTS.md leak | AGENTS.md in a directory that has multiple domain git repos as children | Delete it. Coordinator is a sibling git repo with a registry, not an ancestor file. |
 | S6 | Landing CI on first discover | Jig writing .github or eslint on pass 1 | deferred-ci.md list only. |
 | S7 | Always-on lint-after-edit | Hooks that inject tsc on every edit | Prompt "run the linter". Optional project hook later. |
 | S8 | Semantic index as search | Custom embeddings for a personal repo | Enable Pi grep. No new index. |
@@ -25,6 +25,7 @@ Cite the source path when you recommend a fix so the next agent can read the rul
 | S15 | Glossary-only nouns | Bullet list of names with no relationships | Lexicon in running prose. Nouns define each other. |
 | S16 | Rename without a pin | Mass mv with no characterization test | Refactoring playbook. Pin first. |
 | S17 | Whip-style after-the-fact scolding | Long AGENTS.md "do not" lists with no import wall | Import graph and types. Delete the scolding once the wall exists. |
+| S18 | Container-folder router | Instruction to copy AGENTS.md above several git repos | Do not. Pi walk-up loads that file in every child. |
 
 ## pstack process (agents wander)
 

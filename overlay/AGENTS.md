@@ -22,6 +22,8 @@ Keep the `read` tool enabled.
 
 ## Extra matches
 
-Two git repos or two jigs. Read the cross-repo skill. Do not use `playbooks/investigation.md`.
+If the question spans two git repos, use `/skill:cross-repo`. Do not use pstack `playbooks/investigation.md`.
+
+Do not place `AGENTS.md` in a directory that has multiple domain git repos as children. Ancestor files still load in Pi. Coding rules there leak.
 
 The user says to execute the jig refactor plan. Read `__PSTACK__/skills/poteto-mode/SKILL.md` and copy `__PSTACK__/skills/poteto-mode/playbooks/refactoring.md`. The plan file is `.pi/jig/refactor.md`. Pin before any `mv`.

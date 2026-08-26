@@ -28,5 +28,14 @@ fi
 
 help="$(bash install.sh --help)"
 printf '%s\n' "$help" | grep -q -- '--repos' && fail "install.sh --help must not name --repos"
+printf '%s\n' "$help" | grep -qi workspace && fail "install.sh --help must not name workspace"
+printf '%s\n' "$help" | grep -qi trading && fail "install.sh --help must not name trading"
+
+if grep -qiE 'workspace|--repos|trading' install.sh; then
+	fail "install.sh source must not name workspace, --repos, or trading"
+fi
+if grep -R -E '/home/[^$]|workspace root' -- install.sh overlay skills/jig skills/cross-repo | grep -v '^Binary'; then
+	fail "hardcoded home path or workspace root in overlay files"
+fi
 
 echo "check-overlay ok"

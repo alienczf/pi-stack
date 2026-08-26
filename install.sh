@@ -12,7 +12,7 @@ Does not search for git repositories. Fit a repo later with jig.sh.
 
 Environment
   HOME     install target (default is your home)
-  PSTACK   live pstack clone (see README)
+  PSTACK   live pstack clone. If unset, $HOME/src/pstack.
 EOF
 }
 
@@ -38,12 +38,10 @@ fi
 
 pstack="${PSTACK:-}"
 if [[ -z "$pstack" ]]; then
-	if [[ -f /home/zhanfeng/Projects/plugins/pstack/skills/poteto-mode/SKILL.md ]]; then
-		pstack=/home/zhanfeng/Projects/plugins/pstack
-	elif [[ -f "${HOME}/src/pstack/skills/poteto-mode/SKILL.md" ]]; then
+	if [[ -f "${HOME}/src/pstack/skills/poteto-mode/SKILL.md" ]]; then
 		pstack="${HOME}/src/pstack"
 	else
-		printf 'PSTACK is unset and no pstack clone was found at /home/zhanfeng/Projects/plugins/pstack or %s/src/pstack\n' "$HOME" >&2
+		printf 'PSTACK is unset. Export PSTACK to a pstack clone, or clone it at %s/src/pstack\n' "$HOME" >&2
 		exit 1
 	fi
 fi

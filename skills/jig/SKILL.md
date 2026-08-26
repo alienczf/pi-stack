@@ -12,7 +12,9 @@ Read [interview.md](references/interview.md), [failure-modes.md](references/fail
 
 ## Pass 0. One git repo
 
-Cwd must be inside one git repo. `git rev-parse --show-toplevel` must succeed. If the cwd is a parent of several repos and not a repo itself, stop.
+Cwd must be inside one git repo. `git rev-parse --show-toplevel` must succeed. Operate only on that root. Do not walk parent directories. Do not `find` sibling `.git` dirs.
+
+If this repo contains `registry.md`, `siblings.tsv`, `.pi/registry.md`, `.pi/siblings.tsv`, or scripts that call `pi -p` with another cwd, it is a coordinator. List other repos as external systems. Do not read those trees for coding conventions. Do not copy their nouns into this repo's `AGENTS.md`. The lexicon here is dispatch, registry, brief, report.
 
 ## Pass 1. Interview
 
