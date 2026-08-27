@@ -4,13 +4,17 @@ User-level overlay for [Pi](https://github.com/badlogic/pi-mono) plus two skills
 
 Install Pi first if you do not have it. `install.sh` does not bootstrap Pi or `/login`.
 
-## How to install
+## Quickstart
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/alienczf/pi-stack/main/install.sh | bash
 ```
 
-That one run copies the overlay, rewrites Cursor skill names into `$HOME/.pi/agent/skills-pstack`, merges `settings.json`, installs `npm:pi-web-access`, `npm:pi-hashline-edit`, and `npm:pi-subagents`, rewrites `cursor/*` subagent models to `inherit`, and links `jig` into `$HOME/.local/bin`. You do not run `conform-skills.py` yourself. You do not hand-edit `skills` or the required packages.
+That curl pipe bash is the quickstart. Same oneshot as `./install.sh` from a checkout.
+
+## How to install
+
+The quickstart above is `install.sh`. It copies the overlay, rewrites Cursor skill names into `$HOME/.pi/agent/skills-pstack`, merges `settings.json`, installs `npm:pi-web-access`, `npm:pi-hashline-edit`, and `npm:pi-subagents`, rewrites `cursor/*` subagent models to `inherit`, and links `jig` into `$HOME/.local/bin`. You do not run `conform-skills.py` yourself. You do not hand-edit `skills` or the required packages.
 
 If `PI_STACK` is unset, that uses `$HOME/.pi-stack`. The clone is skipped when that tree already has `overlay/`. If `PSTACK` is unset, it sparse-clones [pstack](https://github.com/cursor/plugins/tree/main/pstack) into `$PI_STACK/.plugins` when that tree is missing.
 
