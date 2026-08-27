@@ -22,6 +22,10 @@ grep -q 'npm:pi-subagents' install.sh || fail "install.sh must install npm:pi-su
 grep -q 'PI_STACK_SKIP_PACKAGES' install.sh || fail "install.sh must honor PI_STACK_SKIP_PACKAGES"
 grep -q 'conform-skills.py' install.sh || fail "install.sh must run conform-skills.py"
 grep -q 'skills-pstack' install.sh || fail "install.sh must write skills-pstack"
+grep -q 'pi-node' install.sh || fail "install.sh must find pi under pi-node"
+grep -q 'inherit' install.sh || fail "install.sh must rewrite cursor subagent models to inherit"
+grep -F -q '.local/bin/jig' install.sh || fail "install.sh must link jig into .local/bin"
+grep -q 'defaultProjectTrust' install.sh || fail "install.sh must set defaultProjectTrust when missing"
 grep -q 'poteto-mode/SKILL.md' overlay/APPEND_SYSTEM.md || fail "APPEND_SYSTEM.md must name poteto-mode/SKILL.md"
 grep -q 'Do not run `pi -p`' overlay/AGENTS.md || fail "AGENTS.md must forbid bash pi -p"
 grep -q 'subagent' overlay/AGENTS.md || fail "AGENTS.md must name the subagent tool"
@@ -82,7 +86,21 @@ mkdir -p "$home"
 
 # curl|bash: no checkout beside the process. PI_STACK already has overlay → skip clone.
 mkdir -p "$home/.pi/agent"
-printf '%s\n' '{"theme":"keep-theme","packages":["npm:keep-me"]}' >"$home/.pi/agent/settings.json"
+cat >"$home/.pi/agent/settings.json" <<'EOF'
+{
+  "theme": "keep-theme",
+  "packages": ["npm:keep-me"],
+  "defaultModel": "cursor/auto",
+  "enabledModels": ["cursor/auto", "cursor/composer-2.5"],
+  "subagents": {
+    "defaultModel": "cursor/auto",
+    "agentOverrides": {
+      "scout": {"model": "cursor/auto"},
+      "oracle": {"model": "openai-codex/gpt-5.4"}
+    }
+  }
+}
+EOF
 (
 	cd "$tmp"
 	HOME="$home" PI_STACK="$root" PSTACK="$stub" PI_STACK_SKIP_PACKAGES=1 bash <"$root/install.sh"
@@ -123,10 +141,56 @@ if not any("skills-pstack/poteto-mode" in s for s in skills):
 	raise SystemExit("skills do not point at skills-pstack/poteto-mode")
 if any("/pstack/skills/poteto-mode" in s for s in skills):
 	raise SystemExit("skills still point at raw pstack")
+if data.get("defaultModel") != "cursor/auto":
+	raise SystemExit("top-level defaultModel was rewritten")
+if data.get("enabledModels") != ["cursor/auto", "cursor/composer-2.5"]:
+	raise SystemExit("enabledModels was rewritten")
+if data.get("defaultProjectTrust") != "always":
+	raise SystemExit("defaultProjectTrust was not set to always")
+subs = data.get("subagents") or {}
+if subs.get("defaultModel") != "inherit":
+	raise SystemExit("subagents.defaultModel was not inherit")
+overrides = subs.get("agentOverrides") or {}
+if (overrides.get("scout") or {}).get("model") != "inherit":
+	raise SystemExit("scout model was not inherit")
+if (overrides.get("oracle") or {}).get("model") != "openai-codex/gpt-5.4":
+	raise SystemExit("oracle model pin was rewritten")
 PY
 grep -q '^name: poteto-mode$' "$home/.pi/agent/skills-pstack/poteto-mode/SKILL.md" || fail "install did not slug Poteto Mode"
 grep -q 'name: Poteto Mode' "$stub/skills/poteto-mode/SKILL.md" || fail "install edited upstream pstack"
 test -L "$home/.pi/agent/skills-pstack/poteto-mode/playbooks" || fail "install did not symlink playbooks"
+test -L "$home/.local/bin/jig" || fail "install did not link ~/.local/bin/jig"
+test -x "$home/.local/bin/jig" || fail "linked jig is not executable"
+
+home_ask="$tmp/home-ask"
+mkdir -p "$home_ask/.pi/agent"
+printf '%s\n' '{"defaultProjectTrust":"ask"}' >"$home_ask/.pi/agent/settings.json"
+(
+	cd "$tmp"
+	HOME="$home_ask" PI_STACK="$root" PSTACK="$stub" PI_STACK_SKIP_PACKAGES=1 bash <"$root/install.sh"
+) || fail "install with existing defaultProjectTrust failed"
+python3 - "$home_ask/.pi/agent/settings.json" <<'PY' || fail "existing defaultProjectTrust was overwritten"
+import json
+import sys
+from pathlib import Path
+data = json.loads(Path(sys.argv[1]).read_text())
+if data.get("defaultProjectTrust") != "ask":
+	raise SystemExit("ask was overwritten")
+PY
+
+home_nopi="$tmp/home-nopi"
+mkdir -p "$home_nopi"
+path_nopi="/usr/bin:/bin"
+if ! PATH="$path_nopi" command -v python3 >/dev/null 2>&1; then
+	fail "need /usr/bin/python3 to test missing pi"
+fi
+if nopi_out="$(
+	cd "$tmp"
+	PATH="$path_nopi" HOME="$home_nopi" PI_STACK="$root" PSTACK="$stub" bash "$root/install.sh" 2>&1
+)"; then
+	fail "install without pi exited 0"
+fi
+printf '%s\n' "$nopi_out" | grep -q 'pi is not installed' || fail "install without pi did not say to install Pi"
 
 fake="$tmp/plugins-src"
 mkdir -p "$fake/pstack/skills/poteto-mode"

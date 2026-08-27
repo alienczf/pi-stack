@@ -1,12 +1,16 @@
 # pi-stack
 
-User-level overlay for [Pi](https://github.com/badlogic/pi-mono) plus two skills. After install, Pi loads poteto-mode process. Then you fit each git repo with a jig.
+User-level overlay for [Pi](https://github.com/badlogic/pi-mono) plus two skills. One `install.sh` is the whole user setup. After that, fit each git repo with `jig`.
+
+Install Pi first if you do not have it. `install.sh` does not bootstrap Pi or `/login`.
 
 ## How to install
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/alienczf/pi-stack/main/install.sh | bash
 ```
+
+That one run copies the overlay, rewrites Cursor skill names into `$HOME/.pi/agent/skills-pstack`, merges `settings.json`, installs `npm:pi-web-access`, `npm:pi-hashline-edit`, and `npm:pi-subagents`, rewrites `cursor/*` subagent models to `inherit`, and links `jig` into `$HOME/.local/bin`. You do not run `conform-skills.py` yourself. You do not hand-edit `skills` or the required packages.
 
 If `PI_STACK` is unset, that uses `$HOME/.pi-stack`. The clone is skipped when that tree already has `overlay/`. If `PSTACK` is unset, it sparse-clones [pstack](https://github.com/cursor/plugins/tree/main/pstack) into `$PI_STACK/.plugins` when that tree is missing.
 
@@ -24,15 +28,11 @@ To read the installer before running it:
 curl -fsSL https://raw.githubusercontent.com/alienczf/pi-stack/main/install.sh
 ```
 
-The installer writes `$HOME/.pi/agent/`. It copies skill directories into `$HOME/.pi/agent/skills-pstack` with Pi-legal `name` fields, then points `settings.json` `skills` at those copies. The pstack clone is not edited. `Poteto Mode` becomes `poteto-mode`. Playbooks stay reachable through symlinks. A naive install that points Pi at `pstack/skills` directly will warn. Run this instead:
+The installer writes `$HOME/.pi/agent/`. Skill copies get Pi-legal `name` fields. The pstack clone is not edited. `Poteto Mode` becomes `poteto-mode`. Playbooks stay reachable through symlinks. Pointing Pi at `pstack/skills` directly will warn.
 
-```bash
-python3 /path/to/pi-stack/bin/conform-skills.py --tree /path/to/pstack/skills --out ~/.pi/agent/skills-pstack
-```
+Existing `settings.json` keys stay, including extra `packages` rows, `theme`, top-level `defaultModel`, and `enabledModels`. `cursor/*` entries in `subagents.defaultModel` and `subagents.agentOverrides.*.model` become `inherit`. Other pins stay. If `defaultProjectTrust` is missing, it is set to `always` so non-interactive `pi -p` can see a jig. An existing `ask` or `never` is left alone. It never writes `auth.json`, `models-store.json`, `private/`, or `sessions/`.
 
-Then list `~/.pi/agent/skills-pstack/<skill>` in `settings.json`, not the upstream tree.
-
-It also merges `defaultTools`, `skills`, and two required packages into `settings.json`. Existing keys stay, including extra `packages` rows, `subagents`, `defaultModel`, and `enabledModels`. It never writes `auth.json`, `models-store.json`, `private/`, or `sessions/`. When `pi` is on `PATH`, it also runs `pi install` for packages whose `node_modules` tree is missing. Set `PI_STACK_SKIP_PACKAGES=1` to merge names only.
+`pi` is found on `PATH`, at `$HOME/.local/bin/pi`, or under `$HOME/.local/share/pi-node`. If it is missing, overlay files may already be written and the script exits 1. Install Pi from https://pi.dev/install.sh, then rerun. Set `PI_STACK_SKIP_PACKAGES=1` to merge package names without running `pi install`.
 
 A second run with the same inputs leaves owned files unchanged. It does not `git pull` `$HOME/.pi-stack` or `$HOME/.pi-stack/.plugins`. Update those trees yourself, then rerun install:
 
@@ -50,14 +50,16 @@ PI_STACK=/path/to/pi-stack PSTACK=/path/to/pstack ./install.sh
 
 Do not vendor pstack skill bodies into this repo. Point at a live clone. A forked copy drifts from upstream.
 
+Dumping the whole pstack tree is optional and not what install does. Install conforms the 14-name allowlist only. `bin/conform-skills.py --tree` is for that dump case.
+
 ## How to fit a repo
 
 ```bash
 cd /path/to/repo
-/path/to/pi-stack/bin/jig.sh
+jig
 ```
 
-Put the pi-stack `bin` directory on `PATH` if you want `jig.sh` as a command. Install also writes `$HOME/.pi/agent/bin/jig` as a wrapper.
+Install links `$HOME/.local/bin/jig`. If that directory is not on `PATH`, run `$HOME/.local/bin/jig` or the checkout `bin/jig.sh`.
 
 Inside Pi, run `/skill:jig` or `/jig`.
 

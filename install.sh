@@ -8,9 +8,11 @@ usage: install.sh
 Copies the pi-stack overlay into $HOME/.pi/agent.
 Rewrites Cursor skill names into $HOME/.pi/agent/skills-pstack. Does not edit pstack.
 Merges defaultTools, skills, and packages into settings.json.
-Installs npm:pi-web-access, npm:pi-hashline-edit, and npm:pi-subagents when pi is on PATH.
+Finds pi on PATH or under ~/.local/share/pi-node and installs
+npm:pi-web-access, npm:pi-hashline-edit, and npm:pi-subagents.
+Rewrites cursor/* subagent models to inherit. Links jig into ~/.local/bin.
 Never writes auth.json, models-store.json, private/, or sessions/.
-Does not search for git repositories. Fit a repo later with jig.sh.
+Does not search for git repositories. Fit a repo later with jig.
 
 If PI_STACK is unset and this script is not in a checkout, uses
 $HOME/.pi-stack. Clones alienczf/pi-stack there when overlay/ is missing.
@@ -40,6 +42,11 @@ case "${1:-}" in
 		exit 2
 		;;
 esac
+
+if ! command -v python3 >/dev/null 2>&1; then
+	printf 'python3 is required\n' >&2
+	exit 1
+fi
 
 src="${BASH_SOURCE[0]:-}"
 here=""
@@ -149,6 +156,11 @@ if [[ -x "$here/bin/jig.sh" ]]; then
 	chmod +x "$wrapper"
 fi
 
+mkdir -p "${HOME}/.local/bin"
+if [[ -x "$agent/bin/jig" ]]; then
+	ln -sfn "$agent/bin/jig" "${HOME}/.local/bin/jig"
+fi
+
 conform_out="${agent}/skills-pstack"
 mkdir -p "$conform_out"
 conform_src=()
@@ -207,6 +219,22 @@ else:
 
 data["defaultTools"] = tools
 data["skills"] = skills
+if "defaultProjectTrust" not in data:
+	data["defaultProjectTrust"] = "always"
+
+def is_cursor_model(value):
+	return isinstance(value, str) and (value == "cursor" or value.startswith("cursor/"))
+
+subs = data.get("subagents")
+if isinstance(subs, dict):
+	if is_cursor_model(subs.get("defaultModel")):
+		subs["defaultModel"] = "inherit"
+	overrides = subs.get("agentOverrides")
+	if isinstance(overrides, dict):
+		for spec in overrides.values():
+			if isinstance(spec, dict) and is_cursor_model(spec.get("model")):
+				spec["model"] = "inherit"
+	data["subagents"] = subs
 
 def npm_unscoped_name(entry):
 	if isinstance(entry, str):
@@ -251,8 +279,8 @@ hashedit = "pi-hashline-edit"
 if hashedit not in by_name:
 	packages.append("npm:pi-hashline-edit")
 
-subs = "pi-subagents"
-if subs not in by_name:
+subs_pkg = "pi-subagents"
+if subs_pkg not in by_name:
 	packages.append("npm:pi-subagents")
 
 data["packages"] = packages
@@ -264,23 +292,62 @@ tmp.write_text(text)
 tmp.replace(path)
 PY
 
-if [[ "${PI_STACK_SKIP_PACKAGES:-}" != 1 ]]; then
+resolve_pi() {
 	if command -v pi >/dev/null 2>&1; then
+		command -v pi
+		return 0
+	fi
+	local pi_bins=()
+	local saved
+	saved="$(shopt -p nullglob || true)"
+	shopt -s nullglob
+	pi_bins=("${HOME}/.local/bin/pi" "${HOME}/.local/share/pi-node"/node-*/bin/pi)
+	eval "$saved"
+	local c
+	for c in "${pi_bins[@]}"; do
+		if [[ -x "$c" ]]; then
+			printf '%s\n' "$c"
+			return 0
+		fi
+	done
+	return 1
+}
+
+if [[ "${PI_STACK_SKIP_PACKAGES:-}" != 1 ]]; then
+	if pi_bin="$(resolve_pi)"; then
 		npm_root="${agent}/npm/node_modules"
 		for spec in pi-web-access pi-hashline-edit pi-subagents; do
 			if [[ ! -d "${npm_root}/${spec}" ]]; then
-				PI_CODING_AGENT_DIR="$agent" pi install "npm:${spec}"
+				PI_CODING_AGENT_DIR="$agent" "$pi_bin" install "npm:${spec}"
+			fi
+			if [[ ! -d "${npm_root}/${spec}" ]]; then
+				printf 'pi install npm:%s did not write %s/%s\n' "$spec" "$npm_root" "$spec" >&2
+				exit 1
 			fi
 		done
 	else
-		printf 'pi not on PATH. After installing pi, run:\n  pi install npm:pi-web-access\n  pi install npm:pi-hashline-edit\n  pi install npm:pi-subagents\n'
+		printf 'pi is not installed. Install Pi, then rerun this script:\n  curl -fsSL https://pi.dev/install.sh | sh\n' >&2
+		exit 1
 	fi
 fi
 
-cat <<'EOF'
+skill_n=0
+if [[ -d "$conform_out" ]]; then
+	skill_n="$(find "$conform_out" -mindepth 2 -maxdepth 2 -name SKILL.md | wc -l | tr -d ' ')"
+fi
+if [[ "${PI_STACK_SKIP_PACKAGES:-}" == 1 ]]; then
+	pkg_msg="names merged, pi install skipped"
+else
+	pkg_msg="pi-web-access, pi-hashline-edit, pi-subagents"
+fi
+cat <<EOF
 pi-stack is installed for this user.
-Fit a repo with a jig:
-  cd /path/to/repo && jig.sh
+  overlay   ${agent}
+  skills    ${skill_n}
+  packages  ${pkg_msg}
+  jig       ${HOME}/.local/bin/jig
+Fit a repo:
+  cd /path/to/repo && jig
 or inside Pi:
   /skill:jig
 EOF
