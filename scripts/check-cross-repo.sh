@@ -11,8 +11,11 @@ test -f examples/orchestrator/registry.md || fail "missing examples/orchestrator
 test -f examples/orchestrator/README.md || fail "missing examples/orchestrator/README.md"
 
 grep -q 'disable-model-invocation: true' skills/cross-repo/SKILL.md || fail "cross-repo skill must disable model invocation"
-grep -q 'pi -p' skills/cross-repo/SKILL.md || fail "skill must dispatch with pi -p"
-grep -q 'read,grep,find,ls,bash' skills/cross-repo/SKILL.md || fail "child tools must be read,grep,find,ls,bash"
+grep -q 'subagent' skills/cross-repo/SKILL.md || fail "skill must dispatch with the subagent tool"
+grep -q 'cwd' skills/cross-repo/SKILL.md || fail "skill must pass cwd to children"
+if grep -q 'pi -p --approve' skills/cross-repo/SKILL.md; then
+	fail "skill must not spawn children with bash pi -p"
+fi
 grep -q 'registry.md' skills/cross-repo/SKILL.md || fail "skill must look for registry.md"
 grep -q 'siblings.tsv' skills/cross-repo/SKILL.md || fail "skill must look for siblings.tsv"
 grep -q 'does not edit' skills/cross-repo/SKILL.md || fail "skill must say the parent does not edit children"
@@ -34,5 +37,9 @@ fi
 grep -q '/skill:cross-repo' overlay/AGENTS.md || fail "overlay AGENTS.md must name /skill:cross-repo"
 grep -q 'playbooks/investigation.md' overlay/AGENTS.md || fail "overlay AGENTS.md must name investigation.md as the thing not to use"
 grep -q 'Do not place `AGENTS.md` in a directory that has multiple domain git repos as children' overlay/AGENTS.md || fail "overlay AGENTS.md must ban ancestor coding files"
+grep -q 'subagent' examples/orchestrator/AGENTS.md || fail "orchestrator sample must dispatch with subagent"
+if grep -q 'Spawn `pi -p`' examples/orchestrator/AGENTS.md; then
+	fail "orchestrator sample still spawns bash pi -p"
+fi
 
 echo "check-cross-repo ok"

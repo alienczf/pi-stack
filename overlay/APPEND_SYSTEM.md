@@ -5,3 +5,5 @@ Non-trivial work. Read `__PSTACK__/skills/poteto-mode/SKILL.md` in full, includi
 Also read `~/.pi/agent/AGENTS.md`. Read `TODO.md` and `PLAN.md` in the working tree when they exist.
 
 Do not register a todo tool. Write progress in `TODO.md`.
+
+Delegate with the `subagent` tool. Do not run `pi -p` from bash.

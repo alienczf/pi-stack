@@ -6,7 +6,9 @@ usage() {
 usage: install.sh
 
 Copies the pi-stack overlay into $HOME/.pi/agent.
-Merges defaultTools and skills into settings.json.
+Rewrites Cursor skill names into $HOME/.pi/agent/skills-pstack. Does not edit pstack.
+Merges defaultTools, skills, and packages into settings.json.
+Installs npm:pi-web-access, npm:pi-hashline-edit, and npm:pi-subagents when pi is on PATH.
 Never writes auth.json, models-store.json, private/, or sessions/.
 Does not search for git repositories. Fit a repo later with jig.sh.
 
@@ -22,6 +24,7 @@ Environment
   PI_STACK_GIT  git URL for that clone (default https://github.com/alienczf/pi-stack.git)
   PSTACK        pstack tree with skills/poteto-mode/SKILL.md
   PSTACK_GIT    git URL for the clone (default https://github.com/cursor/plugins.git)
+  PI_STACK_SKIP_PACKAGES  if 1, write package names only, do not run pi install
 EOF
 }
 
@@ -146,9 +149,24 @@ if [[ -x "$here/bin/jig.sh" ]]; then
 	chmod +x "$wrapper"
 fi
 
+conform_out="${agent}/skills-pstack"
+mkdir -p "$conform_out"
+conform_src=()
+for name in poteto-mode how why architect interrogate tdd unslop technical-writing figure-it-out show-me-your-work reflect create-verification-skill; do
+	if [[ -f "$pstack/skills/$name/SKILL.md" ]]; then
+		conform_src+=("$pstack/skills/$name")
+	fi
+done
+for name in jig cross-repo; do
+	if [[ -f "$here/skills/$name/SKILL.md" ]]; then
+		conform_src+=("$here/skills/$name")
+	fi
+done
+if [[ ${#conform_src[@]} -gt 0 ]]; then
+	python3 "$here/bin/conform-skills.py" --out "$conform_out" "${conform_src[@]}"
+fi
+
 export PI_AGENT_DIR="$agent"
-export PSTACK="$pstack"
-export PI_STACK_ROOT="$here"
 python3 - <<'PY'
 import json
 import os
@@ -156,28 +174,27 @@ import sys
 from pathlib import Path
 
 agent = Path(os.environ["PI_AGENT_DIR"])
-pstack = Path(os.environ["PSTACK"])
-repo = Path(os.environ["PI_STACK_ROOT"])
 path = agent / "settings.json"
+conformed = agent / "skills-pstack"
 
 tools = ["read", "write", "edit", "bash", "grep", "find", "ls"]
 wanted = [
-	pstack / "skills/poteto-mode",
-	pstack / "skills/how",
-	pstack / "skills/why",
-	pstack / "skills/architect",
-	pstack / "skills/interrogate",
-	pstack / "skills/tdd",
-	pstack / "skills/unslop",
-	pstack / "skills/technical-writing",
-	pstack / "skills/figure-it-out",
-	pstack / "skills/show-me-your-work",
-	pstack / "skills/reflect",
-	pstack / "skills/create-verification-skill",
-	repo / "skills/jig",
-	repo / "skills/cross-repo",
+	"poteto-mode",
+	"how",
+	"why",
+	"architect",
+	"interrogate",
+	"tdd",
+	"unslop",
+	"technical-writing",
+	"figure-it-out",
+	"show-me-your-work",
+	"reflect",
+	"create-verification-skill",
+	"jig",
+	"cross-repo",
 ]
-skills = [str(p.resolve()) for p in wanted if (p / "SKILL.md").is_file()]
+skills = [str((conformed / n).resolve()) for n in wanted if (conformed / n / "SKILL.md").is_file()]
 if len(skills) > 14:
 	sys.exit("skills allowlist grew past 14")
 
@@ -190,6 +207,55 @@ else:
 
 data["defaultTools"] = tools
 data["skills"] = skills
+
+def npm_unscoped_name(entry):
+	if isinstance(entry, str):
+		s = entry
+	elif isinstance(entry, dict):
+		s = entry.get("source") or ""
+	else:
+		return None
+	if not isinstance(s, str) or not s.startswith("npm:"):
+		return None
+	rest = s[4:]
+	if rest.startswith("@"):
+		return None
+	return rest.split("@", 1)[0]
+
+packages = data.get("packages")
+if packages is None:
+	packages = []
+if not isinstance(packages, list):
+	sys.exit("settings.json packages is not an array")
+
+by_name = {}
+for i, pkg in enumerate(packages):
+	name = npm_unscoped_name(pkg)
+	if name:
+		by_name[name] = i
+
+web = "pi-web-access"
+web_entry = {"source": "npm:pi-web-access", "skills": ["!skills/librarian/**"]}
+if web not in by_name:
+	packages.append(web_entry)
+else:
+	existing = packages[by_name[web]]
+	if isinstance(existing, str):
+		packages[by_name[web]] = web_entry
+	elif isinstance(existing, dict) and "skills" not in existing:
+		updated = dict(existing)
+		updated["skills"] = ["!skills/librarian/**"]
+		packages[by_name[web]] = updated
+
+hashedit = "pi-hashline-edit"
+if hashedit not in by_name:
+	packages.append("npm:pi-hashline-edit")
+
+subs = "pi-subagents"
+if subs not in by_name:
+	packages.append("npm:pi-subagents")
+
+data["packages"] = packages
 text = json.dumps(data, indent=2) + "\n"
 if path.exists() and path.read_text() == text:
 	sys.exit(0)
@@ -197,6 +263,19 @@ tmp = path.with_name("settings.json.pi-stack-tmp")
 tmp.write_text(text)
 tmp.replace(path)
 PY
+
+if [[ "${PI_STACK_SKIP_PACKAGES:-}" != 1 ]]; then
+	if command -v pi >/dev/null 2>&1; then
+		npm_root="${agent}/npm/node_modules"
+		for spec in pi-web-access pi-hashline-edit pi-subagents; do
+			if [[ ! -d "${npm_root}/${spec}" ]]; then
+				PI_CODING_AGENT_DIR="$agent" pi install "npm:${spec}"
+			fi
+		done
+	else
+		printf 'pi not on PATH. After installing pi, run:\n  pi install npm:pi-web-access\n  pi install npm:pi-hashline-edit\n  pi install npm:pi-subagents\n'
+	fi
+fi
 
 cat <<'EOF'
 pi-stack is installed for this user.

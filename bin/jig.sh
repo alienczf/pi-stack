@@ -5,6 +5,7 @@ here="$(cd "$(dirname "$0")" && pwd)"
 PI_STACK_ROOT="${PI_STACK_ROOT:-$(cd "$here/.." && pwd)}"
 skill="$PI_STACK_ROOT/skills/jig/SKILL.md"
 PI="${PI:-pi}"
+# Human launcher. Pin tools so this one-shot does not inherit a subagent fanout.
 
 iterate=0
 force=0

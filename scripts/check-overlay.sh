@@ -16,9 +16,20 @@ grep -q '"grep"' overlay/settings.json || fail "overlay/settings.json defaultToo
 grep -q '"find"' overlay/settings.json || fail "overlay/settings.json defaultTools lacks find"
 grep -q '"ls"' overlay/settings.json || fail "overlay/settings.json defaultTools lacks ls"
 grep -q '"read"' overlay/settings.json || fail "overlay/settings.json defaultTools lacks read"
+grep -q 'npm:pi-web-access' install.sh || fail "install.sh must install npm:pi-web-access"
+grep -q 'npm:pi-hashline-edit' install.sh || fail "install.sh must install npm:pi-hashline-edit"
+grep -q 'npm:pi-subagents' install.sh || fail "install.sh must install npm:pi-subagents"
+grep -q 'PI_STACK_SKIP_PACKAGES' install.sh || fail "install.sh must honor PI_STACK_SKIP_PACKAGES"
+grep -q 'conform-skills.py' install.sh || fail "install.sh must run conform-skills.py"
+grep -q 'skills-pstack' install.sh || fail "install.sh must write skills-pstack"
 grep -q 'poteto-mode/SKILL.md' overlay/APPEND_SYSTEM.md || fail "APPEND_SYSTEM.md must name poteto-mode/SKILL.md"
-grep -q 'pi -p' overlay/AGENTS.md || fail "AGENTS.md must map Task to pi -p"
+grep -q 'Do not run `pi -p`' overlay/AGENTS.md || fail "AGENTS.md must forbid bash pi -p"
+grep -q 'subagent' overlay/AGENTS.md || fail "AGENTS.md must name the subagent tool"
+grep -q 'subagent' overlay/APPEND_SYSTEM.md || fail "APPEND_SYSTEM.md must name the subagent tool"
 grep -q 'TODO.md' overlay/AGENTS.md || fail "AGENTS.md must map TodoWrite to TODO.md"
+grep -q 'web_search' overlay/AGENTS.md || fail "AGENTS.md must name web_search"
+grep -q 'fetch_content' overlay/AGENTS.md || fail "AGENTS.md must name fetch_content"
+grep -q 'LINE#HASH' overlay/AGENTS.md || fail "AGENTS.md must name LINE#HASH"
 grep -q 'poteto-mode' prompts/poteto.md || fail "prompts/poteto.md must tell the model to read poteto-mode"
 
 chars=$(wc -c < overlay/APPEND_SYSTEM.md)
@@ -56,24 +67,76 @@ printf '%s\n' "$help" | grep -F -q '.plugins' || fail "install.sh --help must na
 tmp=$(mktemp -d)
 cleanup() { rm -rf "$tmp"; }
 trap cleanup EXIT
-mkdir -p "$tmp/pstack/skills/poteto-mode"
-printf '# stub\n' >"$tmp/pstack/skills/poteto-mode/SKILL.md"
+mkdir -p "$tmp/pstack/skills/poteto-mode/playbooks"
+cat >"$tmp/pstack/skills/poteto-mode/SKILL.md" <<'EOF'
+---
+name: Poteto Mode
+description: stub for install test
+---
+# stub
+EOF
+printf 'playbook\n' >"$tmp/pstack/skills/poteto-mode/playbooks/investigation.md"
 stub="$tmp/pstack"
 home="$tmp/home"
 mkdir -p "$home"
 
 # curl|bash: no checkout beside the process. PI_STACK already has overlay → skip clone.
+mkdir -p "$home/.pi/agent"
+printf '%s\n' '{"theme":"keep-theme","packages":["npm:keep-me"]}' >"$home/.pi/agent/settings.json"
 (
 	cd "$tmp"
-	HOME="$home" PI_STACK="$root" PSTACK="$stub" bash <"$root/install.sh"
+	HOME="$home" PI_STACK="$root" PSTACK="$stub" PI_STACK_SKIP_PACKAGES=1 bash <"$root/install.sh"
 ) || fail "piped install with existing PI_STACK failed"
 test -f "$home/.pi/agent/APPEND_SYSTEM.md" || fail "piped install did not write overlay"
 test ! -e "$home/.pi/agent/auth.json" || fail "piped install wrote auth.json"
+test ! -d "$home/.pi/agent/npm" || fail "PI_STACK_SKIP_PACKAGES=1 still ran pi install"
 test ! -d "$root/.plugins" || fail "stub PSTACK must not clone .plugins into this checkout"
+python3 - "$home/.pi/agent/settings.json" <<'PY' || fail "piped install dropped packages or skipped required ones"
+import json
+import sys
+from pathlib import Path
+
+data = json.loads(Path(sys.argv[1]).read_text())
+if data.get("theme") != "keep-theme":
+	raise SystemExit("theme was dropped")
+packages = data.get("packages")
+if not isinstance(packages, list):
+	raise SystemExit("packages missing")
+
+def source(entry):
+	return entry if isinstance(entry, str) else entry.get("source", "")
+
+joined = [source(p) for p in packages]
+if "npm:keep-me" not in joined:
+	raise SystemExit("npm:keep-me was dropped")
+web = next((p for p in packages if "pi-web-access" in source(p)), None)
+if not isinstance(web, dict):
+	raise SystemExit("pi-web-access missing or not object form")
+if "!skills/librarian/**" not in web.get("skills", []):
+	raise SystemExit("pi-web-access missing librarian filter")
+if not any("pi-hashline-edit" in source(p) for p in packages):
+	raise SystemExit("pi-hashline-edit missing")
+if not any("pi-subagents" in source(p) for p in packages):
+	raise SystemExit("pi-subagents missing")
+skills = data.get("skills") or []
+if not any("skills-pstack/poteto-mode" in s for s in skills):
+	raise SystemExit("skills do not point at skills-pstack/poteto-mode")
+if any("/pstack/skills/poteto-mode" in s for s in skills):
+	raise SystemExit("skills still point at raw pstack")
+PY
+grep -q '^name: poteto-mode$' "$home/.pi/agent/skills-pstack/poteto-mode/SKILL.md" || fail "install did not slug Poteto Mode"
+grep -q 'name: Poteto Mode' "$stub/skills/poteto-mode/SKILL.md" || fail "install edited upstream pstack"
+test -L "$home/.pi/agent/skills-pstack/poteto-mode/playbooks" || fail "install did not symlink playbooks"
 
 fake="$tmp/plugins-src"
 mkdir -p "$fake/pstack/skills/poteto-mode"
-printf '# stub\n' >"$fake/pstack/skills/poteto-mode/SKILL.md"
+cat >"$fake/pstack/skills/poteto-mode/SKILL.md" <<'EOF'
+---
+name: Poteto Mode
+description: stub for clone test
+---
+# stub
+EOF
 git init -q "$fake"
 git -C "$fake" add pstack
 git -C "$fake" -c user.email=t@t -c user.name=t commit -qm stub
@@ -91,7 +154,7 @@ home2="$tmp/home2"
 mkdir -p "$home2"
 (
 	cd "$tmp"
-	HOME="$home2" PI_STACK_GIT="$seed" PSTACK_GIT="$fake" bash <"$root/install.sh"
+	HOME="$home2" PI_STACK_GIT="$seed" PSTACK_GIT="$fake" PI_STACK_SKIP_PACKAGES=1 bash <"$root/install.sh"
 ) || fail "piped install with default PI_STACK failed"
 test -f "$home2/.pi-stack/overlay/APPEND_SYSTEM.md" || fail "default PI_STACK was not cloned"
 test -f "$home2/.pi-stack/.plugins/pstack/skills/poteto-mode/SKILL.md" || fail "pstack was not cloned into PI_STACK/.plugins"
@@ -100,7 +163,7 @@ printf 'keep\n' >"$home2/.pi-stack/.skip-marker"
 printf 'keep\n' >"$home2/.pi-stack/.plugins/.skip-marker"
 (
 	cd "$tmp"
-	HOME="$home2" PI_STACK_GIT="$seed" PSTACK_GIT="$fake" bash <"$root/install.sh"
+	HOME="$home2" PI_STACK_GIT="$seed" PSTACK_GIT="$fake" PI_STACK_SKIP_PACKAGES=1 bash <"$root/install.sh"
 ) || fail "second piped install failed"
 test -f "$home2/.pi-stack/.skip-marker" || fail "second piped install recloned PI_STACK"
 test -f "$home2/.pi-stack/.plugins/.skip-marker" || fail "second piped install recloned .plugins"

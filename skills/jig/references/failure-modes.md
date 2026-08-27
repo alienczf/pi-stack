@@ -16,7 +16,7 @@ Cite the source path when you recommend a fix so the next agent can read the rul
 | S6 | Landing CI on first discover | Jig writing .github or eslint on pass 1 | deferred-ci.md list only. |
 | S7 | Always-on lint-after-edit | Hooks that inject tsc on every edit | Prompt "run the linter". Optional project hook later. |
 | S8 | Semantic index as search | Custom embeddings for a personal repo | Enable Pi grep. No new index. |
-| S9 | Fake subagents for context gathering | Orchestrator wrapping CLIs as the product | `pi -p` with cwd set. Coordinator owns briefs, not code. |
+| S9 | Fake subagents for context gathering | Orchestrator wrapping CLIs as the product | `subagent` tool with `cwd`. Coordinator owns briefs, not code. Do not bash `pi -p`. |
 | S10 | Shared memory across opposing domains | One AGENTS.md for ULL and notebooks | Separate jigs. Separate lexicons. |
 | S11 | Auto-merge without mechanical proof | "Looks profitable" as done | Domain-local proof. PnL is not CI. |
 | S12 | Replacing SYSTEM.md | Project SYSTEM.md that drops Pi defaults | APPEND_SYSTEM.md only. |
