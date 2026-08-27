@@ -10,13 +10,18 @@ Merges defaultTools and skills into settings.json.
 Never writes auth.json, models-store.json, private/, or sessions/.
 Does not search for git repositories. Fit a repo later with jig.sh.
 
+If PI_STACK is unset and this script is not in a checkout, uses
+$HOME/.pi-stack. Clones alienczf/pi-stack there when overlay/ is missing.
 If PSTACK is unset, uses $HOME/.pistack/pstack. Clones cursor/plugins
 (sparse, pstack only) into $HOME/.pistack when that tree is missing.
+Neither clone is refreshed on a later run.
 
 Environment
-  HOME        install target (default is your home)
-  PSTACK      pstack tree with skills/poteto-mode/SKILL.md
-  PSTACK_GIT  git URL for the clone (default https://github.com/cursor/plugins.git)
+  HOME          install target (default is your home)
+  PI_STACK      pi-stack checkout with overlay/APPEND_SYSTEM.md
+  PI_STACK_GIT  git URL for that clone (default https://github.com/alienczf/pi-stack.git)
+  PSTACK        pstack tree with skills/poteto-mode/SKILL.md
+  PSTACK_GIT    git URL for the clone (default https://github.com/cursor/plugins.git)
 EOF
 }
 
@@ -33,12 +38,50 @@ case "${1:-}" in
 		;;
 esac
 
-here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-overlay="$here/overlay"
-if [[ ! -f "$overlay/APPEND_SYSTEM.md" ]]; then
-	printf 'install.sh must run from a pi-stack checkout that contains overlay/\n' >&2
+src="${BASH_SOURCE[0]:-}"
+here=""
+if [[ -n "$src" && -f "$src" ]]; then
+	here="$(cd "$(dirname "$src")" && pwd)"
+fi
+
+default_pi_stack="${HOME}/.pi-stack"
+pi_stack_git="${PI_STACK_GIT:-https://github.com/alienczf/pi-stack.git}"
+if [[ -n "${PI_STACK:-}" ]]; then
+	pi_stack="$PI_STACK"
+elif [[ -n "$here" && -f "$here/overlay/APPEND_SYSTEM.md" ]]; then
+	pi_stack="$here"
+else
+	pi_stack="$default_pi_stack"
+fi
+
+# ponytail: skip clone when overlay exists; git pull when you want a newer tree
+if [[ ! -f "$pi_stack/overlay/APPEND_SYSTEM.md" ]]; then
+	if [[ -e "$pi_stack" ]]; then
+		if [[ ! -d "$pi_stack" ]]; then
+			printf '%s exists and is not a directory. Set PI_STACK or remove it.\n' "$pi_stack" >&2
+			exit 1
+		fi
+		if [[ -d "$pi_stack/.git" || -n "$(ls -A "$pi_stack")" ]]; then
+			printf '%s exists and is not a pi-stack checkout. Set PI_STACK or remove it.\n' "$pi_stack" >&2
+			exit 1
+		fi
+	fi
+	if ! command -v git >/dev/null 2>&1; then
+		printf 'git is required to clone pi-stack into %s, or set PI_STACK\n' "$pi_stack" >&2
+		exit 1
+	fi
+	git clone --depth 1 "$pi_stack_git" "$pi_stack"
+fi
+if [[ ! -f "$pi_stack/overlay/APPEND_SYSTEM.md" ]]; then
+	printf 'PI_STACK=%s has no overlay/APPEND_SYSTEM.md\n' "$pi_stack" >&2
 	exit 1
 fi
+pi_stack="$(cd "$pi_stack" && pwd)"
+if [[ "$here" != "$pi_stack" ]]; then
+	exec bash "$pi_stack/install.sh"
+fi
+
+overlay="$here/overlay"
 
 default_root="${HOME}/.pistack"
 default_pstack="${default_root}/pstack"

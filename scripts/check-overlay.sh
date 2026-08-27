@@ -37,9 +37,49 @@ fi
 if ! grep -q '.pistack' install.sh; then
 	fail "install.sh must clone into .pistack when PSTACK is unset"
 fi
-if ! grep -q 'git clone' install.sh; then
-	fail "install.sh must git clone pstack when the default tree is missing"
+if ! grep -q '.pi-stack' install.sh; then
+	fail "install.sh must clone into .pi-stack when PI_STACK is unset"
 fi
+if ! grep -q 'BASH_SOURCE\[0\]:-' install.sh; then
+	fail "install.sh must tolerate curl|bash (empty BASH_SOURCE)"
+fi
+if ! grep -q 'git clone' install.sh; then
+	fail "install.sh must git clone when the default tree is missing"
+fi
+printf '%s\n' "$help" | grep -q PI_STACK || fail "install.sh --help must name PI_STACK"
+
+tmp=$(mktemp -d)
+cleanup() { rm -rf "$tmp"; }
+trap cleanup EXIT
+mkdir -p "$tmp/pstack/skills/poteto-mode"
+printf '# stub\n' >"$tmp/pstack/skills/poteto-mode/SKILL.md"
+stub="$tmp/pstack"
+home="$tmp/home"
+mkdir -p "$home"
+
+# curl|bash: no checkout beside the process. PI_STACK already has overlay → skip clone.
+(
+	cd "$tmp"
+	HOME="$home" PI_STACK="$root" PSTACK="$stub" bash <"$root/install.sh"
+) || fail "piped install with existing PI_STACK failed"
+test -f "$home/.pi/agent/APPEND_SYSTEM.md" || fail "piped install did not write overlay"
+test ! -e "$home/.pi/agent/auth.json" || fail "piped install wrote auth.json"
+
+# curl|bash: PI_STACK unset → clone into $HOME/.pi-stack. Second run must not replace the tree.
+home2="$tmp/home2"
+mkdir -p "$home2"
+(
+	cd "$tmp"
+	HOME="$home2" PSTACK="$stub" PI_STACK_GIT="$root" bash <"$root/install.sh"
+) || fail "piped install with default PI_STACK failed"
+test -f "$home2/.pi-stack/overlay/APPEND_SYSTEM.md" || fail "default PI_STACK was not cloned"
+printf 'keep\n' >"$home2/.pi-stack/.skip-marker"
+(
+	cd "$tmp"
+	HOME="$home2" PSTACK="$stub" PI_STACK_GIT="$root" bash <"$root/install.sh"
+) || fail "second piped install failed"
+test -f "$home2/.pi-stack/.skip-marker" || fail "second piped install recloned PI_STACK"
+
 if grep -R -E '/home/[^$]|workspace root' -- install.sh overlay skills/jig skills/cross-repo | grep -v '^Binary'; then
 	fail "hardcoded home path or workspace root in overlay files"
 fi
