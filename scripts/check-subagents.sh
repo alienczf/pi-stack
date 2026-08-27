@@ -27,4 +27,13 @@ if command -v pi >/dev/null 2>&1 && [[ -d "$pkg" ]]; then
 	grep -q 'subagent' "${HOME}/.pi/agent/APPEND_SYSTEM.md" || fail "live APPEND_SYSTEM.md missing subagent"
 fi
 
+test -f scripts/smoke-subagents.sh || fail "missing scripts/smoke-subagents.sh"
+grep -q -- '--tools subagent' scripts/smoke-subagents.sh || fail "smoke must pin parent tools to subagent"
+grep -q 'action doctor' scripts/smoke-subagents.sh || fail "smoke must call subagent doctor"
+grep -q 'agent delegate' scripts/smoke-subagents.sh || fail "smoke must spawn a delegate child"
+
+if [[ "${PI_STACK_SMOKE:-}" == 1 ]]; then
+	bash "$root/scripts/smoke-subagents.sh" || fail "live subagent smoke failed"
+fi
+
 echo "check-subagents ok"

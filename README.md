@@ -100,6 +100,9 @@ bash scripts/check-conform-skills.sh
 bash scripts/check-subagents.sh
 bash scripts/check-jig.sh
 bash scripts/check-cross-repo.sh
+PI_STACK_SMOKE=1 bash scripts/check-subagents.sh
 ```
+
+`PI_STACK_SMOKE=1` runs a live parent `pi -p` that must call the `subagent` tool. Doctor first, then a `delegate` child. It spends tokens. The static check stays free.
 
 Later commits use Conventional Commits such as `feat(overlay):`, `feat(jig):`, `feat(cross-repo):`, and `docs:`.
