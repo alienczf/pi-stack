@@ -34,11 +34,14 @@ printf '%s\n' "$help" | grep -qi trading && fail "install.sh --help must not nam
 if grep -qiE 'workspace|--repos|trading' install.sh; then
 	fail "install.sh source must not name workspace, --repos, or trading"
 fi
-if ! grep -q '.pistack' install.sh; then
-	fail "install.sh must clone into .pistack when PSTACK is unset"
+if grep -q pistack install.sh README.md; then
+	fail "stale .pistack name; the only home dir is .pi-stack"
 fi
-if ! grep -q '.pi-stack' install.sh; then
+if ! grep -F -q '.pi-stack' install.sh; then
 	fail "install.sh must clone into .pi-stack when PI_STACK is unset"
+fi
+if ! grep -F -q '.plugins' install.sh; then
+	fail "install.sh must clone pstack into PI_STACK/.plugins when PSTACK is unset"
 fi
 if ! grep -q 'BASH_SOURCE\[0\]:-' install.sh; then
 	fail "install.sh must tolerate curl|bash (empty BASH_SOURCE)"
@@ -46,7 +49,9 @@ fi
 if ! grep -q 'git clone' install.sh; then
 	fail "install.sh must git clone when the default tree is missing"
 fi
+grep -q '^\.plugins/' .gitignore || fail ".gitignore must ignore nested .plugins/"
 printf '%s\n' "$help" | grep -q PI_STACK || fail "install.sh --help must name PI_STACK"
+printf '%s\n' "$help" | grep -F -q '.plugins' || fail "install.sh --help must name .plugins"
 
 tmp=$(mktemp -d)
 cleanup() { rm -rf "$tmp"; }
@@ -64,21 +69,41 @@ mkdir -p "$home"
 ) || fail "piped install with existing PI_STACK failed"
 test -f "$home/.pi/agent/APPEND_SYSTEM.md" || fail "piped install did not write overlay"
 test ! -e "$home/.pi/agent/auth.json" || fail "piped install wrote auth.json"
+test ! -d "$root/.plugins" || fail "stub PSTACK must not clone .plugins into this checkout"
 
-# curl|bash: PI_STACK unset → clone into $HOME/.pi-stack. Second run must not replace the tree.
+fake="$tmp/plugins-src"
+mkdir -p "$fake/pstack/skills/poteto-mode"
+printf '# stub\n' >"$fake/pstack/skills/poteto-mode/SKILL.md"
+git init -q "$fake"
+git -C "$fake" add pstack
+git -C "$fake" -c user.email=t@t -c user.name=t commit -qm stub
+
+# Seed repo is this working tree, so the cloned install.sh matches uncommitted edits.
+seed="$tmp/seed"
+mkdir -p "$seed"
+cp -a "$root/install.sh" "$root/overlay" "$root/prompts" "$root/bin" "$root/skills" "$root/.gitignore" "$seed/"
+git init -q "$seed"
+git -C "$seed" add .
+git -C "$seed" -c user.email=t@t -c user.name=t commit -qm seed
+
+# curl|bash: one prefix. Second run must not replace either tree.
 home2="$tmp/home2"
 mkdir -p "$home2"
 (
 	cd "$tmp"
-	HOME="$home2" PSTACK="$stub" PI_STACK_GIT="$root" bash <"$root/install.sh"
+	HOME="$home2" PI_STACK_GIT="$seed" PSTACK_GIT="$fake" bash <"$root/install.sh"
 ) || fail "piped install with default PI_STACK failed"
 test -f "$home2/.pi-stack/overlay/APPEND_SYSTEM.md" || fail "default PI_STACK was not cloned"
+test -f "$home2/.pi-stack/.plugins/pstack/skills/poteto-mode/SKILL.md" || fail "pstack was not cloned into PI_STACK/.plugins"
+test ! -d "$home2/.pistack" || fail "install wrote a second home dir .pistack"
 printf 'keep\n' >"$home2/.pi-stack/.skip-marker"
+printf 'keep\n' >"$home2/.pi-stack/.plugins/.skip-marker"
 (
 	cd "$tmp"
-	HOME="$home2" PSTACK="$stub" PI_STACK_GIT="$root" bash <"$root/install.sh"
+	HOME="$home2" PI_STACK_GIT="$seed" PSTACK_GIT="$fake" bash <"$root/install.sh"
 ) || fail "second piped install failed"
 test -f "$home2/.pi-stack/.skip-marker" || fail "second piped install recloned PI_STACK"
+test -f "$home2/.pi-stack/.plugins/.skip-marker" || fail "second piped install recloned .plugins"
 
 if grep -R -E '/home/[^$]|workspace root' -- install.sh overlay skills/jig skills/cross-repo | grep -v '^Binary'; then
 	fail "hardcoded home path or workspace root in overlay files"

@@ -8,7 +8,7 @@ User-level overlay for [Pi](https://github.com/badlogic/pi-mono) plus two skills
 curl -fsSL https://raw.githubusercontent.com/alienczf/pi-stack/main/install.sh | bash
 ```
 
-If `PI_STACK` is unset, that uses `$HOME/.pi-stack`. The clone is skipped when that tree already has `overlay/`. If `PSTACK` is unset, it sparse-clones [pstack](https://github.com/cursor/plugins/tree/main/pstack) into `$HOME/.pistack` when that tree is missing.
+If `PI_STACK` is unset, that uses `$HOME/.pi-stack`. The clone is skipped when that tree already has `overlay/`. If `PSTACK` is unset, it sparse-clones [pstack](https://github.com/cursor/plugins/tree/main/pstack) into `$PI_STACK/.plugins` when that tree is missing.
 
 A checkout you already have:
 
@@ -26,11 +26,11 @@ curl -fsSL https://raw.githubusercontent.com/alienczf/pi-stack/main/install.sh
 
 The installer writes `$HOME/.pi/agent/`. It merges `defaultTools` and `skills` into `settings.json`. It never writes `auth.json`, `models-store.json`, `private/`, or `sessions/`. Existing keys stay, including `packages`, `subagents`, `defaultModel`, and `enabledModels`.
 
-A second run with the same inputs leaves owned files unchanged. It does not `git pull` `$HOME/.pi-stack` or `$HOME/.pistack`. Update those trees yourself, then rerun install:
+A second run with the same inputs leaves owned files unchanged. It does not `git pull` `$HOME/.pi-stack` or `$HOME/.pi-stack/.plugins`. Update those trees yourself, then rerun install:
 
 ```bash
 git -C ~/.pi-stack pull --ff-only
-git -C ~/.pistack pull --ff-only
+git -C ~/.pi-stack/.plugins pull --ff-only
 ./install.sh
 ```
 

@@ -12,8 +12,8 @@ Does not search for git repositories. Fit a repo later with jig.sh.
 
 If PI_STACK is unset and this script is not in a checkout, uses
 $HOME/.pi-stack. Clones alienczf/pi-stack there when overlay/ is missing.
-If PSTACK is unset, uses $HOME/.pistack/pstack. Clones cursor/plugins
-(sparse, pstack only) into $HOME/.pistack when that tree is missing.
+If PSTACK is unset, uses $PI_STACK/.plugins/pstack. Clones cursor/plugins
+(sparse, pstack only) into $PI_STACK/.plugins when that tree is missing.
 Neither clone is refreshed on a later run.
 
 Environment
@@ -83,26 +83,26 @@ fi
 
 overlay="$here/overlay"
 
-default_root="${HOME}/.pistack"
-default_pstack="${default_root}/pstack"
+plugins_root="$pi_stack/.plugins"
+default_pstack="${plugins_root}/pstack"
 pstack_git="${PSTACK_GIT:-https://github.com/cursor/plugins.git}"
 pstack="${PSTACK:-}"
 if [[ -z "$pstack" ]]; then
 	if [[ -f "${default_pstack}/skills/poteto-mode/SKILL.md" ]]; then
 		pstack="$default_pstack"
 	else
-		if [[ -e "$default_root" && ! -d "$default_root/.git" ]]; then
-			printf '%s exists and is not a git clone. Set PSTACK or remove it.\n' "$default_root" >&2
+		if [[ -e "$plugins_root" && ! -d "$plugins_root/.git" ]]; then
+			printf '%s exists and is not a git clone. Set PSTACK or remove it.\n' "$plugins_root" >&2
 			exit 1
 		fi
 		if ! command -v git >/dev/null 2>&1; then
-			printf 'git is required to clone pstack into %s, or set PSTACK\n' "$default_root" >&2
+			printf 'git is required to clone pstack into %s, or set PSTACK\n' "$plugins_root" >&2
 			exit 1
 		fi
-		if [[ ! -d "$default_root/.git" ]]; then
-			git clone --depth 1 --filter=blob:none --sparse "$pstack_git" "$default_root"
+		if [[ ! -d "$plugins_root/.git" ]]; then
+			git clone --depth 1 --filter=blob:none --sparse "$pstack_git" "$plugins_root"
 		fi
-		git -C "$default_root" sparse-checkout set pstack
+		git -C "$plugins_root" sparse-checkout set pstack
 		pstack="$default_pstack"
 	fi
 fi
