@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "requiredInitOutcome": {"selection": "default"},
+  "hardForbiddenOutcomes": {"selection": "default"},
+  "protectedUserPath": {"selection": "default"},
+  "proofPolicy": {"selection": "default"},
+  "compatibilityPolicy": {"selection": "default"},
+  "autonomyPolicy": {"selection": "default"},
+  "tradeoffOrder": {"selection": "default"},
+  "authority": {
+    "selection": "custom",
+    "value": {
+      "owner": "Repository operator",
+      "exceptions": "No exceptions without operator approval.",
+      "amendmentPolicy": "Agents may propose amendments. The repository operator approves and ratifies them.",
+      "ratificationMarker": "I ratify these exact repository COMMANDMENTS."
+    }
+  },
+  "freeTextAmendments": "Keep the public command stable."
+}
