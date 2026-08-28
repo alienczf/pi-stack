@@ -38,10 +38,11 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["command", "exitCode", "outputSha256", "finishedAt"],
+        "required": ["command", "exitCode", "receiptPath", "outputSha256", "finishedAt"],
         "properties": {
           "command": { "type": "string", "minLength": 1 },
           "exitCode": { "type": "integer", "minimum": 0, "maximum": 255 },
+          "receiptPath": { "$ref": "#/$defs/relativePath" },
           "outputSha256": { "$ref": "#/$defs/sha256" },
           "finishedAt": { "$ref": "#/$defs/timestamp" }
         }

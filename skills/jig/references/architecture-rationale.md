@@ -90,7 +90,11 @@ A scheduler or repeated candidate loop would hide whether init can complete one 
 
 ## Costs and risks
 
-The Python controller becomes a security-sensitive component and needs fixture coverage for stale locks, interrupted writes, corrupt state, symlink escapes, and source revision changes. JSON Schema cannot express every cross-record invariant, such as proving that `selectedCandidateId` names an eligible candidate. The controller must enforce those semantic links after schema validation.
+The Python controller becomes a security-sensitive component and needs fixture coverage for stale locks, interrupted writes, corrupt state, symlink escapes, and source revision changes.
+
+The Draft 2020-12 schemas are the normative rules for each JSON document's shape, formats, and same-document conditions. Development and CI use a conforming Draft 2020-12 validator with format checking to verify the schemas and every example. That validator is not a controller runtime dependency. At runtime, the Python standard-library controller implements the subset of schema operators used by version 1 and applies those rules whenever it reads or writes an artifact. CI must compare the controller's results with the conforming validator on the same valid and invalid examples.
+
+The controller separately validates cross-document links and filesystem facts that JSON Schema cannot prove. These checks include referenced file hashes, contained resolved paths, contiguous transition history, and whether `selectedCandidateId` names an eligible candidate. The controller applies them after each document passes schema validation.
 
 Current-session commands can run after project resources have influenced the session. The manifest receipt and command output must keep that limitation visible. Operators who need isolation must use `jig init` from the shell. A hostile repository still requires an operating-system sandbox.
 

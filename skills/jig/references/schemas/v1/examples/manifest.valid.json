@@ -44,6 +44,7 @@
       "kind": "runtime",
       "command": "bash .pi/skills/jig-verification/scripts/self-test.sh",
       "exitCode": 0,
+      "receiptPath": ".pi/jig/receipts/verification-runtime.txt",
       "outputSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
       "revision": "1111111111111111111111111111111111111111",
       "finishedAt": "2026-08-28T12:20:00Z"

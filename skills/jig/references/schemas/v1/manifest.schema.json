@@ -92,11 +92,12 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["kind", "command", "exitCode", "outputSha256", "revision", "finishedAt"],
+        "required": ["kind", "command", "exitCode", "receiptPath", "outputSha256", "revision", "finishedAt"],
         "properties": {
           "kind": { "enum": ["deterministic", "runtime", "behavioral"] },
           "command": { "type": "string", "minLength": 1 },
           "exitCode": { "type": "integer", "minimum": 0, "maximum": 255 },
+          "receiptPath": { "$ref": "#/$defs/relativePath" },
           "outputSha256": { "$ref": "#/$defs/sha256" },
           "revision": { "$ref": "#/$defs/revision" },
           "finishedAt": { "$ref": "#/$defs/timestamp" }
@@ -172,8 +173,45 @@
       }
     },
     {
-      "if": { "properties": { "evaluation": { "properties": { "required": { "const": false } }, "required": ["required"] } } },
+      "if": { "properties": { "evaluation": { "properties": { "required": { "const": false } }, "required": ["required"] } }, "required": ["evaluation"] },
       "then": { "properties": { "evaluation": { "properties": { "status": { "const": "not-required" }, "verdictPath": { "type": "null" } } } } }
+    },
+    {
+      "if": { "properties": { "evaluation": { "properties": { "required": { "const": true } }, "required": ["required"] } }, "required": ["evaluation"] },
+      "then": { "properties": { "evaluation": { "properties": { "status": { "enum": ["pending", "passed", "failed", "inconclusive"] } } } } }
+    },
+    {
+      "if": {
+        "properties": {
+          "currentState": { "const": "initialized" },
+          "evaluation": { "properties": { "required": { "const": true } }, "required": ["required"] }
+        },
+        "required": ["currentState", "evaluation"]
+      },
+      "then": {
+        "properties": {
+          "evaluation": {
+            "properties": {
+              "status": { "const": "passed" },
+              "verdictPath": { "$ref": "#/$defs/relativePath" }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "currentState": { "$ref": "#/$defs/ratifiedState" } }, "required": ["currentState"] },
+      "then": {
+        "properties": {
+          "commandments": {
+            "properties": {
+              "sha256": { "$ref": "#/$defs/sha256" },
+              "version": { "type": "integer", "minimum": 1 },
+              "ratifiedAt": { "$ref": "#/$defs/timestamp" }
+            }
+          }
+        }
+      }
     }
   ],
   "$defs": {
@@ -186,6 +224,21 @@
     "revision": { "type": "string", "pattern": "^[0-9a-f]{40,64}$" },
     "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
     "timestamp": { "type": "string", "format": "date-time" },
+    "ratifiedState": {
+      "enum": [
+        "commandments-ratified",
+        "verification-building",
+        "verification-ready",
+        "step-selecting",
+        "step-running",
+        "initialized",
+        "failed-commandments-ratified",
+        "failed-verification-building",
+        "failed-verification-ready",
+        "failed-step-selecting",
+        "failed-step-running"
+      ]
+    },
     "state": {
       "enum": [
         "surveying",
