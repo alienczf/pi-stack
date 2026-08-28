@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:pi-stack:jig:schema:v1:result",
+  "title": "Jig first-step result version 1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "stepId",
+    "outcome",
+    "selectionPath",
+    "selectionSha256",
+    "proposalPath",
+    "proposalSha256",
+    "inputRevision",
+    "outputRevision",
+    "branch",
+    "worktree",
+    "commands",
+    "diffSha256",
+    "independentVerdict",
+    "recordedAt"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "stepId": { "const": "0001" },
+    "outcome": { "enum": ["kept", "reverted", "no-eligible-candidate"] },
+    "selectionPath": { "const": ".pi/jig/steps/0001/selection.json" },
+    "selectionSha256": { "$ref": "#/$defs/sha256" },
+    "proposalPath": { "anyOf": [{ "const": ".pi/jig/steps/0001/proposal.json" }, { "type": "null" }] },
+    "proposalSha256": { "anyOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] },
+    "inputRevision": { "anyOf": [{ "$ref": "#/$defs/revision" }, { "type": "null" }] },
+    "outputRevision": { "anyOf": [{ "$ref": "#/$defs/revision" }, { "type": "null" }] },
+    "branch": { "anyOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }] },
+    "worktree": { "anyOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }] },
+    "commands": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["command", "exitCode", "outputSha256", "finishedAt"],
+        "properties": {
+          "command": { "type": "string", "minLength": 1 },
+          "exitCode": { "type": "integer", "minimum": 0, "maximum": 255 },
+          "outputSha256": { "$ref": "#/$defs/sha256" },
+          "finishedAt": { "$ref": "#/$defs/timestamp" }
+        }
+      }
+    },
+    "diffSha256": { "anyOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] },
+    "independentVerdict": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "evidencePath", "evidenceSha256", "revision"],
+          "properties": {
+            "status": { "enum": ["passed", "failed", "inconclusive"] },
+            "evidencePath": { "$ref": "#/$defs/relativePath" },
+            "evidenceSha256": { "$ref": "#/$defs/sha256" },
+            "revision": { "$ref": "#/$defs/revision" }
+          }
+        },
+        { "type": "null" }
+      ]
+    },
+    "recordedAt": { "$ref": "#/$defs/timestamp" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "outcome": { "const": "no-eligible-candidate" } }, "required": ["outcome"] },
+      "then": {
+        "properties": {
+          "proposalPath": { "type": "null" },
+          "proposalSha256": { "type": "null" },
+          "inputRevision": { "type": "null" },
+          "outputRevision": { "type": "null" },
+          "branch": { "type": "null" },
+          "worktree": { "type": "null" },
+          "commands": { "maxItems": 0 },
+          "diffSha256": { "type": "null" },
+          "independentVerdict": { "type": "null" }
+        }
+      },
+      "else": {
+        "properties": {
+          "proposalPath": { "const": ".pi/jig/steps/0001/proposal.json" },
+          "proposalSha256": { "$ref": "#/$defs/sha256" },
+          "inputRevision": { "$ref": "#/$defs/revision" },
+          "outputRevision": { "$ref": "#/$defs/revision" },
+          "branch": { "type": "string", "minLength": 1 },
+          "worktree": { "type": "string", "minLength": 1 },
+          "commands": { "minItems": 1 },
+          "diffSha256": { "$ref": "#/$defs/sha256" }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "revision": { "type": "string", "pattern": "^[0-9a-f]{40,64}$" },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*//).+$"
+    }
+  }
+}

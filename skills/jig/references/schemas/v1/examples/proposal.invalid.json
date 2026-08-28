@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "stepId": "0001",
+  "candidateId": "add-import-guard",
+  "repositoryRevision": "1111111111111111111111111111111111111111",
+  "commandmentsSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "selectionSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "commandmentIds": ["CMD-001"],
+  "failureIds": ["D3"],
+  "responseLayer": "deterministic-guard",
+  "expectedGain": "Prevent private cross-layer imports before review.",
+  "evidence": [
+    { "path": "src/feature.py", "line": 4, "note": "The feature imports a private module." }
+  ],
+  "blastRadius": "low",
+  "uncertainty": "low",
+  "potetoPlaybook": "pstack/skills/poteto-mode/playbooks/feature.md",
+  "baseline": {
+    "commands": ["python3 -m unittest"],
+    "expected": "The current regression suite passes."
+  },
+  "proof": {
+    "targeted": {
+      "commands": ["python3 scripts/check_imports.py"],
+      "expected": "The corrected tree passes the import guard."
+    },
+    "regression": {
+      "commands": ["python3 -m unittest"],
+      "expected": "The product regression suite passes."
+    },
+    "protectedUserPath": null,
+    "seededViolation": null,
+    "independentReview": false
+  },
+  "rollback": {
+    "method": "Revert the isolated worktree commit.",
+    "commands": ["git revert --no-edit HEAD"]
+  },
+  "evalDecision": {
+    "status": "not-required",
+    "reason": "The change is a deterministic guard."
+  }
+}

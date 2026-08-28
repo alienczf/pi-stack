@@ -1,0 +1,142 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:pi-stack:jig:schema:v1:proposal",
+  "title": "Jig selected first-step proposal version 1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "stepId",
+    "candidateId",
+    "repositoryRevision",
+    "commandmentsSha256",
+    "selectionSha256",
+    "commandmentIds",
+    "failureIds",
+    "responseLayer",
+    "expectedGain",
+    "evidence",
+    "blastRadius",
+    "uncertainty",
+    "potetoPlaybook",
+    "baseline",
+    "proof",
+    "rollback",
+    "evalDecision"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "stepId": { "const": "0001" },
+    "candidateId": { "$ref": "#/$defs/id" },
+    "repositoryRevision": { "$ref": "#/$defs/revision" },
+    "commandmentsSha256": { "$ref": "#/$defs/sha256" },
+    "selectionSha256": { "$ref": "#/$defs/sha256" },
+    "commandmentIds": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^CMD-[0-9]{3}$" }
+    },
+    "failureIds": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^[A-Z][A-Z0-9-]{0,31}$" }
+    },
+    "responseLayer": { "enum": ["code", "architecture", "deterministic-guard", "runtime-verification", "verification-skill", "behavioral-eval"] },
+    "expectedGain": { "type": "string", "minLength": 1 },
+    "evidence": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "line", "note"],
+        "properties": {
+          "path": { "$ref": "#/$defs/relativePath" },
+          "line": { "type": "integer", "minimum": 1 },
+          "note": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "blastRadius": { "enum": ["low", "medium", "high"] },
+    "uncertainty": { "enum": ["low", "medium", "high"] },
+    "potetoPlaybook": {
+      "enum": [
+        "pstack/skills/create-verification-skill/SKILL.md",
+        "pstack/skills/poteto-mode/playbooks/refactoring.md",
+        "pstack/skills/poteto-mode/playbooks/bug-fix.md",
+        "pstack/skills/poteto-mode/playbooks/feature.md",
+        "pstack/skills/poteto-mode/playbooks/eval.md",
+        "pstack/skills/poteto-mode/playbooks/perf-issue.md"
+      ]
+    },
+    "baseline": { "$ref": "#/$defs/commandSet" },
+    "proof": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["targeted", "regression", "protectedUserPath", "seededViolation", "independentReview"],
+      "properties": {
+        "targeted": { "$ref": "#/$defs/commandSet" },
+        "regression": { "$ref": "#/$defs/commandSet" },
+        "protectedUserPath": { "anyOf": [{ "$ref": "#/$defs/commandSet" }, { "type": "null" }] },
+        "seededViolation": { "anyOf": [{ "$ref": "#/$defs/commandSet" }, { "type": "null" }] },
+        "independentReview": { "type": "boolean" }
+      }
+    },
+    "rollback": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "commands"],
+      "properties": {
+        "method": { "type": "string", "minLength": 1 },
+        "commands": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } }
+      }
+    },
+    "evalDecision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "reason"],
+      "properties": {
+        "status": { "enum": ["required", "not-required"] },
+        "reason": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "responseLayer": { "const": "deterministic-guard" } }, "required": ["responseLayer"] },
+      "then": {
+        "properties": {
+          "proof": { "properties": { "seededViolation": { "$ref": "#/$defs/commandSet" } } }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "responseLayer": { "const": "behavioral-eval" } }, "required": ["responseLayer"] },
+      "then": {
+        "properties": {
+          "evalDecision": { "properties": { "status": { "const": "required" } } }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
+    "revision": { "type": "string", "pattern": "^[0-9a-f]{40,64}$" },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*//).+$"
+    },
+    "commandSet": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["commands", "expected"],
+      "properties": {
+        "commands": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+        "expected": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}
