@@ -12,6 +12,12 @@ Read [interview.md](references/interview.md), [failure-modes.md](references/fail
 
 The version 1 init contract is [init-contract.md](references/init-contract.md). Its design choices and rejected alternatives are in [architecture-rationale.md](references/architecture-rationale.md).
 
+## Init
+
+For `init`, follow [the internal init playbook](playbooks/init.md). All forms use `.pi/jig/manifest.json` and `bin/jigctl.py`. A current Pi session records `inherited-session` and never starts `pi -p` from Bash. The shell launcher records `isolated-shell`.
+
+Stop at the controller's implemented boundary. Do not infer human intent, select recommended defaults, approve a candidate, or write root `COMMANDMENTS.md` outside the deterministic ratification command.
+
 ## Pass 0. One git repo
 
 Cwd must be inside one git repo. `git rev-parse --show-toplevel` must succeed. Operate only on that root. Do not walk parent directories. Do not `find` sibling `.git` dirs.

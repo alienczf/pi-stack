@@ -20,6 +20,16 @@ grep -q iterate skills/jig/SKILL.md || fail "SKILL.md must mention iterate"
 grep -q S15 skills/jig/references/failure-modes.md || fail "failure-modes.md missing S15"
 grep -q P7 skills/jig/references/failure-modes.md || fail "failure-modes.md missing P7"
 grep -q D4 skills/jig/references/failure-modes.md || fail "failure-modes.md missing D4"
+test -f skills/jig/playbooks/init.md || fail "missing Jig init playbook"
+test -f skills/jig/references/commandments-interview.md || fail "missing COMMANDMENTS interview"
+test -f skills/jig/references/COMMANDMENTS.template.md || fail "missing COMMANDMENTS template"
+grep -q 'one question round' skills/jig/playbooks/init.md || fail "init playbook must keep one interview round"
+grep -q 'recommended default' skills/jig/playbooks/init.md || fail "init playbook must show recommended defaults"
+grep -q 'exact staged candidate bytes and SHA-256 digest' skills/jig/playbooks/init.md || fail "init playbook must show exact digest ratification"
+grep -q 'Record amend and defer' skills/jig/playbooks/init.md || fail "init playbook must preserve amend and defer paths"
+grep -q 'Do not select one for the operator' skills/jig/playbooks/init.md || fail "init playbook must forbid automatic default selection"
+grep -q 'Do not infer values or ask a second round' skills/jig/playbooks/init.md || fail "init playbook must forbid inference and repeat interviews"
+grep -q 'Only this deterministic command may publish' skills/jig/references/commandments-interview.md || fail "ratification must stay controller-owned"
 
 desc=$(awk 'BEGIN{d=0} /^---$/{c++; next} c==1 && $0 ~ /^description:/{d=1} c==1 && d{print} c==2{exit}' skills/jig/SKILL.md | wc -c)
 if [ "$desc" -gt 400 ]; then
@@ -58,7 +68,12 @@ changed = [
     Path("bin/jig.sh"),
     Path("bin/jigctl.py"),
     Path("scripts/check-jig.sh"),
+    Path("skills/jig/SKILL.md"),
+    Path("skills/jig/playbooks/init.md"),
+    Path("skills/jig/references/commandments-interview.md"),
+    Path("skills/jig/references/COMMANDMENTS.template.md"),
     *sorted(Path("scripts/jig_tests").glob("**/*.py")),
+    *sorted(Path("scripts/jig_tests/fixtures").glob("**/*")),
 ]
 banned = {"\u2013", "\u2014", "\u2018", "\u2019", "\u201c", "\u201d"}
 for candidate in changed:
