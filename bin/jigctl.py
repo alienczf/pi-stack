@@ -11,6 +11,8 @@ import json
 import os
 import platform
 import re
+import resource
+import signal
 import socket
 import stat
 import subprocess
@@ -28,20 +30,30 @@ IMPLEMENTED_STATES = {
     "surveying",
     "awaiting-commandments",
     "commandments-ratified",
+    "verification-building",
+    "verification-ready",
     "failed-surveying",
     "failed-awaiting-commandments",
     "failed-commandments-ratified",
+    "failed-verification-building",
+    "failed-verification-ready",
 }
 TRANSITION_KIND_BY_EDGE = {
     ("absent", "surveying"): "init-started",
     ("surveying", "awaiting-commandments"): "profile-committed",
     ("awaiting-commandments", "commandments-ratified"): "commandments-ratified",
+    ("commandments-ratified", "verification-building"): "verification-started",
+    ("verification-building", "verification-ready"): "verification-ready",
     ("surveying", "failed-surveying"): "phase-failed",
     ("awaiting-commandments", "failed-awaiting-commandments"): "phase-failed",
     ("commandments-ratified", "failed-commandments-ratified"): "phase-failed",
+    ("verification-building", "failed-verification-building"): "phase-failed",
+    ("verification-ready", "failed-verification-ready"): "phase-failed",
     ("failed-surveying", "surveying"): "failed-state-reconciled",
     ("failed-awaiting-commandments", "awaiting-commandments"): "failed-state-reconciled",
     ("failed-commandments-ratified", "commandments-ratified"): "failed-state-reconciled",
+    ("failed-verification-building", "verification-building"): "failed-state-reconciled",
+    ("failed-verification-ready", "verification-ready"): "failed-state-reconciled",
 }
 TRANSITION_RECEIPT_PATTERN = re.compile(
     r"transition-([0-9]{4})-("
@@ -64,6 +76,11 @@ COMMANDMENTS_ROOT_PATH = "COMMANDMENTS.md"
 COMMANDMENTS_ROOT_TEMP_PATTERN = re.compile(
     r"\.jigctl-COMMANDMENTS\.md\.([0-9a-f]{64})\.([0-9]+)\.([0-9a-f]{32})\.tmp"
 )
+VERIFICATION_PLAN_PATH = ".pi/jig/verification/plan.json"
+VERIFICATION_SKILL_PATH = ".pi/skills/jig-verification/SKILL.md"
+VERIFICATION_FEATURE_INDEX_PATH = ".pi/skills/jig-verification/references/features/index.md"
+VERIFICATION_OUTPUT_LIMIT = 256 * 1024
+VERIFICATION_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
 COMMANDMENTS_ANSWER_KEYS = (
     "requiredInitOutcome",
     "hardForbiddenOutcomes",
@@ -413,21 +430,24 @@ def resolve_git_root() -> Path:
     return root
 
 
-def source_record(root: Path) -> Dict[str, Any]:
+def source_record(root: Path, excluded_paths: Sequence[str] = ()) -> Dict[str, Any]:
     revision = run_git(root, ["rev-parse", "HEAD"])
     if re.fullmatch(r"[0-9a-f]{40,64}", revision) is None:
         raise JigError("the repository has no valid HEAD revision")
+    pathspecs = [".", ":(exclude).pi/jig", ":(exclude)COMMANDMENTS.md"]
+    for value in excluded_paths:
+        pure = PurePosixPath(value)
+        if (
+            not isinstance(value, str)
+            or pure.is_absolute()
+            or any(part in {"", ".", ".."} for part in pure.parts)
+            or "\\" in value
+        ):
+            raise ValidationError("source exclusion is not a contained relative path")
+        pathspecs.append(f":(exclude){value}")
     raw_status = run_git(
         root,
-        [
-            "status",
-            "--porcelain=v1",
-            "--untracked-files=all",
-            "--",
-            ".",
-            ":(exclude).pi/jig",
-            ":(exclude)COMMANDMENTS.md",
-        ],
+        ["status", "--porcelain=v1", "--untracked-files=all", "--", *pathspecs],
     )
     summary = [] if not raw_status else raw_status.splitlines()
     return {"revision": revision, "dirty": bool(summary), "statusSummary": summary}
@@ -864,6 +884,32 @@ def validate_transition_receipt(
                 "approvalDigest",
             }
         )
+    elif kind == "verification-started":
+        expected_fields.update(
+            {
+                "resourceIsolation",
+                "planPath",
+                "planSha256",
+                "commandmentsSha256",
+                "protectedFeatureId",
+            }
+        )
+    elif kind == "verification-ready":
+        expected_fields.update(
+            {
+                "resourceIsolation",
+                "planPath",
+                "planSha256",
+                "commandmentsSha256",
+                "protectedFeatureId",
+                "skillPath",
+                "skillSha256",
+                "featureIndexPath",
+                "featureIndexSha256",
+                "runtimeReceiptPath",
+                "runtimeReceiptSha256",
+            }
+        )
     elif kind == "phase-failed":
         expected_fields.add("failureReason")
     if not isinstance(receipt, dict) or set(receipt) != expected_fields:
@@ -962,6 +1008,40 @@ def validate_transition_receipt(
             or metadata["marker"] != marker
         ):
             raise ValidationError("COMMANDMENTS transition receipt does not match the exact candidate")
+    elif kind in {"verification-started", "verification-ready"}:
+        if (
+            not isinstance(receipt["resourceIsolation"], str)
+            or receipt["resourceIsolation"] not in {"isolated-shell", "inherited-session"}
+            or receipt["planPath"] != VERIFICATION_PLAN_PATH
+            or not isinstance(receipt["planSha256"], str)
+            or re.fullmatch(r"[0-9a-f]{64}", receipt["planSha256"]) is None
+            or not isinstance(receipt["commandmentsSha256"], str)
+            or re.fullmatch(r"[0-9a-f]{64}", receipt["commandmentsSha256"]) is None
+            or not isinstance(receipt["protectedFeatureId"], str)
+            or VERIFICATION_ID.fullmatch(receipt["protectedFeatureId"]) is None
+        ):
+            raise ValidationError("verification transition receipt is inconsistent")
+        paths = [(receipt["planPath"], receipt["planSha256"])]
+        if kind == "verification-ready":
+            if (
+                receipt["skillPath"] != VERIFICATION_SKILL_PATH
+                or receipt["featureIndexPath"] != VERIFICATION_FEATURE_INDEX_PATH
+                or re.fullmatch(r"[0-9a-f]{64}", receipt["skillSha256"]) is None
+                or re.fullmatch(r"[0-9a-f]{64}", receipt["featureIndexSha256"]) is None
+                or re.fullmatch(r"[0-9a-f]{64}", receipt["runtimeReceiptSha256"]) is None
+            ):
+                raise ValidationError("verification-ready receipt has invalid artifacts")
+            paths.extend(
+                [
+                    (receipt["skillPath"], receipt["skillSha256"]),
+                    (receipt["featureIndexPath"], receipt["featureIndexSha256"]),
+                    (receipt["runtimeReceiptPath"], receipt["runtimeReceiptSha256"]),
+                ]
+            )
+        for path_value, digest in paths:
+            path = safe_relative_path(root, path_value, must_exist=True)
+            if path.is_symlink() or not path.is_file() or sha256_file(path) != digest:
+                raise ValidationError("verification transition artifact hash is inconsistent")
     elif kind == "phase-failed":
         reason = receipt["failureReason"]
         if (
@@ -1070,10 +1150,13 @@ def validate_manifest_semantics(root: Path, manifest: Mapping[str, Any], schema:
         r"^(?:COMMANDMENTS\.md|\.pi/jig/(?:profile\.json|commandments/(?:interview\.json|"
         r"staging\.json|answers/[0-9a-f]{64}\.json|candidates/[0-9a-f]{64}\.md|"
         r"decisions/[0-9a-f]{64}\.json|proposals/[0-9a-f]{64}\.md)|"
-        r"receipts/(?:transition-[0-9]{4}-(?:"
+        r"verification/(?:plan\.json|receipts/runtime-[0-9a-f]{64}\.json|"
+        r"evidence/[a-z0-9][a-z0-9._-]{0,127}\.json)|receipts/(?:transition-[0-9]{4}-(?:"
         + implemented_state
         + r")\.json|lock-reclaimed-[0-9a-f]{16}\.json|"
-        + r"interrupted-write-[0-9a-f]{64}\.bin|interrupted-transition-[0-9a-f]{64}\.json)))$"
+        + r"interrupted-write-[0-9a-f]{64}\.bin|interrupted-transition-[0-9a-f]{64}\.json))|"
+        + r"\.pi/skills/jig-verification/(?:SKILL\.md|helpers/[a-z0-9][a-z0-9-]{0,63}\.py|"
+        + r"references/features/(?:index|[a-z0-9][a-z0-9-]{0,63})\.md))$"
     )
     for artifact in artifacts:
         artifact_path = artifact["path"]
@@ -1081,8 +1164,15 @@ def validate_manifest_semantics(root: Path, manifest: Mapping[str, Any], schema:
             raise ValidationError(f"manifest names an unknown owned artifact: {artifact_path}")
         if artifact_path == COMMANDMENTS_ROOT_PATH or "/answers/" in artifact_path:
             expected_owner = "human"
-        elif artifact_path == ".pi/jig/profile.json" or "/proposals/" in artifact_path:
+        elif (
+            artifact_path == ".pi/jig/profile.json"
+            or artifact_path == VERIFICATION_PLAN_PATH
+            or artifact_path.startswith(".pi/skills/jig-verification/")
+            or "/proposals/" in artifact_path
+        ):
             expected_owner = "jig-skill"
+        elif "/verification/evidence/" in artifact_path:
+            expected_owner = "repository"
         else:
             expected_owner = "controller"
         if artifact["owner"] != expected_owner:
@@ -1160,6 +1250,26 @@ def validate_manifest_semantics(root: Path, manifest: Mapping[str, Any], schema:
                 or receipt_data["at"] != manifest["commandments"]["ratifiedAt"]
             ):
                 raise ValidationError("COMMANDMENTS transition receipt is inconsistent with the manifest")
+        elif kind in {"verification-started", "verification-ready"}:
+            plan_artifact = next(
+                (item for item in artifacts if item["path"] == VERIFICATION_PLAN_PATH),
+                None,
+            )
+            plan = read_json(root / VERIFICATION_PLAN_PATH, "verification plan")
+            if (
+                receipt_data["resourceIsolation"] != manifest["resourceIsolation"]
+                or receipt_data["commandmentsSha256"] != manifest["commandments"]["sha256"]
+                or plan_artifact is None
+                or receipt_data["planSha256"] != plan_artifact["sha256"]
+                or receipt_data["protectedFeatureId"] != plan.get("protectedFeatureId")
+            ):
+                raise ValidationError("verification transition receipt is inconsistent with the manifest")
+            if kind == "verification-ready":
+                if (
+                    len(manifest["verification"]) != 1
+                    or receipt_data["runtimeReceiptPath"] != manifest["verification"][0]["receiptPath"]
+                ):
+                    raise ValidationError("verification-ready receipt differs from the runtime record")
         previous = transition["to"]
     transition_artifacts = {
         path
@@ -1178,6 +1288,10 @@ def validate_manifest_semantics(root: Path, manifest: Mapping[str, Any], schema:
         "failed-awaiting-commandments",
         "commandments-ratified",
         "failed-commandments-ratified",
+        "verification-building",
+        "failed-verification-building",
+        "verification-ready",
+        "failed-verification-ready",
     }:
         profile_artifact = next(
             (item for item in artifacts if item["path"] == ".pi/jig/profile.json"),
@@ -1188,7 +1302,14 @@ def validate_manifest_semantics(root: Path, manifest: Mapping[str, Any], schema:
         profile = read_json(root / ".pi" / "jig" / "profile.json", "profile")
         validate_instance(profile, load_schema("profile"))
         validate_profile_semantics(root, profile, manifest["source"]["revision"])
-    if state in {"commandments-ratified", "failed-commandments-ratified"}:
+    if state in {
+        "commandments-ratified",
+        "failed-commandments-ratified",
+        "verification-building",
+        "failed-verification-building",
+        "verification-ready",
+        "failed-verification-ready",
+    }:
         root_path = safe_relative_path(root, COMMANDMENTS_ROOT_PATH, must_exist=True)
         if not root_path.is_file() or root_path.is_symlink():
             raise ValidationError("ratified COMMANDMENTS path is not a regular file")
@@ -1206,6 +1327,8 @@ def validate_manifest_semantics(root: Path, manifest: Mapping[str, Any], schema:
         artifact = next((item for item in artifacts if item["path"] == COMMANDMENTS_ROOT_PATH), None)
         if artifact != {"path": COMMANDMENTS_ROOT_PATH, "owner": "human", "sha256": digest}:
             raise ValidationError("ratified COMMANDMENTS artifact ownership is inconsistent")
+    if state in {"verification-ready", "failed-verification-ready"}:
+        validate_verification_ready(root, manifest)
 
 
 def receipt_value(kind: str, from_state: str, to_state: str, source: Mapping[str, Any], **extra: Any) -> Dict[str, Any]:
@@ -1304,8 +1427,23 @@ def load_existing_manifest(root: Path) -> Dict[str, Any]:
     return value
 
 
+def verification_reserved_paths(root: Path, manifest: Mapping[str, Any]) -> List[str]:
+    if manifest["currentState"] not in {
+        "verification-building",
+        "failed-verification-building",
+        "verification-ready",
+        "failed-verification-ready",
+    }:
+        return []
+    plan = read_json(root / VERIFICATION_PLAN_PATH, "verification plan")
+    paths = plan.get("reservedPaths") if isinstance(plan, dict) else None
+    if not isinstance(paths, list) or any(not isinstance(item, str) for item in paths):
+        raise ValidationError("verification plan has invalid reserved paths")
+    return list(paths)
+
+
 def validate_current_source(root: Path, manifest: Mapping[str, Any]) -> None:
-    if source_record(root) != manifest["source"]:
+    if source_record(root, verification_reserved_paths(root, manifest)) != manifest["source"]:
         raise ValidationError(
             "repository source revision or dirty summary changed after the recorded boundary"
         )
@@ -1407,6 +1545,18 @@ def start(root: Path, isolation: str, lock: RepositoryLock) -> Dict[str, Any]:
         elif state == "failed-commandments-ratified":
             append_transition(
                 root, manifest, state, "commandments-ratified", "failed-state-reconciled"
+            )
+            changed = True
+            reconciled = True
+        elif state == "failed-verification-building":
+            append_transition(
+                root, manifest, state, "verification-building", "failed-state-reconciled"
+            )
+            changed = True
+            reconciled = True
+        elif state == "failed-verification-ready":
+            append_transition(
+                root, manifest, state, "verification-ready", "failed-state-reconciled"
             )
             changed = True
             reconciled = True
@@ -2726,6 +2876,555 @@ def propose_commandments_amendment(
     return manifest, {"path": path, "sha256": digest}
 
 
+def protected_user_path(root: Path) -> Dict[str, str]:
+    text = (root / COMMANDMENTS_ROOT_PATH).read_text(encoding="utf-8")
+    labels = ("Action", "Visible result", "Evidence", "Cleanup", "Thresholds")
+    result = {}
+    for label in labels:
+        matches = re.findall(rf"^\*\*{re.escape(label)}\.\*\* (.+)$", text, re.MULTILINE)
+        if len(matches) != 1:
+            raise ValidationError(f"COMMANDMENTS protected path has invalid {label}")
+        key = {"Visible result": "visibleResult"}.get(label, label.lower())
+        result[key] = bounded_text(matches[0], f"protected path {label}", 4000)
+    return result
+
+
+def validate_verification_plan(
+    root: Path, manifest: Mapping[str, Any], value: Any
+) -> Dict[str, Any]:
+    fields = {
+        "schemaVersion",
+        "kind",
+        "sourceRevision",
+        "commandmentsSha256",
+        "protectedUserPath",
+        "protectedFeatureId",
+        "skillPath",
+        "featureIndexPath",
+        "featureIds",
+        "featurePaths",
+        "helperPaths",
+        "selfTestCommand",
+        "timeoutSeconds",
+        "cleanupOwner",
+        "reservedPaths",
+    }
+    if not isinstance(value, dict) or set(value) != fields:
+        raise ValidationError("verification plan has an invalid shape")
+    if (
+        type(value["schemaVersion"]) is not int
+        or value["schemaVersion"] != 1
+        or value["kind"] != "verification-plan"
+        or value["sourceRevision"] != manifest["source"]["revision"]
+        or value["commandmentsSha256"] != manifest["commandments"]["sha256"]
+        or value["skillPath"] != VERIFICATION_SKILL_PATH
+        or value["featureIndexPath"] != VERIFICATION_FEATURE_INDEX_PATH
+        or type(value["timeoutSeconds"]) is not int
+        or not 2 <= value["timeoutSeconds"] <= 120
+        or not isinstance(value["cleanupOwner"], str)
+    ):
+        raise ValidationError("verification plan metadata is inconsistent")
+    bounded_text(value["cleanupOwner"], "verification cleanup owner", 500)
+    if value["protectedUserPath"] != protected_user_path(root):
+        raise ValidationError("verification plan changes the ratified protected path")
+    protected_id = value["protectedFeatureId"]
+    if not isinstance(protected_id, str) or VERIFICATION_ID.fullmatch(protected_id) is None:
+        raise ValidationError("verification plan has an invalid protected feature ID")
+    feature_ids = value["featureIds"]
+    if (
+        not isinstance(feature_ids, list)
+        or not 3 <= len(feature_ids) <= 5
+        or len(feature_ids) != len(set(feature_ids))
+        or any(not isinstance(item, str) or VERIFICATION_ID.fullmatch(item) is None for item in feature_ids)
+        or protected_id not in feature_ids
+    ):
+        raise ValidationError("verification plan must name three to five unique features")
+    expected_features = [
+        f".pi/skills/jig-verification/references/features/{item}.md"
+        for item in feature_ids
+    ]
+    if value["featurePaths"] != expected_features:
+        raise ValidationError("verification feature paths do not match their IDs")
+    helpers = value["helperPaths"]
+    if (
+        not isinstance(helpers, list)
+        or not 1 <= len(helpers) <= 5
+        or len(helpers) != len(set(helpers))
+        or any(
+            not isinstance(item, str)
+            or re.fullmatch(r"\.pi/skills/jig-verification/helpers/[a-z0-9][a-z0-9-]{0,63}\.py", item) is None
+            for item in helpers
+        )
+    ):
+        raise ValidationError("verification plan has invalid helper paths")
+    command = value["selfTestCommand"]
+    if (
+        not isinstance(command, list)
+        or command != ["python3", helpers[0], "self-test"]
+        or any(len(item.encode("utf-8")) > 512 for item in command)
+    ):
+        raise ValidationError("verification self-test command is not the fixed argv protocol")
+    reserved = [VERIFICATION_SKILL_PATH, VERIFICATION_FEATURE_INDEX_PATH, *expected_features, *helpers]
+    if value["reservedPaths"] != reserved or len(reserved) != len(set(reserved)):
+        raise ValidationError("verification reserved paths are inconsistent")
+    return value
+
+
+def load_verification_plan(root: Path, manifest: Mapping[str, Any]) -> Dict[str, Any]:
+    path = safe_relative_path(root, VERIFICATION_PLAN_PATH, must_exist=True)
+    if path.is_symlink() or not path.is_file():
+        raise ValidationError("verification plan path is unsafe")
+    return validate_verification_plan(root, manifest, read_json(path, "verification plan"))
+
+
+def portable_verification_text(raw: bytes, label: str) -> str:
+    if not raw or len(raw) > 128 * 1024:
+        raise ValidationError(f"{label} is empty or too large")
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise ValidationError(f"{label} is not UTF-8") from error
+    banned = ("{{", "}}", ".cursor/", "/ho" + "me/", "TEMPLATE", "TODO")
+    if any(item in text for item in banned):
+        raise ValidationError(f"{label} contains a placeholder or nonportable path")
+    return text
+
+
+def validate_generated_verification(
+    root: Path, manifest: Mapping[str, Any], plan: Mapping[str, Any]
+) -> List[Tuple[str, str]]:
+    reserved = set(plan["reservedPaths"])
+    skill_root = root / ".pi/skills/jig-verification"
+    if not skill_root.is_dir() or skill_root.is_symlink():
+        raise ValidationError("verification skill directory is missing or unsafe")
+    actual = {
+        path.relative_to(root).as_posix()
+        for path in skill_root.rglob("*")
+        if not path.is_dir() or path.is_symlink()
+    }
+    if actual != reserved:
+        raise ValidationError("verification skill files differ from the reserved plan")
+    results = []
+    for relative in plan["reservedPaths"]:
+        path = safe_relative_path(root, relative, must_exist=True)
+        if path.is_symlink() or not path.is_file():
+            raise ValidationError(f"verification artifact is unsafe: {relative}")
+        raw = path.read_bytes()
+        text = portable_verification_text(raw, relative)
+        if relative in plan["helperPaths"]:
+            if not os.access(path, os.X_OK):
+                raise ValidationError(f"verification helper is not executable: {relative}")
+        elif relative == VERIFICATION_SKILL_PATH:
+            if (
+                not text.startswith("---\nname: jig-verification\n")
+                or "\ndescription:" not in text.split("---", 2)[1]
+                or any(f"\n## {heading}\n" not in text for heading in ("Launch", "Doctor", "Drive", "Evidence", "Cleanup", "Helpers"))
+                or any(helper not in text for helper in plan["helperPaths"])
+            ):
+                raise ValidationError("verification SKILL.md is incomplete")
+        elif relative == VERIFICATION_FEATURE_INDEX_PATH:
+            if (
+                f"Protected feature: `{plan['protectedFeatureId']}`" not in text
+                or any(f"./{item}.md" not in text for item in plan["featureIds"])
+                or text.count(".md)") != len(plan["featureIds"])
+            ):
+                raise ValidationError("verification feature index is incomplete")
+        else:
+            feature_id = Path(relative).stem
+            headings = re.findall(r"^## (.+)$", text, re.MULTILINE)
+            expected_headings = [
+                "Sub-features",
+                "How to get to it (user POV)",
+                "Driving it with fixture-control",
+                "Gotchas",
+            ]
+            metadata = ("Feature ID", "Owner", "Public entry point", "Allowed dependencies", "Evidence", "Last result")
+            if (
+                headings != expected_headings
+                or f"Feature ID: `{feature_id}`" not in text
+                or any(len(re.findall(rf"^{re.escape(label)}: .+$", text, re.MULTILINE)) != 1 for label in metadata)
+            ):
+                raise ValidationError(f"verification feature map is incomplete: {feature_id}")
+            if feature_id == plan["protectedFeatureId"]:
+                for value in plan["protectedUserPath"].values():
+                    if value not in text:
+                        raise ValidationError("protected feature differs from COMMANDMENTS")
+        results.append((relative, sha256_bytes(raw)))
+    return results
+
+
+def parse_runtime_result(
+    root: Path, manifest: Mapping[str, Any], plan: Mapping[str, Any], raw: bytes
+) -> Tuple[Dict[str, Any], List[Tuple[str, str]]]:
+    value = read_json_bytes(raw, "verification runtime result")
+    fields = {"schemaVersion", "kind", "sourceRevision", "protectedFeatureId", "phases", "process", "evidence"}
+    if not isinstance(value, dict) or set(value) != fields:
+        raise ValidationError("verification runtime result has an invalid shape")
+    phases = value["phases"]
+    process = value["process"]
+    if (
+        value["schemaVersion"] != 1
+        or value["kind"] != "verification-self-test"
+        or value["sourceRevision"] != manifest["source"]["revision"]
+        or value["protectedFeatureId"] != plan["protectedFeatureId"]
+        or not isinstance(phases, dict)
+        or set(phases) != {"launch", "doctor", "drive", "evidence", "cleanup"}
+        or any(item is not True for item in phases.values())
+        or not isinstance(process, dict)
+        or set(process) != {"pid", "processStart", "cleaned"}
+        or type(process["pid"]) is not int
+        or process["pid"] < 1
+        or not isinstance(process["processStart"], str)
+        or not process["processStart"]
+        or process["cleaned"] is not True
+        or process_start(process["pid"]) == process["processStart"]
+    ):
+        raise ValidationError("verification runtime phases or cleanup are unproved")
+    evidence = value["evidence"]
+    if not isinstance(evidence, list) or len(evidence) < 2:
+        raise ValidationError("verification runtime evidence is incomplete")
+    artifacts = []
+    seen = set()
+    documents = {}
+    for item in evidence:
+        if not isinstance(item, dict) or set(item) != {"path", "sha256"}:
+            raise ValidationError("verification evidence record has an invalid shape")
+        relative = item["path"]
+        if (
+            not isinstance(relative, str)
+            or re.fullmatch(r"\.pi/jig/verification/evidence/[a-z0-9][a-z0-9._-]{0,127}\.json", relative) is None
+            or relative in seen
+            or re.fullmatch(r"[0-9a-f]{64}", item["sha256"]) is None
+        ):
+            raise ValidationError("verification evidence path or digest is invalid")
+        path = safe_relative_path(root, relative, must_exist=True)
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > 128 * 1024 or sha256_file(path) != item["sha256"]:
+            raise ValidationError("verification evidence bytes are inconsistent")
+        documents[Path(relative).name] = read_json(path, "verification evidence")
+        seen.add(relative)
+        artifacts.append((relative, item["sha256"]))
+    if set(documents) != {"protected-action.json", "protected-result.json"}:
+        raise ValidationError("verification evidence must contain the protected action and result")
+    action = documents["protected-action.json"]
+    result = documents["protected-result.json"]
+    protected = plan["protectedUserPath"]
+    if (
+        not isinstance(action, dict)
+        or set(action) != {"kind", "action", "command"}
+        or action["kind"] != "protected-action"
+        or action["action"] != protected["action"]
+        or not isinstance(action["command"], list)
+        or not action["command"]
+        or not isinstance(result, dict)
+        or set(result) != {"kind", "visibleResult", "evidence", "thresholds", "observed", "persisted"}
+        or result["kind"] != "protected-result"
+        or result["visibleResult"] != protected["visibleResult"]
+        or result["evidence"] != protected["evidence"]
+        or result["thresholds"] != protected["thresholds"]
+        or not result["observed"]
+        or result["observed"] != result["persisted"]
+    ):
+        raise ValidationError("verification evidence does not prove the ratified protected path")
+    evidence_directory = root / ".pi/jig/verification/evidence"
+    actual_evidence = {
+        path.relative_to(root).as_posix()
+        for path in evidence_directory.iterdir()
+    }
+    if actual_evidence != seen:
+        raise ValidationError("verification evidence directory contains unknown or missing files")
+    return value, artifacts
+
+
+def run_verification_command(
+    root: Path, plan: Mapping[str, Any]
+) -> Tuple[bytes, bytes, str]:
+    ensure_owned_directory(root, ".pi/jig/verification")
+    stdout_file = tempfile.TemporaryFile()
+    stderr_file = tempfile.TemporaryFile()
+    started = now()
+
+    def child_limits() -> None:
+        resource.setrlimit(
+            resource.RLIMIT_FSIZE,
+            (VERIFICATION_OUTPUT_LIMIT, VERIFICATION_OUTPUT_LIMIT),
+        )
+
+    def stop_group(pid: int) -> None:
+        try:
+            os.killpg(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            return
+        try:
+            process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.wait()
+
+    process = subprocess.Popen(
+        plan["selfTestCommand"],
+        cwd=root,
+        stdin=subprocess.DEVNULL,
+        stdout=stdout_file,
+        stderr=stderr_file,
+        start_new_session=True,
+        preexec_fn=child_limits,
+    )
+    try:
+        process.wait(timeout=plan["timeoutSeconds"])
+    except subprocess.TimeoutExpired as error:
+        stop_group(process.pid)
+        stdout_file.close()
+        stderr_file.close()
+        raise ValidationError(
+            "verification self-test timed out and its process group was stopped"
+        ) from error
+    stdout_file.seek(0)
+    stderr_file.seek(0)
+    stdout = stdout_file.read(VERIFICATION_OUTPUT_LIMIT + 1)
+    stderr = stderr_file.read(VERIFICATION_OUTPUT_LIMIT + 1)
+    stdout_file.close()
+    stderr_file.close()
+    if len(stdout) > VERIFICATION_OUTPUT_LIMIT or len(stderr) > VERIFICATION_OUTPUT_LIMIT:
+        stop_group(process.pid)
+        raise ValidationError("verification self-test output is too large")
+    if process.returncode != 0:
+        stop_group(process.pid)
+        detail = stderr.decode("utf-8", errors="replace")[:500]
+        raise ValidationError(
+            f"verification self-test failed with {process.returncode}: {detail}"
+        )
+    try:
+        os.killpg(process.pid, 0)
+    except ProcessLookupError:
+        pass
+    else:
+        stop_group(process.pid)
+        raise ValidationError("verification self-test left a process alive")
+    return stdout, stderr, started
+
+
+def begin_verification(
+    root: Path, isolation: str, raw: bytes
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    manifest = require_commandments_boundary(root, isolation, ("commandments-ratified", "verification-building"))
+    value = read_json_bytes(raw, "verification plan input")
+    plan = validate_verification_plan(root, manifest, value)
+    wanted = canonical_json(plan)
+    skill_root = root / ".pi/skills/jig-verification"
+    if (
+        manifest["currentState"] != "verification-building"
+        and (skill_root.exists() or skill_root.is_symlink())
+    ):
+        raise ValidationError(
+            "pre-existing verification skill is preserved and blocks generation"
+        )
+    plan_path = fixed_artifact_path(root, VERIFICATION_PLAN_PATH)
+    if manifest["currentState"] == "verification-building":
+        if not plan_path.exists() or plan_path.read_bytes() != wanted:
+            raise ValidationError("verification-building uses a different plan")
+        return manifest, plan
+    if plan_path.exists() and plan_path.read_bytes() != wanted:
+        raise ValidationError("uncommitted verification plan differs from the supplied plan")
+    if not plan_path.exists():
+        atomic_write(plan_path, wanted)
+    plan_digest = sha256_bytes(wanted)
+    upsert_artifact(manifest, VERIFICATION_PLAN_PATH, "jig-skill", plan_digest)
+    append_transition(
+        root,
+        manifest,
+        "commandments-ratified",
+        "verification-building",
+        "verification-started",
+        resourceIsolation=isolation,
+        planPath=VERIFICATION_PLAN_PATH,
+        planSha256=plan_digest,
+        commandmentsSha256=manifest["commandments"]["sha256"],
+        protectedFeatureId=plan["protectedFeatureId"],
+    )
+    write_manifest(root, manifest)
+    return manifest, plan
+
+
+def known_runtime_receipts(
+    root: Path, manifest: Mapping[str, Any], plan: Mapping[str, Any]
+) -> List[Tuple[str, str]]:
+    directory = root / ".pi/jig/verification/receipts"
+    if not directory.exists():
+        return []
+    if directory.is_symlink() or not directory.is_dir():
+        raise ValidationError("verification receipt directory is unsafe")
+    expected = {
+        "schemaVersion",
+        "kind",
+        "command",
+        "sourceRevision",
+        "commandmentsSha256",
+        "protectedFeatureId",
+        "startedAt",
+        "finishedAt",
+        "exitCode",
+        "stdoutSha256",
+        "stderrSha256",
+        "result",
+    }
+    receipts = []
+    for path in sorted(directory.iterdir()):
+        if path.is_symlink() or not path.is_file():
+            raise ValidationError("verification receipt directory contains an unknown path")
+        raw = path.read_bytes()
+        digest = sha256_bytes(raw)
+        if path.name != f"runtime-{digest}.json":
+            raise ValidationError("verification receipt name does not prove ownership")
+        value = read_json_bytes(raw, "verification runtime receipt")
+        if (
+            not isinstance(value, dict)
+            or set(value) != expected
+            or value["schemaVersion"] != 1
+            or value["kind"] != "verification-runtime-receipt"
+            or value["command"] != plan["selfTestCommand"]
+            or value["sourceRevision"] != manifest["source"]["revision"]
+            or value["commandmentsSha256"] != manifest["commandments"]["sha256"]
+            or value["protectedFeatureId"] != plan["protectedFeatureId"]
+            or value["exitCode"] != 0
+            or not valid_datetime(value["startedAt"])
+            or not valid_datetime(value["finishedAt"])
+            or re.fullmatch(r"[0-9a-f]{64}", value["stdoutSha256"]) is None
+            or re.fullmatch(r"[0-9a-f]{64}", value["stderrSha256"]) is None
+        ):
+            raise ValidationError("verification runtime receipt is inconsistent")
+        receipts.append((relative_to_root(root, path), digest))
+    return receipts
+
+
+def complete_verification(root: Path, isolation: str) -> Dict[str, Any]:
+    manifest = load_existing_manifest(root)
+    if manifest["resourceIsolation"] != isolation:
+        raise JigError("the existing manifest uses a different resourceIsolation route")
+    validate_current_source(root, manifest)
+    if manifest["currentState"] == "verification-ready":
+        validate_verification_ready(root, manifest)
+        return manifest
+    if manifest["currentState"] != "verification-building":
+        raise ValidationError("verification cannot complete from the current state")
+    plan = load_verification_plan(root, manifest)
+    generated = validate_generated_verification(root, manifest, plan)
+    stdout, stderr, started = run_verification_command(root, plan)
+    result, evidence = parse_runtime_result(root, manifest, plan, stdout)
+    finished = now()
+    runtime = {
+        "schemaVersion": 1,
+        "kind": "verification-runtime-receipt",
+        "command": plan["selfTestCommand"],
+        "sourceRevision": manifest["source"]["revision"],
+        "commandmentsSha256": manifest["commandments"]["sha256"],
+        "protectedFeatureId": plan["protectedFeatureId"],
+        "startedAt": started,
+        "finishedAt": finished,
+        "exitCode": 0,
+        "stdoutSha256": sha256_bytes(stdout),
+        "stderrSha256": sha256_bytes(stderr),
+        "result": result,
+    }
+    runtime_raw = canonical_json(runtime)
+    runtime_digest = sha256_bytes(runtime_raw)
+    runtime_relative = f".pi/jig/verification/receipts/runtime-{runtime_digest}.json"
+    write_exact_artifact(root, runtime_relative, runtime_raw)
+    for relative, digest in generated:
+        upsert_artifact(manifest, relative, "jig-skill", digest)
+    for relative, digest in evidence:
+        upsert_artifact(manifest, relative, "repository", digest)
+    for relative, digest in known_runtime_receipts(root, manifest, plan):
+        upsert_artifact(manifest, relative, "controller", digest)
+    manifest["verification"].append(
+        {
+            "kind": "runtime",
+            "command": " ".join(plan["selfTestCommand"]),
+            "exitCode": 0,
+            "receiptPath": runtime_relative,
+            "outputSha256": sha256_bytes(stdout),
+            "revision": manifest["source"]["revision"],
+            "finishedAt": finished,
+        }
+    )
+    hashes = dict(generated)
+    append_transition(
+        root,
+        manifest,
+        "verification-building",
+        "verification-ready",
+        "verification-ready",
+        resourceIsolation=isolation,
+        planPath=VERIFICATION_PLAN_PATH,
+        planSha256=sha256_file(root / VERIFICATION_PLAN_PATH),
+        commandmentsSha256=manifest["commandments"]["sha256"],
+        protectedFeatureId=plan["protectedFeatureId"],
+        skillPath=VERIFICATION_SKILL_PATH,
+        skillSha256=hashes[VERIFICATION_SKILL_PATH],
+        featureIndexPath=VERIFICATION_FEATURE_INDEX_PATH,
+        featureIndexSha256=hashes[VERIFICATION_FEATURE_INDEX_PATH],
+        runtimeReceiptPath=runtime_relative,
+        runtimeReceiptSha256=runtime_digest,
+    )
+    manifest["updatedAt"] = max(manifest["updatedAt"], finished)
+    write_manifest(root, manifest)
+    return manifest
+
+
+def validate_verification_ready(root: Path, manifest: Mapping[str, Any]) -> Dict[str, Any]:
+    plan = load_verification_plan(root, manifest)
+    generated = dict(validate_generated_verification(root, manifest, plan))
+    artifacts = {item["path"]: item for item in manifest["artifacts"]}
+    for relative, digest in known_runtime_receipts(root, manifest, plan):
+        if artifacts.get(relative) != {"path": relative, "owner": "controller", "sha256": digest}:
+            raise ValidationError("runtime receipt ownership is inconsistent")
+    for relative, digest in generated.items():
+        if artifacts.get(relative) != {"path": relative, "owner": "jig-skill", "sha256": digest}:
+            raise ValidationError("ready verification artifact registration is inconsistent")
+    if len(manifest["verification"]) != 1:
+        raise ValidationError("verification-ready requires one runtime verification")
+    record = manifest["verification"][0]
+    path = safe_relative_path(root, record["receiptPath"], must_exist=True)
+    if (
+        artifacts.get(record["receiptPath"]) != {
+            "path": record["receiptPath"],
+            "owner": "controller",
+            "sha256": sha256_file(path),
+        }
+        or record["exitCode"] != 0
+        or record["kind"] != "runtime"
+    ):
+        raise ValidationError("runtime verification receipt registration is inconsistent")
+    runtime = read_json(path, "runtime verification receipt")
+    if (
+        runtime["command"] != plan["selfTestCommand"]
+        or runtime["sourceRevision"] != record["revision"]
+        or runtime["finishedAt"] != record["finishedAt"]
+        or runtime["stdoutSha256"] != record["outputSha256"]
+        or record["command"] != " ".join(plan["selfTestCommand"])
+    ):
+        raise ValidationError("runtime verification record differs from its receipt")
+    result_raw = canonical_json(runtime["result"])
+    _result, evidence = parse_runtime_result(root, manifest, plan, result_raw)
+    for relative, digest in evidence:
+        if artifacts.get(relative) != {"path": relative, "owner": "repository", "sha256": digest}:
+            raise ValidationError("verification evidence registration is inconsistent")
+    return plan
+
+
+def validate_verification(root: Path, isolation: str) -> Dict[str, Any]:
+    manifest = load_existing_manifest(root)
+    if manifest["resourceIsolation"] != isolation:
+        raise JigError("the existing manifest uses a different resourceIsolation route")
+    validate_current_source(root, manifest)
+    if manifest["currentState"] != "verification-ready":
+        raise ValidationError("verification is not ready")
+    validate_verification_ready(root, manifest)
+    return manifest
+
+
 def render_result(root: Path, manifest: Mapping[str, Any]) -> None:
     result: Dict[str, Any] = {
         "root": ".",
@@ -2850,6 +3549,40 @@ def render_result(root: Path, manifest: Mapping[str, Any]) -> None:
                 "This launcher version does not consume response files on rerun."
             ),
         }
+    elif manifest["currentState"] == "commandments-ratified":
+        result["resume"] = {
+            "controller": "jigctl.py",
+            "operations": [
+                {
+                    "name": "begin-verification",
+                    "command": ["begin-verification", "--resource-isolation", manifest["resourceIsolation"]],
+                    "stdin": ".pi/jig/verification/plan.input.json",
+                }
+            ],
+        }
+    elif manifest["currentState"] == "verification-building":
+        plan = load_verification_plan(root, manifest)
+        result["verification"] = {
+            "planPath": VERIFICATION_PLAN_PATH,
+            "reservedPaths": plan["reservedPaths"],
+            "protectedFeatureId": plan["protectedFeatureId"],
+        }
+        result["resume"] = {
+            "controller": "jigctl.py",
+            "operations": [
+                {
+                    "name": "complete-verification",
+                    "command": ["complete-verification", "--resource-isolation", manifest["resourceIsolation"]],
+                }
+            ],
+        }
+    elif manifest["currentState"] == "verification-ready":
+        plan = load_verification_plan(root, manifest)
+        result["verification"] = {
+            "skillPath": VERIFICATION_SKILL_PATH,
+            "featureIndexPath": VERIFICATION_FEATURE_INDEX_PATH,
+            "protectedFeatureId": plan["protectedFeatureId"],
+        }
     print(json.dumps(result, sort_keys=True))
 
 
@@ -2874,6 +3607,9 @@ def parser() -> argparse.ArgumentParser:
         "ratify-commandments",
         "validate-commandments",
         "propose-commandments-amendment",
+        "begin-verification",
+        "complete-verification",
+        "validate-verification",
     )
     commands = {}
     for name in mutating:
@@ -2887,7 +3623,13 @@ def parser() -> argparse.ArgumentParser:
     commands["record-failure"].add_argument(
         "--state",
         required=True,
-        choices=("surveying", "awaiting-commandments", "commandments-ratified"),
+        choices=(
+            "surveying",
+            "awaiting-commandments",
+            "commandments-ratified",
+            "verification-building",
+            "verification-ready",
+        ),
     )
     commands["record-failure"].add_argument("--reason", required=True)
     commands["stage-commandments"].add_argument("--amend-candidate-sha")
@@ -2956,6 +3698,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             )
         elif arguments.command == "validate-commandments":
             manifest = validate_commandments(root, arguments.resource_isolation)
+        elif arguments.command == "begin-verification":
+            raw = sys.stdin.buffer.read(MAX_INPUT_BYTES + 1)
+            manifest, output = begin_verification(
+                root, arguments.resource_isolation, raw
+            )
+            output = {"state": manifest["currentState"], **output}
+        elif arguments.command == "complete-verification":
+            manifest = complete_verification(root, arguments.resource_isolation)
+        elif arguments.command == "validate-verification":
+            manifest = validate_verification(root, arguments.resource_isolation)
         else:
             raw = sys.stdin.buffer.read(MAX_INPUT_BYTES + 1)
             manifest, output = propose_commandments_amendment(
