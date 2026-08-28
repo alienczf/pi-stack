@@ -883,6 +883,65 @@ class CommandmentsTest(unittest.TestCase):
             alternate_path, {item["path"] for item in self.manifest()["artifacts"]}
         )
 
+    def test_adopted_staging_requires_exact_answer_marker(self):
+        self.prepare()
+        resolved, _modes = jigctl.validate_commandments_answers(self.answers)
+        candidate = jigctl.render_commandments_candidate(
+            resolved, "2026-01-01T00:00:00Z"
+        )
+        root_path = self.repo / "COMMANDMENTS.md"
+        root_path.write_bytes(candidate)
+        with mock.patch.object(
+            jigctl, "write_manifest", side_effect=RuntimeError("crash")
+        ):
+            with self.assertRaises(RuntimeError):
+                jigctl.stage_commandments(
+                    self.repo,
+                    "isolated-shell",
+                    json.dumps(self.answers).encode(),
+                    None,
+                    True,
+                )
+        pointer_path = self.repo / ".pi/jig/commandments/staging.json"
+        pointer = json.loads(pointer_path.read_text())
+        changed_answers = json.loads(json.dumps(self.answers))
+        changed_answers["authority"]["value"]["ratificationMarker"] = (
+            "I ratify marker TWO."
+        )
+        _resolved, modes = jigctl.validate_commandments_answers(changed_answers)
+        answers_raw = jigctl.canonical_json(changed_answers)
+        answers_path, answers_digest = jigctl.content_addressed_artifact(
+            self.repo, "answers", "json", answers_raw
+        )
+        pointer["answersPath"] = answers_path
+        pointer["answersSha256"] = answers_digest
+        pointer["choiceModes"] = modes
+        pointer_path.write_bytes(jigctl.canonical_json(pointer))
+        manifest_before = self.manifest_path().read_bytes()
+        root_before = root_path.read_bytes()
+        staging_before = pointer_path.read_bytes()
+        registered_before = {
+            item["path"] for item in self.manifest()["artifacts"]
+        }
+        self.assertNotIn(answers_path, registered_before)
+        self.assertNotIn(pointer["candidatePath"], registered_before)
+        rejected = self.ctl(
+            "stage-commandments",
+            "--adopt-existing",
+            input_value=changed_answers,
+        )
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertEqual(rejected.stdout, "")
+        self.assertIn("marker", rejected.stderr)
+        self.assertEqual(self.manifest_path().read_bytes(), manifest_before)
+        self.assertEqual(root_path.read_bytes(), root_before)
+        self.assertEqual(pointer_path.read_bytes(), staging_before)
+        registered_after = {
+            item["path"] for item in self.manifest()["artifacts"]
+        }
+        self.assertNotIn(answers_path, registered_after)
+        self.assertNotIn(pointer["candidatePath"], registered_after)
+
     def test_explicit_decision_retry_registers_completed_orphan(self):
         self.prepare()
         staged = self.stage()

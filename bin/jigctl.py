@@ -2147,10 +2147,17 @@ def load_staging(
     if (
         metadata["version"] != value["version"]
         or metadata["ratifiedAt"] != value["prospectiveRatifiedAt"]
-        or metadata["marker"] != value["intendedMarker"]
     ):
         raise ValidationError(
             "COMMANDMENTS staging candidate metadata is inconsistent"
+        )
+    if not (
+        resolved["authority"]["ratificationMarker"]
+        == value["intendedMarker"]
+        == metadata["marker"]
+    ):
+        raise ValidationError(
+            "COMMANDMENTS staging answer and candidate markers are inconsistent"
         )
     if value["adoptedExisting"]:
         root_path = fixed_artifact_path(
