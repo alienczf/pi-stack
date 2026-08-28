@@ -1,5 +1,6 @@
 import ast
 import importlib.util
+import hashlib
 import json
 import os
 import shutil
@@ -25,6 +26,7 @@ spec.loader.exec_module(jigctl)
 class JigControllerTest(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
+        self.external = tempfile.TemporaryDirectory()
         self.repo = Path(self.temporary.name)
         self.git("init", "-q")
         self.git("config", "user.email", "jig@example.invalid")
@@ -34,6 +36,7 @@ class JigControllerTest(unittest.TestCase):
         self.git("commit", "-qm", "fixture")
 
     def tearDown(self):
+        self.external.cleanup()
         self.temporary.cleanup()
 
     def git(self, *arguments):
@@ -98,6 +101,31 @@ class JigControllerTest(unittest.TestCase):
             "isolated-shell",
             input_text=json.dumps(value),
         )
+
+    def valid_lock(self, pid=999999999, host=None, process_start=None):
+        return {
+            "schemaVersion": 1,
+            "pid": pid,
+            "host": socket.gethostname() if host is None else host,
+            "processStart": process_start,
+            "token": uuid.uuid4().hex,
+            "acquiredAt": "2026-01-01T00:00:00Z",
+        }
+
+    def jig_snapshot(self):
+        jig = self.repo / ".pi" / "jig"
+        return {
+            path.relative_to(jig).as_posix(): path.read_bytes()
+            for path in sorted(jig.rglob("*"))
+            if path.is_file() and path.name != "init.lock"
+        }
+
+    def assert_source_drift_fails_without_state_changes(self):
+        before = self.jig_snapshot()
+        result = self.ctl("start", "--resource-isolation", "isolated-shell")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("source revision or dirty summary changed", result.stderr)
+        self.assertEqual(self.jig_snapshot(), before)
 
     def test_outside_git_fails_without_writes(self):
         outside = Path(tempfile.mkdtemp())
@@ -216,14 +244,7 @@ class JigControllerTest(unittest.TestCase):
     def test_stale_lock_is_reclaimed_with_evidence(self):
         self.start()
         lock = self.repo / ".pi" / "jig" / "init.lock"
-        lock.write_text(json.dumps({
-            "schemaVersion": 1,
-            "pid": 999999999,
-            "host": socket.gethostname(),
-            "processStart": None,
-            "token": "stale",
-            "acquiredAt": "2026-01-01T00:00:00Z",
-        }), encoding="utf-8")
+        lock.write_text(json.dumps(self.valid_lock()), encoding="utf-8")
         result = self.start()
         self.assertEqual(result.returncode, 0)
         evidence = list((self.repo / ".pi" / "jig" / "receipts").glob("lock-reclaimed-*.json"))
@@ -234,14 +255,10 @@ class JigControllerTest(unittest.TestCase):
     def test_live_and_uncertain_locks_are_refused(self):
         self.start()
         lock = self.repo / ".pi" / "jig" / "init.lock"
-        live = {
-            "schemaVersion": 1,
-            "pid": os.getpid(),
-            "host": socket.gethostname(),
-            "processStart": jigctl.process_start(os.getpid()),
-            "token": "live",
-            "acquiredAt": "2026-01-01T00:00:00Z",
-        }
+        live = self.valid_lock(
+            pid=os.getpid(),
+            process_start=jigctl.process_start(os.getpid()),
+        )
         for raw in (json.dumps(live).encode(), b"uncertain"):
             lock.write_bytes(raw)
             result = self.ctl("start", "--resource-isolation", "isolated-shell")
@@ -306,8 +323,9 @@ class JigControllerTest(unittest.TestCase):
         (self.repo / ".pi" / "extensions").mkdir()
         (self.repo / ".pi" / "prompts").mkdir()
         (self.repo / ".pi" / "settings.json").write_text("{}\n", encoding="utf-8")
-        receipt = self.repo / "argv.json"
-        stub = self.repo / "pi-stub.py"
+        external = Path(self.external.name)
+        receipt = external / "argv.json"
+        stub = external / "pi-stub.py"
         stub.write_text(
             "#!/usr/bin/env python3\nimport json, os, sys\n"
             "open(os.environ['ARGV_RECEIPT'], 'w').write(json.dumps(sys.argv[1:]))\n",
@@ -324,7 +342,7 @@ class JigControllerTest(unittest.TestCase):
             text=True,
             env=environment,
         )
-        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotEqual(result.returncode, 0, result.stderr)
         argv = json.loads(receipt.read_text(encoding="utf-8"))
         expected_prefix = [
             "-p", "--no-approve", "--no-session", "--no-context-files", "--no-extensions",
@@ -334,6 +352,11 @@ class JigControllerTest(unittest.TestCase):
         self.assertEqual(argv[:-1], expected_prefix)
         self.assertIn("commit-profile", argv[-1])
         self.assertEqual(self.manifest()["resourceIsolation"], "isolated-shell")
+        self.assertEqual(self.manifest()["currentState"], "failed-surveying")
+        self.assertIn("before the awaiting-commandments boundary", result.stderr)
+        transition = self.manifest()["transitions"][-1]
+        failure_receipt = json.loads((self.repo / transition["receiptPath"]).read_text(encoding="utf-8"))
+        self.assertEqual(failure_receipt["kind"], "phase-failed")
 
     def test_controller_runs_without_site_packages_or_jsonschema(self):
         result = self.ctl(
@@ -388,6 +411,251 @@ class JigControllerTest(unittest.TestCase):
                     controller = False
                 self.assertEqual(controller, conforming, example.name)
                 self.assertEqual(controller, ".invalid." not in example.name, example.name)
+
+    def test_datetime_format_matches_draft_202012_checker(self):
+        try:
+            import jsonschema
+        except ImportError:
+            self.skipTest("development-only jsonschema is unavailable")
+        values = [
+            "2026-01-01T00:00:00Z",
+            "2026-01-01t00:00:00z",
+            "1937-01-01T12:00:27.87+00:20",
+            "2026-01-01T00:00:00.123z",
+            "2026-01-01T00:00:00.1Z",
+            "2026-01-01T00:00:00.123456789123Z",
+            "2026-01-01t00:00:00+23:59",
+            "2026-01-01 00:00:00Z",
+            "2026-01-01T24:00:00Z",
+            "2026-02-29T00:00:00Z",
+            "1990-12-31T23:59:60Z",
+            "2026-01-01T00:00:00+24:00",
+            "2026-01-01T00:00:00,Z",
+        ]
+        checker = jsonschema.FormatChecker()
+        for value in values:
+            try:
+                checker.check(value, "date-time")
+                conforming = True
+            except jsonschema.exceptions.FormatError:
+                conforming = False
+            self.assertEqual(jigctl.valid_datetime(value), conforming, value)
+
+    def test_dirty_summary_drift_fails_at_surveying(self):
+        self.start()
+        (self.repo / "dirty.txt").write_text("dirty\n", encoding="utf-8")
+        self.assert_source_drift_fails_without_state_changes()
+
+    def test_dirty_summary_drift_fails_at_awaiting_commandments(self):
+        self.start()
+        self.assertEqual(self.commit_profile().returncode, 0)
+        (self.repo / "dirty.txt").write_text("dirty\n", encoding="utf-8")
+        self.assert_source_drift_fails_without_state_changes()
+
+    def test_head_drift_fails_at_surveying(self):
+        self.start()
+        (self.repo / "README.md").write_text("new head\n", encoding="utf-8")
+        self.git("add", "README.md")
+        self.git("commit", "-qm", "new head")
+        self.assert_source_drift_fails_without_state_changes()
+
+    def test_head_drift_fails_at_awaiting_commandments(self):
+        self.start()
+        self.assertEqual(self.commit_profile().returncode, 0)
+        (self.repo / "README.md").write_text("new head\n", encoding="utf-8")
+        self.git("add", "README.md")
+        self.git("commit", "-qm", "new head")
+        self.assert_source_drift_fails_without_state_changes()
+
+    def test_mutating_commands_reject_source_drift_before_writes(self):
+        self.start()
+        (self.repo / "dirty.txt").write_text("dirty\n", encoding="utf-8")
+        before = self.jig_snapshot()
+        failure = self.ctl(
+            "record-failure",
+            "--resource-isolation", "isolated-shell",
+            "--state", "surveying",
+            "--reason", "must not be recorded",
+        )
+        profile = self.commit_profile()
+        self.assertNotEqual(failure.returncode, 0)
+        self.assertNotEqual(profile.returncode, 0)
+        self.assertEqual(self.jig_snapshot(), before)
+
+    def test_lock_records_are_validated_before_liveness(self):
+        self.start()
+        lock = self.repo / ".pi" / "jig" / "init.lock"
+        malformed = [
+            {"pid": 999999999, "host": socket.gethostname()},
+            {**self.valid_lock(), "unexpected": True},
+            {**self.valid_lock(), "schemaVersion": 2},
+            {**self.valid_lock(), "processStart": "not-numeric"},
+            {**self.valid_lock(), "token": "short"},
+            {**self.valid_lock(), "acquiredAt": "not-a-date"},
+            self.valid_lock(host="foreign.invalid"),
+        ]
+        for value in malformed:
+            with self.subTest(value=value):
+                raw = json.dumps(value).encode("utf-8")
+                lock.write_bytes(raw)
+                result = self.ctl("start", "--resource-isolation", "isolated-shell")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(lock.read_bytes(), raw)
+                lock.unlink()
+
+    def test_stale_lock_collision_with_different_evidence_fails_closed(self):
+        self.start()
+        lock = self.repo / ".pi" / "jig" / "init.lock"
+        raw = json.dumps(self.valid_lock(), sort_keys=True).encode("utf-8")
+        lock.write_bytes(raw)
+        evidence = self.repo / ".pi" / "jig" / "receipts" / f"lock-reclaimed-{hashlib.sha256(raw).hexdigest()[:16]}.json"
+        existing = b"existing evidence\n"
+        evidence.write_bytes(existing)
+        result = self.ctl("start", "--resource-isolation", "isolated-shell")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(lock.read_bytes(), raw)
+        self.assertEqual(evidence.read_bytes(), existing)
+
+    def test_stale_lock_collision_with_same_evidence_reconciles(self):
+        self.start()
+        lock = self.repo / ".pi" / "jig" / "init.lock"
+        raw = json.dumps(self.valid_lock(), sort_keys=True).encode("utf-8")
+        lock.write_bytes(raw)
+        evidence = self.repo / ".pi" / "jig" / "receipts" / f"lock-reclaimed-{hashlib.sha256(raw).hexdigest()[:16]}.json"
+        evidence.write_bytes(raw)
+        before = evidence.read_bytes()
+        result = self.ctl("start", "--resource-isolation", "isolated-shell")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(lock.exists())
+        self.assertEqual(evidence.read_bytes(), before)
+        self.assertIn(evidence.relative_to(self.repo).as_posix(), {item["path"] for item in self.manifest()["artifacts"]})
+
+    def test_concurrent_stale_lock_reclamation_preserves_evidence(self):
+        self.start()
+        lock = self.repo / ".pi" / "jig" / "init.lock"
+        raw = json.dumps(self.valid_lock(), sort_keys=True).encode("utf-8")
+        lock.write_bytes(raw)
+        command = [sys.executable, str(CONTROLLER), "start", "--resource-isolation", "isolated-shell"]
+        environment = {**os.environ, "JIG_PI_VERSION": "fixture-pi"}
+        processes = [
+            subprocess.Popen(command, cwd=self.repo, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=environment)
+            for _ in range(2)
+        ]
+        results = [process.communicate(timeout=10) + (process.returncode,) for process in processes]
+        self.assertTrue(any(returncode == 0 for _stdout, _stderr, returncode in results), results)
+        evidence = list((self.repo / ".pi" / "jig" / "receipts").glob("lock-reclaimed-*.json"))
+        self.assertEqual(len(evidence), 1)
+        self.assertEqual(evidence[0].read_bytes(), raw)
+        self.assertFalse(lock.exists())
+        jigctl.validate_manifest_semantics(self.repo, self.manifest(), jigctl.load_schema("manifest"))
+
+    def test_transition_receipt_source_contradiction_fails_closed(self):
+        self.start()
+        manifest = self.manifest()
+        transition = manifest["transitions"][0]
+        receipt_path = self.repo / transition["receiptPath"]
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        receipt["sourceDirty"] = not manifest["source"]["dirty"]
+        raw = jigctl.canonical_json(receipt)
+        receipt_path.write_bytes(raw)
+        digest = hashlib.sha256(raw).hexdigest()
+        transition["receiptSha256"] = digest
+        for artifact in manifest["artifacts"]:
+            if artifact["path"] == transition["receiptPath"]:
+                artifact["sha256"] = digest
+        self.manifest_path().write_bytes(jigctl.canonical_json(manifest))
+        before = self.jig_snapshot()
+        result = self.ctl("start", "--resource-isolation", "isolated-shell")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("receipt", result.stderr)
+        self.assertEqual(self.jig_snapshot(), before)
+
+    def test_control_characters_are_bounded_path_failures(self):
+        self.start()
+        for path in ("README.md\0suffix", "README.md\nsuffix", "README.md\x7fsuffix"):
+            with self.subTest(path=repr(path)):
+                before = self.jig_snapshot()
+                result = self.commit_profile(self.profile(path))
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn("Traceback", result.stderr)
+                self.assertLess(len(result.stderr), 600)
+                self.assertEqual(self.jig_snapshot(), before)
+
+    def test_profile_evidence_must_be_a_regular_file(self):
+        directory = self.repo / "evidence-dir"
+        fifo = self.repo / "evidence-fifo"
+        unix_socket_path = self.repo / "evidence.sock"
+        directory.mkdir()
+        os.mkfifo(fifo)
+        unix_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.addCleanup(unix_socket.close)
+        unix_socket.bind(str(unix_socket_path))
+        self.start()
+        for path in (directory, fifo, unix_socket_path):
+            with self.subTest(path=path.name):
+                before = self.jig_snapshot()
+                result = self.commit_profile(self.profile(path.name))
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("not a regular file", result.stderr)
+                self.assertEqual(self.jig_snapshot(), before)
+
+    def test_unknown_lookalike_temporary_file_is_preserved(self):
+        self.start()
+        unknown_directory = self.repo / ".pi" / "jig" / "unknown"
+        unknown_directory.mkdir()
+        identifier = uuid.uuid4().hex
+        unknown = unknown_directory / f".jigctl-manifest.json.123.{identifier}.tmp"
+        unknown.write_bytes(b"unknown\n")
+        genuine = self.repo / ".pi" / "jig" / f".jigctl-manifest.json.123.{uuid.uuid4().hex}.tmp"
+        genuine.write_bytes(b"genuine\n")
+        result = self.ctl("start", "--resource-isolation", "isolated-shell")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(unknown.read_bytes(), b"unknown\n")
+        self.assertFalse(genuine.exists())
+        artifact_paths = {item["path"] for item in self.manifest()["artifacts"]}
+        self.assertNotIn(unknown.relative_to(self.repo).as_posix(), artifact_paths)
+        self.assertTrue(any(path.startswith(".pi/jig/receipts/interrupted-write-") for path in artifact_paths))
+
+    def test_shell_valid_profile_stub_reaches_awaiting_commandments(self):
+        external = Path(self.external.name)
+        stub = external / "pi-profile-stub.py"
+        stub.write_text(
+            "#!/usr/bin/env python3\n"
+            "import json, os, subprocess, sys\n"
+            "revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()\n"
+            "profile = {'schemaVersion': 1, 'repositoryRevision': revision, 'productType': {'value': 'fixture', 'evidence': [{'path': 'README.md', 'line': 1, 'note': 'Fixture.'}]}, 'languages': [], 'frameworks': [], 'buildTools': [], 'ci': [], 'entryPoints': [], 'topology': [], 'unknowns': [], 'failureModes': []}\n"
+            "controller = os.path.join(os.environ['PI_STACK_ROOT'], 'bin', 'jigctl.py')\n"
+            "result = subprocess.run([sys.executable, controller, 'commit-profile', '--resource-isolation', 'isolated-shell'], input=json.dumps(profile), text=True)\n"
+            "raise SystemExit(result.returncode)\n",
+            encoding="utf-8",
+        )
+        stub.chmod(0o755)
+        result = subprocess.run(
+            ["bash", str(LAUNCHER), "init"],
+            cwd=self.repo,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env={**os.environ, "PI": str(stub), "PI_STACK_ROOT": str(ROOT), "JIG_PI_VERSION": "fixture-pi"},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.manifest()["currentState"], "awaiting-commandments")
+
+    def test_shell_nonzero_stub_records_failure(self):
+        stub = Path(self.external.name) / "pi-failing-stub.sh"
+        stub.write_text("#!/usr/bin/env bash\nexit 7\n", encoding="utf-8")
+        stub.chmod(0o755)
+        result = subprocess.run(
+            ["bash", str(LAUNCHER), "init"],
+            cwd=self.repo,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env={**os.environ, "PI": str(stub), "PI_STACK_ROOT": str(ROOT), "JIG_PI_VERSION": "fixture-pi"},
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("status 7", result.stderr)
+        self.assertEqual(self.manifest()["currentState"], "failed-surveying")
 
     def test_failure_guidance_is_bounded_and_unknown_state_is_preserved(self):
         self.start()

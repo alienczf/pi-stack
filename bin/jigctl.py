@@ -84,13 +84,27 @@ def resolve_ref(root_schema: Mapping[str, Any], reference: str) -> Mapping[str, 
 
 
 def valid_datetime(value: str) -> bool:
-    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})", value):
+    match = re.fullmatch(
+        r"(\d{4})-(\d{2})-(\d{2})[Tt](\d{2}):(\d{2}):(\d{2})"
+        r"(?:\.\d+)?(?:[Zz]|([+-])(\d{2}):(\d{2}))",
+        value,
+    )
+    if match is None:
         return False
+    year, month, day, hour, minute, second = map(int, match.groups()[:6])
+    offset_hour = int(match.group(8) or 0)
+    offset_minute = int(match.group(9) or 0)
     try:
-        parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+        dt.date(year, month, day)
     except ValueError:
         return False
-    return parsed.tzinfo is not None
+    return (
+        hour <= 23
+        and minute <= 59
+        and second <= 59
+        and offset_hour <= 23
+        and offset_minute <= 59
+    )
 
 
 def validate_instance(
@@ -318,6 +332,8 @@ def ensure_owned_directory(root: Path, relative: str) -> Path:
 
 
 class RepositoryLock:
+    FIELDS = {"schemaVersion", "pid", "host", "processStart", "token", "acquiredAt"}
+
     def __init__(self, root: Path) -> None:
         self.root = root
         self.directory = root / ".pi" / "jig"
@@ -342,15 +358,68 @@ class RepositoryLock:
             os.close(descriptor)
         fsync_directory(self.directory)
 
-    def _stale(self, value: Any) -> bool:
-        if not isinstance(value, dict):
-            return False
-        if value.get("host") != socket.gethostname():
-            return False
+    def _snapshot(self, path: Path, label: str) -> Tuple[bytes, Tuple[int, int]]:
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            descriptor = os.open(path, flags)
+        except OSError as error:
+            raise JigError(f"{label} is not a contained regular file") from error
+        try:
+            metadata = os.fstat(descriptor)
+            if not stat.S_ISREG(metadata.st_mode):
+                raise JigError(f"{label} is not a contained regular file")
+            chunks = []
+            total = 0
+            while True:
+                chunk = os.read(descriptor, 65536)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > MAX_INPUT_BYTES:
+                    raise JigError(f"{label} exceeds {MAX_INPUT_BYTES} bytes")
+                chunks.append(chunk)
+            return b"".join(chunks), (metadata.st_dev, metadata.st_ino)
+        finally:
+            os.close(descriptor)
+
+    def _validate_holder(self, value: Any) -> Mapping[str, Any]:
+        if not isinstance(value, dict) or set(value) != self.FIELDS:
+            raise JigError("the init lock record has an invalid shape")
         pid = value.get("pid")
-        expected_start = value.get("processStart")
+        host = value.get("host")
+        process_start_value = value.get("processStart")
+        token = value.get("token")
+        acquired_at = value.get("acquiredAt")
+        if value.get("schemaVersion") != 1:
+            raise JigError("the init lock record has an unsupported version")
         if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+            raise JigError("the init lock record has an invalid PID")
+        if (
+            not isinstance(host, str)
+            or not host
+            or len(host) > 255
+            or any(ord(character) < 32 or 127 <= ord(character) <= 159 for character in host)
+        ):
+            raise JigError("the init lock record has an invalid host")
+        if not (
+            process_start_value is None
+            or (
+                isinstance(process_start_value, str)
+                and re.fullmatch(r"[0-9]+", process_start_value) is not None
+            )
+        ):
+            raise JigError("the init lock record has an invalid process start")
+        if not isinstance(token, str) or re.fullmatch(r"[0-9a-f]{32}", token) is None:
+            raise JigError("the init lock record has an invalid token")
+        if not isinstance(acquired_at, str) or not valid_datetime(acquired_at):
+            raise JigError("the init lock record has an invalid acquisition time")
+        return value
+
+    def _stale(self, value: Mapping[str, Any]) -> bool:
+        if value["host"] != socket.gethostname():
             return False
+        pid = value["pid"]
+        expected_start = value["processStart"]
         try:
             os.kill(pid, 0)
         except ProcessLookupError:
@@ -360,7 +429,51 @@ class RepositoryLock:
         except OSError as error:
             return error.errno == errno.ESRCH
         current_start = process_start(pid)
-        return current_start is not None and expected_start is not None and current_start != expected_start
+        return (
+            current_start is not None
+            and expected_start is not None
+            and current_start != expected_start
+        )
+
+    def _evidence_matches(self, evidence: Path, raw: bytes) -> bool:
+        try:
+            existing, _identity = self._snapshot(evidence, "stale-lock evidence")
+        except JigError:
+            return False
+        return existing == raw
+
+    def _unlink_snapshot(self, raw: bytes, identity: Tuple[int, int]) -> None:
+        current, current_identity = self._snapshot(self.path, "init lock")
+        if current != raw or current_identity != identity:
+            raise JigError("the init lock changed during stale-owner reconciliation")
+        try:
+            self.path.unlink()
+        except FileNotFoundError as error:
+            raise JigError("the init lock changed during stale-owner reconciliation") from error
+        fsync_directory(self.directory)
+
+    def _preserve_stale(self, raw: bytes, identity: Tuple[int, int], evidence: Path) -> None:
+        created = False
+        try:
+            os.link(self.path, evidence, follow_symlinks=False)
+            created = True
+            fsync_directory(evidence.parent)
+        except FileExistsError:
+            if not self._evidence_matches(evidence, raw):
+                raise JigError(
+                    "stale-lock evidence collides with an existing different file; both were preserved"
+                )
+        except FileNotFoundError as error:
+            raise JigError("the init lock changed during stale-owner reconciliation") from error
+        if created:
+            evidence_raw, evidence_identity = self._snapshot(evidence, "stale-lock evidence")
+            if evidence_raw != raw or evidence_identity != identity:
+                try:
+                    evidence.unlink()
+                except OSError:
+                    pass
+                raise JigError("the init lock changed during stale-owner reconciliation")
+        self._unlink_snapshot(raw, identity)
 
     def acquire(self) -> "RepositoryLock":
         ensure_owned_directory(self.root, ".pi/jig")
@@ -370,20 +483,17 @@ class RepositoryLock:
         except FileExistsError:
             pass
         try:
-            raw = self.path.read_bytes()
-            holder = read_json_bytes(raw, "init lock")
-        except (OSError, ValidationError) as error:
-            raise JigError("the init lock owner is uncertain; preserve .pi/jig/init.lock and inspect it") from error
+            raw, identity = self._snapshot(self.path, "init lock")
+            holder = self._validate_holder(read_json_bytes(raw, "init lock"))
+        except (OSError, ValidationError, JigError) as error:
+            raise JigError(
+                "the init lock owner is uncertain; preserve .pi/jig/init.lock and inspect it"
+            ) from error
         if not self._stale(holder):
             raise JigError("the init lock has a live or uncertain owner; wait for that owner to finish")
         receipts = ensure_owned_directory(self.root, ".pi/jig/receipts")
         evidence = receipts / f"lock-reclaimed-{sha256_bytes(raw)[:16]}.json"
-        try:
-            os.rename(self.path, evidence)
-        except FileNotFoundError:
-            raise JigError("the init lock changed during stale-owner reconciliation")
-        except FileExistsError:
-            raise JigError("stale-lock evidence already exists and was not overwritten")
+        self._preserve_stale(raw, identity, evidence)
         self.reclaimed.append(evidence)
         try:
             self._write_owner()
@@ -457,7 +567,13 @@ def load_schema(name: str) -> Mapping[str, Any]:
 
 
 def safe_relative_path(root: Path, value: str, must_exist: bool = False) -> Path:
-    if not isinstance(value, str) or not value or "\\" in value or "//" in value:
+    if (
+        not isinstance(value, str)
+        or not value
+        or "\\" in value
+        or "//" in value
+        or any(ord(character) < 32 or 127 <= ord(character) <= 159 for character in value)
+    ):
         raise ValidationError("artifact path is not a portable repository-relative path")
     raw_parts = value.split("/")
     pure = PurePosixPath(value)
@@ -510,7 +626,13 @@ def validate_profile_semantics(root: Path, profile: Mapping[str, Any], revision:
     if profile.get("repositoryRevision") != revision:
         raise ValidationError("profile repositoryRevision does not match the recorded source revision")
     for path in profile_evidence_paths(profile):
-        safe_relative_path(root, path, must_exist=True)
+        evidence = safe_relative_path(root, path, must_exist=True)
+        try:
+            mode = evidence.lstat().st_mode
+        except OSError as error:
+            raise ValidationError(f"profile evidence cannot be inspected: {path}") from error
+        if not stat.S_ISREG(mode):
+            raise ValidationError(f"profile evidence is not a regular file: {path}")
 
 
 def upsert_artifact(manifest: Dict[str, Any], path: str, owner: str, digest: str) -> None:
@@ -565,19 +687,29 @@ def reconcile_temporary_files(root: Path) -> List[Tuple[str, str]]:
     if not jig_dir.exists() or jig_dir.is_symlink():
         return []
     receipts = ensure_owned_directory(root, ".pi/jig/receipts")
+    reserved = (
+        (jig_dir, re.compile(r"\.jigctl-(?:manifest|profile)\.json\.\d+\.[0-9a-f]{32}\.tmp")),
+        (receipts, re.compile(r"\.jigctl-transition-\d{4}-[a-z-]+\.json\.\d+\.[0-9a-f]{32}\.tmp")),
+    )
     recovered: List[Tuple[str, str]] = []
-    for parent, directories, files in os.walk(jig_dir, followlinks=False):
-        directories[:] = [name for name in directories if not (Path(parent) / name).is_symlink()]
-        for name in files:
-            if re.fullmatch(r"\.jigctl-[A-Za-z0-9_.-]+\.\d+\.[0-9a-f]{32}\.tmp", name) is None:
+    for parent, name_pattern in reserved:
+        try:
+            candidates = sorted(parent.iterdir())
+        except OSError as error:
+            raise JigError("controller temporary files cannot be inspected") from error
+        for path in candidates:
+            if name_pattern.fullmatch(path.name) is None:
                 continue
-            path = Path(parent) / name
-            if path.is_symlink():
-                continue
+            try:
+                mode = path.lstat().st_mode
+            except OSError as error:
+                raise JigError("controller temporary file cannot be inspected") from error
+            if not stat.S_ISREG(mode):
+                raise JigError("controller temporary file is not a regular file")
             digest = sha256_file(path)
             destination = receipts / f"interrupted-write-{digest}.bin"
             if destination.exists():
-                if sha256_file(destination) != digest:
+                if destination.is_symlink() or not destination.is_file() or sha256_file(destination) != digest:
                     raise JigError("interrupted-write evidence collides with an existing unknown file")
                 path.unlink()
             else:
@@ -624,21 +756,76 @@ def validate_manifest_semantics(root: Path, manifest: Mapping[str, Any], schema:
         ("failed-awaiting-commandments", "awaiting-commandments"),
     }
     previous = "absent"
-    for transition in transitions:
+    receipt_kind = {
+        ("absent", "surveying"): "init-started",
+        ("surveying", "awaiting-commandments"): "profile-committed",
+        ("surveying", "failed-surveying"): "phase-failed",
+        ("awaiting-commandments", "failed-awaiting-commandments"): "phase-failed",
+        ("failed-surveying", "surveying"): "failed-state-reconciled",
+        ("failed-awaiting-commandments", "awaiting-commandments"): "failed-state-reconciled",
+    }
+    source_status_sha256 = sha256_bytes(canonical_json(manifest["source"]["statusSummary"]))
+    for index, transition in enumerate(transitions, start=1):
         edge = (transition["from"], transition["to"])
         if transition["from"] != previous or edge not in allowed_edges:
             raise ValidationError("manifest transition history has an invalid edge")
-        receipt = safe_relative_path(root, transition["receiptPath"], must_exist=True)
+        expected_path = f".pi/jig/receipts/transition-{index:04d}-{edge[1]}.json"
+        if transition["receiptPath"] != expected_path:
+            raise ValidationError("transition receipt path does not match the implemented transition")
+        receipt_artifact = next(
+            (item for item in artifacts if item["path"] == expected_path), None
+        )
+        if (
+            receipt_artifact is None
+            or receipt_artifact["owner"] != "controller"
+            or receipt_artifact["sha256"] != transition["receiptSha256"]
+        ):
+            raise ValidationError("transition receipt artifact does not match the manifest")
+        receipt = safe_relative_path(root, expected_path, must_exist=True)
         if sha256_file(receipt) != transition["receiptSha256"]:
             raise ValidationError("transition receipt hash mismatch")
         receipt_data = read_json(receipt, "transition receipt")
-        if not isinstance(receipt_data, dict) or any(
-            receipt_data.get(key) != value
-            for key, value in (("from", edge[0]), ("to", edge[1]), ("at", transition["at"]))
-        ):
+        kind = receipt_kind[edge]
+        expected_values = {
+            "schemaVersion": 1,
+            "kind": kind,
+            "from": edge[0],
+            "to": edge[1],
+            "at": transition["at"],
+            "sourceRevision": manifest["source"]["revision"],
+            "sourceDirty": manifest["source"]["dirty"],
+            "sourceStatusSha256": source_status_sha256,
+        }
+        expected_fields = set(expected_values)
+        if kind == "profile-committed":
+            expected_fields.update({"profilePath", "profileSha256", "commandmentsGenerated"})
+        elif kind == "phase-failed":
+            expected_fields.add("failureReason")
+        if not isinstance(receipt_data, dict) or set(receipt_data) != expected_fields:
+            raise ValidationError("transition receipt has an invalid implemented shape")
+        if any(receipt_data.get(key) != value for key, value in expected_values.items()):
             raise ValidationError("transition receipt does not match the manifest")
-        if receipt_data.get("sourceRevision") != manifest["source"]["revision"]:
-            raise ValidationError("transition receipt source revision does not match")
+        if kind == "profile-committed":
+            profile_artifact = next(
+                (item for item in artifacts if item["path"] == ".pi/jig/profile.json"), None
+            )
+            if (
+                receipt_data["profilePath"] != ".pi/jig/profile.json"
+                or receipt_data["commandmentsGenerated"] is not False
+                or profile_artifact is None
+                or receipt_data["profileSha256"] != profile_artifact["sha256"]
+            ):
+                raise ValidationError("profile transition receipt is inconsistent")
+        elif kind == "phase-failed":
+            reason = receipt_data["failureReason"]
+            if (
+                not isinstance(reason, str)
+                or not reason.strip()
+                or len(reason) > 500
+                or "\n" in reason
+                or "\r" in reason
+            ):
+                raise ValidationError("failure transition receipt has an invalid reason")
         previous = transition["to"]
     if previous != state:
         raise ValidationError("manifest currentState does not match its last transition")
@@ -750,6 +937,13 @@ def load_existing_manifest(root: Path) -> Dict[str, Any]:
     return value
 
 
+def validate_current_source(root: Path, manifest: Mapping[str, Any]) -> None:
+    if source_record(root) != manifest["source"]:
+        raise ValidationError(
+            "repository source revision or dirty summary changed after the recorded boundary"
+        )
+
+
 def attach_recovery_artifacts(manifest: Dict[str, Any], artifacts: Iterable[Tuple[str, str]]) -> bool:
     before = canonical_json(manifest["artifacts"])
     for path, digest in artifacts:
@@ -771,6 +965,7 @@ def start(root: Path, isolation: str, lock: RepositoryLock) -> Dict[str, Any]:
         manifest = load_existing_manifest(root)
         if manifest["resourceIsolation"] != isolation:
             raise JigError("the existing manifest uses a different resourceIsolation route")
+        validate_current_source(root, manifest)
         recovered = (
             reconcile_temporary_files(root)
             + reconcile_orphan_transitions(root, manifest)
@@ -809,6 +1004,7 @@ def record_failure(root: Path, isolation: str, expected_state: str, reason: str)
     manifest = load_existing_manifest(root)
     if manifest["resourceIsolation"] != isolation:
         raise JigError("the existing manifest uses a different resourceIsolation route")
+    validate_current_source(root, manifest)
     if manifest["currentState"] != expected_state:
         raise ValidationError(
             f"failure expected {expected_state}, found {manifest['currentState']}"
@@ -833,6 +1029,7 @@ def commit_profile(root: Path, isolation: str, lock: RepositoryLock, raw: bytes)
     manifest = load_existing_manifest(root)
     if manifest["resourceIsolation"] != isolation:
         raise JigError("the existing manifest uses a different resourceIsolation route")
+    validate_current_source(root, manifest)
     recovered = reconcile_orphan_transitions(root, manifest) + known_receipt_artifacts(root)
     if attach_recovery_artifacts(manifest, recovered):
         manifest["updatedAt"] = now()
