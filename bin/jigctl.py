@@ -62,7 +62,7 @@ COMMANDMENTS_INTERVIEW_PATH = ".pi/jig/commandments/interview.json"
 COMMANDMENTS_STAGING_PATH = ".pi/jig/commandments/staging.json"
 COMMANDMENTS_ROOT_PATH = "COMMANDMENTS.md"
 COMMANDMENTS_ROOT_TEMP_PATTERN = re.compile(
-    r"\.jigctl-COMMANDMENTS\.md(?:\.([0-9a-f]{64}))?\.([0-9]+)\.([0-9a-f]{32})\.tmp"
+    r"\.jigctl-COMMANDMENTS\.md\.([0-9a-f]{64})\.([0-9]+)\.([0-9a-f]{32})\.tmp"
 )
 COMMANDMENTS_ANSWER_KEYS = (
     "requiredInitOutcome",
@@ -1350,8 +1350,10 @@ def reconcile_commandments_root_temporaries(
             continue
         raw = path.read_bytes()
         token = match.group(1)
-        owned = token == candidate_digest or (
-            token is None and bool(raw) and candidate.startswith(raw)
+        owned = (
+            token == candidate_digest
+            and bool(raw)
+            and candidate.startswith(raw)
         )
         if not owned:
             continue
@@ -1693,6 +1695,12 @@ def validate_commandments_bytes(raw: bytes) -> Dict[str, Any]:
         raise ValidationError(
             "COMMANDMENTS contains a template marker or lacks its final newline"
         )
+    if any(
+        (ord(character) < 32 and character != "\n")
+        or 127 <= ord(character) <= 159
+        for character in text
+    ):
+        raise ValidationError("COMMANDMENTS contains a control character")
     required_sections = (
         "# Repository COMMANDMENTS",
         "## Hard commandments",
@@ -1755,6 +1763,111 @@ def validate_commandments_bytes(raw: bytes) -> Dict[str, Any]:
             bounded_text(
                 values[0], f"COMMANDMENTS {match.group(1)} {label}", 4000
             )
+
+    def section_lines(index: int) -> List[str]:
+        start = text.index("\n", section_positions[index]) + 1
+        end = (
+            section_positions[index + 1]
+            if index + 1 < len(section_positions)
+            else len(text)
+        )
+        return [line for line in text[start:end].splitlines() if line]
+
+    def ordered_values(
+        index: int, labels: Sequence[str], pattern: str, kind: str
+    ) -> List[str]:
+        lines = section_lines(index)
+        values = []
+        positions = []
+        for label in labels:
+            matches = [
+                (line_index, match.group(1))
+                for line_index, line in enumerate(lines)
+                for match in [re.fullmatch(pattern.format(label=re.escape(label)), line)]
+                if match is not None
+            ]
+            if len(matches) != 1:
+                raise ValidationError(
+                    f"COMMANDMENTS {kind} has an invalid {label} field"
+                )
+            positions.append(matches[0][0])
+            values.append(
+                bounded_text(
+                    matches[0][1], f"COMMANDMENTS {kind} {label}", 4000
+                )
+            )
+        if positions != sorted(positions) or len(lines) != len(labels):
+            raise ValidationError(f"COMMANDMENTS {kind} fields are misplaced")
+        return values
+
+    ordered_values(
+        3,
+        ("Action", "Visible result", "Evidence", "Cleanup", "Thresholds"),
+        r"\*\*{label}\.\*\* (.+)",
+        "protected user path",
+    )
+    ordered_values(
+        4,
+        (
+            "Baseline requirement",
+            "Targeted verification",
+            "Product regression floor",
+            "Seeded guard proof",
+            "Independent review",
+            "Behavioral eval",
+        ),
+        r"- {label}: (.+)",
+        "proof policy",
+    )
+    compatibility = section_lines(5)
+    if not compatibility:
+        raise ValidationError("COMMANDMENTS compatibility policy is empty")
+    for line in compatibility:
+        bounded_text(line, "COMMANDMENTS compatibility policy", 4000)
+    autonomy_lines = section_lines(6)
+    autonomy = []
+    for line in autonomy_lines:
+        match = re.fullmatch(r"- (.+)", line)
+        if match is None:
+            raise ValidationError("COMMANDMENTS autonomy policy is malformed")
+        autonomy.append(
+            bounded_text(match.group(1), "COMMANDMENTS autonomy policy", 1000)
+        )
+    if not autonomy or len(autonomy) != len(set(autonomy)):
+        raise ValidationError("COMMANDMENTS autonomy policy is empty or duplicated")
+    tradeoff_lines = section_lines(7)
+    tradeoffs = []
+    numbers = []
+    for line in tradeoff_lines:
+        match = re.fullmatch(r"([1-9][0-9]*)\. (.+)", line)
+        if match is None:
+            raise ValidationError("COMMANDMENTS tradeoff order is malformed")
+        numbers.append(int(match.group(1)))
+        tradeoffs.append(
+            bounded_text(match.group(2), "COMMANDMENTS tradeoff entry", 1000)
+        )
+    if (
+        not tradeoffs
+        or numbers != list(range(1, len(numbers) + 1))
+        or len(tradeoffs) != len(set(tradeoffs))
+    ):
+        raise ValidationError("COMMANDMENTS tradeoff order is empty or ambiguous")
+    amendment_lines = section_lines(8)
+    amendment_prefix = "Free-text amendments from the interview: "
+    if (
+        len(amendment_lines) < 2
+        or not amendment_lines[-1].startswith(amendment_prefix)
+        or sum(line.startswith(amendment_prefix) for line in amendment_lines) != 1
+    ):
+        raise ValidationError("COMMANDMENTS amendment policy is incomplete")
+    for line in amendment_lines[:-1]:
+        bounded_text(line, "COMMANDMENTS amendment policy", 4000)
+    bounded_text(
+        amendment_lines[-1][len(amendment_prefix):],
+        "COMMANDMENTS free-text amendments",
+        4000,
+    )
+
     def unique_line(label: str, pattern: str) -> re.Match[str]:
         matches = list(re.finditer(pattern, text, flags=re.MULTILINE))
         if len(matches) != 1:
@@ -2021,15 +2134,16 @@ def load_staging(
             or sha256_file(artifact_path) != digest
         ):
             raise ValidationError("COMMANDMENTS staging artifact hash changed")
-    answers = read_json(root / value["answersPath"], "staged COMMANDMENTS answers")
-    _resolved, modes = validate_commandments_answers(answers)
+    answers = read_json(
+        root / value["answersPath"], "staged COMMANDMENTS answers"
+    )
+    resolved, modes = validate_commandments_answers(answers)
     if modes != value["choiceModes"]:
         raise ValidationError(
             "COMMANDMENTS staging choice evidence is inconsistent"
         )
-    metadata = validate_commandments_bytes(
-        (root / value["candidatePath"]).read_bytes()
-    )
+    candidate_raw = (root / value["candidatePath"]).read_bytes()
+    metadata = validate_commandments_bytes(candidate_raw)
     if (
         metadata["version"] != value["version"]
         or metadata["ratifiedAt"] != value["prospectiveRatifiedAt"]
@@ -2038,6 +2152,27 @@ def load_staging(
         raise ValidationError(
             "COMMANDMENTS staging candidate metadata is inconsistent"
         )
+    if value["adoptedExisting"]:
+        root_path = fixed_artifact_path(
+            root, COMMANDMENTS_ROOT_PATH, create_parent=False
+        )
+        if not root_path.exists() or root_path.read_bytes() != candidate_raw:
+            raise ValidationError(
+                "adopted COMMANDMENTS staging no longer matches the root file"
+            )
+    else:
+        expected_candidate = render_commandments_candidate(
+            resolved,
+            value["prospectiveRatifiedAt"],
+            value["version"],
+        )
+        if (
+            expected_candidate != candidate_raw
+            or sha256_bytes(expected_candidate) != value["candidateSha256"]
+        ):
+            raise ValidationError(
+                "generated COMMANDMENTS staging differs from its exact answers"
+            )
     return value
 
 
@@ -2629,6 +2764,8 @@ def render_result(root: Path, manifest: Mapping[str, Any]) -> None:
                         staging["previousCandidateSha256"],
                     ]
                 )
+            if staging is not None and staging["adoptedExisting"]:
+                stage_command.append("--adopt-existing")
             operations.append(
                 {
                     "name": "stage",
