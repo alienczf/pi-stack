@@ -113,6 +113,18 @@ class JigControllerTest(unittest.TestCase):
             "acquiredAt": "2026-01-01T00:00:00Z",
         }
 
+    def transition_path(self, index, state):
+        return self.repo / ".pi" / "jig" / "receipts" / f"transition-{index:04d}-{state}.json"
+
+    def write_orphan_receipt(self, index, from_state, to_state, kind, **extra):
+        source = self.manifest()["source"] if self.manifest_path().exists() else jigctl.source_record(self.repo)
+        receipt = jigctl.receipt_value(kind, from_state, to_state, source, **extra)
+        path = self.transition_path(index, to_state)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        raw = jigctl.canonical_json(receipt)
+        path.write_bytes(raw)
+        return path, raw
+
     def jig_snapshot(self):
         jig = self.repo / ".pi" / "jig"
         return {
@@ -767,6 +779,250 @@ class JigControllerTest(unittest.TestCase):
         for path, raw in seeded.items():
             self.assertEqual(path.read_bytes(), raw)
             self.assertNotIn(path.relative_to(self.repo).as_posix(), artifact_paths)
+
+    def test_unknown_transition_lookalikes_remain_untouched_at_all_entry_points(self):
+        receipts = self.repo / ".pi" / "jig" / "receipts"
+        receipts.mkdir(parents=True)
+        log = receipts / "transition-log.json"
+        log.write_bytes(b"operator log\n")
+        self.start()
+        notes = receipts / "transition-notes.json"
+        userdata = receipts / "transition-userdata.json"
+        lookalikes = [
+            receipts / "transition-٠٠٠٢-failed-surveying.json",
+            receipts / "transition-０００２-failed-surveying.json",
+            receipts / "transition-2-failed-surveying.json",
+            receipts / "transition-00002-failed-surveying.json",
+            receipts / "transition-0002-initialized.json",
+        ]
+        seeded = {log: b"operator log\n", notes: b"operator notes\n", userdata: b"operator data\n"}
+        seeded.update({path: f"lookalike {index}\n".encode() for index, path in enumerate(lookalikes)})
+        for path, raw in seeded.items():
+            if not path.exists():
+                path.write_bytes(raw)
+        before = self.manifest_path().read_bytes()
+        invalid = self.commit_profile({"schemaVersion": 2})
+        self.assertNotEqual(invalid.returncode, 0)
+        self.assertEqual(self.manifest_path().read_bytes(), before)
+        self.start()
+        artifact_paths = {item["path"] for item in self.manifest()["artifacts"]}
+        for path, raw in seeded.items():
+            with self.subTest(path=path.name):
+                self.assertEqual(path.read_bytes(), raw)
+                self.assertNotIn(path.relative_to(self.repo).as_posix(), artifact_paths)
+
+    def test_exact_transition_candidates_require_the_complete_ownership_proof(self):
+        self.start()
+        source = self.manifest()["source"]
+        valid = jigctl.receipt_value(
+            "phase-failed",
+            "surveying",
+            "failed-surveying",
+            source,
+            failureReason="seeded failure",
+        )
+        cases = []
+        cases.append(("malformed-json", b"{not-json"))
+        for name, mutate in [
+            ("extra-field", lambda value: value.update({"unknown": True})),
+            ("missing-field", lambda value: value.pop("failureReason")),
+            ("wrong-from", lambda value: value.update({"from": "absent"})),
+            ("wrong-to", lambda value: value.update({"to": "awaiting-commandments"})),
+            ("wrong-kind", lambda value: value.update({"kind": "init-started"})),
+            ("wrong-revision", lambda value: value.update({"sourceRevision": "0" * 40})),
+            ("wrong-dirty", lambda value: value.update({"sourceDirty": not source["dirty"]})),
+            ("wrong-status", lambda value: value.update({"sourceStatusSha256": "0" * 64})),
+        ]:
+            candidate = dict(valid)
+            mutate(candidate)
+            cases.append((name, jigctl.canonical_json(candidate)))
+        for name, raw in cases:
+            with self.subTest(case=name):
+                path = self.transition_path(2, "failed-surveying")
+                path.write_bytes(raw)
+                before = self.manifest_path().read_bytes()
+                result = self.ctl(
+                    "record-failure",
+                    "--resource-isolation", "isolated-shell",
+                    "--state", "surveying",
+                    "--reason", "retry failure",
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(path.read_bytes(), raw)
+                self.assertEqual(self.manifest_path().read_bytes(), before)
+                artifact_paths = {item["path"] for item in self.manifest()["artifacts"]}
+                self.assertNotIn(path.relative_to(self.repo).as_posix(), artifact_paths)
+                path.unlink()
+        wrong_index = self.transition_path(3, "failed-surveying")
+        wrong_index.write_bytes(jigctl.canonical_json(valid))
+        suffix_mismatch = self.transition_path(2, "awaiting-commandments")
+        suffix_mismatch.write_bytes(jigctl.canonical_json(valid))
+        before = self.manifest_path().read_bytes()
+        self.start()
+        self.assertEqual(self.manifest_path().read_bytes(), before)
+        for path in (wrong_index, suffix_mismatch):
+            self.assertEqual(path.read_bytes(), jigctl.canonical_json(valid))
+            artifact_paths = {item["path"] for item in self.manifest()["artifacts"]}
+            self.assertNotIn(path.relative_to(self.repo).as_posix(), artifact_paths)
+
+    def test_genuine_fresh_orphan_is_quarantined_then_init_reruns_cleanly(self):
+        path, raw = self.write_orphan_receipt(1, "absent", "surveying", "init-started")
+        digest = hashlib.sha256(raw).hexdigest()
+        evidence = path.parent / f"interrupted-transition-{digest}.json"
+        self.start()
+        manifest = self.manifest()
+        self.assertEqual(manifest["currentState"], "surveying")
+        self.assertEqual(len(manifest["transitions"]), 1)
+        self.assertEqual(evidence.read_bytes(), raw)
+        self.assertTrue(path.is_file())
+        artifact_paths = {item["path"] for item in manifest["artifacts"]}
+        self.assertIn(evidence.relative_to(self.repo).as_posix(), artifact_paths)
+        self.assertIn(path.relative_to(self.repo).as_posix(), artifact_paths)
+        before = self.manifest_path().read_bytes()
+        self.start()
+        self.assertEqual(self.manifest_path().read_bytes(), before)
+
+    def test_record_failure_retries_after_a_genuine_orphan(self):
+        self.start()
+        path, raw = self.write_orphan_receipt(
+            2,
+            "surveying",
+            "failed-surveying",
+            "phase-failed",
+            failureReason="crashed failure",
+        )
+        digest = hashlib.sha256(raw).hexdigest()
+        evidence = path.parent / f"interrupted-transition-{digest}.json"
+        result = self.ctl(
+            "record-failure",
+            "--resource-isolation", "isolated-shell",
+            "--state", "surveying",
+            "--reason", "retried failure",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        manifest = self.manifest()
+        self.assertEqual(manifest["currentState"], "failed-surveying")
+        self.assertEqual(evidence.read_bytes(), raw)
+        self.assertIn(
+            evidence.relative_to(self.repo).as_posix(),
+            {item["path"] for item in manifest["artifacts"]},
+        )
+
+    def test_genuine_existing_orphans_recover_without_advancing_before_retry(self):
+        self.start()
+
+        def quarantine(path, raw):
+            before = self.manifest_path().read_bytes()
+            recovered = jigctl.reconcile_orphan_transitions(self.repo, self.manifest())
+            digest = hashlib.sha256(raw).hexdigest()
+            evidence = path.parent / f"interrupted-transition-{digest}.json"
+            self.assertEqual(recovered, [(evidence.relative_to(self.repo).as_posix(), digest)])
+            self.assertEqual(evidence.read_bytes(), raw)
+            self.assertEqual(self.manifest_path().read_bytes(), before)
+            return evidence
+
+        path, raw = self.write_orphan_receipt(
+            2,
+            "surveying",
+            "failed-surveying",
+            "phase-failed",
+            failureReason="crashed failure",
+        )
+        failure_evidence = quarantine(path, raw)
+        failure = self.ctl(
+            "record-failure",
+            "--resource-isolation", "isolated-shell",
+            "--state", "surveying",
+            "--reason", "retried failure",
+        )
+        self.assertEqual(failure.returncode, 0, failure.stderr)
+        self.assertEqual(self.manifest()["currentState"], "failed-surveying")
+
+        path, raw = self.write_orphan_receipt(
+            3,
+            "failed-surveying",
+            "surveying",
+            "failed-state-reconciled",
+        )
+        reconciliation_evidence = quarantine(path, raw)
+        self.start()
+        self.assertEqual(self.manifest()["currentState"], "surveying")
+
+        profile = self.profile()
+        profile_path = self.repo / ".pi" / "jig" / "profile.json"
+        profile_raw = jigctl.canonical_json(profile)
+        profile_path.write_bytes(profile_raw)
+        profile_digest = hashlib.sha256(profile_raw).hexdigest()
+        path, raw = self.write_orphan_receipt(
+            4,
+            "surveying",
+            "awaiting-commandments",
+            "profile-committed",
+            profilePath=".pi/jig/profile.json",
+            profileSha256=profile_digest,
+            commandmentsGenerated=False,
+        )
+        profile_evidence = quarantine(path, raw)
+        committed = self.commit_profile(profile)
+        self.assertEqual(committed.returncode, 0, committed.stderr)
+        manifest = self.manifest()
+        self.assertEqual(manifest["currentState"], "awaiting-commandments")
+        artifact_paths = {item["path"] for item in manifest["artifacts"]}
+        for evidence in (failure_evidence, reconciliation_evidence, profile_evidence):
+            self.assertIn(evidence.relative_to(self.repo).as_posix(), artifact_paths)
+        before = self.manifest_path().read_bytes()
+        self.start()
+        self.assertEqual(self.manifest_path().read_bytes(), before)
+
+    def test_genuine_orphan_digest_collisions_are_no_clobber_and_bounded(self):
+        path, raw = self.write_orphan_receipt(1, "absent", "surveying", "init-started")
+        digest = hashlib.sha256(raw).hexdigest()
+        evidence = path.parent / f"interrupted-transition-{digest}.json"
+        different = b"existing operator bytes\n"
+        evidence.write_bytes(different)
+        result = self.ctl("start", "--resource-isolation", "isolated-shell")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("Traceback", result.stderr)
+        self.assertEqual(path.read_bytes(), raw)
+        self.assertEqual(evidence.read_bytes(), different)
+        evidence.write_bytes(raw)
+        self.start()
+        self.assertEqual(evidence.read_bytes(), raw)
+        self.assertTrue(path.is_file())
+
+    def test_transition_artifact_bijection_and_recovery_digest_names_are_enforced(self):
+        self.start()
+        before = self.manifest_path().read_bytes()
+        manifest = self.manifest()
+        extra_path, extra_raw = self.write_orphan_receipt(
+            2,
+            "surveying",
+            "failed-surveying",
+            "phase-failed",
+            failureReason="extra artifact",
+        )
+        manifest["artifacts"].append({
+            "path": extra_path.relative_to(self.repo).as_posix(),
+            "owner": "controller",
+            "sha256": hashlib.sha256(extra_raw).hexdigest(),
+        })
+        with self.assertRaisesRegex(jigctl.ValidationError, "transition receipt artifacts"):
+            jigctl.write_manifest(self.repo, manifest)
+        self.assertEqual(self.manifest_path().read_bytes(), before)
+        extra_path.unlink()
+
+        mismatch = extra_path.parent / f"interrupted-transition-{'0' * 64}.json"
+        mismatch_raw = b"recovery evidence\n"
+        mismatch.write_bytes(mismatch_raw)
+        manifest = self.manifest()
+        manifest["artifacts"].append({
+            "path": mismatch.relative_to(self.repo).as_posix(),
+            "owner": "controller",
+            "sha256": hashlib.sha256(mismatch_raw).hexdigest(),
+        })
+        with self.assertRaisesRegex(jigctl.ValidationError, "name does not match its digest"):
+            jigctl.write_manifest(self.repo, manifest)
+        self.assertEqual(self.manifest_path().read_bytes(), before)
 
     def test_shell_valid_profile_stub_reaches_awaiting_commandments(self):
         external = Path(self.external.name)
