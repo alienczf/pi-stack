@@ -30,6 +30,19 @@ IMPLEMENTED_STATES = {
     "failed-surveying",
     "failed-awaiting-commandments",
 }
+TRANSITION_KIND_BY_EDGE = {
+    ("absent", "surveying"): "init-started",
+    ("surveying", "awaiting-commandments"): "profile-committed",
+    ("surveying", "failed-surveying"): "phase-failed",
+    ("awaiting-commandments", "failed-awaiting-commandments"): "phase-failed",
+    ("failed-surveying", "surveying"): "failed-state-reconciled",
+    ("failed-awaiting-commandments", "awaiting-commandments"): "failed-state-reconciled",
+}
+TRANSITION_RECEIPT_PATTERN = re.compile(
+    r"transition-([0-9]{4})-("
+    + "|".join(sorted(re.escape(state) for state in IMPLEMENTED_STATES))
+    + r")\.json"
+)
 SENSITIVE_NAMES = {
     ".env",
     "auth.json",
@@ -727,22 +740,107 @@ def known_receipt_artifacts(root: Path) -> List[Tuple[str, str]]:
     return result
 
 
+def validate_transition_receipt(
+    root: Path,
+    receipt: Any,
+    edge: Tuple[str, str],
+    source: Mapping[str, Any],
+    expected_at: Optional[str] = None,
+) -> str:
+    kind = TRANSITION_KIND_BY_EDGE.get(edge)
+    if kind is None:
+        raise ValidationError("transition receipt has an unimplemented edge")
+    expected_values = {
+        "schemaVersion": 1,
+        "kind": kind,
+        "from": edge[0],
+        "to": edge[1],
+        "sourceRevision": source["revision"],
+        "sourceDirty": source["dirty"],
+        "sourceStatusSha256": sha256_bytes(canonical_json(source["statusSummary"])),
+    }
+    expected_fields = set(expected_values) | {"at"}
+    if kind == "profile-committed":
+        expected_fields.update({"profilePath", "profileSha256", "commandmentsGenerated"})
+    elif kind == "phase-failed":
+        expected_fields.add("failureReason")
+    if not isinstance(receipt, dict) or set(receipt) != expected_fields:
+        raise ValidationError("transition receipt has an invalid implemented shape")
+    if type(receipt["schemaVersion"]) is not int:
+        raise ValidationError("transition receipt has an invalid schema version")
+    if type(receipt["sourceDirty"]) is not bool:
+        raise ValidationError("transition receipt has an invalid source dirty flag")
+    if any(receipt.get(key) != value for key, value in expected_values.items()):
+        raise ValidationError("transition receipt does not match its boundary")
+    if not isinstance(receipt["at"], str) or not valid_datetime(receipt["at"]):
+        raise ValidationError("transition receipt has an invalid timestamp")
+    if expected_at is not None and receipt["at"] != expected_at:
+        raise ValidationError("transition receipt does not match its transition timestamp")
+    if kind == "profile-committed":
+        if (
+            receipt["profilePath"] != ".pi/jig/profile.json"
+            or receipt["commandmentsGenerated"] is not False
+            or not isinstance(receipt["profileSha256"], str)
+            or re.fullmatch(r"[0-9a-f]{64}", receipt["profileSha256"]) is None
+        ):
+            raise ValidationError("profile transition receipt is inconsistent")
+        profile_path = safe_relative_path(root, receipt["profilePath"], must_exist=True)
+        try:
+            mode = profile_path.lstat().st_mode
+        except OSError as error:
+            raise ValidationError("committed profile cannot be inspected") from error
+        if not stat.S_ISREG(mode) or sha256_file(profile_path) != receipt["profileSha256"]:
+            raise ValidationError("profile transition receipt hash is inconsistent")
+    elif kind == "phase-failed":
+        reason = receipt["failureReason"]
+        if (
+            not isinstance(reason, str)
+            or not reason.strip()
+            or len(reason) > 500
+            or "\n" in reason
+            or "\r" in reason
+        ):
+            raise ValidationError("failure transition receipt has an invalid reason")
+    return kind
+
+
 def reconcile_orphan_transitions(root: Path, manifest: Optional[Mapping[str, Any]]) -> List[Tuple[str, str]]:
     receipts = ensure_owned_directory(root, ".pi/jig/receipts")
     referenced = set() if manifest is None else {item["receiptPath"] for item in manifest["transitions"]}
+    expected_index = 1 if manifest is None else len(manifest["transitions"]) + 1
+    boundary = "absent" if manifest is None else manifest["currentState"]
+    source = source_record(root) if manifest is None else manifest["source"]
     recovered = []
-    for path in sorted(receipts.glob("transition-*.json")):
+    for path in sorted(receipts.iterdir()):
+        match = TRANSITION_RECEIPT_PATTERN.fullmatch(path.name)
+        if match is None or int(match.group(1)) != expected_index:
+            continue
         relative = relative_to_root(root, path)
-        if relative in referenced or not path.is_file() or path.is_symlink():
+        if relative in referenced or path.is_symlink() or not path.is_file():
+            continue
+        edge = (boundary, match.group(2))
+        try:
+            receipt = read_json(path, "orphan transition receipt")
+            validate_transition_receipt(root, receipt, edge, source)
+        except JigError:
             continue
         digest = sha256_file(path)
         destination = receipts / f"interrupted-transition-{digest}.json"
-        if destination.exists():
-            if sha256_file(destination) != digest:
-                raise JigError("interrupted-transition evidence collides with an existing unknown file")
-            path.unlink()
-        else:
-            os.rename(path, destination)
+        try:
+            if destination.exists() or destination.is_symlink():
+                if (
+                    destination.is_symlink()
+                    or not destination.is_file()
+                    or sha256_file(destination) != digest
+                ):
+                    raise JigError(
+                        "interrupted-transition evidence collides with an existing unknown file"
+                    )
+                path.unlink()
+            else:
+                os.rename(path, destination)
+        except OSError as error:
+            raise JigError("orphan transition receipt could not be preserved safely") from error
         recovered.append((relative_to_root(root, destination), digest))
     return recovered
 
@@ -753,8 +851,8 @@ def reconcile_temporary_files(root: Path) -> List[Tuple[str, str]]:
         return []
     receipts = ensure_owned_directory(root, ".pi/jig/receipts")
     reserved = (
-        (jig_dir, re.compile(r"\.jigctl-(?:manifest|profile)\.json\.\d+\.[0-9a-f]{32}\.tmp")),
-        (receipts, re.compile(r"\.jigctl-transition-\d{4}-[a-z-]+\.json\.\d+\.[0-9a-f]{32}\.tmp")),
+        (jig_dir, re.compile(r"\.jigctl-(?:manifest|profile)\.json\.[0-9]+\.[0-9a-f]{32}\.tmp")),
+        (receipts, re.compile(r"\.jigctl-transition-[0-9]{4}-[a-z-]+\.json\.[0-9]+\.[0-9a-f]{32}\.tmp")),
     )
     recovered: List[Tuple[str, str]] = []
     for parent, name_pattern in reserved:
@@ -794,10 +892,12 @@ def validate_manifest_semantics(root: Path, manifest: Mapping[str, Any], schema:
     artifact_paths = [artifact["path"] for artifact in artifacts]
     if len(artifact_paths) != len(set(artifact_paths)):
         raise ValidationError("manifest has duplicate artifact paths")
+    implemented_state = "|".join(sorted(re.escape(item) for item in IMPLEMENTED_STATES))
     allowed_artifact = re.compile(
-        r"^\.pi/jig/(?:profile\.json|receipts/(?:transition-\d{4}-[a-z-]+\.json|"
-        r"lock-reclaimed-[0-9a-f]{16}\.json|interrupted-write-[0-9a-f]{64}\.bin|"
-        r"interrupted-transition-[0-9a-f]{64}\.json))$"
+        r"^\.pi/jig/(?:profile\.json|receipts/(?:transition-[0-9]{4}-(?:"
+        + implemented_state
+        + r")\.json|lock-reclaimed-[0-9a-f]{16}\.json|"
+        + r"interrupted-write-[0-9a-f]{64}\.bin|interrupted-transition-[0-9a-f]{64}\.json))$"
     )
     for artifact in artifacts:
         artifact_path = artifact["path"]
@@ -809,34 +909,29 @@ def validate_manifest_semantics(root: Path, manifest: Mapping[str, Any], schema:
         path = safe_relative_path(root, artifact_path, must_exist=True)
         if sha256_file(path) != artifact["sha256"]:
             raise ValidationError(f"owned artifact hash mismatch: {artifact_path}")
+        receipt_name = Path(artifact_path).name
+        digest_name = re.fullmatch(r"lock-reclaimed-([0-9a-f]{16})\.json", receipt_name)
+        if digest_name is not None and not artifact["sha256"].startswith(digest_name.group(1)):
+            raise ValidationError(f"recovery artifact name does not match its digest: {artifact_path}")
+        digest_name = re.fullmatch(
+            r"interrupted-(?:write|transition)-([0-9a-f]{64})\.(?:bin|json)",
+            receipt_name,
+        )
+        if digest_name is not None and artifact["sha256"] != digest_name.group(1):
+            raise ValidationError(f"recovery artifact name does not match its digest: {artifact_path}")
     transitions = manifest["transitions"]
     if not transitions or transitions[0]["from"] != "absent":
         raise ValidationError("manifest transition history does not start at absent")
-    allowed_edges = {
-        ("absent", "surveying"),
-        ("surveying", "awaiting-commandments"),
-        ("surveying", "failed-surveying"),
-        ("awaiting-commandments", "failed-awaiting-commandments"),
-        ("failed-surveying", "surveying"),
-        ("failed-awaiting-commandments", "awaiting-commandments"),
-    }
+    expected_transition_artifacts = set()
     previous = "absent"
-    receipt_kind = {
-        ("absent", "surveying"): "init-started",
-        ("surveying", "awaiting-commandments"): "profile-committed",
-        ("surveying", "failed-surveying"): "phase-failed",
-        ("awaiting-commandments", "failed-awaiting-commandments"): "phase-failed",
-        ("failed-surveying", "surveying"): "failed-state-reconciled",
-        ("failed-awaiting-commandments", "awaiting-commandments"): "failed-state-reconciled",
-    }
-    source_status_sha256 = sha256_bytes(canonical_json(manifest["source"]["statusSummary"]))
     for index, transition in enumerate(transitions, start=1):
         edge = (transition["from"], transition["to"])
-        if transition["from"] != previous or edge not in allowed_edges:
+        if transition["from"] != previous or edge not in TRANSITION_KIND_BY_EDGE:
             raise ValidationError("manifest transition history has an invalid edge")
         expected_path = f".pi/jig/receipts/transition-{index:04d}-{edge[1]}.json"
         if transition["receiptPath"] != expected_path:
             raise ValidationError("transition receipt path does not match the implemented transition")
+        expected_transition_artifacts.add(expected_path)
         receipt_artifact = next(
             (item for item in artifacts if item["path"] == expected_path), None
         )
@@ -850,48 +945,33 @@ def validate_manifest_semantics(root: Path, manifest: Mapping[str, Any], schema:
         if sha256_file(receipt) != transition["receiptSha256"]:
             raise ValidationError("transition receipt hash mismatch")
         receipt_data = read_json(receipt, "transition receipt")
-        kind = receipt_kind[edge]
-        expected_values = {
-            "schemaVersion": 1,
-            "kind": kind,
-            "from": edge[0],
-            "to": edge[1],
-            "at": transition["at"],
-            "sourceRevision": manifest["source"]["revision"],
-            "sourceDirty": manifest["source"]["dirty"],
-            "sourceStatusSha256": source_status_sha256,
-        }
-        expected_fields = set(expected_values)
-        if kind == "profile-committed":
-            expected_fields.update({"profilePath", "profileSha256", "commandmentsGenerated"})
-        elif kind == "phase-failed":
-            expected_fields.add("failureReason")
-        if not isinstance(receipt_data, dict) or set(receipt_data) != expected_fields:
-            raise ValidationError("transition receipt has an invalid implemented shape")
-        if any(receipt_data.get(key) != value for key, value in expected_values.items()):
-            raise ValidationError("transition receipt does not match the manifest")
+        kind = validate_transition_receipt(
+            root,
+            receipt_data,
+            edge,
+            manifest["source"],
+            expected_at=transition["at"],
+        )
         if kind == "profile-committed":
             profile_artifact = next(
                 (item for item in artifacts if item["path"] == ".pi/jig/profile.json"), None
             )
             if (
-                receipt_data["profilePath"] != ".pi/jig/profile.json"
-                or receipt_data["commandmentsGenerated"] is not False
-                or profile_artifact is None
+                profile_artifact is None
                 or receipt_data["profileSha256"] != profile_artifact["sha256"]
             ):
                 raise ValidationError("profile transition receipt is inconsistent")
-        elif kind == "phase-failed":
-            reason = receipt_data["failureReason"]
-            if (
-                not isinstance(reason, str)
-                or not reason.strip()
-                or len(reason) > 500
-                or "\n" in reason
-                or "\r" in reason
-            ):
-                raise ValidationError("failure transition receipt has an invalid reason")
         previous = transition["to"]
+    transition_artifacts = {
+        path
+        for path in artifact_paths
+        if re.fullmatch(
+            r"\.pi/jig/receipts/transition-[0-9]{4}-(?:" + implemented_state + r")\.json",
+            path,
+        )
+    }
+    if transition_artifacts != expected_transition_artifacts:
+        raise ValidationError("transition receipt artifacts do not match transition history")
     if previous != state:
         raise ValidationError("manifest currentState does not match its last transition")
     if state in {"awaiting-commandments", "failed-awaiting-commandments"}:
@@ -1077,6 +1157,10 @@ def record_failure(root: Path, isolation: str, expected_state: str, reason: str)
     clean_reason = reason.strip()
     if not clean_reason or len(clean_reason) > 500 or "\n" in clean_reason or "\r" in clean_reason:
         raise ValidationError("failure reason must be one line of 1 to 500 characters")
+    recovered = reconcile_orphan_transitions(root, manifest) + known_receipt_artifacts(root)
+    if attach_recovery_artifacts(manifest, recovered):
+        manifest["updatedAt"] = now()
+        write_manifest(root, manifest)
     failed_state = f"failed-{expected_state}"
     append_transition(
         root,
