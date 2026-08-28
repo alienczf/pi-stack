@@ -252,8 +252,10 @@ class CommandmentsTest(unittest.TestCase):
         first = self.stage()
         changed = json.loads(json.dumps(self.answers))
         changed["compatibilityPolicy"] = {"selection": "custom", "value": "Keep every public command."}
+        before_rejected = self.snapshot()
         rejected = self.ctl("stage-commandments", input_value=changed)
         self.assertNotEqual(rejected.returncode, 0)
+        self.assertEqual(self.snapshot(), before_rejected)
         wrong = self.ctl(
             "record-commandments-decision",
             "--decision",
@@ -311,6 +313,11 @@ class CommandmentsTest(unittest.TestCase):
         existing = jigctl.render_commandments_candidate(
             jigctl.validate_commandments_answers(self.answers)[0],
             "2026-01-01T00:00:00Z",
+        )
+        existing = existing.replace(
+            b"**Scope.** Jig init through the first terminal improvement outcome.",
+            b"**Scope.** Manually authored repository initialization policy.",
+            1,
         )
         root = self.repo / "COMMANDMENTS.md"
         root.write_bytes(existing)
@@ -443,6 +450,7 @@ class CommandmentsTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(path.read_bytes(), before)
         self.assertEqual(self.manifest()["currentState"], "awaiting-commandments")
+        self.assertFalse((self.repo / "COMMANDMENTS.md").exists())
 
     def test_expected_commandments_change_does_not_mask_unrelated_source_drift(self):
         self.prepare()
@@ -468,16 +476,240 @@ class CommandmentsTest(unittest.TestCase):
         self.assertIn("different resourceIsolation route", wrong.stderr)
         self.assertEqual(self.manifest()["resourceIsolation"], "inherited-session")
 
-    def test_noninteractive_awaiting_output_has_usable_resume_and_no_answers(self):
+    def test_noninteractive_resume_operations_execute_through_ratification(self):
         self.prepare(present=False)
-        result = self.ctl("start")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        output = json.loads(result.stdout)
+        awaiting = self.ctl("start")
+        self.assertEqual(awaiting.returncode, 0, awaiting.stderr)
+        output = json.loads(awaiting.stdout)
+        operations = {
+            item["name"]: item for item in output["resume"]["operations"]
+        }
         self.assertEqual(output["state"], "awaiting-commandments")
-        self.assertIn("answers.input.json", output["resume"])
-        self.assertIn("same route", output["resume"])
-        self.assertNotIn("commandments-ratified", result.stdout)
-        self.assertNotIn("answers", self.manifest())
+        self.assertIn("does not consume response files", output["resume"]["note"])
+        self.assertEqual(
+            operations["stage"]["stdin"],
+            ".pi/jig/commandments/answers.input.json",
+        )
+        presented = self.ctl(*operations["present"]["command"])
+        self.assertEqual(presented.returncode, 0, presented.stderr)
+        staged = self.ctl(
+            *operations["stage"]["command"], input_value=self.answers
+        )
+        self.assertEqual(staged.returncode, 0, staged.stderr)
+        staged_output = json.loads(staged.stdout)
+        resumed = self.ctl("start")
+        self.assertEqual(resumed.returncode, 0, resumed.stderr)
+        resumed_output = json.loads(resumed.stdout)
+        self.assertEqual(
+            resumed_output["candidate"]["sha256"],
+            staged_output["candidateSha256"],
+        )
+        next_operations = {
+            item["name"]: item
+            for item in resumed_output["resume"]["operations"]
+        }
+        self.assertIn(
+            staged_output["candidateSha256"],
+            next_operations["amend"]["followUp"]["command"],
+        )
+        ratified = self.ctl(*next_operations["ratify"]["command"])
+        self.assertEqual(ratified.returncode, 0, ratified.stderr)
+        self.assertEqual(self.manifest()["currentState"], "commandments-ratified")
+
+    def test_amended_staging_manifest_crash_converges(self):
+        self.prepare()
+        first = self.stage()
+        accepted = self.ctl(
+            "record-commandments-decision",
+            "--decision",
+            "amend",
+            "--candidate-sha",
+            first["candidateSha256"],
+            "--operator-marker",
+            "Amend compatibility.",
+        )
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+        changed = json.loads(json.dumps(self.answers))
+        changed["compatibilityPolicy"] = {
+            "selection": "custom",
+            "value": "Keep every public command.",
+        }
+        with mock.patch.object(
+            jigctl, "write_manifest", side_effect=RuntimeError("crash")
+        ):
+            with self.assertRaises(RuntimeError):
+                jigctl.stage_commandments(
+                    self.repo,
+                    "isolated-shell",
+                    json.dumps(changed).encode(),
+                    first["candidateSha256"],
+                    False,
+                )
+        resumed = self.ctl("start")
+        self.assertEqual(resumed.returncode, 0, resumed.stderr)
+        recovery_operations = {
+            item["name"]: item
+            for item in json.loads(resumed.stdout)["resume"]["operations"]
+        }
+        self.assertIn(
+            first["candidateSha256"], recovery_operations["stage"]["command"]
+        )
+        staged_result = self.ctl(
+            *recovery_operations["stage"]["command"], input_value=changed
+        )
+        self.assertEqual(staged_result.returncode, 0, staged_result.stderr)
+        second = json.loads(staged_result.stdout)
+        ratified = self.ratify(second)
+        self.assertEqual(ratified.returncode, 0, ratified.stderr)
+
+    def test_root_publication_temporary_reconciles_by_candidate_token(self):
+        self.prepare()
+        staged = self.stage()
+        candidate = (self.repo / staged["candidatePath"]).read_bytes()
+        temporaries = [
+            self.repo / (
+                f".jigctl-COMMANDMENTS.md.{staged['candidateSha256']}."
+                f"424242.{uuid.uuid4().hex}.tmp"
+            ),
+            self.repo / (
+                f".jigctl-COMMANDMENTS.md.{staged['candidateSha256']}."
+                f"424243.{uuid.uuid4().hex}.tmp"
+            ),
+            self.repo / (
+                f".jigctl-COMMANDMENTS.md.424244.{uuid.uuid4().hex}.tmp"
+            ),
+        ]
+        temporaries[0].write_bytes(candidate)
+        temporaries[1].write_bytes(candidate[: len(candidate) // 2])
+        temporaries[2].write_bytes(candidate[: len(candidate) // 3])
+        resumed = self.ctl("start")
+        self.assertEqual(resumed.returncode, 0, resumed.stderr)
+        self.assertTrue(all(not path.exists() for path in temporaries))
+        recovered = [
+            item
+            for item in self.manifest()["artifacts"]
+            if "interrupted-write" in item["path"]
+        ]
+        self.assertEqual(len(recovered), 3)
+        self.assertEqual(self.manifest()["currentState"], "awaiting-commandments")
+
+    def test_unknown_root_temporary_is_preserved_and_blocks_source_drift(self):
+        self.prepare()
+        staged = self.stage()
+        candidate = (self.repo / staged["candidatePath"]).read_bytes()
+        temporary = self.repo / (
+            f".jigctl-COMMANDMENTS.md.{'0' * 64}."
+            f"424242.{uuid.uuid4().hex}.tmp"
+        )
+        temporary.write_bytes(candidate[: len(candidate) // 2])
+        resumed = self.ctl("start")
+        self.assertNotEqual(resumed.returncode, 0)
+        self.assertIn("source revision or dirty summary changed", resumed.stderr)
+        self.assertTrue(temporary.exists())
+
+    def test_matching_root_temporary_symlink_and_fifo_are_preserved(self):
+        self.prepare()
+        staged = self.stage()
+        outside = Path(self.external.name) / "outside"
+        outside.write_bytes(b"outside")
+        symlink = self.repo / (
+            f".jigctl-COMMANDMENTS.md.{staged['candidateSha256']}."
+            f"424242.{uuid.uuid4().hex}.tmp"
+        )
+        fifo = self.repo / (
+            f".jigctl-COMMANDMENTS.md.{staged['candidateSha256']}."
+            f"424243.{uuid.uuid4().hex}.tmp"
+        )
+        symlink.symlink_to(outside)
+        os.mkfifo(fifo)
+        recovered = jigctl.reconcile_commandments_root_temporaries(
+            self.repo, self.manifest()
+        )
+        self.assertEqual(recovered, [])
+        self.assertTrue(symlink.is_symlink())
+        self.assertTrue(fifo.exists())
+        self.assertEqual(outside.read_bytes(), b"outside")
+
+    def test_adoption_validator_rejects_blank_and_misplaced_fields(self):
+        resolved, _modes = jigctl.validate_commandments_answers(self.answers)
+        raw = jigctl.render_commandments_candidate(
+            resolved, "2026-01-01T00:00:00Z"
+        )
+        blank = raw.replace(
+            b"**Proof.** Prove the changed behavior",
+            b"**Proof.** ",
+            1,
+        )
+        with self.assertRaises(jigctl.ValidationError):
+            jigctl.validate_commandments_bytes(blank)
+        text = raw.decode()
+        misplaced = text.replace(
+            "## Hard commandments", "## TEMP", 1
+        ).replace(
+            "## Directional commandments", "## Hard commandments", 1
+        ).replace("## TEMP", "## Directional commandments", 1)
+        with self.assertRaises(jigctl.ValidationError):
+            jigctl.validate_commandments_bytes(misplaced.encode())
+        self.prepare()
+        (self.repo / "COMMANDMENTS.md").write_bytes(blank)
+        rejected = self.ctl(
+            "stage-commandments",
+            "--adopt-existing",
+            input_value=self.answers,
+        )
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertNotIn("COMMANDMENTS.md", {
+            item["path"] for item in self.manifest()["artifacts"]
+        })
+
+    def test_explicit_decision_retry_registers_completed_orphan(self):
+        self.prepare()
+        staged = self.stage()
+        with mock.patch.object(
+            jigctl, "write_manifest", side_effect=RuntimeError("crash")
+        ):
+            with self.assertRaises(RuntimeError):
+                jigctl.record_commandments_decision(
+                    self.repo,
+                    "isolated-shell",
+                    "amend",
+                    staged["candidateSha256"],
+                    "Amend exact candidate.",
+                )
+        retried = self.ctl(
+            "record-commandments-decision",
+            "--decision",
+            "amend",
+            "--candidate-sha",
+            staged["candidateSha256"],
+            "--operator-marker",
+            "Amend exact candidate.",
+        )
+        self.assertEqual(retried.returncode, 0, retried.stderr)
+        decisions = list(
+            (self.repo / ".pi/jig/commandments/decisions").glob("*.json")
+        )
+        registered = {item["path"] for item in self.manifest()["artifacts"]}
+        self.assertEqual(len(decisions), 1)
+        self.assertIn(decisions[0].relative_to(self.repo).as_posix(), registered)
+
+    def test_ratification_keeps_manifest_update_time_monotonic(self):
+        self.prepare()
+        staged = self.stage()
+        deferred = self.ctl(
+            "record-commandments-decision",
+            "--decision",
+            "defer",
+            "--candidate-sha",
+            staged["candidateSha256"],
+            "--operator-marker",
+            "Defer this exact candidate.",
+        )
+        self.assertEqual(deferred.returncode, 0, deferred.stderr)
+        before = self.manifest()["updatedAt"]
+        ratified = self.ratify(staged)
+        self.assertEqual(ratified.returncode, 0, ratified.stderr)
+        self.assertGreaterEqual(self.manifest()["updatedAt"], before)
 
     def test_unsupported_and_out_of_order_commands_fail_before_writes(self):
         self.ctl("start")

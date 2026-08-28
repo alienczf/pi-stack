@@ -26,8 +26,10 @@ Run `ratify-commandments` only after the operator explicitly approves the displa
 
 ## Noninteractive shell resume
 
-At `awaiting-commandments`, write no answers. Run `present-commandments`, print the candidate input path `.pi/jig/commandments/answers.input.json`, and stop. Tell the operator to fill that file from the one question round and rerun `jig init`. If the file exists on the next shell run, pass its exact bytes to `stage-commandments`.
+At `awaiting-commandments`, write no answers. Read the `resume.operations` array from `start`. Prepend the trusted `jigctl.py` path to each named controller operation.
 
-If a staged candidate exists, print its exact path and digest. Ask the operator to write one decision to `.pi/jig/commandments/decision.input.json` and rerun `jig init`. The decision must name `ratify`, `amend`, or `defer`. A ratify decision must contain the exact digest and intended marker. On the next shell run, pass that explicit decision to the matching controller command.
+If `present` appears, run it and show the one question round. Ask the operator to write the complete response to `.pi/jig/commandments/answers.input.json`. Run the printed `stage` operation with that file as standard input. Do not tell the operator that `jig init` consumes the file. This launcher version does not consume response files on rerun.
 
-Never claim `commandments-ratified` before the controller commits the transition. Never claim isolated resources after an inherited session performs semantic work.
+After staging, run `start` again. Print the exact candidate path, digest, and intended marker. The output names the `ratify`, `amend`, and `defer` operations. Run only the operation that matches the operator's explicit decision. Replace `<operator-written marker>` only with the operator's text. After an amend decision, run its `followUp` operation with the complete amended response.
+
+A later integration unit may add response-file handling to the public launcher. Until then, use the direct controller operations. Never claim `commandments-ratified` before the controller commits the transition. Never claim isolated resources after an inherited session performs semantic work.

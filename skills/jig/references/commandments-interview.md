@@ -48,4 +48,6 @@ Use the `resourceIsolation` value already recorded in the manifest for every con
 
 In a current Pi session, call the controller directly. Do not start `pi -p` from Bash.
 
-A noninteractive shell run must stop at `awaiting-commandments`. It prints the response file path and tells the operator to rerun `jig init`. The next shell run uses the same route and consumes only operator-written response or decision files. It never invents answers.
+A noninteractive shell run stops at `awaiting-commandments`. Read the `resume.operations` array from `start`. Run the named trusted-controller operations directly. The `stage` operation reads `.pi/jig/commandments/answers.input.json` from standard input. After staging, `start` prints the candidate and the exact ratify, amend, and defer operations. The amend operation includes the follow-up staging command.
+
+This launcher version does not consume response or decision files on rerun. Do not claim that it does. A later integration unit owns public-launcher response-file handling.
