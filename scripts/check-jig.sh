@@ -6,7 +6,9 @@ cd "$root"
 fail() { printf '%s\n' "$*" >&2; exit 1; }
 
 test -f skills/jig/SKILL.md || fail "missing skills/jig/SKILL.md"
-grep -q 'git rev-parse --show-toplevel' bin/jig.sh || fail "jig.sh must operate on git rev-parse --show-toplevel"
+test -x bin/jig.sh || fail "bin/jig.sh must be executable"
+test -x bin/jigctl.py || fail "bin/jigctl.py must be executable"
+grep -q 'git rev-parse --show-toplevel' bin/jig.sh || fail "jig.sh must resolve the Git top level"
 if grep -qE 'find .*-name .git|workspace root|~/trading' bin/jig.sh; then
 	fail "jig.sh must not discover folder layout"
 fi
@@ -28,25 +30,47 @@ if [ "$body" -gt 24000 ]; then
 	fail "jig SKILL.md body is ${body} bytes, cap is 24k"
 fi
 
-tmp=$(mktemp -d)
-trap 'rm -rf "$tmp"' EXIT
-git init -q "$tmp"
-mkdir -p "$tmp/src"
-# argv check from a subdirectory so git root resolution is proven
-out=$(cd "$tmp/src" && PI=echo "$root/bin/jig.sh")
-printf '%s\n' "$out" | grep -q -- '-p' || fail "PI=echo argv missing -p"
-printf '%s\n' "$out" | grep -q -- '--approve' || fail "PI=echo argv missing --approve"
-printf '%s\n' "$out" | grep -q -- '--no-session' || fail "PI=echo argv missing --no-session"
-printf '%s\n' "$out" | grep -q 'read,grep,find,ls,bash,write,edit' || fail "PI=echo argv missing tools allowlist"
-printf '%s\n' "$out" | grep -q 'skills/jig/SKILL.md' || fail "PI=echo argv missing SKILL.md path"
+bash -n bin/jig.sh scripts/check-jig.sh
+python3 -m py_compile bin/jigctl.py
+python3 -m unittest discover -s scripts/jig_tests -p 'test_*.py'
+python3 - <<'PY'
+import ast
+import sys
+from pathlib import Path
 
-iter=$(cd "$tmp" && PI=echo "$root/bin/jig.sh" --iterate)
-printf '%s\n' "$iter" | grep -q -- '--iterate' || fail "--iterate was not forwarded"
+path = Path("bin/jigctl.py")
+tree = ast.parse(path.read_text(encoding="utf-8"))
+imports = {
+    node.names[0].name.split(".")[0]
+    for node in ast.walk(tree)
+    if isinstance(node, ast.Import)
+}
+imports.update(
+    node.module.split(".")[0]
+    for node in ast.walk(tree)
+    if isinstance(node, ast.ImportFrom) and node.module and node.module != "__future__"
+)
+external = sorted(imports - sys.stdlib_module_names)
+if external:
+    raise SystemExit(f"jigctl.py has non-stdlib imports: {', '.join(external)}")
 
-mkdir -p "$tmp/.pi/jig"
-echo already >"$tmp/.pi/jig/interview.md"
-idle=$(cd "$tmp" && PI=echo "$root/bin/jig.sh")
-printf '%s\n' "$idle" | grep -q 'already fitted' || fail "second run with no flags must print already fitted"
-printf '%s\n' "$idle" | grep -q -- '--approve' && fail "no-flags second run must not invoke PI"
+changed = [
+    Path("bin/jig.sh"),
+    Path("bin/jigctl.py"),
+    Path("scripts/check-jig.sh"),
+    *sorted(Path("scripts/jig_tests").glob("**/*.py")),
+]
+banned = {"\u2013", "\u2014", "\u2018", "\u2019", "\u201c", "\u201d"}
+for candidate in changed:
+    if not candidate.is_file():
+        continue
+    text = candidate.read_text(encoding="utf-8")
+    found = sorted(character for character in banned if character in text)
+    if found:
+        raise SystemExit(f"{candidate} contains banned Unicode punctuation")
+    if __import__("re").search(r"/ho" r"me/[^/]+/", text):
+        raise SystemExit(f"{candidate} contains a machine-specific absolute path")
+print("jig scans ok: stdlib imports and portable changed files")
+PY
 
-echo "check-jig ok"
+printf 'check-jig ok\n'
