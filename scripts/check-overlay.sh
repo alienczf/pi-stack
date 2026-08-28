@@ -20,6 +20,12 @@ grep -q 'npm:pi-web-access' install.sh || fail "install.sh must install npm:pi-w
 grep -q 'npm:pi-hashline-edit' install.sh || fail "install.sh must install npm:pi-hashline-edit"
 grep -q 'npm:pi-subagents' install.sh || fail "install.sh must install npm:pi-subagents"
 grep -q 'PI_STACK_SKIP_PACKAGES' install.sh || fail "install.sh must honor PI_STACK_SKIP_PACKAGES"
+grep -q 'backups/subagents' install.sh || fail "install.sh must name backups/subagents"
+grep -q 'agents/' install.sh || fail "install.sh must name agents/"
+for name in scout researcher oracle reviewer worker delegate; do
+	test -f "overlay/agents/${name}.md" || fail "missing overlay/agents/${name}.md"
+	grep -q "name: ${name}" "overlay/agents/${name}.md" || fail "overlay/agents/${name}.md must contain name: ${name}"
+done
 grep -q 'conform-skills.py' install.sh || fail "install.sh must run conform-skills.py"
 grep -q 'skills-pstack' install.sh || fail "install.sh must write skills-pstack"
 grep -q 'pi-node' install.sh || fail "install.sh must find pi under pi-node"
@@ -161,6 +167,39 @@ grep -q 'name: Poteto Mode' "$stub/skills/poteto-mode/SKILL.md" || fail "install
 test -L "$home/.pi/agent/skills-pstack/poteto-mode/playbooks" || fail "install did not symlink playbooks"
 test -L "$home/.local/bin/jig" || fail "install did not link ~/.local/bin/jig"
 test -x "$home/.local/bin/jig" || fail "linked jig is not executable"
+test -f "$home/.pi/agent/agents/oracle.md" || fail "piped install did not write agents/oracle.md"
+grep -q poteto-mode "$home/.pi/agent/agents/worker.md" || fail "worker.md must mention poteto-mode"
+
+mkdir -p "$home/.pi/agent/npm/node_modules/pi-subagents/agents"
+printf '%s\n' 'UPSTREAM-ORACLE' >"$home/.pi/agent/npm/node_modules/pi-subagents/agents/oracle.md"
+printf '%s\n' 'USER-ORACLE' >"$home/.pi/agent/agents/oracle.md"
+stamp_n() {
+	local d="$home/.pi/agent/backups/subagents"
+	if [[ ! -d "$d" ]]; then
+		printf '0'
+		return
+	fi
+	find "$d" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' '
+}
+(
+	cd "$tmp"
+	HOME="$home" PI_STACK="$root" PSTACK="$stub" PI_STACK_SKIP_PACKAGES=1 bash <"$root/install.sh"
+) || fail "second piped install with fake upstream failed"
+if grep -q USER-ORACLE "$home/.pi/agent/agents/oracle.md"; then
+	fail "dest oracle.md still USER-ORACLE"
+fi
+grep -q 'name: oracle' "$home/.pi/agent/agents/oracle.md" || fail "dest oracle.md is not the overlay"
+grep -R -q USER-ORACLE "$home/.pi/agent/backups/subagents" || fail "backups missing USER-ORACLE"
+grep -R -q UPSTREAM-ORACLE "$home/.pi/agent/backups/subagents" || fail "backups missing UPSTREAM-ORACLE"
+stamps_after_replace="$(stamp_n)"
+[[ "$stamps_after_replace" -ge 1 ]] || fail "replace install created no stamp dir"
+cp "$home/.pi/agent/agents/oracle.md" "$tmp/oracle.after-replace"
+(
+	cd "$tmp"
+	HOME="$home" PI_STACK="$root" PSTACK="$stub" PI_STACK_SKIP_PACKAGES=1 bash <"$root/install.sh"
+) || fail "third piped install failed"
+cmp -s "$home/.pi/agent/agents/oracle.md" "$tmp/oracle.after-replace" || fail "third install rewrote dest oracle.md"
+[[ "$(stamp_n)" == "$stamps_after_replace" ]] || fail "third install created a new stamp dir"
 
 home_ask="$tmp/home-ask"
 mkdir -p "$home_ask/.pi/agent"

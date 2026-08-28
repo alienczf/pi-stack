@@ -6,6 +6,8 @@ usage() {
 usage: install.sh
 
 Copies the pi-stack overlay into $HOME/.pi/agent.
+Writes pstack-aligned user agents into $HOME/.pi/agent/agents/.
+Dated backups go to $HOME/.pi/agent/backups/subagents/.
 Rewrites Cursor skill names into $HOME/.pi/agent/skills-pstack. Does not edit pstack.
 Merges defaultTools, skills, and packages into settings.json.
 Finds pi on PATH or under ~/.local/share/pi-node and installs
@@ -331,6 +333,60 @@ if [[ "${PI_STACK_SKIP_PACKAGES:-}" != 1 ]]; then
 	fi
 fi
 
+export PSTACK="$pstack"
+export OVERLAY="$overlay"
+export PI_AGENT_DIR="$agent"
+python3 - <<'PY'
+import os
+from datetime import datetime, timezone
+from pathlib import Path
+
+agent = Path(os.environ["PI_AGENT_DIR"])
+overlay_agents = Path(os.environ["OVERLAY"]) / "agents"
+pstack = os.environ["PSTACK"]
+skills_pstack = str(agent / "skills-pstack")
+dest_dir = agent / "agents"
+pkg_dir = agent / "npm" / "node_modules" / "pi-subagents" / "agents"
+backup_root = agent / "backups/subagents"
+
+existing = []
+if backup_root.is_dir():
+	existing = [p.read_bytes() for p in backup_root.rglob("*") if p.is_file()]
+
+pending_backups = []
+pending_writes = []
+for src in sorted(overlay_agents.glob("*.md")):
+	name = src.stem
+	wanted = src.read_text().replace("__SKILLS_PSTACK__", skills_pstack).replace("__PSTACK__", pstack)
+	dest = dest_dir / (name + ".md")
+	if dest.exists():
+		if dest.read_text() != wanted:
+			pending_backups.append((name + ".md", dest.read_bytes()))
+			pending_writes.append((dest, wanted))
+	else:
+		pending_writes.append((dest, wanted))
+	pkg = pkg_dir / (name + ".md")
+	if pkg.is_file():
+		original = pkg.read_bytes()
+		if original not in existing:
+			pending_backups.append(("package/" + name + ".md", original))
+			existing.append(original)
+
+if pending_backups:
+	stamp = backup_root / datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+	stamp.mkdir(parents=True)
+	for rel, data in pending_backups:
+		out = stamp / rel
+		out.parent.mkdir(parents=True, exist_ok=True)
+		out.write_bytes(data)
+
+for dest, text in pending_writes:
+	if dest.exists() and dest.read_text() == text:
+		continue
+	dest.parent.mkdir(parents=True, exist_ok=True)
+	dest.write_text(text)
+PY
+
 skill_n=0
 if [[ -d "$conform_out" ]]; then
 	skill_n="$(find "$conform_out" -mindepth 2 -maxdepth 2 -name SKILL.md | wc -l | tr -d ' ')"
@@ -343,6 +399,8 @@ fi
 cat <<EOF
 pi-stack is installed for this user.
   overlay   ${agent}
+  agents    ${agent}/agents
+  backups   ${agent}/backups/subagents
   skills    ${skill_n}
   packages  ${pkg_msg}
   jig       ${HOME}/.local/bin/jig

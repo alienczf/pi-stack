@@ -15,6 +15,10 @@ if grep -q '`Task` is `pi -p`' overlay/AGENTS.md; then
 	fail "AGENTS.md still maps Task to bash pi -p"
 fi
 
+for agent in scout worker reviewer oracle delegate researcher; do
+	test -f "overlay/agents/${agent}.md" || fail "missing overlay/agents/${agent}.md"
+done
+
 pkg="${HOME}/.pi/agent/npm/node_modules/pi-subagents"
 if command -v pi >/dev/null 2>&1 && [[ -d "$pkg" ]]; then
 	pi list | grep -q 'npm:pi-subagents' || fail "pi list missing npm:pi-subagents"

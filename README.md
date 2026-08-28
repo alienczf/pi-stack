@@ -36,6 +36,8 @@ The installer writes `$HOME/.pi/agent/`. Skill copies get Pi-legal `name` fields
 
 Existing `settings.json` keys stay, including extra `packages` rows, `theme`, top-level `defaultModel`, and `enabledModels`. `cursor/*` entries in `subagents.defaultModel` and `subagents.agentOverrides.*.model` become `inherit`. Other pins stay. If `defaultProjectTrust` is missing, it is set to `always` so non-interactive `pi -p` can see a jig. An existing `ask` or `never` is left alone. It never writes `auth.json`, `models-store.json`, `private/`, or `sessions/`.
 
+The installer writes pstack-aligned user agents into `$HOME/.pi/agent/agents/`. Same-name files override pi-subagents builtins. Dated backups of replaced dest files and of package originals go in `$HOME/.pi/agent/backups/subagents/`.
+
 `pi` is found on `PATH`, at `$HOME/.local/bin/pi`, or under `$HOME/.local/share/pi-node`. If it is missing, overlay files may already be written and the script exits 1. Install Pi from https://pi.dev/install.sh, then rerun. Set `PI_STACK_SKIP_PACKAGES=1` to merge package names without running `pi install`.
 
 A second run with the same inputs leaves owned files unchanged. It does not `git pull` `$HOME/.pi-stack` or `$HOME/.pi-stack/.plugins`. Update those trees yourself, then rerun install:

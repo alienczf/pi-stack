@@ -6,7 +6,7 @@ This file maps Cursor verbs onto Pi. It is process, not repo architecture. Fit a
 
 `Task` is the `subagent` tool from pi-subagents. One child is `{ agent, task }`. Several children are one `{ workflowScript }` with `await runs.all`. Set `cwd` when the child must run in another tree. Do not run `pi -p` from bash. That nested process blocks the parent and has no fleet status. `--tools` that omit `subagent` is how that bash spawn happens. jig.sh is a human launcher and may pin tools. Agents inside Pi may not. `pi -c` continues a session. It is not cwd.
 
-Builtin agents. `scout` recon. `researcher` web and docs. `worker` edits. `reviewer` checks. `oracle` second opinion, no edits. `delegate` when the child should behave like the parent. `poteto-agent` is `delegate` or `worker` whose task says to read `__PSTACK__/skills/poteto-mode/SKILL.md` in full, including the Principles index.
+These names are pstack-aligned user overrides that install.sh writes to `~/.pi/agent/agents/`. `scout` is the how explorer. `researcher` is web and why. `worker` is the poteto-agent writer. `reviewer` is interrogate checks. `oracle` is the how explainer and second opinion. `delegate` is the poteto-agent child that stays close to the parent. `poteto-agent` is `delegate` or `worker` whose task says to read `__PSTACK__/skills/poteto-mode/SKILL.md` in full, including the Principles index. The dest files also say that themselves.
 
 Leave `async` on. That is the default. `async:false` only when this turn cannot continue without the child. Do not sleep-poll. Use `subagent_wait` only when this turn must consume the result.
 
