@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 import uuid
 from pathlib import Path
 
@@ -204,6 +205,34 @@ class JigControllerTest(unittest.TestCase):
         self.start()
         self.assertEqual(self.manifest()["currentState"], "surveying")
         self.assertEqual(len(self.manifest()["transitions"]), 1)
+
+    def test_profile_input_requires_strict_json_and_canonical_json_is_finite(self):
+        self.start()
+        profile = json.dumps(self.profile())
+        lexical_cases = [
+            profile.replace('"schemaVersion": 1', '"schemaVersion": 1, "schemaVersion": 1', 1),
+            profile.replace('"line": 1', '"line": NaN', 1),
+            profile.replace('"line": 1', '"line": Infinity', 1),
+            profile.replace('"line": 1', '"line": -Infinity', 1),
+        ]
+        before = self.jig_snapshot()
+        for raw in lexical_cases:
+            with self.subTest(raw=raw[:80]):
+                result = self.ctl(
+                    "commit-profile",
+                    "--resource-isolation",
+                    "isolated-shell",
+                    input_text=raw,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("not valid UTF-8 JSON", result.stderr)
+                self.assertNotIn("Traceback", result.stderr)
+                self.assertLess(len(result.stderr), 600)
+                self.assertEqual(self.jig_snapshot(), before)
+        for value in (float("nan"), float("inf"), float("-inf")):
+            with self.subTest(value=value):
+                with self.assertRaises(jigctl.ValidationError):
+                    jigctl.canonical_json(value)
 
     def test_interrupted_temporary_write_is_retained_as_evidence(self):
         self.start()
@@ -412,6 +441,52 @@ class JigControllerTest(unittest.TestCase):
                 self.assertEqual(controller, conforming, example.name)
                 self.assertEqual(controller, ".invalid." not in example.name, example.name)
 
+    def test_scalar_equality_matches_draft_202012_validator(self):
+        try:
+            import jsonschema
+        except ImportError:
+            self.skipTest("development-only jsonschema is unavailable")
+        cases = [
+            ({"type": "integer"}, True, False),
+            ({"type": "integer"}, 1, True),
+            ({"type": "integer"}, 1.0, True),
+            ({"type": "integer"}, -0.0, True),
+            ({"type": "integer"}, 1.5, False),
+            ({"const": 1}, True, False),
+            ({"const": 0}, False, False),
+            ({"const": 1}, 1.0, True),
+            ({"const": {"nested": [1]}}, {"nested": [1.0]}, True),
+            ({"const": {"nested": [True]}}, {"nested": [1]}, False),
+            ({"enum": [1]}, True, False),
+            ({"enum": [0]}, False, False),
+            ({"enum": [1]}, 1.0, True),
+            ({"enum": [{"nested": [1]}]}, {"nested": [1.0]}, True),
+            ({"enum": [{"nested": [False]}]}, {"nested": [0]}, False),
+            ({"type": "array", "uniqueItems": True}, [True, 1], True),
+            ({"type": "array", "uniqueItems": True}, [False, 0], True),
+            ({"type": "array", "uniqueItems": True}, [1, 1.0], False),
+            (
+                {"type": "array", "uniqueItems": True},
+                [{"nested": [True]}, {"nested": [1]}],
+                True,
+            ),
+            (
+                {"type": "array", "uniqueItems": True},
+                [{"nested": [1]}, {"nested": [1.0]}],
+                False,
+            ),
+        ]
+        for schema, instance, expected in cases:
+            with self.subTest(schema=schema, instance=instance):
+                conforming = jsonschema.Draft202012Validator(schema).is_valid(instance)
+                try:
+                    jigctl.validate_instance(instance, schema)
+                    controller = True
+                except jigctl.ValidationError:
+                    controller = False
+                self.assertEqual(conforming, expected)
+                self.assertEqual(controller, conforming)
+
     def test_datetime_format_matches_draft_202012_checker(self):
         try:
             import jsonschema
@@ -431,6 +506,8 @@ class JigControllerTest(unittest.TestCase):
             "1990-12-31T23:59:60Z",
             "2026-01-01T00:00:00+24:00",
             "2026-01-01T00:00:00,Z",
+            "٢٠٢٦-٠١-٠١T٠٠:٠٠:٠٠Z",
+            "２０２６-０１-０１T００:００:００Z",
         ]
         checker = jsonschema.FormatChecker()
         for value in values:
@@ -503,6 +580,42 @@ class JigControllerTest(unittest.TestCase):
                 self.assertEqual(lock.read_bytes(), raw)
                 lock.unlink()
 
+    def test_lock_scalar_shapes_and_oversized_pid_fail_bounded(self):
+        self.start()
+        lock = self.repo / ".pi" / "jig" / "init.lock"
+        invalid = [
+            {**self.valid_lock(), "schemaVersion": True},
+            {**self.valid_lock(), "schemaVersion": 1.0},
+            {**self.valid_lock(), "pid": 1.0},
+            {**self.valid_lock(), "pid": 10**100},
+        ]
+        for value in invalid:
+            with self.subTest(value=value):
+                raw = json.dumps(value).encode("utf-8")
+                lock.write_bytes(raw)
+                result = self.ctl("start", "--resource-isolation", "isolated-shell")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn("Traceback", result.stderr)
+                self.assertLess(len(result.stderr), 600)
+                self.assertEqual(lock.read_bytes(), raw)
+                lock.unlink()
+
+    def test_stale_lock_hard_link_failure_is_bounded_and_preserves_bytes(self):
+        self.start()
+        lock_path = self.repo / ".pi" / "jig" / "init.lock"
+        raw = json.dumps(self.valid_lock(), sort_keys=True).encode("utf-8")
+        lock_path.write_bytes(raw)
+        before = self.jig_snapshot()
+        lock = jigctl.RepositoryLock(self.repo)
+        with mock.patch.object(jigctl.os, "link", side_effect=OSError("hard links unsupported")):
+            with self.assertRaises(jigctl.JigError) as caught:
+                lock.acquire()
+        message = str(caught.exception)
+        self.assertNotIn("Traceback", message)
+        self.assertLess(len(message), 600)
+        self.assertEqual(lock_path.read_bytes(), raw)
+        self.assertEqual(self.jig_snapshot(), before)
+
     def test_stale_lock_collision_with_different_evidence_fails_closed(self):
         self.start()
         lock = self.repo / ".pi" / "jig" / "init.lock"
@@ -570,6 +683,15 @@ class JigControllerTest(unittest.TestCase):
         self.assertIn("receipt", result.stderr)
         self.assertEqual(self.jig_snapshot(), before)
 
+    def test_manifest_semantics_are_validated_before_write(self):
+        self.start()
+        before = self.manifest_path().read_bytes()
+        manifest = self.manifest()
+        manifest["artifacts"][0]["owner"] = "repository"
+        with self.assertRaises(jigctl.ValidationError):
+            jigctl.write_manifest(self.repo, manifest)
+        self.assertEqual(self.manifest_path().read_bytes(), before)
+
     def test_control_characters_are_bounded_path_failures(self):
         self.start()
         for path in ("README.md\0suffix", "README.md\nsuffix", "README.md\x7fsuffix"):
@@ -615,6 +737,36 @@ class JigControllerTest(unittest.TestCase):
         artifact_paths = {item["path"] for item in self.manifest()["artifacts"]}
         self.assertNotIn(unknown.relative_to(self.repo).as_posix(), artifact_paths)
         self.assertTrue(any(path.startswith(".pi/jig/receipts/interrupted-write-") for path in artifact_paths))
+
+    def test_receipt_lookalikes_remain_unclaimed_across_reruns(self):
+        receipts = self.repo / ".pi" / "jig" / "receipts"
+        receipts.mkdir(parents=True)
+        names = [
+            "lock-reclaimed-not-a-digest.json",
+            "lock-reclaimed-0000000000000000.json",
+            "interrupted-write-not-a-digest.bin",
+            f"interrupted-write-{'0' * 64}.bin",
+            "interrupted-transition-not-a-digest.json",
+            f"interrupted-transition-{'0' * 64}.json",
+        ]
+        seeded = {}
+        for index, name in enumerate(names):
+            path = receipts / name
+            raw = f"unknown receipt {index}\n".encode("utf-8")
+            path.write_bytes(raw)
+            seeded[path] = raw
+        self.start()
+        first = self.manifest_path().read_bytes()
+        artifact_paths = {item["path"] for item in self.manifest()["artifacts"]}
+        for path, raw in seeded.items():
+            self.assertEqual(path.read_bytes(), raw)
+            self.assertNotIn(path.relative_to(self.repo).as_posix(), artifact_paths)
+        self.start()
+        self.assertEqual(self.manifest_path().read_bytes(), first)
+        artifact_paths = {item["path"] for item in self.manifest()["artifacts"]}
+        for path, raw in seeded.items():
+            self.assertEqual(path.read_bytes(), raw)
+            self.assertNotIn(path.relative_to(self.repo).as_posix(), artifact_paths)
 
     def test_shell_valid_profile_stub_reaches_awaiting_commandments(self):
         external = Path(self.external.name)
