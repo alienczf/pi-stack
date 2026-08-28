@@ -141,21 +141,25 @@ class JigControllerTest(unittest.TestCase):
 
     def test_failed_state_reconciliation_returns_to_last_valid_boundary(self):
         self.start()
-        manifest = self.manifest()
-        jigctl.append_transition(
-            self.repo, manifest, "surveying", "failed-surveying", "seeded-failure"
+        failed = self.ctl(
+            "record-failure",
+            "--resource-isolation", "isolated-shell",
+            "--state", "surveying",
+            "--reason", "seeded survey failure",
         )
-        jigctl.write_manifest(self.repo, manifest)
+        self.assertEqual(failed.returncode, 0, failed.stderr)
         self.start()
         self.assertEqual(self.manifest()["currentState"], "surveying")
         result = self.commit_profile()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.manifest()["currentState"], "awaiting-commandments")
-        manifest = self.manifest()
-        jigctl.append_transition(
-            self.repo, manifest, "awaiting-commandments", "failed-awaiting-commandments", "seeded-failure"
+        failed = self.ctl(
+            "record-failure",
+            "--resource-isolation", "isolated-shell",
+            "--state", "awaiting-commandments",
+            "--reason", "seeded interview-boundary failure",
         )
-        jigctl.write_manifest(self.repo, manifest)
+        self.assertEqual(failed.returncode, 0, failed.stderr)
         self.start()
         self.assertEqual(self.manifest()["currentState"], "awaiting-commandments")
 

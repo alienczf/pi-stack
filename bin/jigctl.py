@@ -805,6 +805,30 @@ def start(root: Path, isolation: str, lock: RepositoryLock) -> Dict[str, Any]:
     return manifest
 
 
+def record_failure(root: Path, isolation: str, expected_state: str, reason: str) -> Dict[str, Any]:
+    manifest = load_existing_manifest(root)
+    if manifest["resourceIsolation"] != isolation:
+        raise JigError("the existing manifest uses a different resourceIsolation route")
+    if manifest["currentState"] != expected_state:
+        raise ValidationError(
+            f"failure expected {expected_state}, found {manifest['currentState']}"
+        )
+    clean_reason = reason.strip()
+    if not clean_reason or len(clean_reason) > 500 or "\n" in clean_reason or "\r" in clean_reason:
+        raise ValidationError("failure reason must be one line of 1 to 500 characters")
+    failed_state = f"failed-{expected_state}"
+    append_transition(
+        root,
+        manifest,
+        expected_state,
+        failed_state,
+        "phase-failed",
+        failureReason=clean_reason,
+    )
+    write_manifest(root, manifest)
+    return manifest
+
+
 def commit_profile(root: Path, isolation: str, lock: RepositoryLock, raw: bytes) -> Dict[str, Any]:
     manifest = load_existing_manifest(root)
     if manifest["resourceIsolation"] != isolation:
@@ -875,13 +899,18 @@ def command_validate_schema(arguments: argparse.Namespace) -> int:
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(prog="jigctl.py")
     subparsers = result.add_subparsers(dest="command", required=True)
-    for name in ("start", "commit-profile"):
+    for name in ("start", "commit-profile", "record-failure"):
         command = subparsers.add_parser(name)
         command.add_argument(
             "--resource-isolation",
             required=True,
             choices=("isolated-shell", "inherited-session"),
         )
+        if name == "record-failure":
+            command.add_argument(
+                "--state", required=True, choices=("surveying", "awaiting-commandments")
+            )
+            command.add_argument("--reason", required=True)
     validate = subparsers.add_parser("validate-schema")
     validate.add_argument("--schema", required=True)
     validate.add_argument("--document", required=True)
@@ -896,6 +925,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     with RepositoryLock(root) as lock:
         if arguments.command == "start":
             manifest = start(root, arguments.resource_isolation, lock)
+        elif arguments.command == "record-failure":
+            manifest = record_failure(
+                root,
+                arguments.resource_isolation,
+                arguments.state,
+                arguments.reason,
+            )
         else:
             raw = sys.stdin.buffer.read(MAX_INPUT_BYTES + 1)
             manifest = commit_profile(root, arguments.resource_isolation, lock, raw)
