@@ -23,6 +23,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 JIG_VERSION = "1.0.0"
 SCHEMA_VERSION = 1
 MAX_INPUT_BYTES = 1024 * 1024
+MAX_OS_PID = (1 << 31) - 1
 IMPLEMENTED_STATES = {
     "surveying",
     "awaiting-commandments",
@@ -51,6 +52,27 @@ def is_object(value: Any) -> bool:
     return isinstance(value, dict)
 
 
+def is_json_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def json_equal(left: Any, right: Any) -> bool:
+    if is_json_number(left) and is_json_number(right):
+        return left == right
+    if type(left) is not type(right):
+        return False
+    if isinstance(left, list):
+        return len(left) == len(right) and all(
+            json_equal(left_item, right_item)
+            for left_item, right_item in zip(left, right)
+        )
+    if isinstance(left, dict):
+        return set(left) == set(right) and all(
+            json_equal(left[key], right[key]) for key in left
+        )
+    return left == right
+
+
 def type_matches(value: Any, expected: str) -> bool:
     if expected == "object":
         return isinstance(value, dict)
@@ -59,9 +81,13 @@ def type_matches(value: Any, expected: str) -> bool:
     if expected == "string":
         return isinstance(value, str)
     if expected == "integer":
-        return isinstance(value, int) and not isinstance(value, bool)
+        if isinstance(value, bool):
+            return False
+        return isinstance(value, int) or (
+            isinstance(value, float) and value.is_integer()
+        )
     if expected == "number":
-        return isinstance(value, (int, float)) and not isinstance(value, bool)
+        return is_json_number(value)
     if expected == "boolean":
         return isinstance(value, bool)
     if expected == "null":
@@ -85,8 +111,8 @@ def resolve_ref(root_schema: Mapping[str, Any], reference: str) -> Mapping[str, 
 
 def valid_datetime(value: str) -> bool:
     match = re.fullmatch(
-        r"(\d{4})-(\d{2})-(\d{2})[Tt](\d{2}):(\d{2}):(\d{2})"
-        r"(?:\.\d+)?(?:[Zz]|([+-])(\d{2}):(\d{2}))",
+        r"([0-9]{4})-([0-9]{2})-([0-9]{2})[Tt]([0-9]{2}):([0-9]{2}):([0-9]{2})"
+        r"(?:\.[0-9]+)?(?:[Zz]|([+-])([0-9]{2}):([0-9]{2}))",
         value,
     )
     if match is None:
@@ -125,9 +151,9 @@ def validate_instance(
         if not any(type_matches(instance, item) for item in accepted):
             raise ValidationError(f"{location} has the wrong type")
 
-    if "const" in schema and instance != schema["const"]:
+    if "const" in schema and not json_equal(instance, schema["const"]):
         raise ValidationError(f"{location} does not match its required value")
-    if "enum" in schema and instance not in schema["enum"]:
+    if "enum" in schema and not any(json_equal(instance, item) for item in schema["enum"]):
         raise ValidationError(f"{location} is not an allowed value")
 
     if isinstance(instance, dict):
@@ -154,9 +180,9 @@ def validate_instance(
         if "maxItems" in schema and len(instance) > schema["maxItems"]:
             raise ValidationError(f"{location} has too many items")
         if schema.get("uniqueItems") is True:
-            encoded = [json.dumps(item, sort_keys=True, separators=(",", ":")) for item in instance]
-            if len(encoded) != len(set(encoded)):
-                raise ValidationError(f"{location} has duplicate items")
+            for index, item in enumerate(instance):
+                if any(json_equal(item, other) for other in instance[index + 1 :]):
+                    raise ValidationError(f"{location} has duplicate items")
         items = schema.get("items")
         if isinstance(items, dict):
             for index, item in enumerate(instance):
@@ -218,9 +244,25 @@ def read_json_bytes(raw: bytes, label: str) -> Any:
         raise ValidationError(f"{label} is empty")
     if len(raw) > MAX_INPUT_BYTES:
         raise ValidationError(f"{label} exceeds {MAX_INPUT_BYTES} bytes")
+
+    def reject_constant(_value: str) -> Any:
+        raise ValueError("non-standard JSON constant")
+
+    def reject_duplicate_keys(pairs: List[Tuple[str, Any]]) -> Dict[str, Any]:
+        value: Dict[str, Any] = {}
+        for key, item in pairs:
+            if key in value:
+                raise ValueError("duplicate JSON object key")
+            value[key] = item
+        return value
+
     try:
-        return json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        return json.loads(
+            raw.decode("utf-8"),
+            parse_constant=reject_constant,
+            object_pairs_hook=reject_duplicate_keys,
+        )
+    except (UnicodeDecodeError, ValueError) as error:
         raise ValidationError(f"{label} is not valid UTF-8 JSON") from error
 
 
@@ -234,7 +276,11 @@ def read_json(path: Path, label: str) -> Any:
 
 
 def canonical_json(value: Any) -> bytes:
-    return (json.dumps(value, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    try:
+        rendered = json.dumps(value, allow_nan=False, indent=2, sort_keys=True)
+    except (TypeError, ValueError) as error:
+        raise ValidationError("value cannot be encoded as canonical JSON") from error
+    return (rendered + "\n").encode("utf-8")
 
 
 def sha256_bytes(value: bytes) -> str:
@@ -390,9 +436,9 @@ class RepositoryLock:
         process_start_value = value.get("processStart")
         token = value.get("token")
         acquired_at = value.get("acquiredAt")
-        if value.get("schemaVersion") != 1:
+        if type(value.get("schemaVersion")) is not int or value["schemaVersion"] != 1:
             raise JigError("the init lock record has an unsupported version")
-        if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+        if type(pid) is not int or pid <= 0 or pid > MAX_OS_PID:
             raise JigError("the init lock record has an invalid PID")
         if (
             not isinstance(host, str)
@@ -426,6 +472,8 @@ class RepositoryLock:
             return True
         except PermissionError:
             return False
+        except OverflowError:
+            return False
         except OSError as error:
             return error.errno == errno.ESRCH
         current_start = process_start(pid)
@@ -450,6 +498,8 @@ class RepositoryLock:
             self.path.unlink()
         except FileNotFoundError as error:
             raise JigError("the init lock changed during stale-owner reconciliation") from error
+        except OSError as error:
+            raise JigError("the init lock could not be removed during stale-owner reconciliation") from error
         fsync_directory(self.directory)
 
     def _preserve_stale(self, raw: bytes, identity: Tuple[int, int], evidence: Path) -> None:
@@ -465,6 +515,8 @@ class RepositoryLock:
                 )
         except FileNotFoundError as error:
             raise JigError("the init lock changed during stale-owner reconciliation") from error
+        except OSError as error:
+            raise JigError("stale-lock evidence could not be preserved safely") from error
         if created:
             evidence_raw, evidence_identity = self._snapshot(evidence, "stale-lock evidence")
             if evidence_raw != raw or evidence_identity != identity:
@@ -653,12 +705,25 @@ def known_receipt_artifacts(root: Path) -> List[Tuple[str, str]]:
     receipts = root / ".pi" / "jig" / "receipts"
     if not receipts.is_dir() or receipts.is_symlink():
         return []
+    reserved = (
+        (re.compile(r"lock-reclaimed-([0-9a-f]{16})\.json"), True),
+        (re.compile(r"interrupted-write-([0-9a-f]{64})\.bin"), False),
+        (re.compile(r"interrupted-transition-([0-9a-f]{64})\.json"), False),
+    )
     result = []
-    patterns = ("lock-reclaimed-*.json", "interrupted-write-*.bin", "interrupted-transition-*.json")
-    for pattern in patterns:
-        for path in sorted(receipts.glob(pattern)):
-            if path.is_file() and not path.is_symlink():
-                result.append((relative_to_root(root, path), sha256_file(path)))
+    for path in sorted(receipts.iterdir()):
+        if path.is_symlink() or not path.is_file():
+            continue
+        for pattern, prefix_digest in reserved:
+            match = pattern.fullmatch(path.name)
+            if match is None:
+                continue
+            digest = sha256_file(path)
+            expected = match.group(1)
+            digest_matches = digest.startswith(expected) if prefix_digest else digest == expected
+            if digest_matches:
+                result.append((relative_to_root(root, path), digest))
+            break
     return result
 
 
@@ -953,7 +1018,7 @@ def attach_recovery_artifacts(manifest: Dict[str, Any], artifacts: Iterable[Tupl
 
 def write_manifest(root: Path, manifest: Dict[str, Any]) -> None:
     schema = load_schema("manifest")
-    validate_instance(manifest, schema)
+    validate_manifest_semantics(root, manifest, schema)
     atomic_write_json(root / ".pi" / "jig" / "manifest.json", manifest, schema)
 
 
