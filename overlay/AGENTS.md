@@ -8,7 +8,7 @@ This file maps Cursor verbs onto Pi. It is process, not repo architecture. Fit a
 
 These names are pstack-aligned user overrides that install.sh writes to `~/.pi/agent/agents/`. `scout` is the how explorer. `researcher` is web and why. `worker` is the poteto-agent writer. `reviewer` is interrogate checks. `oracle` is the how explainer and second opinion. `delegate` is the poteto-agent child that stays close to the parent. `poteto-agent` is `delegate` or `worker` whose task says to read `__PSTACK__/skills/poteto-mode/SKILL.md` in full, including the Principles index. The dest files also say that themselves.
 
-Leave `async` on. That is the default. `async:false` only when this turn cannot continue without the child. Do not sleep-poll. Use `subagent_wait` only when this turn must consume the result.
+Leave `async` on. That is the default. `async:false` only when this turn cannot continue without the child. Do not sleep-poll. Use blocking `subagent_wait` only when this turn must consume the result.
 
 Do not pin child models to `cursor/*` unless that provider is authenticated. A missing pattern warns and the child waits on a model that never comes. Use `inherit` or a listed `provider/id`. Call `{ action: "models" }` before an explicit model.
 
@@ -20,7 +20,8 @@ Plan mode is `PLAN.md` in the working tree.
 
 Public web is `web_search` and `fetch_content`. `gh`, `git`, and `curl` cover private or authenticated URLs those tools cannot reach. Never MCP.
 
-`/loop` and `/goal` are prompt templates under `~/.pi/agent/prompts/`.
+`/loop` is a one-shot prompt template, not a timer. `/goal` comes from `@narumitw/pi-goal`. For pstack autonomous runs, replace the Cursor `/loop` wake step with `/goal` settled continuation. Start `/goal <objective>` with a checkable exit predicate. Call `goal_complete` only after evidence proves the predicate. Call `goal_blocked` only for a repeated genuine impasse.
+When progress depends on an external event, arrange its non-Goal wake message first. For an async child, register `subagent_wait` with `nonBlocking: true`. Then call `goal_wait` alone with `resume_after_ms` only as a bounded fallback. A time-only wake uses `goal_wait` with `resume_after_ms`. Do not use `goal_wait` for ordinary unfinished work.
 
 Never background bash. Use tmux if you need a long-running process that is not a subagent.
 

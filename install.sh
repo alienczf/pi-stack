@@ -11,7 +11,9 @@ Dated backups go to $HOME/.pi/agent/backups/subagents/.
 Rewrites Cursor skill names into $HOME/.pi/agent/skills-pstack. Does not edit pstack.
 Merges defaultTools, skills, and packages into settings.json.
 Finds pi on PATH or under ~/.local/share/pi-node and installs
-npm:pi-web-access, npm:pi-hashline-edit, and npm:pi-subagents.
+npm:pi-web-access, npm:pi-hashline-edit, npm:pi-subagents, and
+npm:@narumitw/pi-goal.
+Creates pi-goal.json with unlimited automatic turns when that file is absent.
 Rewrites cursor/* subagent models to inherit. Links jig into ~/.local/bin.
 Never writes auth.json, models-store.json, private/, or sessions/.
 Does not search for git repositories. Fit a repo later with jig.
@@ -94,6 +96,12 @@ if [[ "$here" != "$pi_stack" ]]; then
 fi
 
 overlay="$here/overlay"
+required_packages=(
+	pi-web-access
+	pi-hashline-edit
+	pi-subagents
+	@narumitw/pi-goal
+)
 
 plugins_root="$pi_stack/.plugins"
 default_pstack="${plugins_root}/pstack"
@@ -181,15 +189,17 @@ if [[ ${#conform_src[@]} -gt 0 ]]; then
 fi
 
 export PI_AGENT_DIR="$agent"
-python3 - <<'PY'
+python3 - "${required_packages[@]}" <<'PY'
 import json
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 agent = Path(os.environ["PI_AGENT_DIR"])
 path = agent / "settings.json"
 conformed = agent / "skills-pstack"
+required_packages = sys.argv[1:]
 
 tools = ["read", "write", "edit", "bash", "grep", "find", "ls"]
 wanted = [
@@ -238,19 +248,24 @@ if isinstance(subs, dict):
 				spec["model"] = "inherit"
 	data["subagents"] = subs
 
-def npm_unscoped_name(entry):
+def npm_package_name(entry):
 	if isinstance(entry, str):
-		s = entry
+		source = entry
 	elif isinstance(entry, dict):
-		s = entry.get("source") or ""
+		source = entry.get("source") or ""
 	else:
 		return None
-	if not isinstance(s, str) or not s.startswith("npm:"):
+	if not isinstance(source, str) or not source.startswith("npm:"):
 		return None
-	rest = s[4:]
+	rest = source[4:]
 	if rest.startswith("@"):
-		return None
-	return rest.split("@", 1)[0]
+		slash = rest.find("/")
+		if slash < 2:
+			return None
+		version = rest.find("@", slash + 1)
+		return rest if version == -1 else rest[:version]
+	name = rest.split("@", 1)[0]
+	return name or None
 
 packages = data.get("packages")
 if packages is None:
@@ -259,8 +274,8 @@ if not isinstance(packages, list):
 	sys.exit("settings.json packages is not an array")
 
 by_name = {}
-for i, pkg in enumerate(packages):
-	name = npm_unscoped_name(pkg)
+for i, package in enumerate(packages):
+	name = npm_package_name(package)
 	if name:
 		by_name[name] = i
 
@@ -277,21 +292,31 @@ else:
 		updated["skills"] = ["!skills/librarian/**"]
 		packages[by_name[web]] = updated
 
-hashedit = "pi-hashline-edit"
-if hashedit not in by_name:
-	packages.append("npm:pi-hashline-edit")
-
-subs_pkg = "pi-subagents"
-if subs_pkg not in by_name:
-	packages.append("npm:pi-subagents")
+for package in required_packages:
+	if package != web and package not in by_name:
+		packages.append(f"npm:{package}")
 
 data["packages"] = packages
 text = json.dumps(data, indent=2) + "\n"
-if path.exists() and path.read_text() == text:
-	sys.exit(0)
-tmp = path.with_name("settings.json.pi-stack-tmp")
-tmp.write_text(text)
-tmp.replace(path)
+if not path.exists() or path.read_text() != text:
+	tmp = path.with_name("settings.json.pi-stack-tmp")
+	tmp.write_text(text)
+	tmp.replace(path)
+
+goal_settings = agent / "pi-goal.json"
+if not goal_settings.exists() and not goal_settings.is_symlink():
+	goal_text = json.dumps({
+		"continuationLimits": {"automaticTurns": None, "noProgressTurns": 3}
+	}, indent=2) + "\n"
+	with tempfile.NamedTemporaryFile("w", dir=agent, prefix=".pi-goal.", delete=False) as tmp:
+		tmp.write(goal_text)
+		goal_tmp = Path(tmp.name)
+	try:
+		os.link(goal_tmp, goal_settings)
+	except FileExistsError:
+		pass
+	finally:
+		goal_tmp.unlink(missing_ok=True)
 PY
 
 resolve_pi() {
@@ -315,10 +340,11 @@ resolve_pi() {
 	return 1
 }
 
+npm_root="${agent}/npm/node_modules"
+
 if [[ "${PI_STACK_SKIP_PACKAGES:-}" != 1 ]]; then
 	if pi_bin="$(resolve_pi)"; then
-		npm_root="${agent}/npm/node_modules"
-		for spec in pi-web-access pi-hashline-edit pi-subagents; do
+		for spec in "${required_packages[@]}"; do
 			if [[ ! -d "${npm_root}/${spec}" ]]; then
 				PI_CODING_AGENT_DIR="$agent" "$pi_bin" install "npm:${spec}"
 			fi
@@ -331,6 +357,40 @@ if [[ "${PI_STACK_SKIP_PACKAGES:-}" != 1 ]]; then
 		printf 'pi is not installed. Install Pi, then rerun this script:\n  curl -fsSL https://pi.dev/install.sh | sh\n' >&2
 		exit 1
 	fi
+fi
+
+goal_manifest="${npm_root}/@narumitw/pi-goal/package.json"
+if [[ -f "$goal_manifest" ]]; then
+	python3 - "$goal_manifest" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+data = json.loads(path.read_text())
+if data.get("name") != "@narumitw/pi-goal":
+	raise SystemExit(f"pi-goal package identity mismatch in {path}")
+PY
+	python3 - "$agent/prompts/goal.md" <<'PY'
+import hashlib
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+legacy_sha256 = "c17b0e11552afcc0de0fb894ec8f63ba036cce54afb31f3db79ad64c92b9275a"
+if path.is_symlink():
+	print(f"{path} is not the generated pi-stack goal prompt; keeping it.", file=sys.stderr)
+elif path.is_file():
+	if hashlib.sha256(path.read_bytes()).hexdigest() == legacy_sha256:
+		path.unlink()
+	else:
+		print(f"{path} is not the generated pi-stack goal prompt; keeping it.", file=sys.stderr)
+elif path.exists():
+	print(f"{path} is not a regular file; keeping it.", file=sys.stderr)
+PY
+elif [[ "${PI_STACK_SKIP_PACKAGES:-}" != 1 ]]; then
+	printf 'pi-goal package manifest is missing: %s\n' "$goal_manifest" >&2
+	exit 1
 fi
 
 export PSTACK="$pstack"
@@ -394,7 +454,8 @@ fi
 if [[ "${PI_STACK_SKIP_PACKAGES:-}" == 1 ]]; then
 	pkg_msg="names merged, pi install skipped"
 else
-	pkg_msg="pi-web-access, pi-hashline-edit, pi-subagents"
+	package_list="$(printf ', %s' "${required_packages[@]}")"
+	pkg_msg="${package_list:2}"
 fi
 cat <<EOF
 pi-stack is installed for this user.
