@@ -61,6 +61,9 @@ COMMANDMENTS_TEMPLATE = "skills/jig/references/COMMANDMENTS.template.md"
 COMMANDMENTS_INTERVIEW_PATH = ".pi/jig/commandments/interview.json"
 COMMANDMENTS_STAGING_PATH = ".pi/jig/commandments/staging.json"
 COMMANDMENTS_ROOT_PATH = "COMMANDMENTS.md"
+COMMANDMENTS_ROOT_TEMP_PATTERN = re.compile(
+    r"\.jigctl-COMMANDMENTS\.md(?:\.([0-9a-f]{64}))?\.([0-9]+)\.([0-9a-f]{32})\.tmp"
+)
 COMMANDMENTS_ANSWER_KEYS = (
     "requiredInitOutcome",
     "hardForbiddenOutcomes",
@@ -673,10 +676,14 @@ def fsync_directory(path: Path) -> None:
         os.close(descriptor)
 
 
-def atomic_write(path: Path, data: bytes) -> None:
+def atomic_write(path: Path, data: bytes, ownership_token: Optional[str] = None) -> None:
     if not path.parent.is_dir() or path.parent.is_symlink():
         raise JigError(f"atomic-write parent is unsafe: {path.parent.name}")
-    temporary = path.parent / f".jigctl-{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
+    token = f".{ownership_token}" if ownership_token is not None else ""
+    temporary = (
+        path.parent
+        / f".jigctl-{path.name}{token}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
+    )
     descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
         offset = 0
@@ -1317,6 +1324,55 @@ def write_manifest(root: Path, manifest: Dict[str, Any]) -> None:
     atomic_write_json(root / ".pi" / "jig" / "manifest.json", manifest, schema)
 
 
+def reconcile_commandments_root_temporaries(
+    root: Path, manifest: Mapping[str, Any]
+) -> List[Tuple[str, str]]:
+    if manifest["currentState"] != "awaiting-commandments":
+        return []
+    staging = load_staging(root, manifest)
+    if staging is None or not staging_artifacts_registered(manifest, staging):
+        return []
+    candidate = safe_relative_path(
+        root, staging["candidatePath"], must_exist=True
+    ).read_bytes()
+    candidate_digest = staging["candidateSha256"]
+    receipts = ensure_owned_directory(root, ".pi/jig/receipts")
+    recovered: List[Tuple[str, str]] = []
+    for path in sorted(root.iterdir()):
+        match = COMMANDMENTS_ROOT_TEMP_PATTERN.fullmatch(path.name)
+        if match is None:
+            continue
+        try:
+            details = path.lstat()
+        except OSError as error:
+            raise JigError("COMMANDMENTS temporary cannot be inspected") from error
+        if not stat.S_ISREG(details.st_mode) or details.st_size > len(candidate):
+            continue
+        raw = path.read_bytes()
+        token = match.group(1)
+        owned = token == candidate_digest or (
+            token is None and bool(raw) and candidate.startswith(raw)
+        )
+        if not owned:
+            continue
+        digest = sha256_bytes(raw)
+        destination = receipts / f"interrupted-write-{digest}.bin"
+        if destination.exists() or destination.is_symlink():
+            if (
+                destination.is_symlink()
+                or not destination.is_file()
+                or sha256_file(destination) != digest
+            ):
+                raise JigError(
+                    "interrupted-write evidence collides with an existing unknown file"
+                )
+            path.unlink()
+        else:
+            os.rename(path, destination)
+        recovered.append((relative_to_root(root, destination), digest))
+    return recovered
+
+
 def start(root: Path, isolation: str, lock: RepositoryLock) -> Dict[str, Any]:
     manifest_path = root / ".pi" / "jig" / "manifest.json"
     if manifest_path.exists():
@@ -1325,9 +1381,11 @@ def start(root: Path, isolation: str, lock: RepositoryLock) -> Dict[str, Any]:
         manifest = load_existing_manifest(root)
         if manifest["resourceIsolation"] != isolation:
             raise JigError("the existing manifest uses a different resourceIsolation route")
+        root_recovery = reconcile_commandments_root_temporaries(root, manifest)
         validate_current_source(root, manifest)
         recovered = (
-            reconcile_temporary_files(root)
+            root_recovery
+            + reconcile_temporary_files(root)
             + reconcile_orphan_transitions(root, manifest)
             + known_receipt_artifacts(root)
         )
@@ -1626,8 +1684,15 @@ def validate_commandments_bytes(raw: bytes) -> Dict[str, Any]:
         text = raw.decode("utf-8")
     except UnicodeDecodeError as error:
         raise ValidationError("COMMANDMENTS bytes are not UTF-8") from error
-    if not text.endswith("\n") or "{{" in text or "}}" in text or "TEMPLATE, NOT RATIFIED" in text:
-        raise ValidationError("COMMANDMENTS contains a template marker or lacks its final newline")
+    if (
+        not text.endswith("\n")
+        or "{{" in text
+        or "}}" in text
+        or "TEMPLATE, NOT RATIFIED" in text
+    ):
+        raise ValidationError(
+            "COMMANDMENTS contains a template marker or lacks its final newline"
+        )
     required_sections = (
         "# Repository COMMANDMENTS",
         "## Hard commandments",
@@ -1640,27 +1705,78 @@ def validate_commandments_bytes(raw: bytes) -> Dict[str, Any]:
         "## Amendment policy",
         "## Ratification",
     )
-    if any(text.count(section) != 1 for section in required_sections):
-        raise ValidationError("COMMANDMENTS does not match the checked-in section structure")
-    ids = re.findall(r"^### (CMD-[0-9]{3})\. ", text, flags=re.MULTILINE)
+    section_positions = []
+    for section in required_sections:
+        matches = list(
+            re.finditer(rf"^{re.escape(section)}$", text, flags=re.MULTILINE)
+        )
+        if len(matches) != 1:
+            raise ValidationError(
+                "COMMANDMENTS does not match the checked-in section structure"
+            )
+        section_positions.append(matches[0].start())
+    if section_positions != sorted(section_positions):
+        raise ValidationError("COMMANDMENTS sections are out of order")
+    id_matches = list(
+        re.finditer(r"^### (CMD-[0-9]{3})\. .+$", text, flags=re.MULTILINE)
+    )
+    ids = [match.group(1) for match in id_matches]
     if ids != ["CMD-001", "CMD-002", "CMD-101", "CMD-102"]:
-        raise ValidationError("COMMANDMENTS has missing, duplicate, or unstable commandment IDs")
-    for label, count in (
-        ("**Statement.** ", 4),
-        ("**Scope.** ", 4),
-        ("**Priority.** ", 4),
-        ("**Proof.** ", 4),
-        ("**Exceptions.** ", 4),
-        ("**Owner.** ", 4),
+        raise ValidationError(
+            "COMMANDMENTS has missing, duplicate, or unstable commandment IDs"
+        )
+    hard_start = section_positions[1]
+    directional_start = section_positions[2]
+    protected_start = section_positions[3]
+    if not (
+        hard_start < id_matches[0].start() < id_matches[1].start() < directional_start
+        < id_matches[2].start() < id_matches[3].start() < protected_start
     ):
-        if text.count(label) != count:
-            raise ValidationError("COMMANDMENTS commandment entries are incomplete")
-    status = re.search(r"^Status: (.+)$", text, flags=re.MULTILINE)
-    owner = re.search(r"^Owner: (.+)$", text, flags=re.MULTILINE)
-    timestamp = re.search(r"^Ratified at: (.+)$", text, flags=re.MULTILINE)
-    version = re.search(r"^Version: ([0-9]+)$", text, flags=re.MULTILINE)
-    marker = re.search(r"^Human note: (.+)$", text, flags=re.MULTILINE)
-    if not all((status, owner, timestamp, version, marker)) or status.group(1) != "RATIFIED":
+        raise ValidationError(
+            "COMMANDMENTS hard and directional entries are misplaced"
+        )
+    block_ends = (
+        id_matches[1].start(),
+        directional_start,
+        id_matches[3].start(),
+        protected_start,
+    )
+    labels = ("Statement", "Scope", "Priority", "Proof", "Exceptions", "Owner")
+    for match, end in zip(id_matches, block_ends):
+        block = text[match.start():end]
+        for label in labels:
+            values = re.findall(
+                rf"^\*\*{label}\.\*\* (.+)$", block, flags=re.MULTILINE
+            )
+            if len(values) != 1:
+                raise ValidationError(
+                    f"COMMANDMENTS {match.group(1)} has an invalid {label} field"
+                )
+            bounded_text(
+                values[0], f"COMMANDMENTS {match.group(1)} {label}", 4000
+            )
+    def unique_line(label: str, pattern: str) -> re.Match[str]:
+        matches = list(re.finditer(pattern, text, flags=re.MULTILINE))
+        if len(matches) != 1:
+            raise ValidationError(f"COMMANDMENTS {label} metadata is invalid")
+        return matches[0]
+    status = unique_line("status", r"^Status: (.+)$")
+    owner = unique_line("owner", r"^Owner: (.+)$")
+    timestamp = unique_line("timestamp", r"^Ratified at: (.+)$")
+    version = unique_line("version", r"^Version: ([0-9]+)$")
+    scope = unique_line("scope", r"^Scope: (.+)$")
+    marker = unique_line("ratification marker", r"^Human note: (.+)$")
+    decision = unique_line("decision", r"^Human decision: (.+)$")
+    if (
+        status.group(1) != "RATIFIED"
+        or decision.group(1) != "ratified"
+        or not (
+            section_positions[0] == 0
+            and section_positions[0] < status.start() < owner.start()
+            < timestamp.start() < version.start() < scope.start() < hard_start
+            and section_positions[-1] < decision.start() < marker.start()
+        )
+    ):
         raise ValidationError("COMMANDMENTS ratification metadata is incomplete")
     if not valid_datetime(timestamp.group(1)):
         raise ValidationError("COMMANDMENTS ratification timestamp is invalid")
@@ -1668,9 +1784,8 @@ def validate_commandments_bytes(raw: bytes) -> Dict[str, Any]:
     if parsed_version < 1:
         raise ValidationError("COMMANDMENTS version is invalid")
     bounded_text(owner.group(1), "COMMANDMENTS owner", 1000)
+    bounded_text(scope.group(1), "COMMANDMENTS scope", 2000)
     bounded_text(marker.group(1), "COMMANDMENTS ratification marker", 200)
-    if "Human decision: ratified" not in text:
-        raise ValidationError("COMMANDMENTS lacks the prospective ratification decision")
     return {
         "owner": owner.group(1),
         "ratifiedAt": timestamp.group(1),
@@ -1808,7 +1923,9 @@ def present_commandments(root: Path, isolation: str) -> Dict[str, Any]:
     return read_json_bytes(raw, "COMMANDMENTS interview")
 
 
-def load_staging(root: Path) -> Optional[Dict[str, Any]]:
+def load_staging(
+    root: Path, manifest: Optional[Mapping[str, Any]] = None
+) -> Optional[Dict[str, Any]]:
     path = root / COMMANDMENTS_STAGING_PATH
     if not path.exists() and not path.is_symlink():
         return None
@@ -1827,6 +1944,7 @@ def load_staging(root: Path) -> Optional[Dict[str, Any]]:
         "intendedMarker",
         "sourceRevision",
         "interviewSha256",
+        "previousCandidateSha256",
         "adoptedExisting",
     }
     if not isinstance(value, dict) or set(value) != expected:
@@ -1838,15 +1956,45 @@ def load_staging(root: Path) -> Optional[Dict[str, Any]]:
         or type(value["version"]) is not int
         or value["version"] < 1
         or type(value["adoptedExisting"]) is not bool
+        or (
+            value["previousCandidateSha256"] is not None
+            and (
+                not isinstance(value["previousCandidateSha256"], str)
+                or re.fullmatch(
+                    r"[0-9a-f]{64}", value["previousCandidateSha256"]
+                )
+                is None
+            )
+        )
         or not isinstance(value["sourceRevision"], str)
         or re.fullmatch(r"[0-9a-f]{40,64}", value["sourceRevision"]) is None
         or not isinstance(value["interviewSha256"], str)
         or re.fullmatch(r"[0-9a-f]{64}", value["interviewSha256"]) is None
         or not isinstance(value["choiceModes"], dict)
         or set(value["choiceModes"]) != set(COMMANDMENTS_ANSWER_KEYS)
-        or any(mode not in {"default", "custom"} for mode in value["choiceModes"].values())
+        or any(
+            mode not in {"default", "custom"}
+            for mode in value["choiceModes"].values()
+        )
     ):
         raise ValidationError("COMMANDMENTS staging record has invalid metadata")
+    if manifest is not None:
+        interview = next(
+            (
+                item
+                for item in manifest["artifacts"]
+                if item["path"] == COMMANDMENTS_INTERVIEW_PATH
+            ),
+            None,
+        )
+        if (
+            value["sourceRevision"] != manifest["source"]["revision"]
+            or interview is None
+            or value["interviewSha256"] != interview["sha256"]
+        ):
+            raise ValidationError(
+                "COMMANDMENTS staging record differs from its manifest boundary"
+            )
     bounded_text(value["intendedMarker"], "staged ratification marker", 200)
     if not isinstance(value["prospectiveRatifiedAt"], str) or not valid_datetime(
         value["prospectiveRatifiedAt"]
@@ -1863,37 +2011,58 @@ def load_staging(root: Path) -> Optional[Dict[str, Any]]:
             or re.fullmatch(r"[0-9a-f]{64}", digest) is None
             or value[path_key] != expected_path
         ):
-            raise ValidationError("COMMANDMENTS staging record has an invalid content address")
+            raise ValidationError(
+                "COMMANDMENTS staging record has an invalid content address"
+            )
         artifact_path = safe_relative_path(root, expected_path, must_exist=True)
-        if artifact_path.is_symlink() or not artifact_path.is_file() or sha256_file(artifact_path) != digest:
+        if (
+            artifact_path.is_symlink()
+            or not artifact_path.is_file()
+            or sha256_file(artifact_path) != digest
+        ):
             raise ValidationError("COMMANDMENTS staging artifact hash changed")
     answers = read_json(root / value["answersPath"], "staged COMMANDMENTS answers")
     _resolved, modes = validate_commandments_answers(answers)
     if modes != value["choiceModes"]:
-        raise ValidationError("COMMANDMENTS staging choice evidence is inconsistent")
-    metadata = validate_commandments_bytes((root / value["candidatePath"]).read_bytes())
+        raise ValidationError(
+            "COMMANDMENTS staging choice evidence is inconsistent"
+        )
+    metadata = validate_commandments_bytes(
+        (root / value["candidatePath"]).read_bytes()
+    )
     if (
         metadata["version"] != value["version"]
         or metadata["ratifiedAt"] != value["prospectiveRatifiedAt"]
         or metadata["marker"] != value["intendedMarker"]
     ):
-        raise ValidationError("COMMANDMENTS staging candidate metadata is inconsistent")
+        raise ValidationError(
+            "COMMANDMENTS staging candidate metadata is inconsistent"
+        )
     return value
 
 
-def amendment_decision_exists(
-    root: Path,
-    manifest: Mapping[str, Any],
-    candidate_digest: str,
-    isolation: str,
+def staging_artifacts_registered(
+    manifest: Mapping[str, Any], staging: Mapping[str, Any]
 ) -> bool:
-    directory = root / ".pi" / "jig" / "commandments" / "decisions"
-    if not directory.exists():
-        return False
-    if directory.is_symlink() or not directory.is_dir():
-        raise ValidationError("COMMANDMENTS decision directory is unsafe")
     artifacts = {item["path"]: item for item in manifest["artifacts"]}
-    expected_fields = {
+    return (
+        artifacts.get(staging["answersPath"])
+        == {
+            "path": staging["answersPath"],
+            "owner": "human",
+            "sha256": staging["answersSha256"],
+        }
+        and artifacts.get(staging["candidatePath"])
+        == {
+            "path": staging["candidatePath"],
+            "owner": "controller",
+            "sha256": staging["candidateSha256"],
+        }
+    )
+
+
+def parse_commandments_decision(raw: bytes) -> Optional[Dict[str, Any]]:
+    expected = {
         "schemaVersion",
         "kind",
         "decision",
@@ -1903,41 +2072,120 @@ def amendment_decision_exists(
         "sourceRevision",
         "resourceIsolation",
     }
-    for path in directory.iterdir():
-        if path.is_symlink() or not path.is_file():
-            continue
-        raw = path.read_bytes()
-        digest = sha256_bytes(raw)
-        relative = relative_to_root(root, path)
-        artifact = artifacts.get(relative)
-        if (
-            path.name != f"{digest}.json"
-            or artifact != {"path": relative, "owner": "controller", "sha256": digest}
-        ):
-            continue
-        try:
-            value = read_json_bytes(raw, "COMMANDMENTS decision")
-            if not isinstance(value, dict) or set(value) != expected_fields:
-                continue
-            marker = bounded_text(
-                value["operatorMarker"], "decision operator marker", 200
+    try:
+        value = read_json_bytes(raw, "COMMANDMENTS decision")
+        if not isinstance(value, dict) or set(value) != expected:
+            return None
+        bounded_text(value["operatorMarker"], "decision operator marker", 200)
+    except ValidationError:
+        return None
+    if (
+        type(value["schemaVersion"]) is not int
+        or value["schemaVersion"] != 1
+        or value["kind"] != "commandments-decision"
+        or value["decision"] not in {"amend", "defer"}
+        or (
+            value["candidateSha256"] is not None
+            and (
+                not isinstance(value["candidateSha256"], str)
+                or re.fullmatch(r"[0-9a-f]{64}", value["candidateSha256"])
+                is None
             )
-        except ValidationError:
+        )
+        or (
+            value["decision"] == "amend"
+            and value["candidateSha256"] is None
+        )
+        or not isinstance(value["at"], str)
+        or not valid_datetime(value["at"])
+        or value["resourceIsolation"] not in {"isolated-shell", "inherited-session"}
+        or not isinstance(value["sourceRevision"], str)
+    ):
+        return None
+    return value
+
+
+def decision_matches(
+    value: Mapping[str, Any],
+    manifest: Mapping[str, Any],
+    decision: str,
+    candidate_sha: Optional[str],
+    operator_marker: str,
+    isolation: str,
+) -> bool:
+    return (
+        value["decision"] == decision
+        and value["candidateSha256"] == candidate_sha
+        and value["operatorMarker"] == operator_marker
+        and value["sourceRevision"] == manifest["source"]["revision"]
+        and value["resourceIsolation"] == isolation
+    )
+
+
+def amendment_decision_exists(
+    root: Path,
+    manifest: Mapping[str, Any],
+    candidate_digest: str,
+    isolation: str,
+) -> bool:
+    for artifact in manifest["artifacts"]:
+        relative = artifact["path"]
+        if "/decisions/" not in relative:
             continue
-        if (
-            type(value["schemaVersion"]) is int
-            and value["schemaVersion"] == 1
-            and value["kind"] == "commandments-decision"
-            and value["decision"] == "amend"
-            and value["candidateSha256"] == candidate_digest
-            and value["sourceRevision"] == manifest["source"]["revision"]
-            and value["resourceIsolation"] == isolation
-            and isinstance(value["at"], str)
-            and valid_datetime(value["at"])
-            and marker == value["operatorMarker"]
+        path = safe_relative_path(root, relative, must_exist=True)
+        value = parse_commandments_decision(path.read_bytes())
+        if value is not None and decision_matches(
+            value,
+            manifest,
+            "amend",
+            candidate_digest,
+            value["operatorMarker"],
+            isolation,
         ):
             return True
     return False
+
+
+def matching_orphan_decision(
+    root: Path,
+    manifest: Mapping[str, Any],
+    decision: str,
+    candidate_sha: Optional[str],
+    operator_marker: str,
+    isolation: str,
+) -> Optional[Tuple[Dict[str, Any], str, str]]:
+    directory = root / ".pi" / "jig" / "commandments" / "decisions"
+    if not directory.exists():
+        return None
+    if directory.is_symlink() or not directory.is_dir():
+        raise ValidationError("COMMANDMENTS decision directory is unsafe")
+    registered = {item["path"] for item in manifest["artifacts"]}
+    matches = []
+    for path in sorted(directory.iterdir()):
+        if path.is_symlink() or not path.is_file():
+            continue
+        relative = relative_to_root(root, path)
+        if relative in registered or path.stat().st_size > 4096:
+            continue
+        raw = path.read_bytes()
+        digest = sha256_bytes(raw)
+        if path.name != f"{digest}.json":
+            continue
+        value = parse_commandments_decision(raw)
+        if value is not None and decision_matches(
+            value,
+            manifest,
+            decision,
+            candidate_sha,
+            operator_marker,
+            isolation,
+        ):
+            matches.append((value, relative, digest))
+    if len(matches) > 1:
+        raise ValidationError(
+            "multiple matching orphan COMMANDMENTS decisions require inspection"
+        )
+    return matches[0] if matches else None
 
 
 def stage_commandments(
@@ -1947,40 +2195,57 @@ def stage_commandments(
     amend_candidate_sha: Optional[str],
     adopt_existing: bool,
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    manifest = require_commandments_boundary(root, isolation, ("awaiting-commandments",))
+    manifest = require_commandments_boundary(
+        root, isolation, ("awaiting-commandments",)
+    )
     interview_artifact = next(
-        (item for item in manifest["artifacts"] if item["path"] == COMMANDMENTS_INTERVIEW_PATH),
+        (
+            item
+            for item in manifest["artifacts"]
+            if item["path"] == COMMANDMENTS_INTERVIEW_PATH
+        ),
         None,
     )
     if interview_artifact is None:
-        raise ValidationError("present the one COMMANDMENTS interview before staging answers")
+        raise ValidationError(
+            "present the one COMMANDMENTS interview before staging answers"
+        )
     answers = read_json_bytes(raw, "COMMANDMENTS answers")
     resolved, modes = validate_commandments_answers(answers)
     answers_raw = canonical_json(answers)
-    answers_path, answers_digest = content_addressed_artifact(
-        root, "answers", "json", answers_raw
+    answers_digest = sha256_bytes(answers_raw)
+    answers_path = (
+        f".pi/jig/commandments/answers/{answers_digest}.json"
     )
-    current = load_staging(root)
+    current = load_staging(root, manifest)
     if (
         current is not None
         and current["answersSha256"] == answers_digest
         and current["adoptedExisting"] == adopt_existing
     ):
-        candidate_path = safe_relative_path(root, current["candidatePath"], must_exist=True)
-        candidate_raw = candidate_path.read_bytes()
-        if sha256_bytes(candidate_raw) != current["candidateSha256"]:
-            raise ValidationError("staged COMMANDMENTS candidate hash changed")
-        staging_raw = canonical_json(current)
-        wanted = (
-            (answers_path, "human", answers_digest),
-            (current["candidatePath"], "controller", current["candidateSha256"]),
-            (COMMANDMENTS_STAGING_PATH, "controller", sha256_bytes(staging_raw)),
-        )
-        before = canonical_json(manifest["artifacts"])
-        for path_value, owner, digest in wanted:
-            upsert_artifact(manifest, path_value, owner, digest)
-        if before != canonical_json(manifest["artifacts"]):
-            manifest["updatedAt"] = now()
+        if not staging_artifacts_registered(manifest, current):
+            previous = current["previousCandidateSha256"]
+            if previous is not None and (
+                amend_candidate_sha != previous
+                or not amendment_decision_exists(
+                    root, manifest, previous, isolation
+                )
+            ):
+                raise ValidationError(
+                    "staging recovery requires the recorded amend decision"
+                )
+            if previous is None and amend_candidate_sha is not None:
+                raise ValidationError("there is no staged candidate to amend")
+            upsert_artifact(
+                manifest, current["answersPath"], "human", current["answersSha256"]
+            )
+            upsert_artifact(
+                manifest,
+                current["candidatePath"],
+                "controller",
+                current["candidateSha256"],
+            )
+            manifest["updatedAt"] = max(manifest["updatedAt"], now())
             write_manifest(root, manifest)
         return manifest, current
     if current is not None:
@@ -1994,23 +2259,47 @@ def stage_commandments(
             )
     elif amend_candidate_sha is not None:
         raise ValidationError("there is no staged candidate to amend")
-    root_path = fixed_artifact_path(root, COMMANDMENTS_ROOT_PATH, create_parent=False)
+    root_path = fixed_artifact_path(
+        root, COMMANDMENTS_ROOT_PATH, create_parent=False
+    )
     if adopt_existing:
         if not root_path.exists():
-            raise ValidationError("there is no existing root COMMANDMENTS.md to adopt")
+            raise ValidationError(
+                "there is no existing root COMMANDMENTS.md to adopt"
+            )
         candidate_raw = root_path.read_bytes()
         metadata = validate_commandments_bytes(candidate_raw)
         if metadata["marker"] != resolved["authority"]["ratificationMarker"]:
-            raise ValidationError("existing COMMANDMENTS marker differs from the explicit answer")
+            raise ValidationError(
+                "existing COMMANDMENTS marker differs from the explicit answer"
+            )
     else:
         metadata = {"ratifiedAt": now(), "version": 1}
         candidate_raw = render_commandments_candidate(
             resolved, metadata["ratifiedAt"], metadata["version"]
         )
         metadata = validate_commandments_bytes(candidate_raw)
-    candidate_path, candidate_digest = content_addressed_artifact(
-        root, "candidates", "md", candidate_raw
+    candidate_digest = sha256_bytes(candidate_raw)
+    candidate_path = (
+        f".pi/jig/commandments/candidates/{candidate_digest}.md"
     )
+    for relative, expected_raw in (
+        (answers_path, answers_raw),
+        (candidate_path, candidate_raw),
+    ):
+        path = root / relative
+        parent = path.parent
+        if parent.exists() or parent.is_symlink():
+            if parent.is_symlink() or not parent.is_dir():
+                raise ValidationError(
+                    f"artifact directory is unsafe: {relative}"
+                )
+            if path.exists() or path.is_symlink():
+                fixed_artifact_path(root, relative)
+                if path.read_bytes() != expected_raw:
+                    raise ValidationError(
+                        f"content-addressed artifact collision: {relative}"
+                    )
     staging = {
         "schemaVersion": 1,
         "kind": "commandments-staged",
@@ -2024,20 +2313,19 @@ def stage_commandments(
         "intendedMarker": resolved["authority"]["ratificationMarker"],
         "sourceRevision": manifest["source"]["revision"],
         "interviewSha256": interview_artifact["sha256"],
+        "previousCandidateSha256": (
+            current["candidateSha256"] if current is not None else None
+        ),
         "adoptedExisting": adopt_existing,
     }
     staging_raw = canonical_json(staging)
     staging_path = fixed_artifact_path(root, COMMANDMENTS_STAGING_PATH)
+    content_addressed_artifact(root, "answers", "json", answers_raw)
+    content_addressed_artifact(root, "candidates", "md", candidate_raw)
     atomic_write(staging_path, staging_raw)
     upsert_artifact(manifest, answers_path, "human", answers_digest)
     upsert_artifact(manifest, candidate_path, "controller", candidate_digest)
-    upsert_artifact(
-        manifest,
-        COMMANDMENTS_STAGING_PATH,
-        "controller",
-        sha256_bytes(staging_raw),
-    )
-    manifest["updatedAt"] = now()
+    manifest["updatedAt"] = max(manifest["updatedAt"], now())
     write_manifest(root, manifest)
     return manifest, staging
 
@@ -2049,12 +2337,20 @@ def record_commandments_decision(
     candidate_sha: Optional[str],
     operator_marker: str,
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    manifest = require_commandments_boundary(root, isolation, ("awaiting-commandments",))
+    manifest = require_commandments_boundary(
+        root, isolation, ("awaiting-commandments",)
+    )
     marker = bounded_text(operator_marker, "operator marker", 200)
-    current = load_staging(root)
+    current = load_staging(root, manifest)
+    if current is not None and not staging_artifacts_registered(manifest, current):
+        raise ValidationError(
+            "resume staging before recording a COMMANDMENTS decision"
+        )
     if decision == "amend":
         if current is None or candidate_sha != current["candidateSha256"]:
-            raise ValidationError("amend must name the current exact candidate digest")
+            raise ValidationError(
+                "amend must name the current exact candidate digest"
+            )
     elif decision == "defer":
         if candidate_sha is not None and (
             current is None or candidate_sha != current["candidateSha256"]
@@ -2062,6 +2358,20 @@ def record_commandments_decision(
             raise ValidationError("defer names a stale or unknown candidate digest")
     else:
         raise ValidationError("decision must be amend or defer")
+    orphan = matching_orphan_decision(
+        root,
+        manifest,
+        decision,
+        candidate_sha,
+        marker,
+        isolation,
+    )
+    if orphan is not None:
+        receipt, path, digest = orphan
+        upsert_artifact(manifest, path, "controller", digest)
+        manifest["updatedAt"] = max(manifest["updatedAt"], receipt["at"])
+        write_manifest(root, manifest)
+        return manifest, {**receipt, "path": path, "sha256": digest}
     receipt = {
         "schemaVersion": 1,
         "kind": "commandments-decision",
@@ -2073,9 +2383,11 @@ def record_commandments_decision(
         "resourceIsolation": isolation,
     }
     raw = canonical_json(receipt)
-    path, digest = content_addressed_artifact(root, "decisions", "json", raw)
+    path, digest = content_addressed_artifact(
+        root, "decisions", "json", raw
+    )
     upsert_artifact(manifest, path, "controller", digest)
-    manifest["updatedAt"] = receipt["at"]
+    manifest["updatedAt"] = max(manifest["updatedAt"], receipt["at"])
     write_manifest(root, manifest)
     return manifest, {**receipt, "path": path, "sha256": digest}
 
@@ -2090,69 +2402,108 @@ def ratify_commandments(
     )
     marker = bounded_text(operator_marker, "operator marker", 200)
     if re.fullmatch(r"[0-9a-f]{64}", candidate_sha) is None:
-        raise ValidationError("candidate digest must be a lowercase SHA-256 value")
+        raise ValidationError(
+            "candidate digest must be a lowercase SHA-256 value"
+        )
     if manifest["currentState"] == "commandments-ratified":
         if manifest["commandments"]["sha256"] != candidate_sha:
-            raise ValidationError("ratified COMMANDMENTS digest differs from the requested digest")
-        metadata = validate_commandments_bytes((root / COMMANDMENTS_ROOT_PATH).read_bytes())
+            raise ValidationError(
+                "ratified COMMANDMENTS digest differs from the requested digest"
+            )
+        metadata = validate_commandments_bytes(
+            (root / COMMANDMENTS_ROOT_PATH).read_bytes()
+        )
         if metadata["marker"] != marker:
-            raise ValidationError("operator marker differs from the ratified exact bytes")
+            raise ValidationError(
+                "operator marker differs from the ratified exact bytes"
+            )
         return manifest
-    staging = load_staging(root)
+    staging = load_staging(root, manifest)
     if staging is None or staging["candidateSha256"] != candidate_sha:
-        raise ValidationError("ratification must name the current exact candidate digest")
-    candidate_path = safe_relative_path(root, staging["candidatePath"], must_exist=True)
+        raise ValidationError(
+            "ratification must name the current exact candidate digest"
+        )
+    if not staging_artifacts_registered(manifest, staging):
+        raise ValidationError("resume staging before ratification")
+    candidate_path = safe_relative_path(
+        root, staging["candidatePath"], must_exist=True
+    )
     candidate_raw = candidate_path.read_bytes()
     if sha256_bytes(candidate_raw) != candidate_sha:
         raise ValidationError("staged COMMANDMENTS candidate hash changed")
     metadata = validate_commandments_bytes(candidate_raw)
     if metadata["marker"] != marker or staging["intendedMarker"] != marker:
-        raise ValidationError("ratification marker differs from the exact staged candidate")
-    root_path = fixed_artifact_path(root, COMMANDMENTS_ROOT_PATH, create_parent=False)
-    if root_path.exists():
-        if root_path.read_bytes() != candidate_raw:
-            raise ValidationError(
-                "pre-existing COMMANDMENTS.md differs from the staged digest; preserve it and stage exact adoption"
-            )
-    else:
-        atomic_write(root_path, candidate_raw)
+        raise ValidationError(
+            "ratification marker differs from the exact staged candidate"
+        )
     interview_artifact = next(
-        item for item in manifest["artifacts"] if item["path"] == COMMANDMENTS_INTERVIEW_PATH
+        item
+        for item in manifest["artifacts"]
+        if item["path"] == COMMANDMENTS_INTERVIEW_PATH
     )
     approval_digest = sha256_bytes(
-        canonical_json({"candidateSha256": candidate_sha, "operatorMarker": marker})
+        canonical_json(
+            {"candidateSha256": candidate_sha, "operatorMarker": marker}
+        )
     )
     index = len(manifest["transitions"]) + 1
     receipt_relative = (
         f".pi/jig/receipts/transition-{index:04d}-commandments-ratified.json"
     )
     receipt_path = fixed_artifact_path(root, receipt_relative)
+    root_path = fixed_artifact_path(
+        root, COMMANDMENTS_ROOT_PATH, create_parent=False
+    )
+    expected_receipt = {
+        "resourceIsolation": isolation,
+        "interviewPath": COMMANDMENTS_INTERVIEW_PATH,
+        "interviewSha256": interview_artifact["sha256"],
+        "answersPath": staging["answersPath"],
+        "answersSha256": staging["answersSha256"],
+        "candidatePath": staging["candidatePath"],
+        "commandmentsPath": COMMANDMENTS_ROOT_PATH,
+        "commandmentsSha256": candidate_sha,
+        "version": metadata["version"],
+        "operatorMarker": marker,
+        "approvalDigest": approval_digest,
+        "at": metadata["ratifiedAt"],
+    }
     if receipt_path.exists():
-        receipt = read_json(receipt_path, "COMMANDMENTS ratification receipt")
+        if not root_path.exists():
+            raise ValidationError(
+                "ratification receipt exists before root publication"
+            )
+        if root_path.read_bytes() != candidate_raw:
+            raise ValidationError(
+                "existing ratification receipt has different root bytes"
+            )
+        receipt = read_json(
+            receipt_path, "COMMANDMENTS ratification receipt"
+        )
         validate_transition_receipt(
             root,
             receipt,
             ("awaiting-commandments", "commandments-ratified"),
             manifest["source"],
         )
-        expected_receipt = {
-            "resourceIsolation": isolation,
-            "interviewPath": COMMANDMENTS_INTERVIEW_PATH,
-            "interviewSha256": interview_artifact["sha256"],
-            "answersPath": staging["answersPath"],
-            "answersSha256": staging["answersSha256"],
-            "candidatePath": staging["candidatePath"],
-            "commandmentsPath": COMMANDMENTS_ROOT_PATH,
-            "commandmentsSha256": candidate_sha,
-            "version": metadata["version"],
-            "operatorMarker": marker,
-            "approvalDigest": approval_digest,
-            "at": metadata["ratifiedAt"],
-        }
-        if any(receipt.get(key) != value for key, value in expected_receipt.items()):
-            raise ValidationError("existing ratification receipt differs from this approval")
+        if any(
+            receipt.get(key) != value
+            for key, value in expected_receipt.items()
+        ):
+            raise ValidationError(
+                "existing ratification receipt differs from this approval"
+            )
         receipt_raw = receipt_path.read_bytes()
     else:
+        if root_path.exists() and root_path.read_bytes() != candidate_raw:
+            raise ValidationError(
+                "pre-existing COMMANDMENTS.md differs from the staged digest; "
+                "preserve it and stage exact adoption"
+            )
+        if not root_path.exists():
+            atomic_write(
+                root_path, candidate_raw, ownership_token=candidate_sha
+            )
         receipt = receipt_value(
             "commandments-ratified",
             "awaiting-commandments",
@@ -2184,8 +2535,12 @@ def ratify_commandments(
             "receiptSha256": receipt_digest,
         }
     )
-    upsert_artifact(manifest, receipt_relative, "controller", receipt_digest)
-    upsert_artifact(manifest, COMMANDMENTS_ROOT_PATH, "human", candidate_sha)
+    upsert_artifact(
+        manifest, receipt_relative, "controller", receipt_digest
+    )
+    upsert_artifact(
+        manifest, COMMANDMENTS_ROOT_PATH, "human", candidate_sha
+    )
     manifest["commandments"] = {
         "path": COMMANDMENTS_ROOT_PATH,
         "sha256": candidate_sha,
@@ -2193,7 +2548,9 @@ def ratify_commandments(
         "ratifiedAt": metadata["ratifiedAt"],
     }
     manifest["currentState"] = "commandments-ratified"
-    manifest["updatedAt"] = receipt["at"]
+    manifest["updatedAt"] = max(
+        manifest["updatedAt"], receipt["recordedAt"]
+    )
     write_manifest(root, manifest)
     return manifest
 
@@ -2227,17 +2584,128 @@ def propose_commandments_amendment(
     return manifest, {"path": path, "sha256": digest}
 
 
-def render_result(manifest: Mapping[str, Any]) -> None:
-    result = {
+def render_result(root: Path, manifest: Mapping[str, Any]) -> None:
+    result: Dict[str, Any] = {
         "root": ".",
         "state": manifest["currentState"],
         "resourceIsolation": manifest["resourceIsolation"],
     }
     if manifest["currentState"] == "awaiting-commandments":
-        result["resume"] = (
-            "Write the complete one-round response to "
-            ".pi/jig/commandments/answers.input.json, then rerun jig init through the same route."
+        isolation = manifest["resourceIsolation"]
+        operations = []
+        interview = next(
+            (
+                item
+                for item in manifest["artifacts"]
+                if item["path"] == COMMANDMENTS_INTERVIEW_PATH
+            ),
+            None,
         )
+        if interview is None:
+            operations.append(
+                {
+                    "name": "present",
+                    "command": [
+                        "present-commandments",
+                        "--resource-isolation",
+                        isolation,
+                    ],
+                }
+            )
+        staging = load_staging(root, manifest)
+        if staging is None or not staging_artifacts_registered(manifest, staging):
+            stage_command = [
+                "stage-commandments",
+                "--resource-isolation",
+                isolation,
+            ]
+            if (
+                staging is not None
+                and staging["previousCandidateSha256"] is not None
+            ):
+                stage_command.extend(
+                    [
+                        "--amend-candidate-sha",
+                        staging["previousCandidateSha256"],
+                    ]
+                )
+            operations.append(
+                {
+                    "name": "stage",
+                    "command": stage_command,
+                    "stdin": ".pi/jig/commandments/answers.input.json",
+                }
+            )
+        else:
+            digest = staging["candidateSha256"]
+            marker = staging["intendedMarker"]
+            result["candidate"] = {
+                "path": staging["candidatePath"],
+                "sha256": digest,
+                "intendedMarker": marker,
+            }
+            operations.extend(
+                [
+                    {
+                        "name": "ratify",
+                        "command": [
+                            "ratify-commandments",
+                            "--candidate-sha",
+                            digest,
+                            "--operator-marker",
+                            marker,
+                            "--resource-isolation",
+                            isolation,
+                        ],
+                    },
+                    {
+                        "name": "amend",
+                        "command": [
+                            "record-commandments-decision",
+                            "--decision",
+                            "amend",
+                            "--candidate-sha",
+                            digest,
+                            "--operator-marker",
+                            "<operator-written marker>",
+                            "--resource-isolation",
+                            isolation,
+                        ],
+                        "followUp": {
+                            "command": [
+                                "stage-commandments",
+                                "--amend-candidate-sha",
+                                digest,
+                                "--resource-isolation",
+                                isolation,
+                            ],
+                            "stdin": ".pi/jig/commandments/answers.input.json",
+                        },
+                    },
+                    {
+                        "name": "defer",
+                        "command": [
+                            "record-commandments-decision",
+                            "--decision",
+                            "defer",
+                            "--candidate-sha",
+                            digest,
+                            "--operator-marker",
+                            "<operator-written marker>",
+                            "--resource-isolation",
+                            isolation,
+                        ],
+                    },
+                ]
+            )
+        result["resume"] = {
+            "controller": "jigctl.py",
+            "operations": operations,
+            "note": (
+                "Run the named trusted-controller operation directly. "
+                "This launcher version does not consume response files on rerun."
+            ),
+        }
     print(json.dumps(result, sort_keys=True))
 
 
@@ -2350,7 +2818,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 root, arguments.resource_isolation, raw
             )
     if output is None:
-        render_result(manifest)
+        render_result(root, manifest)
     else:
         print(json.dumps(output, sort_keys=True))
     return 0

@@ -30,6 +30,10 @@ grep -q 'Record amend and defer' skills/jig/playbooks/init.md || fail "init play
 grep -q 'Do not select one for the operator' skills/jig/playbooks/init.md || fail "init playbook must forbid automatic default selection"
 grep -q 'Do not infer values or ask a second round' skills/jig/playbooks/init.md || fail "init playbook must forbid inference and repeat interviews"
 grep -q 'Only this deterministic command may publish' skills/jig/references/commandments-interview.md || fail "ratification must stay controller-owned"
+grep -q 'does not consume response files on rerun' skills/jig/playbooks/init.md || fail "init playbook must describe the direct controller resume"
+if grep -q 'rerun `jig init`' skills/jig/playbooks/init.md skills/jig/references/commandments-interview.md; then
+	fail "COMMANDMENTS resume must not claim launcher response-file consumption"
+fi
 
 desc=$(awk 'BEGIN{d=0} /^---$/{c++; next} c==1 && $0 ~ /^description:/{d=1} c==1 && d{print} c==2{exit}' skills/jig/SKILL.md | wc -c)
 if [ "$desc" -gt 400 ]; then
