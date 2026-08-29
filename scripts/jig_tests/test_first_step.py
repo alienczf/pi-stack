@@ -979,6 +979,105 @@ class FirstStepTest(unittest.TestCase):
             finally:
                 case.tearDown()
 
+    def test_result_stages_kept_from_exact_proof_and_verdict_evidence(self):
+        main_head = self.fixture.git("rev-parse", "HEAD").strip()
+        _worktree, worker, output = self.proved_candidate()
+        draft = self.verdict_draft(output)
+        self.assertEqual(self.ctl("commit-step-verdict", input_value=draft).returncode, 0)
+        first_step = self.manifest()["firstStep"].copy()
+        prepared = self.ctl("prepare-step-result")
+        self.assertEqual(prepared.returncode, 0, prepared.stderr)
+        path = self.repo / ".pi/jig/steps/0001/result.json"
+        result = json.loads(path.read_text())
+        test_verification.jigctl.validate_instance(
+            result, test_verification.jigctl.load_schema("result"))
+        before = json.loads((self.repo / ".pi/jig/steps/0001/before.json").read_text())
+        after = json.loads((self.repo / ".pi/jig/steps/0001/after.json").read_text())
+        expected = before["commands"] + after["commands"]
+        self.assertEqual([item["command"] for item in result["commands"]],
+            [item["command"] for item in expected])
+        for summary in result["commands"]:
+            receipt = json.loads((self.repo / summary["receiptPath"]).read_text())
+            self.assertEqual(summary, {key: value for key, value in (
+                ("command", receipt["command"]), ("exitCode", receipt["exitCode"]),
+                ("receiptPath", summary["receiptPath"]), ("outputSha256", receipt["outputSha256"]),
+                ("finishedAt", receipt["finishedAt"]),
+            )})
+        verdict = json.loads((self.repo / ".pi/jig/steps/0001/verdict.json").read_text())
+        self.assertEqual(result, {
+            "schemaVersion": 1, "stepId": "0001", "outcome": "kept",
+            "selectionPath": ".pi/jig/steps/0001/selection.json",
+            "selectionSha256": worker["selectionSha256"],
+            "proposalPath": ".pi/jig/steps/0001/proposal.json",
+            "proposalSha256": worker["proposalSha256"],
+            "inputRevision": worker["inputRevision"], "outputRevision": output["outputRevision"],
+            "branch": worker["branch"], "worktree": worker["worktree"], "commands": result["commands"],
+            "diffSha256": output["diffSha256"], "independentVerdict": {
+                "status": verdict["status"], "evidencePath": verdict["reportPath"],
+                "evidenceSha256": verdict["reportSha256"], "revision": output["outputRevision"],
+            }, "recordedAt": result["recordedAt"],
+        })
+        manifest = self.manifest()
+        self.assertEqual((manifest["currentState"], manifest["firstStep"]), ("step-running", first_step))
+        self.assertEqual(self.fixture.git("rev-parse", "HEAD").strip(), main_head)
+        started = json.loads(self.ctl("start").stdout)
+        self.assertEqual(started["stagedResult"],
+            {"outcome": "kept", "path": ".pi/jig/steps/0001/result.json"})
+        self.assertNotIn("resume", started)
+
+    def test_result_derives_reverted_and_missing_required_verdict_fails_closed(self):
+        for scenario in ("failed-proof", "failed-verdict", "inconclusive-verdict", "missing-verdict"):
+            case = FirstStepTest(methodName="runTest")
+            case.setUp()
+            try:
+                candidate = case.selected_fixture()
+                proposal = case.proposal_draft(candidate)
+                if scenario == "failed-proof":
+                    proposal["proof"]["targeted"]["commands"] = ["exit 1"]
+                _worktree, _worker, output = case.proved_candidate(proposal)
+                if scenario.endswith("verdict") and scenario != "missing-verdict":
+                    status = scenario.removesuffix("-verdict")
+                    self.assertEqual(case.ctl("commit-step-verdict",
+                        input_value=case.verdict_draft(output, status=status)).returncode, 0)
+                prepared = case.ctl("prepare-step-result")
+                if scenario == "missing-verdict":
+                    self.assertNotEqual(prepared.returncode, 0)
+                    self.assertFalse((case.repo / ".pi/jig/steps/0001/result.json").exists())
+                else:
+                    self.assertEqual(prepared.returncode, 0, prepared.stderr)
+                    result = json.loads((case.repo / ".pi/jig/steps/0001/result.json").read_text())
+                    self.assertEqual(result["outcome"], "reverted")
+                    self.assertEqual(case.manifest()["firstStep"]["outcome"], "pending")
+            finally:
+                case.tearDown()
+
+    def test_result_retry_interruption_collision_and_evidence_drift_fail_closed(self):
+        _worktree, _worker, output = self.proved_candidate()
+        self.assertEqual(self.ctl("commit-step-verdict", input_value=self.verdict_draft(output)).returncode, 0)
+        with mock.patch.object(test_verification.jigctl, "write_manifest", side_effect=RuntimeError("crash")):
+            with self.assertRaises(RuntimeError):
+                test_verification.jigctl.prepare_step_result(self.repo, "isolated-shell")
+        result_path = self.repo / ".pi/jig/steps/0001/result.json"
+        result_before = (result_path.read_bytes(), result_path.stat().st_ino, result_path.stat().st_mtime_ns)
+        recovered = self.ctl("prepare-step-result")
+        self.assertEqual(recovered.returncode, 0, recovered.stderr)
+        manifest_path = self.repo / ".pi/jig/manifest.json"
+        manifest_before = (manifest_path.read_bytes(), manifest_path.stat().st_ino, manifest_path.stat().st_mtime_ns)
+        self.assertEqual(self.ctl("prepare-step-result").returncode, 0)
+        self.assertEqual((result_path.read_bytes(), result_path.stat().st_ino, result_path.stat().st_mtime_ns),
+            result_before)
+        self.assertEqual((manifest_path.read_bytes(), manifest_path.stat().st_ino, manifest_path.stat().st_mtime_ns),
+            manifest_before)
+        after_path = self.repo / ".pi/jig/steps/0001/after.json"
+        after = after_path.read_bytes()
+        after_path.write_bytes(after + b" ")
+        self.assertNotEqual(self.ctl("prepare-step-result").returncode, 0)
+        self.assertEqual(result_path.read_bytes(), result_before[0])
+        after_path.write_bytes(after)
+        result_path.write_bytes(b"preserve collision\n")
+        self.assertNotEqual(self.ctl("prepare-step-result").returncode, 0)
+        self.assertEqual(result_path.read_bytes(), b"preserve collision\n")
+
 
 if __name__ == "__main__":
     unittest.main()
