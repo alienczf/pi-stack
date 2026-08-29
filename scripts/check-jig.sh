@@ -23,6 +23,9 @@ grep -q D4 skills/jig/references/failure-modes.md || fail "failure-modes.md miss
 test -f skills/jig/playbooks/init.md || fail "missing Jig init playbook"
 test -f skills/jig/references/commandments-interview.md || fail "missing COMMANDMENTS interview"
 test -f skills/jig/references/COMMANDMENTS.template.md || fail "missing COMMANDMENTS template"
+test -f skills/jig/references/runtime-verification.md || fail "missing runtime verification boundary"
+test -f scripts/jig_tests/test_verification.py || fail "missing runtime verification tests"
+test -x scripts/jig_tests/fixtures/runtime-app/generated/fixture-control.py || fail "fixture control helper must be executable"
 grep -q 'one question round' skills/jig/playbooks/init.md || fail "init playbook must keep one interview round"
 grep -q 'recommended default' skills/jig/playbooks/init.md || fail "init playbook must show recommended defaults"
 grep -q 'exact staged candidate bytes and SHA-256 digest' skills/jig/playbooks/init.md || fail "init playbook must show exact digest ratification"
@@ -33,6 +36,11 @@ grep -q 'Only this deterministic command may publish' skills/jig/references/comm
 grep -q 'does not consume response files on rerun' skills/jig/playbooks/init.md || fail "init playbook must describe the direct controller resume"
 if grep -q 'rerun `jig init`' skills/jig/playbooks/init.md skills/jig/references/commandments-interview.md; then
 	fail "COMMANDMENTS resume must not claim launcher response-file consumption"
+fi
+grep -q 'verification-ready' skills/jig/playbooks/init.md || fail "init playbook must reach verification-ready"
+grep -q 'create-verification-skill/SKILL.md' skills/jig/playbooks/init.md || fail "init must route to the canonical verification procedure"
+if grep -R -n -E '/ho''me/[^/]+/|\.cursor/' scripts/jig_tests/fixtures/runtime-app/generated skills/jig/references/runtime-verification.md; then
+    fail "generated verification artifacts are not portable Pi paths"
 fi
 
 desc=$(awk 'BEGIN{d=0} /^---$/{c++; next} c==1 && $0 ~ /^description:/{d=1} c==1 && d{print} c==2{exit}' skills/jig/SKILL.md | wc -c)
