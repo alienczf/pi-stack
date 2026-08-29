@@ -61,6 +61,20 @@ class FirstStepTest(unittest.TestCase):
             "behavioralEval": "not-required",
         }
 
+    def eligible_candidate(self, candidate_id="client-app-boundary"):
+        candidate = self.rejected_candidate()
+        candidate.update({
+            "id": candidate_id,
+            "title": "Decouple the public client from the server implementation",
+            "evidence": [
+                {"path": "client.py", "line": 8, "note": "The public client imports the server module."},
+                {"path": "app.py", "line": 9, "note": "The server owns the imported API version."},
+            ],
+            "eligibility": {"eligible": True, "rejectionReasons": []},
+            "verificationPlan": ["Run the fixture client against the launched server."],
+        })
+        return candidate
+
     def commit_selection(self, draft):
         return self.ctl("commit-step-selection", input_value=draft)
 
@@ -142,6 +156,48 @@ class FirstStepTest(unittest.TestCase):
         self.assertIsNone(manifest["firstStep"]["proposalPath"])
         self.assertIsNone(manifest["firstStep"]["resultPath"])
 
+    def test_selected_eligible_candidate_commits_without_execution_artifacts(self):
+        self.assertEqual(self.ctl("begin-step-selection").returncode, 0)
+        candidate = self.eligible_candidate()
+        worktrees_before = self.fixture.git("worktree", "list", "--porcelain")
+        committed = self.commit_selection(self.selection_draft([candidate], selected=candidate["id"]))
+        self.assertEqual(committed.returncode, 0, committed.stderr)
+        manifest = self.manifest()
+        self.assertEqual(manifest["currentState"], "step-selecting")
+        self.assertEqual(manifest["firstStep"], {
+            "selectionPath": ".pi/jig/steps/0001/selection.json",
+            "selectedCandidateId": candidate["id"], "proposalPath": None,
+            "resultPath": None, "outcome": "pending",
+        })
+        step_dir = self.repo / ".pi/jig/steps/0001"
+        self.assertEqual({path.name for path in step_dir.iterdir()}, {"selection.json"})
+        self.assertEqual(self.fixture.git("worktree", "list", "--porcelain"), worktrees_before)
+
+    def test_selected_candidate_validation_accepts_model_ranking_and_fails_closed(self):
+        self.assertEqual(self.ctl("begin-step-selection").returncode, 0)
+        first = self.eligible_candidate()
+        second = self.eligible_candidate("client-app-boundary-two")
+        rejected = self.rejected_candidate()
+        behavioral = self.eligible_candidate("behavioral-check")
+        behavioral["responseLayer"] = "behavioral-eval"
+        invalid = [
+            self.selection_draft([first], selected="unknown-candidate"),
+            self.selection_draft([first, rejected], selected=rejected["id"]),
+            self.selection_draft([first, json.loads(json.dumps(first))], selected=first["id"]),
+            self.selection_draft([behavioral], selected=behavioral["id"]),
+        ]
+        path = self.repo / ".pi/jig/steps/0001/selection.json"
+        for draft in invalid:
+            with self.subTest(selected=draft["selectedCandidateId"]):
+                self.assertNotEqual(self.commit_selection(draft).returncode, 0)
+                self.assertFalse(path.exists())
+        committed = self.commit_selection(
+            self.selection_draft([first, second], selected=second["id"], summary="Prefer the second eligible option.")
+        )
+        self.assertEqual(committed.returncode, 0, committed.stderr)
+        self.assertEqual(json.loads(path.read_text())["selectedCandidateId"], second["id"])
+        self.assertEqual(self.manifest()["firstStep"]["selectedCandidateId"], second["id"])
+
     def test_rejected_candidates_commit_and_invalid_candidates_fail_closed(self):
         self.assertEqual(self.ctl("begin-step-selection").returncode, 0)
         candidate = self.rejected_candidate()
@@ -172,9 +228,10 @@ class FirstStepTest(unittest.TestCase):
         self.assertEqual(committed.returncode, 0, committed.stderr)
         self.assertEqual(json.loads(selection_path.read_text())["candidates"][0]["id"], "candidate-one")
 
-    def test_selection_retry_and_interrupted_manifest_write_converge(self):
+    def test_selected_selection_retry_and_interrupted_manifest_write_converge(self):
         self.assertEqual(self.ctl("begin-step-selection").returncode, 0)
-        draft = self.selection_draft()
+        candidate = self.eligible_candidate()
+        draft = self.selection_draft([candidate], selected=candidate["id"])
         with mock.patch.object(
             test_verification.jigctl, "write_manifest", side_effect=RuntimeError("crash")
         ):
@@ -187,13 +244,21 @@ class FirstStepTest(unittest.TestCase):
         recovered = self.commit_selection(draft)
         self.assertEqual(recovered.returncode, 0, recovered.stderr)
         self.assertEqual((path.read_bytes(), path.stat().st_ino, path.stat().st_mtime_ns), before)
-        manifest_before = (self.repo / ".pi/jig/manifest.json").read_bytes()
+        manifest_path = self.repo / ".pi/jig/manifest.json"
+        manifest_before = manifest_path.read_bytes()
         retried = self.commit_selection(draft)
         self.assertEqual(retried.returncode, 0, retried.stderr)
         self.assertEqual((path.read_bytes(), path.stat().st_ino, path.stat().st_mtime_ns), before)
-        self.assertEqual((self.repo / ".pi/jig/manifest.json").read_bytes(), manifest_before)
-        changed = self.commit_selection(self.selection_draft(summary="Changed selection."))
+        self.assertEqual(manifest_path.read_bytes(), manifest_before)
+        changed = self.commit_selection(self.selection_draft([candidate], selected=candidate["id"], summary="Changed selection."))
         self.assertNotEqual(changed.returncode, 0)
+        self.assertEqual((path.read_bytes(), path.stat().st_ino, path.stat().st_mtime_ns), before)
+        mismatched = json.loads(manifest_before)
+        mismatched["firstStep"]["selectedCandidateId"] = "different-candidate"
+        manifest_path.write_text(json.dumps(mismatched))
+        mismatch_bytes = manifest_path.read_bytes()
+        self.assertNotEqual(self.commit_selection(draft).returncode, 0)
+        self.assertEqual(manifest_path.read_bytes(), mismatch_bytes)
         self.assertEqual((path.read_bytes(), path.stat().st_ino, path.stat().st_mtime_ns), before)
 
     def test_empty_selection_finalizes_schema_valid_no_candidate_result(self):

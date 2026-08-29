@@ -3575,18 +3575,24 @@ def validate_committed_selection(
         or selection["commandmentsSha256"] != manifest["commandments"]["sha256"]
     ):
         raise ValidationError("selection differs from the current source or COMMANDMENTS boundary")
+    registered = any(item["path"] == SELECTION_PATH for item in manifest["artifacts"])
+    if registered and manifest["firstStep"]["selectedCandidateId"] != selection["selectedCandidateId"]:
+        raise ValidationError("manifest selected candidate differs from the committed selection")
     candidates = selection["candidates"]
     if len(candidates) > 20:
         raise ValidationError("selection has more than 20 candidates")
     ids = [candidate["id"] for candidate in candidates]
     if len(ids) != len(set(ids)):
         raise ValidationError("selection has duplicate candidate IDs")
+    selected_id = selection["selectedCandidateId"]
     commandments = (root / COMMANDMENTS_ROOT_PATH).read_text(encoding="utf-8")
     known_ids = set(re.findall(r"^### (CMD-[0-9]{3})\. ", commandments, re.MULTILINE))
     for candidate in candidates:
         eligibility = candidate["eligibility"]
-        if eligibility["eligible"] or not eligibility["rejectionReasons"]:
+        if selected_id is None and (eligibility["eligible"] or not eligibility["rejectionReasons"]):
             raise ValidationError("no-selection candidates must be ineligible with rejection reasons")
+        if candidate["responseLayer"] == "behavioral-eval" and candidate["behavioralEval"] != "required":
+            raise ValidationError("behavioral-eval candidates must require behavioral evaluation")
         if not set(candidate["commandmentIds"]).issubset(known_ids):
             raise ValidationError("selection cites an unknown COMMANDMENT ID")
         for evidence in candidate["evidence"]:
@@ -3604,6 +3610,13 @@ def validate_committed_selection(
                         raise ValidationError("selection evidence line does not exist")
             except (OSError, UnicodeError) as error:
                 raise ValidationError("selection evidence is not a readable source file") from error
+    if selected_id is not None:
+        matches = [candidate for candidate in candidates if candidate["id"] == selected_id]
+        if len(matches) != 1:
+            raise ValidationError("selected candidate ID must match exactly one candidate")
+        eligibility = matches[0]["eligibility"]
+        if not eligibility["eligible"] or eligibility["rejectionReasons"]:
+            raise ValidationError("selected candidate must be eligible with no rejection reasons")
 
 
 def validate_no_candidate_result(root: Path, manifest: Mapping[str, Any]) -> None:
@@ -3673,8 +3686,6 @@ def commit_step_selection(root: Path, isolation: str, raw: bytes) -> Dict[str, A
     draft = read_json_bytes(raw, "selection draft")
     if not isinstance(draft, dict) or set(draft) != SELECTION_DRAFT_FIELDS:
         raise ValidationError("selection draft must contain every semantic selection field exactly")
-    if draft["selectedCandidateId"] is not None:
-        raise ValidationError("selected candidates are not implemented")
     input_digest = sha256_bytes(canonical_json(draft))
     path = fixed_artifact_path(root, SELECTION_PATH)
     existing = path.exists() or path.is_symlink()
@@ -3698,6 +3709,7 @@ def commit_step_selection(root: Path, isolation: str, raw: bytes) -> Dict[str, A
             raise ValidationError("registered selection differs from the committed file")
         return manifest
     upsert_artifact(manifest, SELECTION_PATH, "controller", digest)
+    manifest["firstStep"]["selectedCandidateId"] = selection["selectedCandidateId"]
     manifest["updatedAt"] = selection["controllerReceipt"]["recordedAt"]
     write_manifest(root, manifest)
     return manifest
