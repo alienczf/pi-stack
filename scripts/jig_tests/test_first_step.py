@@ -480,5 +480,85 @@ class FirstStepTest(unittest.TestCase):
         self.assertNotEqual(self.commit_proposal(draft).returncode, 0)
         self.assertEqual(manifest_path.read_bytes(), mismatch_bytes)
 
+    def test_prepare_worktree_pins_only_the_passing_baseline(self):
+        candidate = self.selected_fixture()
+        self.assertEqual(self.commit_proposal(self.proposal_draft(candidate)).returncode, 0)
+        head = self.fixture.git("rev-parse", "HEAD").strip()
+        source = {name: (self.repo / name).read_bytes() for name in ("app.py", "client.py", "test_weak.py")}
+        prepared = self.ctl("prepare-step-worktree")
+        self.assertEqual(prepared.returncode, 0, prepared.stderr)
+        manifest = self.manifest()
+        selection_sha = test_verification.jigctl.sha256_file(self.repo / ".pi/jig/steps/0001/selection.json")
+        branch = f"jig/init-step-0001-{selection_sha[:12]}"
+        worktree = self.repo / ".pi/jig/worktrees/0001"
+        receipt_path = self.repo / ".pi/jig/steps/0001/commands/baseline-01.json"
+        before_path = self.repo / ".pi/jig/steps/0001/before.json"
+        receipt = json.loads(receipt_path.read_text())
+        before = json.loads(before_path.read_text())
+        self.assertEqual((receipt["phase"], receipt["index"], receipt["command"]), ("baseline", 1, "python3 -m unittest test_weak"))
+        self.assertEqual((receipt["branch"], receipt["revision"], receipt["exitCode"], receipt["timedOut"]), (branch, head, 0, False))
+        self.assertEqual((before["branch"], before["worktree"], before["inputRevision"]), (branch, ".pi/jig/worktrees/0001", head))
+        self.assertEqual(before["commands"][0]["receiptSha256"], test_verification.jigctl.sha256_file(receipt_path))
+        artifacts = {item["path"]: item["sha256"] for item in manifest["artifacts"]}
+        self.assertEqual(artifacts[".pi/jig/steps/0001/before.json"], test_verification.jigctl.sha256_file(before_path))
+        self.assertEqual(self.fixture.git("rev-parse", branch).strip(), head)
+        self.assertEqual(self.fixture.git("-C", str(worktree), "rev-parse", "HEAD").strip(), head)
+        self.assertEqual((manifest["currentState"], manifest["firstStep"]["outcome"], manifest["firstStep"]["resultPath"]), ("step-selecting", "pending", None))
+        self.assertEqual(self.fixture.git("rev-parse", "HEAD").strip(), head)
+        self.assertEqual({name: (self.repo / name).read_bytes() for name in source}, source)
+        self.assertFalse((worktree / "__pycache__").exists())
+
+    def test_prepare_retry_and_file_before_manifest_recovery_are_stable(self):
+        candidate = self.selected_fixture()
+        self.assertEqual(self.commit_proposal(self.proposal_draft(candidate)).returncode, 0)
+        with mock.patch.object(test_verification.jigctl, "write_manifest", side_effect=RuntimeError("crash")):
+            with self.assertRaises(RuntimeError):
+                test_verification.jigctl.prepare_step_worktree(self.repo, "isolated-shell")
+        paths = [
+            self.repo / ".pi/jig/steps/0001/commands/baseline-01.json",
+            self.repo / ".pi/jig/steps/0001/before.json",
+        ]
+        snapshots = [(path.read_bytes(), path.stat().st_ino, path.stat().st_mtime_ns) for path in paths]
+        topology = self.fixture.git("worktree", "list", "--porcelain")
+        recovered = self.ctl("prepare-step-worktree")
+        self.assertEqual(recovered.returncode, 0, recovered.stderr)
+        manifest = (self.repo / ".pi/jig/manifest.json").read_bytes()
+        self.assertEqual([(path.read_bytes(), path.stat().st_ino, path.stat().st_mtime_ns) for path in paths], snapshots)
+        self.assertEqual(self.fixture.git("worktree", "list", "--porcelain"), topology)
+        self.assertEqual(self.ctl("prepare-step-worktree").returncode, 0)
+        self.assertEqual((self.repo / ".pi/jig/manifest.json").read_bytes(), manifest)
+        self.assertEqual([(path.read_bytes(), path.stat().st_ino, path.stat().st_mtime_ns) for path in paths], snapshots)
+
+    def test_prepare_rejects_wrong_branch_and_mutating_baseline_without_before(self):
+        cases = [(self, "printf changed >> app.py"), (FirstStepTest(methodName="runTest"), None)]
+        for case, command in cases:
+            if case is not self:
+                case.setUp()
+            try:
+                candidate = case.selected_fixture()
+                draft = case.proposal_draft(candidate)
+                if command is not None:
+                    draft["baseline"]["commands"] = [command]
+                self.assertEqual(case.commit_proposal(draft).returncode, 0)
+                head = case.fixture.git("rev-parse", "HEAD").strip()
+                app = (case.repo / "app.py").read_bytes()
+                if command is None:
+                    selection = case.repo / ".pi/jig/steps/0001/selection.json"
+                    branch = f"jig/init-step-0001-{test_verification.jigctl.sha256_file(selection)[:12]}"
+                    case.fixture.git("commit", "--allow-empty", "-qm", "wrong branch")
+                    wrong = case.fixture.git("rev-parse", "HEAD").strip()
+                    case.fixture.git("reset", "--hard", head)
+                    case.fixture.git("branch", branch, wrong)
+                rejected = case.ctl("prepare-step-worktree")
+                self.assertNotEqual(rejected.returncode, 0)
+                self.assertFalse((case.repo / ".pi/jig/steps/0001/before.json").exists())
+                self.assertEqual((case.manifest()["currentState"], case.manifest()["firstStep"]["outcome"]), ("step-selecting", "pending"))
+                self.assertEqual(case.fixture.git("rev-parse", "HEAD").strip(), head)
+                self.assertEqual((case.repo / "app.py").read_bytes(), app)
+            finally:
+                if case is not self:
+                    case.tearDown()
+
+
 if __name__ == "__main__":
     unittest.main()
