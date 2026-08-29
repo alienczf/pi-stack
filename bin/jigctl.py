@@ -83,6 +83,8 @@ RESULT_PATH = ".pi/jig/steps/0001/result.json"
 BEFORE_PATH = ".pi/jig/steps/0001/before.json"
 STEP_WORKTREE = ".pi/jig/worktrees/0001"
 WORKER_PATH = ".pi/jig/steps/0001/worker.json"
+OUTPUT_PATH = ".pi/jig/steps/0001/output.json"
+CANDIDATE_DIFF_PATH = ".pi/jig/steps/0001/candidate.diff"
 WORKER_DRAFT_FIELDS = {"schemaVersion", "stepId", "workerSessionId", "allowedPaths"}
 WORKER_PROTECTED_PATHS = [".git", ".pi", "COMMANDMENTS.md", "eval", "evals"]
 BASELINE_OUTPUT_LIMIT = 256 * 1024
@@ -1210,7 +1212,7 @@ def validate_manifest_semantics(root: Path, manifest: Mapping[str, Any], schema:
         r"^(?:COMMANDMENTS\.md|\.pi/jig/(?:profile\.json|commandments/(?:interview\.json|"
         r"staging\.json|answers/[0-9a-f]{64}\.json|candidates/[0-9a-f]{64}\.md|"
         r"decisions/[0-9a-f]{64}\.json|proposals/[0-9a-f]{64}\.md)|"
-        r"steps/0001/(?:(?:selection|proposal|result|before|worker)\.json|commands/baseline-[0-9]{2}\.json)|"
+        r"steps/0001/(?:(?:selection|proposal|result|before|worker|output)\.json|candidate\.diff|commands/baseline-[0-9]{2}\.json)|"
         r"verification/(?:plan\.json|receipts/runtime-[0-9a-f]{64}\.json|"
         r"evidence/[a-z0-9][a-z0-9._-]{0,127}\.json)|receipts/(?:transition-[0-9]{4}-(?:"
         + implemented_state
@@ -4131,7 +4133,127 @@ def validate_step_worker(root: Path, manifest: Mapping[str, Any]) -> Dict[str, A
     changed.update(line[3:].split(" -> ")[-1] for line in status.splitlines() if len(line) > 3)
     if changed - set(worker["allowedPaths"]):
         raise ValidationError("worker changed source outside its authorized paths")
+    if any(path in artifacts for path in (CANDIDATE_DIFF_PATH, OUTPUT_PATH)):
+        validate_step_output(root, manifest, worker)
     return worker
+
+
+def candidate_snapshot(root: Path, manifest: Mapping[str, Any], worker: Mapping[str, Any]) -> Tuple[str, int, List[str], bytes]:
+    worktree = root / worker["worktree"]
+    head = run_git(worktree, ["rev-parse", "HEAD"])
+    status = run_git(worktree, ["status", "--porcelain=v1", "--untracked-files=all"])
+    entries = [item for item in worktree_entries(root) if item.get("worktree") == str(worktree)]
+    if (status or len(entries) != 1 or entries[0].get("branch") != f"refs/heads/{worker['branch']}"
+            or entries[0].get("HEAD") != head or branch_revision(root, worker["branch"]) != head):
+        raise ValidationError("candidate output worktree is dirty or left its reserved branch")
+    ancestry = subprocess.run(["git", "-C", str(worktree), "merge-base", "--is-ancestor",
+        worker["inputRevision"], head], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    count_text = run_git(worktree, ["rev-list", "--count", f"{worker['inputRevision']}..{head}"])
+    if ancestry.returncode != 0 or not count_text.isdigit() or not 1 <= int(count_text) <= 5:
+        raise ValidationError("candidate output must be one to five descendant commits")
+    changed_raw = run_git(worktree, ["diff", "--name-only", "-z", worker["inputRevision"], head])
+    changed = sorted(set(filter(None, changed_raw.split("\0"))))
+    if not changed or any(path not in worker["allowedPaths"] for path in changed):
+        raise ValidationError("candidate output tracked paths escape or empty the authorized scope")
+    for path in changed:
+        parts = [part.lower() for part in PurePosixPath(path).parts]
+        if (any(part in {".git", ".pi", "eval", "evals", "proposal", "proposals"} for part in parts)
+                or path.lower() == "commandments.md"):
+            raise ValidationError("candidate output changes a protected path")
+        for revision in (worker["inputRevision"], head):
+            tree = subprocess.run(["git", "-C", str(worktree), "ls-tree", "-z", revision, "--", path],
+                check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE).stdout
+            if tree.startswith((b"120000 ", b"160000 ")):
+                raise ValidationError("candidate output changes a symlink or submodule")
+    result = subprocess.run(["git", "-C", str(worktree), "diff", "--binary", "--full-index",
+        "--no-ext-diff", f"{worker['inputRevision']}..{head}", "--"], check=False,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if result.returncode != 0 or not result.stdout or len(result.stdout) > MAX_INPUT_BYTES:
+        raise ValidationError("candidate output diff is empty, oversized, or unavailable")
+    entries = [item for item in worktree_entries(root) if item.get("worktree") == str(worktree)]
+    ancestry = subprocess.run(["git", "-C", str(worktree), "merge-base", "--is-ancestor",
+        worker["inputRevision"], head], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if (run_git(worktree, ["rev-parse", "HEAD"]) != head
+            or run_git(worktree, ["status", "--porcelain=v1", "--untracked-files=all"])
+            or len(entries) != 1 or entries[0].get("branch") != f"refs/heads/{worker['branch']}"
+            or entries[0].get("HEAD") != head or branch_revision(root, worker["branch"]) != head
+            or ancestry.returncode != 0):
+        raise ValidationError("candidate output changed while its diff was captured")
+    validate_current_source(root, manifest)
+    return head, int(count_text), changed, result.stdout
+
+
+def validate_step_output(root: Path, manifest: Mapping[str, Any], worker: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+    artifacts = {item["path"]: item for item in manifest["artifacts"]}
+    registered = [path in artifacts for path in (CANDIDATE_DIFF_PATH, OUTPUT_PATH)]
+    if not any(registered):
+        return None
+    if not all(registered):
+        raise ValidationError("candidate output artifacts are only partly registered")
+    output_path = safe_relative_path(root, OUTPUT_PATH, must_exist=True)
+    diff_path = safe_relative_path(root, CANDIDATE_DIFF_PATH, must_exist=True)
+    output = read_json(output_path, "step output receipt")
+    head, count, changed, diff = candidate_snapshot(root, manifest, worker)
+    expected = {
+        "schemaVersion": 1, "kind": "step-output", "stepId": "0001",
+        "selectionSha256": worker["selectionSha256"], "proposalSha256": worker["proposalSha256"],
+        "beforeSha256": worker["beforeSha256"], "workerSha256": sha256_file(root / WORKER_PATH),
+        "workerSessionId": worker["workerSessionId"], "inputRevision": worker["inputRevision"],
+        "outputRevision": head, "branch": worker["branch"], "worktree": worker["worktree"],
+        "commitCount": count, "changedPaths": changed, "diffPath": CANDIDATE_DIFF_PATH,
+        "diffSha256": sha256_bytes(diff),
+    }
+    if (not isinstance(output, dict) or set(output) != set(expected) | {"recordedAt"}
+            or any(output.get(key) != value for key, value in expected.items())
+            or not isinstance(output.get("recordedAt"), str) or not valid_datetime(output["recordedAt"])
+            or canonical_json(output) != output_path.read_bytes() or diff_path.read_bytes() != diff):
+        raise ValidationError("recorded candidate output differs from its frozen revision or diff")
+    return output
+
+
+def record_step_output(root: Path, isolation: str) -> Dict[str, Any]:
+    manifest = load_existing_manifest(root)
+    if manifest["resourceIsolation"] != isolation or manifest["currentState"] != "step-running":
+        raise ValidationError("output recording requires the current step-running route")
+    validate_current_source(root, manifest)
+    worker = validate_step_worker(root, manifest)
+    if all(any(item["path"] == path for item in manifest["artifacts"])
+            for path in (CANDIDATE_DIFF_PATH, OUTPUT_PATH)):
+        return manifest
+    step_dir = root / ".pi/jig/steps/0001"
+    if {item.name for item in step_dir.iterdir()} - {"selection.json", "proposal.json", "before.json",
+            "worker.json", "commands", "candidate.diff", "output.json"}:
+        raise ValidationError("step directory contains unknown output bytes")
+    head, count, changed, diff = candidate_snapshot(root, manifest, worker)
+    fixed = {
+        "schemaVersion": 1, "kind": "step-output", "stepId": "0001",
+        "selectionSha256": worker["selectionSha256"], "proposalSha256": worker["proposalSha256"],
+        "beforeSha256": worker["beforeSha256"], "workerSha256": sha256_file(root / WORKER_PATH),
+        "workerSessionId": worker["workerSessionId"], "inputRevision": worker["inputRevision"],
+        "outputRevision": head, "branch": worker["branch"], "worktree": worker["worktree"],
+        "commitCount": count, "changedPaths": changed, "diffPath": CANDIDATE_DIFF_PATH,
+        "diffSha256": sha256_bytes(diff),
+    }
+    output_path, diff_path = fixed_artifact_path(root, OUTPUT_PATH), fixed_artifact_path(root, CANDIDATE_DIFF_PATH)
+    if output_path.exists():
+        output = read_json(output_path, "step output receipt")
+        if (not isinstance(output, dict) or set(output) != set(fixed) | {"recordedAt"}
+                or any(output.get(key) != value for key, value in fixed.items())
+                or canonical_json(output) != output_path.read_bytes()):
+            raise ValidationError("existing step output receipt collides with this output")
+    else:
+        output = {**fixed, "recordedAt": now()}
+    for path, raw in ((diff_path, diff), (output_path, canonical_json(output))):
+        if path.exists():
+            if path.read_bytes() != raw:
+                raise ValidationError("candidate output artifact collision")
+        else:
+            atomic_create(path, raw)
+    upsert_artifact(manifest, CANDIDATE_DIFF_PATH, "controller", sha256_bytes(diff))
+    upsert_artifact(manifest, OUTPUT_PATH, "controller", sha256_file(output_path))
+    manifest["updatedAt"] = output["recordedAt"]
+    write_manifest(root, manifest)
+    return manifest
 
 
 def activate_step_worker(root: Path, isolation: str, raw: bytes) -> Dict[str, Any]:
@@ -4461,13 +4583,18 @@ def render_result(root: Path, manifest: Mapping[str, Any]) -> None:
         }
     elif manifest["currentState"] in {"step-running", "failed-step-running"}:
         worker = validate_step_worker(root, manifest)
-        proposal = read_json(root / PROPOSAL_PATH, "proposal")
-        result["workerHandoff"] = {
-            "worktree": worker["worktree"], "workerSessionId": worker["workerSessionId"],
-            "selectedCandidateId": worker["selectedCandidateId"], "proposalPath": PROPOSAL_PATH,
-            "potetoPlaybook": proposal["potetoPlaybook"],
-            "allowedPaths": worker["allowedPaths"], "protectedPaths": worker["protectedPaths"],
-        }
+        output = validate_step_output(root, manifest, worker)
+        if output is not None:
+            result["stepOutput"] = {"path": OUTPUT_PATH, "outputRevision": output["outputRevision"],
+                "diffPath": CANDIDATE_DIFF_PATH, "diffSha256": output["diffSha256"]}
+        else:
+            proposal = read_json(root / PROPOSAL_PATH, "proposal")
+            result["workerHandoff"] = {
+                "worktree": worker["worktree"], "workerSessionId": worker["workerSessionId"],
+                "selectedCandidateId": worker["selectedCandidateId"], "proposalPath": PROPOSAL_PATH,
+                "potetoPlaybook": proposal["potetoPlaybook"],
+                "allowedPaths": worker["allowedPaths"], "protectedPaths": worker["protectedPaths"],
+            }
     elif manifest["currentState"] == "step-selecting":
         selection = next(
             (item for item in manifest["artifacts"] if item["path"] == SELECTION_PATH), None
@@ -4507,6 +4634,7 @@ def parser() -> argparse.ArgumentParser:
         "prepare-step-worktree",
         "finalize-no-candidate",
         "activate-step-worker",
+        "record-step-output",
     )
     commands = {}
     for name in mutating:
@@ -4620,6 +4748,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         elif arguments.command == "activate-step-worker":
             raw = sys.stdin.buffer.read(MAX_INPUT_BYTES + 1)
             manifest = activate_step_worker(root, arguments.resource_isolation, raw)
+        elif arguments.command == "record-step-output":
+            manifest = record_step_output(root, arguments.resource_isolation)
         elif arguments.command == "finalize-no-candidate":
             manifest = finalize_no_candidate(root, arguments.resource_isolation)
         else:
