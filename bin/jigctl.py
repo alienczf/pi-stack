@@ -86,6 +86,11 @@ VERIFICATION_SKILL_PATH = ".pi/skills/jig-verification/SKILL.md"
 VERIFICATION_FEATURE_INDEX_PATH = ".pi/skills/jig-verification/references/features/index.md"
 VERIFICATION_OUTPUT_LIMIT = 256 * 1024
 VERIFICATION_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
+SELECTION_PATH = ".pi/jig/steps/0001/selection.json"
+SELECTION_DRAFT_FIELDS = {
+    "schemaVersion", "stepId", "repositoryRevision", "commandmentsSha256",
+    "candidates", "selectedCandidateId", "rankingSummary",
+}
 COMMANDMENTS_ANSWER_KEYS = (
     "requiredInitOutcome",
     "hardForbiddenOutcomes",
@@ -1174,6 +1179,7 @@ def validate_manifest_semantics(root: Path, manifest: Mapping[str, Any], schema:
         r"^(?:COMMANDMENTS\.md|\.pi/jig/(?:profile\.json|commandments/(?:interview\.json|"
         r"staging\.json|answers/[0-9a-f]{64}\.json|candidates/[0-9a-f]{64}\.md|"
         r"decisions/[0-9a-f]{64}\.json|proposals/[0-9a-f]{64}\.md)|"
+        r"steps/0001/selection\.json|"
         r"verification/(?:plan\.json|receipts/runtime-[0-9a-f]{64}\.json|"
         r"evidence/[a-z0-9][a-z0-9._-]{0,127}\.json)|receipts/(?:transition-[0-9]{4}-(?:"
         + implemented_state
@@ -1224,6 +1230,8 @@ def validate_manifest_semantics(root: Path, manifest: Mapping[str, Any], schema:
         )
         if content_name is not None and artifact["sha256"] != content_name.group(1):
             raise ValidationError(f"content-addressed artifact name does not match its digest: {artifact_path}")
+        if artifact_path == SELECTION_PATH:
+            validate_committed_selection(root, manifest, read_json(path, "selection"))
     transitions = manifest["transitions"]
     if not transitions or transitions[0]["from"] != "absent":
         raise ValidationError("manifest transition history does not start at absent")
@@ -1449,7 +1457,7 @@ def new_manifest(root: Path, isolation: str) -> Dict[str, Any]:
         "artifacts": [],
         "verification": [],
         "firstStep": {
-            "selectionPath": ".pi/jig/steps/0001/selection.json",
+            "selectionPath": SELECTION_PATH,
             "selectedCandidateId": None,
             "proposalPath": None,
             "resultPath": None,
@@ -3507,6 +3515,109 @@ def begin_step_selection(root: Path, isolation: str) -> Dict[str, Any]:
     return manifest
 
 
+def validate_committed_selection(
+    root: Path, manifest: Mapping[str, Any], selection: Any, draft: Optional[Mapping[str, Any]] = None
+) -> None:
+    validate_instance(selection, load_schema("selection"))
+    if not isinstance(selection, dict):
+        raise ValidationError("selection is not an object")
+    semantic = {key: selection[key] for key in SELECTION_DRAFT_FIELDS}
+    if draft is not None and not json_equal(semantic, draft):
+        raise ValidationError("existing selection differs from the submitted draft")
+    if (
+        selection["repositoryRevision"] != manifest["source"]["revision"]
+        or selection["commandmentsSha256"] != manifest["commandments"]["sha256"]
+    ):
+        raise ValidationError("selection differs from the current source or COMMANDMENTS boundary")
+    candidates = selection["candidates"]
+    if len(candidates) > 20:
+        raise ValidationError("selection has more than 20 candidates")
+    ids = [candidate["id"] for candidate in candidates]
+    if len(ids) != len(set(ids)):
+        raise ValidationError("selection has duplicate candidate IDs")
+    commandments = (root / COMMANDMENTS_ROOT_PATH).read_text(encoding="utf-8")
+    known_ids = set(re.findall(r"^### (CMD-[0-9]{3})\. ", commandments, re.MULTILINE))
+    for candidate in candidates:
+        eligibility = candidate["eligibility"]
+        if eligibility["eligible"] or not eligibility["rejectionReasons"]:
+            raise ValidationError("no-selection candidates must be ineligible with rejection reasons")
+        if not set(candidate["commandmentIds"]).issubset(known_ids):
+            raise ValidationError("selection cites an unknown COMMANDMENT ID")
+        for evidence in candidate["evidence"]:
+            relative = evidence["path"]
+            if relative == COMMANDMENTS_ROOT_PATH or relative.startswith(".pi/"):
+                raise ValidationError("selection evidence is not a source file")
+            path = safe_relative_path(root, relative, must_exist=True)
+            flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+            try:
+                descriptor = os.open(path, flags)
+                with os.fdopen(descriptor, encoding="utf-8") as source:
+                    if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
+                        raise ValidationError("selection evidence is not a regular source file")
+                    if not any(number == evidence["line"] for number, _line in enumerate(source, 1)):
+                        raise ValidationError("selection evidence line does not exist")
+            except (OSError, UnicodeError) as error:
+                raise ValidationError("selection evidence is not a readable source file") from error
+
+
+def atomic_create(path: Path, data: bytes) -> None:
+    temporary = path.parent / f".jigctl-{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        offset = 0
+        while offset < len(data):
+            offset += os.write(descriptor, data[offset:])
+        os.fsync(descriptor)
+        os.link(temporary, path, follow_symlinks=False)
+        fsync_directory(path.parent)
+    except FileExistsError as error:
+        raise JigError(f"owned artifact path already exists: {relative_to_root(path.parents[4], path)}") from error
+    finally:
+        os.close(descriptor)
+        temporary.unlink(missing_ok=True)
+
+
+def commit_step_selection(root: Path, isolation: str, raw: bytes) -> Dict[str, Any]:
+    manifest = load_existing_manifest(root)
+    if manifest["resourceIsolation"] != isolation:
+        raise JigError("the existing manifest uses a different resourceIsolation route")
+    validate_current_source(root, manifest)
+    if manifest["currentState"] != "step-selecting":
+        raise ValidationError("selection commitment requires step-selecting")
+    validate_verification_ready(root, manifest)
+    draft = read_json_bytes(raw, "selection draft")
+    if not isinstance(draft, dict) or set(draft) != SELECTION_DRAFT_FIELDS:
+        raise ValidationError("selection draft must contain every semantic selection field exactly")
+    if draft["selectedCandidateId"] is not None:
+        raise ValidationError("selected candidates are not implemented")
+    input_digest = sha256_bytes(canonical_json(draft))
+    path = fixed_artifact_path(root, SELECTION_PATH)
+    existing = path.exists() or path.is_symlink()
+    if existing:
+        if path.is_symlink() or not path.is_file():
+            raise JigError("existing selection collision is not a regular file")
+        selection = read_json(path, "selection")
+        validate_committed_selection(root, manifest, selection, draft)
+        if selection["controllerReceipt"]["inputSha256"] != input_digest:
+            raise ValidationError("existing selection input digest differs from the submitted draft")
+    else:
+        selection = dict(draft)
+        selection["controllerReceipt"] = {"recordedAt": now(), "inputSha256": input_digest}
+        validate_committed_selection(root, manifest, selection, draft)
+        atomic_create(path, canonical_json(selection))
+    digest = sha256_file(path)
+    registered = next((item for item in manifest["artifacts"] if item["path"] == SELECTION_PATH), None)
+    expected = {"path": SELECTION_PATH, "owner": "controller", "sha256": digest}
+    if registered is not None:
+        if registered != expected:
+            raise ValidationError("registered selection differs from the committed file")
+        return manifest
+    upsert_artifact(manifest, SELECTION_PATH, "controller", digest)
+    manifest["updatedAt"] = selection["controllerReceipt"]["recordedAt"]
+    write_manifest(root, manifest)
+    return manifest
+
+
 def render_result(root: Path, manifest: Mapping[str, Any]) -> None:
     result: Dict[str, Any] = {
         "root": ".",
@@ -3665,6 +3776,12 @@ def render_result(root: Path, manifest: Mapping[str, Any]) -> None:
             "featureIndexPath": VERIFICATION_FEATURE_INDEX_PATH,
             "protectedFeatureId": plan["protectedFeatureId"],
         }
+    elif manifest["currentState"] == "step-selecting":
+        selection = next(
+            (item for item in manifest["artifacts"] if item["path"] == SELECTION_PATH), None
+        )
+        if selection is not None:
+            result["selection"] = {"path": SELECTION_PATH, "sha256": selection["sha256"]}
     print(json.dumps(result, sort_keys=True))
 
 
@@ -3693,6 +3810,7 @@ def parser() -> argparse.ArgumentParser:
         "complete-verification",
         "validate-verification",
         "begin-step-selection",
+        "commit-step-selection",
     )
     commands = {}
     for name in mutating:
@@ -3794,6 +3912,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             manifest = validate_verification(root, arguments.resource_isolation)
         elif arguments.command == "begin-step-selection":
             manifest = begin_step_selection(root, arguments.resource_isolation)
+        elif arguments.command == "commit-step-selection":
+            raw = sys.stdin.buffer.read(MAX_INPUT_BYTES + 1)
+            manifest = commit_step_selection(root, arguments.resource_isolation, raw)
         else:
             raw = sys.stdin.buffer.read(MAX_INPUT_BYTES + 1)
             manifest, output = propose_commandments_amendment(
