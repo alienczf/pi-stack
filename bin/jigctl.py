@@ -89,6 +89,7 @@ VERIFICATION_FEATURE_INDEX_PATH = ".pi/skills/jig-verification/references/featur
 VERIFICATION_OUTPUT_LIMIT = 256 * 1024
 VERIFICATION_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
 SELECTION_PATH = ".pi/jig/steps/0001/selection.json"
+PROPOSAL_PATH = ".pi/jig/steps/0001/proposal.json"
 RESULT_PATH = ".pi/jig/steps/0001/result.json"
 SELECTION_DRAFT_FIELDS = {
     "schemaVersion", "stepId", "repositoryRevision", "commandmentsSha256",
@@ -1207,7 +1208,7 @@ def validate_manifest_semantics(root: Path, manifest: Mapping[str, Any], schema:
         r"^(?:COMMANDMENTS\.md|\.pi/jig/(?:profile\.json|commandments/(?:interview\.json|"
         r"staging\.json|answers/[0-9a-f]{64}\.json|candidates/[0-9a-f]{64}\.md|"
         r"decisions/[0-9a-f]{64}\.json|proposals/[0-9a-f]{64}\.md)|"
-        r"steps/0001/(?:selection|result)\.json|"
+        r"steps/0001/(?:selection|proposal|result)\.json|"
         r"verification/(?:plan\.json|receipts/runtime-[0-9a-f]{64}\.json|"
         r"evidence/[a-z0-9][a-z0-9._-]{0,127}\.json)|receipts/(?:transition-[0-9]{4}-(?:"
         + implemented_state
@@ -1260,6 +1261,10 @@ def validate_manifest_semantics(root: Path, manifest: Mapping[str, Any], schema:
             raise ValidationError(f"content-addressed artifact name does not match its digest: {artifact_path}")
         if artifact_path == SELECTION_PATH:
             validate_committed_selection(root, manifest, read_json(path, "selection"))
+    proposal_artifact = next((item for item in artifacts if item["path"] == PROPOSAL_PATH), None)
+    if proposal_artifact is not None:
+        proposal_path = safe_relative_path(root, PROPOSAL_PATH, must_exist=True)
+        validate_committed_proposal(root, manifest, read_json(proposal_path, "proposal"))
     transitions = manifest["transitions"]
     if not transitions or transitions[0]["from"] != "absent":
         raise ValidationError("manifest transition history does not start at absent")
@@ -3619,6 +3624,74 @@ def validate_committed_selection(
             raise ValidationError("selected candidate must be eligible with no rejection reasons")
 
 
+def validate_command_set(command_set: Mapping[str, Any], label: str) -> None:
+    commands = command_set["commands"]
+    if len(commands) > 4:
+        raise ValidationError(f"{label} has more than four commands")
+    for command in commands:
+        if not command.strip() or "\n" in command or "\r" in command or len(command) > 1000:
+            raise ValidationError(f"{label} commands must be nonempty single lines of at most 1000 characters")
+
+
+def validate_committed_proposal(
+    root: Path, manifest: Mapping[str, Any], proposal: Any, draft: Optional[Mapping[str, Any]] = None
+) -> None:
+    validate_instance(proposal, load_schema("proposal"))
+    if not isinstance(proposal, dict):
+        raise ValidationError("proposal is not an object")
+    if draft is not None and not json_equal(proposal, draft):
+        raise ValidationError("existing proposal differs from the submitted draft")
+    selection_artifact = next((item for item in manifest["artifacts"] if item["path"] == SELECTION_PATH), None)
+    if selection_artifact is None or selection_artifact["owner"] != "controller":
+        raise ValidationError("proposal requires a registered controller selection")
+    selection_path = safe_relative_path(root, SELECTION_PATH, must_exist=True)
+    selection_digest = sha256_file(selection_path)
+    if selection_artifact["sha256"] != selection_digest:
+        raise ValidationError("registered selection differs from the committed file")
+    selection = read_json(selection_path, "selection")
+    validate_committed_selection(root, manifest, selection)
+    selected_id = selection["selectedCandidateId"]
+    candidates = [item for item in selection["candidates"] if item["id"] == selected_id]
+    if selected_id is None or len(candidates) != 1:
+        raise ValidationError("proposal requires one selected candidate")
+    candidate = candidates[0]
+    expected = {
+        "candidateId": selected_id,
+        "repositoryRevision": manifest["source"]["revision"],
+        "commandmentsSha256": manifest["commandments"]["sha256"],
+        "selectionSha256": selection_digest,
+        "commandmentIds": candidate["commandmentIds"],
+        "evidence": candidate["evidence"],
+        "responseLayer": candidate["responseLayer"],
+        "blastRadius": candidate["riskCost"]["blastRadius"],
+        "uncertainty": candidate["riskCost"]["uncertainty"],
+        "potetoPlaybook": candidate["potetoPlaybook"],
+    }
+    if any(not json_equal(proposal[key], value) for key, value in expected.items()):
+        raise ValidationError("proposal differs from its selected candidate boundary")
+    if proposal["evalDecision"]["status"] != candidate["behavioralEval"]:
+        raise ValidationError("proposal eval decision differs from its selected candidate")
+    if candidate["behavioralEval"] == "required" and not proposal["proof"]["independentReview"]:
+        raise ValidationError("behavioral evaluation requires independent review")
+    command_sets = [("baseline", proposal["baseline"])]
+    command_sets.extend((f"proof.{key}", value) for key, value in proposal["proof"].items() if isinstance(value, dict))
+    command_sets.append(("rollback", {"commands": proposal["rollback"]["commands"]}))
+    for label, command_set in command_sets:
+        validate_command_set(command_set, label)
+    first_step = manifest["firstStep"]
+    registered = any(item["path"] == PROPOSAL_PATH for item in manifest["artifacts"])
+    expected_proposal_path = PROPOSAL_PATH if registered else None
+    if (
+        manifest["currentState"] != "step-selecting"
+        or first_step["selectionPath"] != SELECTION_PATH
+        or first_step["selectedCandidateId"] != selected_id
+        or first_step["proposalPath"] != expected_proposal_path
+        or first_step["resultPath"] is not None
+        or first_step["outcome"] != "pending"
+    ):
+        raise ValidationError("proposal links do not match the pending first step")
+
+
 def validate_no_candidate_result(root: Path, manifest: Mapping[str, Any]) -> None:
     first_step = manifest["firstStep"]
     if first_step != {
@@ -3711,6 +3784,43 @@ def commit_step_selection(root: Path, isolation: str, raw: bytes) -> Dict[str, A
     upsert_artifact(manifest, SELECTION_PATH, "controller", digest)
     manifest["firstStep"]["selectedCandidateId"] = selection["selectedCandidateId"]
     manifest["updatedAt"] = selection["controllerReceipt"]["recordedAt"]
+    write_manifest(root, manifest)
+    return manifest
+
+
+def commit_step_proposal(root: Path, isolation: str, raw: bytes) -> Dict[str, Any]:
+    manifest = load_existing_manifest(root)
+    if manifest["resourceIsolation"] != isolation:
+        raise JigError("the existing manifest uses a different resourceIsolation route")
+    validate_current_source(root, manifest)
+    if manifest["currentState"] != "step-selecting":
+        raise ValidationError("proposal commitment requires step-selecting")
+    validate_verification_ready(root, manifest)
+    draft = read_json_bytes(raw, "proposal draft")
+    validate_committed_proposal(root, manifest, draft, draft)
+    path = fixed_artifact_path(root, PROPOSAL_PATH)
+    names = {item.name for item in path.parent.iterdir()}
+    if names - {"selection.json", "proposal.json"}:
+        raise JigError("step directory contains an unknown artifact")
+    if path.exists() or path.is_symlink():
+        if path.is_symlink() or not path.is_file():
+            raise JigError("existing proposal collision is not a regular file")
+        proposal = read_json(path, "proposal")
+        if canonical_json(proposal) != path.read_bytes():
+            raise ValidationError("existing proposal is not the exact recoverable proposal")
+        validate_committed_proposal(root, manifest, proposal, draft)
+    else:
+        atomic_create(path, canonical_json(draft))
+    digest = sha256_file(path)
+    registered = next((item for item in manifest["artifacts"] if item["path"] == PROPOSAL_PATH), None)
+    expected = {"path": PROPOSAL_PATH, "owner": "controller", "sha256": digest}
+    if registered is not None:
+        if registered != expected:
+            raise ValidationError("registered proposal differs from the committed file")
+        return manifest
+    upsert_artifact(manifest, PROPOSAL_PATH, "controller", digest)
+    manifest["firstStep"]["proposalPath"] = PROPOSAL_PATH
+    manifest["updatedAt"] = now()
     write_manifest(root, manifest)
     return manifest
 
@@ -3987,6 +4097,7 @@ def parser() -> argparse.ArgumentParser:
         "validate-verification",
         "begin-step-selection",
         "commit-step-selection",
+        "commit-step-proposal",
         "finalize-no-candidate",
     )
     commands = {}
@@ -4092,6 +4203,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         elif arguments.command == "commit-step-selection":
             raw = sys.stdin.buffer.read(MAX_INPUT_BYTES + 1)
             manifest = commit_step_selection(root, arguments.resource_isolation, raw)
+        elif arguments.command == "commit-step-proposal":
+            raw = sys.stdin.buffer.read(MAX_INPUT_BYTES + 1)
+            manifest = commit_step_proposal(root, arguments.resource_isolation, raw)
         elif arguments.command == "finalize-no-candidate":
             manifest = finalize_no_candidate(root, arguments.resource_isolation)
         else:

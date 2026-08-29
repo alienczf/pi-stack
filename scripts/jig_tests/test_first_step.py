@@ -78,6 +78,50 @@ class FirstStepTest(unittest.TestCase):
     def commit_selection(self, draft):
         return self.ctl("commit-step-selection", input_value=draft)
 
+    def selected_fixture(self):
+        candidate = self.eligible_candidate()
+        candidate.update({
+            "responseLayer": "deterministic-guard",
+            "potetoPlaybook": "pstack/skills/poteto-mode/playbooks/refactoring.md",
+            "behavioralEval": "not-required",
+        })
+        self.assertEqual(self.ctl("begin-step-selection").returncode, 0)
+        self.assertEqual(
+            self.commit_selection(self.selection_draft([candidate], selected=candidate["id"])).returncode, 0
+        )
+        return candidate
+
+    def proposal_draft(self, candidate):
+        manifest = self.manifest()
+        selection_path = self.repo / ".pi/jig/steps/0001/selection.json"
+        command_set = lambda command, expected: {"commands": [command], "expected": expected}
+        return {
+            "schemaVersion": 1, "stepId": "0001", "candidateId": candidate["id"],
+            "repositoryRevision": manifest["source"]["revision"],
+            "commandmentsSha256": manifest["commandments"]["sha256"],
+            "selectionSha256": test_verification.jigctl.sha256_file(selection_path),
+            "commandmentIds": candidate["commandmentIds"], "failureIds": ["WEAK-IMPORT-PROOF"],
+            "responseLayer": candidate["responseLayer"],
+            "expectedGain": "Prevent the public client from depending on the server implementation.",
+            "evidence": candidate["evidence"],
+            "blastRadius": candidate["riskCost"]["blastRadius"],
+            "uncertainty": candidate["riskCost"]["uncertainty"],
+            "potetoPlaybook": candidate["potetoPlaybook"],
+            "baseline": command_set("python3 -m unittest test_weak", "The weak existing proof passes."),
+            "proof": {
+                "targeted": command_set("python3 -m unittest test_client", "The dependency guard passes."),
+                "regression": command_set("python3 -m unittest", "The fixture suite passes."),
+                "protectedUserPath": command_set("python3 client.py list", "The client remains usable."),
+                "seededViolation": command_set("python3 seed_violation.py", "The guard rejects the seeded import."),
+                "independentReview": True,
+            },
+            "rollback": {"method": "Revert the dependency guard change.", "commands": ["git revert --no-edit HEAD"]},
+            "evalDecision": {"status": "not-required", "reason": "The deterministic guard proves the claim."},
+        }
+
+    def commit_proposal(self, draft):
+        return self.ctl("commit-step-proposal", input_value=draft)
+
     def test_ready_enters_selecting_without_step_artifacts(self):
         before = self.manifest()
         selected = self.ctl("begin-step-selection")
@@ -346,6 +390,95 @@ class FirstStepTest(unittest.TestCase):
         self.assertEqual((result_path.read_bytes(), result_path.stat().st_ino, result_path.stat().st_mtime_ns), result_before)
         self.assertEqual((transition_path.read_bytes(), transition_path.stat().st_ino, transition_path.stat().st_mtime_ns), transition_before)
 
+    def test_selected_fixture_proposal_commits_without_execution_artifacts(self):
+        candidate = self.selected_fixture()
+        draft = self.proposal_draft(candidate)
+        worktrees_before = self.fixture.git("worktree", "list", "--porcelain")
+        refs_before = self.fixture.git("for-each-ref", "--format=%(refname):%(objectname)")
+        committed = self.commit_proposal(draft)
+        self.assertEqual(committed.returncode, 0, committed.stderr)
+        path = self.repo / ".pi/jig/steps/0001/proposal.json"
+        proposal = json.loads(path.read_text())
+        test_verification.jigctl.validate_instance(proposal, test_verification.jigctl.load_schema("proposal"))
+        manifest = self.manifest()
+        self.assertEqual(manifest["firstStep"]["proposalPath"], ".pi/jig/steps/0001/proposal.json")
+        self.assertEqual(manifest["firstStep"]["resultPath"], None)
+        self.assertEqual((manifest["currentState"], manifest["firstStep"]["outcome"]), ("step-selecting", "pending"))
+        self.assertEqual({item.name for item in path.parent.iterdir()}, {"selection.json", "proposal.json"})
+        self.assertEqual(self.fixture.git("worktree", "list", "--porcelain"), worktrees_before)
+        self.assertEqual(self.fixture.git("for-each-ref", "--format=%(refname):%(objectname)"), refs_before)
+
+    def test_proposal_mismatches_and_unbounded_commands_fail_closed(self):
+        candidate = self.selected_fixture()
+        draft = self.proposal_draft(candidate)
+        invalid = []
+        for key, value in (
+            ("candidateId", "other-candidate"),
+            ("selectionSha256", "0" * 64),
+            ("repositoryRevision", "0" * 40),
+            ("commandmentsSha256", "0" * 64),
+            ("evidence", [{"path": "app.py", "line": 1, "note": "Different evidence."}]),
+            ("responseLayer", "code"),
+            ("blastRadius", "high"),
+            ("uncertainty", "high"),
+            ("potetoPlaybook", "pstack/skills/poteto-mode/playbooks/feature.md"),
+        ):
+            changed = json.loads(json.dumps(draft))
+            changed[key] = value
+            invalid.append(changed)
+        changed = json.loads(json.dumps(draft))
+        changed["evalDecision"]["status"] = "required"
+        invalid.append(changed)
+        for commands in (["echo ok"] * 5, ["echo first\necho second"], ["x" * 1001], ["   "]):
+            changed = json.loads(json.dumps(draft))
+            changed["baseline"]["commands"] = commands
+            invalid.append(changed)
+        changed = json.loads(json.dumps(draft))
+        changed["rollback"]["commands"] = [" "]
+        invalid.append(changed)
+        path = self.repo / ".pi/jig/steps/0001/proposal.json"
+        for proposal in invalid:
+            with self.subTest(proposal=proposal):
+                self.assertNotEqual(self.commit_proposal(proposal).returncode, 0)
+                self.assertFalse(path.exists())
+
+    def test_proposal_retry_interruption_and_collisions_fail_or_converge(self):
+        candidate = self.selected_fixture()
+        draft = self.proposal_draft(candidate)
+        path = self.repo / ".pi/jig/steps/0001/proposal.json"
+        path.write_text("preserve me\n")
+        self.assertNotEqual(self.commit_proposal(draft).returncode, 0)
+        self.assertEqual(path.read_text(), "preserve me\n")
+        path.unlink()
+        collision = path.parent / "unknown.json"
+        collision.write_text("preserve me\n")
+        self.assertNotEqual(self.commit_proposal(draft).returncode, 0)
+        self.assertEqual(collision.read_text(), "preserve me\n")
+        collision.unlink()
+        with mock.patch.object(test_verification.jigctl, "write_manifest", side_effect=RuntimeError("crash")):
+            with self.assertRaises(RuntimeError):
+                test_verification.jigctl.commit_step_proposal(
+                    self.repo, "isolated-shell", json.dumps(draft).encode()
+                )
+        proposal_before = (path.read_bytes(), path.stat().st_ino, path.stat().st_mtime_ns)
+        recovered = self.commit_proposal(draft)
+        self.assertEqual(recovered.returncode, 0, recovered.stderr)
+        manifest_path = self.repo / ".pi/jig/manifest.json"
+        manifest_before = manifest_path.read_bytes()
+        self.assertEqual((path.read_bytes(), path.stat().st_ino, path.stat().st_mtime_ns), proposal_before)
+        self.assertEqual(self.commit_proposal(draft).returncode, 0)
+        self.assertEqual(manifest_path.read_bytes(), manifest_before)
+        self.assertEqual((path.read_bytes(), path.stat().st_ino, path.stat().st_mtime_ns), proposal_before)
+        path.write_bytes(proposal_before[0] + b" ")
+        self.assertNotEqual(self.commit_proposal(draft).returncode, 0)
+        self.assertEqual(path.read_bytes(), proposal_before[0] + b" ")
+        path.write_bytes(proposal_before[0])
+        mismatched = json.loads(manifest_before)
+        mismatched["firstStep"]["proposalPath"] = None
+        manifest_path.write_text(json.dumps(mismatched))
+        mismatch_bytes = manifest_path.read_bytes()
+        self.assertNotEqual(self.commit_proposal(draft).returncode, 0)
+        self.assertEqual(manifest_path.read_bytes(), mismatch_bytes)
 
 if __name__ == "__main__":
     unittest.main()
