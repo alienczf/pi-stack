@@ -91,6 +91,10 @@ VERIFICATION_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
 SELECTION_PATH = ".pi/jig/steps/0001/selection.json"
 PROPOSAL_PATH = ".pi/jig/steps/0001/proposal.json"
 RESULT_PATH = ".pi/jig/steps/0001/result.json"
+BEFORE_PATH = ".pi/jig/steps/0001/before.json"
+STEP_WORKTREE = ".pi/jig/worktrees/0001"
+BASELINE_OUTPUT_LIMIT = 256 * 1024
+BASELINE_TIMEOUT_SECONDS = 120
 SELECTION_DRAFT_FIELDS = {
     "schemaVersion", "stepId", "repositoryRevision", "commandmentsSha256",
     "candidates", "selectedCandidateId", "rankingSummary",
@@ -1208,7 +1212,7 @@ def validate_manifest_semantics(root: Path, manifest: Mapping[str, Any], schema:
         r"^(?:COMMANDMENTS\.md|\.pi/jig/(?:profile\.json|commandments/(?:interview\.json|"
         r"staging\.json|answers/[0-9a-f]{64}\.json|candidates/[0-9a-f]{64}\.md|"
         r"decisions/[0-9a-f]{64}\.json|proposals/[0-9a-f]{64}\.md)|"
-        r"steps/0001/(?:selection|proposal|result)\.json|"
+        r"steps/0001/(?:(?:selection|proposal|result|before)\.json|commands/baseline-[0-9]{2}\.json)|"
         r"verification/(?:plan\.json|receipts/runtime-[0-9a-f]{64}\.json|"
         r"evidence/[a-z0-9][a-z0-9._-]{0,127}\.json)|receipts/(?:transition-[0-9]{4}-(?:"
         + implemented_state
@@ -3825,6 +3829,214 @@ def commit_step_proposal(root: Path, isolation: str, raw: bytes) -> Dict[str, An
     return manifest
 
 
+def worktree_entries(root: Path) -> List[Dict[str, str]]:
+    entries: List[Dict[str, str]] = []
+    for block in run_git(root, ["worktree", "list", "--porcelain"]).split("\n\n"):
+        entry: Dict[str, str] = {}
+        for line in block.splitlines():
+            key, _, value = line.partition(" ")
+            entry[key] = value
+        if entry:
+            entries.append(entry)
+    return entries
+
+
+def branch_revision(root: Path, branch: str) -> Optional[str]:
+    result = subprocess.run(
+        ["git", "-C", str(root), "show-ref", "--verify", "--quiet", f"refs/heads/{branch}"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
+    )
+    if result.returncode == 1:
+        return None
+    if result.returncode != 0:
+        raise JigError("Git could not inspect the reserved step branch")
+    return run_git(root, ["rev-parse", f"refs/heads/{branch}"])
+
+
+def ensure_step_worktree(root: Path, branch: str, revision: str) -> Path:
+    parent = ensure_owned_directory(root, ".pi/jig/worktrees")
+    path = parent / "0001"
+    entries = worktree_entries(root)
+    branch_ref = f"refs/heads/{branch}"
+    branch_head = branch_revision(root, branch)
+    matches = [item for item in entries if item.get("worktree") == str(path)]
+    users = [item for item in entries if item.get("branch") == branch_ref]
+    if path.exists() or path.is_symlink():
+        if path.is_symlink() or not path.is_dir() or len(matches) != 1:
+            raise JigError("reserved step worktree path has an unknown identity")
+    elif matches:
+        raise JigError("reserved step worktree has a stale Git administrative entry")
+    if users and users != matches:
+        raise JigError("reserved step branch is registered to a different worktree")
+    if branch_head is not None and branch_head != revision:
+        raise JigError("reserved step branch has the wrong revision")
+    if not matches:
+        arguments = ["worktree", "add", "--quiet"]
+        if branch_head is None:
+            arguments.extend(["-b", branch, str(path), revision])
+        else:
+            arguments.extend([str(path), branch])
+        result = subprocess.run(
+            ["git", "-C", str(root), *arguments], check=False,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        if result.returncode != 0:
+            raise JigError("Git could not create the reserved step worktree")
+        matches = [item for item in worktree_entries(root) if item.get("worktree") == str(path)]
+    if (len(matches) != 1 or matches[0].get("branch") != branch_ref
+            or matches[0].get("HEAD") != revision or branch_revision(root, branch) != revision):
+        raise JigError("reserved step worktree identity does not match the proposal")
+    return path
+
+
+def clean_step_worktree(path: Path, revision: str) -> None:
+    if run_git(path, ["rev-parse", "HEAD"]) != revision:
+        raise ValidationError("baseline changed the isolated worktree revision")
+    if run_git(path, ["status", "--porcelain=v1", "--untracked-files=all"]):
+        raise ValidationError("baseline changed the isolated worktree source")
+
+
+def validate_baseline_receipt(value: Any, expected: Mapping[str, Any]) -> None:
+    fields = set(expected) | {
+        "exitCode", "timedOut", "finishedAt", "stdout", "stdoutSha256",
+        "stdoutTruncated", "stderr", "stderrSha256", "stderrTruncated",
+    }
+    if not isinstance(value, dict) or set(value) != fields:
+        raise ValidationError("baseline command receipt has an invalid shape")
+    if any(value.get(key) != item for key, item in expected.items()):
+        raise ValidationError("baseline command receipt differs from the proposal boundary")
+    if (type(value["exitCode"]) is not int or type(value["timedOut"]) is not bool
+            or not isinstance(value["finishedAt"], str) or not valid_datetime(value["finishedAt"])):
+        raise ValidationError("baseline command receipt has invalid completion evidence")
+    for stream in ("stdout", "stderr"):
+        output = value[stream]
+        if (not isinstance(output, str) or len(output.encode("utf-8")) > BASELINE_OUTPUT_LIMIT
+                or value[f"{stream}Sha256"] != sha256_bytes(output.encode("utf-8"))
+                or type(value[f"{stream}Truncated"]) is not bool):
+            raise ValidationError("baseline command receipt has invalid bounded output")
+
+
+def run_baseline_command(path: Path, command: str) -> Dict[str, Any]:
+    environment = dict(os.environ)
+    environment["PYTHONDONTWRITEBYTECODE"] = "1"
+    with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
+        process = subprocess.Popen(
+            ["sh", "-c", command], cwd=path, env=environment,
+            stdout=stdout_file, stderr=stderr_file, start_new_session=True,
+        )
+        timed_out = False
+        try:
+            process.wait(timeout=BASELINE_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait()
+        outputs = []
+        truncated = []
+        for stream in (stdout_file, stderr_file):
+            stream.seek(0, os.SEEK_END)
+            truncated.append(stream.tell() > BASELINE_OUTPUT_LIMIT)
+            stream.seek(0)
+            outputs.append(stream.read(BASELINE_OUTPUT_LIMIT).decode("utf-8", errors="replace"))
+    code = 124 if timed_out else (process.returncode if process.returncode >= 0 else 128 - process.returncode)
+    return {
+        "exitCode": code, "timedOut": timed_out, "finishedAt": now(),
+        "stdout": outputs[0], "stdoutSha256": sha256_bytes(outputs[0].encode()),
+        "stdoutTruncated": truncated[0], "stderr": outputs[1],
+        "stderrSha256": sha256_bytes(outputs[1].encode()), "stderrTruncated": truncated[1],
+    }
+
+
+def prepare_step_worktree(root: Path, isolation: str) -> Dict[str, Any]:
+    manifest = load_existing_manifest(root)
+    if manifest["resourceIsolation"] != isolation:
+        raise JigError("the existing manifest uses a different resourceIsolation route")
+    validate_current_source(root, manifest)
+    if manifest["currentState"] != "step-selecting" or manifest["firstStep"]["resultPath"] is not None:
+        raise ValidationError("baseline preparation requires a pending step-selecting proposal")
+    validate_verification_ready(root, manifest)
+    proposal_path = safe_relative_path(root, PROPOSAL_PATH, must_exist=True)
+    proposal = read_json(proposal_path, "proposal")
+    validate_committed_proposal(root, manifest, proposal)
+    proposal_digest = sha256_file(proposal_path)
+    proposal_artifact = next((item for item in manifest["artifacts"] if item["path"] == PROPOSAL_PATH), None)
+    if proposal_artifact != {"path": PROPOSAL_PATH, "owner": "controller", "sha256": proposal_digest}:
+        raise ValidationError("registered proposal differs from the committed file")
+    selection_digest = sha256_file(root / SELECTION_PATH)
+    branch = f"jig/init-step-0001-{selection_digest[:12]}"
+    revision = proposal["repositoryRevision"]
+    worktree = ensure_step_worktree(root, branch, revision)
+    clean_step_worktree(worktree, revision)
+    commands = proposal["baseline"]["commands"]
+    command_dir = ensure_owned_directory(root, ".pi/jig/steps/0001/commands")
+    allowed = {f"baseline-{index:02d}.json" for index in range(1, len(commands) + 1)}
+    if {item.name for item in command_dir.iterdir()} - allowed:
+        raise JigError("baseline command directory contains an unknown artifact")
+    summaries = []
+    artifacts = []
+    for index, command in enumerate(commands, 1):
+        relative = f".pi/jig/steps/0001/commands/baseline-{index:02d}.json"
+        receipt_path = root / relative
+        expected = {
+            "schemaVersion": 1, "kind": "step-command", "phase": "baseline",
+            "index": index, "command": command, "worktree": STEP_WORKTREE,
+            "branch": branch, "revision": revision,
+        }
+        if receipt_path.exists() or receipt_path.is_symlink():
+            if receipt_path.is_symlink() or not receipt_path.is_file():
+                raise JigError("baseline command receipt has an unknown identity")
+            receipt = read_json(receipt_path, "baseline command receipt")
+            validate_baseline_receipt(receipt, expected)
+            if canonical_json(receipt) != receipt_path.read_bytes():
+                raise ValidationError("baseline command receipt has unknown bytes")
+        else:
+            receipt = {**expected, **run_baseline_command(worktree, command)}
+            validate_baseline_receipt(receipt, expected)
+            atomic_create(receipt_path, canonical_json(receipt))
+        clean_step_worktree(worktree, revision)
+        if receipt["exitCode"] != 0 or receipt["timedOut"]:
+            raise ValidationError("baseline command did not pass")
+        digest = sha256_file(receipt_path)
+        artifacts.append((relative, digest))
+        summaries.append({
+            "phase": "baseline", "index": index, "command": command,
+            "receiptPath": relative, "receiptSha256": digest,
+            "exitCode": receipt["exitCode"], "finishedAt": receipt["finishedAt"],
+        })
+    before_static = {
+        "schemaVersion": 1, "kind": "step-before", "stepId": "0001",
+        "proposalPath": PROPOSAL_PATH, "proposalSha256": proposal_digest,
+        "inputRevision": revision, "branch": branch, "worktree": STEP_WORKTREE,
+        "commands": summaries,
+    }
+    before_path = root / BEFORE_PATH
+    if before_path.exists() or before_path.is_symlink():
+        if before_path.is_symlink() or not before_path.is_file():
+            raise JigError("before receipt has an unknown identity")
+        before = read_json(before_path, "before receipt")
+        if (not isinstance(before, dict) or set(before) != set(before_static) | {"recordedAt"}
+                or any(before.get(key) != value for key, value in before_static.items())
+                or not isinstance(before["recordedAt"], str) or not valid_datetime(before["recordedAt"])
+                or canonical_json(before) != before_path.read_bytes()):
+            raise ValidationError("before receipt is not the exact recoverable baseline pin")
+    else:
+        before = {**before_static, "recordedAt": now()}
+        atomic_create(before_path, canonical_json(before))
+    artifacts.append((BEFORE_PATH, sha256_file(before_path)))
+    validate_current_source(root, manifest)
+    registered = {item["path"]: item for item in manifest["artifacts"]}
+    expected_artifacts = {path: {"path": path, "owner": "controller", "sha256": digest} for path, digest in artifacts}
+    if all(registered.get(path) == value for path, value in expected_artifacts.items()):
+        return manifest
+    if any(path in registered and registered[path] != value for path, value in expected_artifacts.items()):
+        raise ValidationError("registered baseline evidence differs from the exact receipts")
+    for path, digest in artifacts:
+        upsert_artifact(manifest, path, "controller", digest)
+    manifest["updatedAt"] = before["recordedAt"]
+    write_manifest(root, manifest)
+    return manifest
+
+
 def finalize_no_candidate(root: Path, isolation: str) -> Dict[str, Any]:
     manifest = load_existing_manifest(root)
     if manifest["resourceIsolation"] != isolation:
@@ -4098,6 +4310,7 @@ def parser() -> argparse.ArgumentParser:
         "begin-step-selection",
         "commit-step-selection",
         "commit-step-proposal",
+        "prepare-step-worktree",
         "finalize-no-candidate",
     )
     commands = {}
@@ -4206,6 +4419,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         elif arguments.command == "commit-step-proposal":
             raw = sys.stdin.buffer.read(MAX_INPUT_BYTES + 1)
             manifest = commit_step_proposal(root, arguments.resource_isolation, raw)
+        elif arguments.command == "prepare-step-worktree":
+            manifest = prepare_step_worktree(root, arguments.resource_isolation)
         elif arguments.command == "finalize-no-candidate":
             manifest = finalize_no_candidate(root, arguments.resource_isolation)
         else:
