@@ -1,6 +1,6 @@
 # Pi overlay adapter
 
-This file maps Cursor verbs onto Pi. It is process, not repo architecture. Fit a git repo with `/skill:jig`.
+This file maps Cursor verbs onto Pi. It is process, not repository architecture. Initialize one whole Git repository with `/skill:jig init`.
 
 ## Verb map
 
@@ -33,4 +33,10 @@ If the question spans two git repos, use `/skill:cross-repo`. Do not use pstack 
 
 Do not place `AGENTS.md` in a directory that has multiple domain git repos as children. Ancestor files still load in Pi. Coding rules there leak.
 
-The user says to execute the jig refactor plan. Read `__PSTACK__/skills/poteto-mode/SKILL.md` and copy `__PSTACK__/skills/poteto-mode/playbooks/refactoring.md`. The plan file is `.pi/jig/refactor.md`. Pin before any `mv`.
+## Jig handoff
+
+Use `jig init` from the human shell for a fresh resource-isolated Pi campaign. Use `/skill:jig init` or `/jig init` inside the current trusted Pi session. A running agent never launches `pi -p`.
+
+Every route uses the installed controller at `${PI_CODING_AGENT_DIR:-${PI_AGENT_DIR:-$HOME/.pi/agent}}/jig/bin/jigctl.py`. Preserve the manifest's `resourceIsolation` value. An `isolated-shell` campaign resumes with `jig init`. An `inherited-session` campaign resumes with `/skill:jig init` or `/jig init`.
+
+Target-repository COMMANDMENTS are mandatory. Stop at `awaiting-commandments` until the target operator supplies one complete response and explicitly ratifies the displayed candidate digest. The controller may finish one first step as `kept`, `reverted`, or `no-eligible-candidate`. Never offer a second step or merge automatically.

@@ -1,4 +1,5 @@
 ---
-description: Fit this git repo with a jig
+description: Initialize the current Git repository through the registered Jig skill
+argument-hint: "init"
 ---
-Read the jig skill and execute it in this git repo. The skill file lives next to this overlay. Use `/skill:jig` when it is registered. Drafts go under `.pi/jig/`. Do not apply a refactor plan from this prompt.
+Load the registered `jig` skill with these exact user arguments: `$ARGUMENTS`.

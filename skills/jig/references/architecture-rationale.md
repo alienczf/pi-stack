@@ -2,7 +2,7 @@
 
 ## Problem
 
-Current Jig delegates the repository survey and completion judgment to one Pi session. A partial `interview.md` can appear complete, project resources load before the survey, and the shell, skill command, and prompt template do not share state semantics. Version 1 needs semantic repository interpretation without asking the model to own locks, containment, atomic writes, or its own keep verdict.
+Jig needs semantic repository interpretation without asking the model to own locks, containment, atomic writes, or its own keep verdict. Its shell, skill command, and prompt template must share one state contract while reporting their different resource-loading conditions.
 
 ## Caller's view
 
@@ -99,7 +99,3 @@ The controller separately validates cross-document links and filesystem facts th
 Current-session commands can run after project resources have influenced the session. The manifest receipt and command output must keep that limitation visible. Operators who need isolation must use `jig init` from the shell. A hostile repository still requires an operating-system sandbox.
 
 One repository-wide scope can be coarse for large monorepos. That cost is preferable to ambiguous shared state in version 1. A later package design needs explicit ownership for root files, cross-package commands, and repository-wide COMMANDMENTS before it can replace this boundary.
-
-## Next implementation step
-
-Implement the Python controller through `awaiting-commandments` against the version 1 schemas, then prove interruption recovery and project-resource isolation with fixtures.

@@ -1,12 +1,12 @@
-# Repository COMMANDMENTS interview
+# Target repository COMMANDMENTS interview
 
-Ask this interview only when `.pi/jig/manifest.json` is at `awaiting-commandments`. Reuse the committed repository profile for observed facts.
+Use this interview only at `awaiting-commandments`. Every real `jig init` campaign needs a complete target-operator response and explicit ratification. Preserve an existing root `COMMANDMENTS.md` and let the controller validate whether it can be adopted.
 
 ## Present one round
 
-Run `present-commandments` first. Show the `observedFacts` separately from the `questions`. Each question contains a `recommendedDefault`. A default is a recommendation, not an answer.
+Run `present-commandments` first. Show `observedFacts` separately from `questions`. Show every `recommendedDefault`. A default is a recommendation, not an answer.
 
-Ask the operator to answer every key in one response. Each answer has one of these shapes:
+Ask the target operator to answer every key in one response. Each answer uses one of these shapes:
 
 ```json
 {"selection":"default"}
@@ -16,38 +16,36 @@ Ask the operator to answer every key in one response. Each answer has one of the
 {"selection":"custom","value":"an explicit value"}
 ```
 
-Use the second shape with the object or list requested by the question. Do not add `value` to a default selection. Do not select a default for the operator. Preserve `freeTextAmendments` exactly as explicit operator text.
+Use the custom shape with the object or list requested by the question. Do not add `value` to a default selection. Do not select a default for the operator. Preserve `freeTextAmendments` as exact operator text.
 
 The one round covers the required init outcome, forbidden outcomes, protected user path, proof policy, compatibility, autonomy, tradeoff order, authority and exceptions, amendment ownership, and the intended ratification marker.
 
-## Keep unresolved answers visible
+## Keep incomplete answers unresolved
 
-If any answer is missing or malformed, report the controller error and keep the state at `awaiting-commandments`. Do not infer an answer. Do not ask a second round. Ask the operator to amend the original response.
+If any answer is missing or malformed, report the controller error and keep `awaiting-commandments`. Do not infer an answer. Do not ask a second round. Ask the operator to amend the original response.
 
-## Stage exact bytes
+The durable response path is `.pi/jig/commandments/answers.input.json`. Pass its exact bytes to the `stage-commandments` operation emitted by `start`. In an interactive Pi session, the operator may provide the same complete JSON response directly for that operation.
 
-Pass the complete response as strict JSON to `stage-commandments`. The controller expands a recommended default only when the response explicitly selects `default`. It writes the prospective final bytes outside the repository root file and returns the SHA-256 digest.
+## Stage and display exact bytes
 
-Show the complete candidate and its digest once. Offer three decisions:
+The controller expands a recommended default only when the response selects `default`. It stages the prospective root file and returns its path and SHA-256 digest.
 
-1. Ratify that exact digest with the intended operator marker.
+Show the complete candidate bytes, the exact digest, and the intended marker. Offer these decisions:
+
+1. Ratify that exact digest.
 2. Amend named entries in the original response.
 3. Defer.
 
-Record amend or defer with `record-commandments-decision`. Neither decision publishes `COMMANDMENTS.md` or advances state. After an amend decision, submit a complete amended response. Do not start another interview.
+Record amend or defer through the emitted `record-commandments-decision` operation. Neither decision publishes `COMMANDMENTS.md` or advances state. After an amend decision, pass one complete amended response through the emitted follow-up operation. Do not restart the interview.
 
 ## Ratify exact bytes
 
-Pass both the displayed digest and the operator marker to `ratify-commandments`. Only this deterministic command may publish root `COMMANDMENTS.md`. The root bytes must equal the staged candidate bytes.
+Pass both the displayed digest and the operator-approved marker to the emitted `ratify-commandments` operation. Only that controller operation may publish root `COMMANDMENTS.md`. The root bytes must equal the staged candidate bytes.
 
-After ratification, `validate-commandments` checks the root hash, owner, version, timestamp, transition receipt, and manifest. A changed root hash fails closed. Propose later amendments with `propose-commandments-amendment`; proposals never change the ratified hash or version.
+Run `validate-commandments` after ratification. It checks the root hash, owner, version, timestamp, transition receipt, and manifest. A changed root hash fails closed. Later proposals under `.pi/jig/commandments/proposals/` never change the ratified file.
 
-## Resume honestly
+## Resume on the owning route
 
-Use the `resourceIsolation` value already recorded in the manifest for every controller call. Never relabel `isolated-shell` as `inherited-session`, or the reverse.
+Keep the manifest's `resourceIsolation` value for every controller call. Never relabel shell work as inherited work or inherited work as shell work. Use the recovery command in [the public-route matrix](public-routes.json) after a mismatch.
 
-In a current Pi session, call the controller directly. Do not start `pi -p` from Bash.
-
-A noninteractive shell run stops at `awaiting-commandments`. Read the `resume.operations` array from `start`. Run the named trusted-controller operations directly. The `stage` operation reads `.pi/jig/commandments/answers.input.json` from standard input. After staging, `start` prints the candidate and the exact ratify, amend, and defer operations. The amend operation includes the follow-up staging command.
-
-This launcher version does not consume response or decision files on rerun. Do not claim that it does. A later integration unit owns public-launcher response-file handling.
+A running Pi agent calls the installed controller directly. It never starts `pi -p` from Bash.
