@@ -86,6 +86,11 @@ WORKER_PATH = ".pi/jig/steps/0001/worker.json"
 OUTPUT_PATH = ".pi/jig/steps/0001/output.json"
 CANDIDATE_DIFF_PATH = ".pi/jig/steps/0001/candidate.diff"
 AFTER_PATH = ".pi/jig/steps/0001/after.json"
+VERDICT_PATH = ".pi/jig/steps/0001/verdict.json"
+REVIEW_LIMIT = 256 * 1024
+VERDICT_DRAFT_FIELDS = {
+    "schemaVersion", "stepId", "status", "revision", "reviewerSessionId", "reviewerModel", "report",
+}
 PROOF_PHASES = (
     ("targeted", "targeted"), ("regression", "regression"),
     ("protectedUserPath", "protected-user-path"), ("seededViolation", "seeded-violation"),
@@ -1217,7 +1222,7 @@ def validate_manifest_semantics(root: Path, manifest: Mapping[str, Any], schema:
         r"^(?:COMMANDMENTS\.md|\.pi/jig/(?:profile\.json|commandments/(?:interview\.json|"
         r"staging\.json|answers/[0-9a-f]{64}\.json|candidates/[0-9a-f]{64}\.md|"
         r"decisions/[0-9a-f]{64}\.json|proposals/[0-9a-f]{64}\.md)|"
-        r"steps/0001/(?:(?:selection|proposal|result|before|worker|output|after)\.json|candidate\.diff|commands/(?:baseline|targeted|regression|protected-user-path|seeded-violation)-[0-9]{2}\.json)|"
+        r"steps/0001/(?:(?:selection|proposal|result|before|worker|output|after|verdict)\.json|candidate\.diff|reviews/[0-9a-f]{64}\.md|commands/(?:baseline|targeted|regression|protected-user-path|seeded-violation)-[0-9]{2}\.json)|"
         r"verification/(?:plan\.json|receipts/runtime-[0-9a-f]{64}\.json|"
         r"evidence/[a-z0-9][a-z0-9._-]{0,127}\.json)|receipts/(?:transition-[0-9]{4}-(?:"
         + implemented_state
@@ -4148,6 +4153,8 @@ def validate_step_worker(root: Path, manifest: Mapping[str, Any]) -> Dict[str, A
         validate_step_output(root, manifest, worker)
     if AFTER_PATH in artifacts:
         validate_after_receipt(root, manifest, worker)
+    if VERDICT_PATH in artifacts:
+        validate_step_verdict(root, manifest, worker)
     return worker
 
 
@@ -4337,6 +4344,61 @@ def validate_after_receipt(root: Path, manifest: Mapping[str, Any], worker: Mapp
     return after
 
 
+def bounded_reviewer_identity(value: Any) -> bool:
+    return (isinstance(value, str) and bool(value.strip()) and len(value) <= 200
+        and not any(ord(character) < 32 for character in value))
+
+
+def validate_step_verdict(root: Path, manifest: Mapping[str, Any],
+    worker: Mapping[str, Any]) -> Dict[str, Any]:
+    artifacts = {item["path"]: item for item in manifest["artifacts"]}
+    proposal = read_json(root / PROPOSAL_PATH, "proposal")
+    output = validate_step_output(root, manifest, worker)
+    after = validate_after_receipt(root, manifest, worker)
+    if (output is None or not proposal["proof"]["independentReview"]
+            or after["status"] != "passed"):
+        raise ValidationError("verdict requires independent review of passed mechanical proof")
+    verdict_path = safe_relative_path(root, VERDICT_PATH, must_exist=True)
+    verdict = read_json(verdict_path, "verdict receipt")
+    fields = {"schemaVersion", "kind", "stepId", "status", "outputRevision",
+        "reviewerSessionId", "reviewerModel", "reportPath", "reportSha256",
+        "afterPath", "afterSha256", "recordedAt"}
+    if (not isinstance(verdict, dict) or set(verdict) != fields
+            or verdict.get("schemaVersion") != 1 or verdict.get("kind") != "step-verdict"
+            or verdict.get("stepId") != "0001" or verdict.get("status") not in {"passed", "failed", "inconclusive"}
+            or verdict.get("outputRevision") != output["outputRevision"]
+            or not bounded_reviewer_identity(verdict.get("reviewerSessionId"))
+            or verdict.get("reviewerSessionId") == worker["workerSessionId"]
+            or not bounded_reviewer_identity(verdict.get("reviewerModel"))
+            or verdict.get("afterPath") != AFTER_PATH
+            or verdict.get("afterSha256") != sha256_file(root / AFTER_PATH)
+            or not isinstance(verdict.get("recordedAt"), str) or not valid_datetime(verdict["recordedAt"])
+            or canonical_json(verdict) != verdict_path.read_bytes()):
+        raise ValidationError("verdict receipt has an invalid pinned boundary")
+    report_digest = verdict.get("reportSha256")
+    expected_report = f".pi/jig/steps/0001/reviews/{report_digest}.md"
+    if not isinstance(report_digest, str) or re.fullmatch(r"[0-9a-f]{64}", report_digest) is None:
+        raise ValidationError("verdict report digest is invalid")
+    if verdict.get("reportPath") != expected_report:
+        raise ValidationError("verdict report path does not match its digest")
+    report_path = safe_relative_path(root, expected_report, must_exist=True)
+    report = report_path.read_bytes()
+    try:
+        report.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise ValidationError("review report is not UTF-8 text") from error
+    if not report or len(report) > REVIEW_LIMIT or b"\0" in report or sha256_bytes(report) != report_digest:
+        raise ValidationError("review report is empty, unsafe, oversized, or changed")
+    for relative in (expected_report, VERDICT_PATH, AFTER_PATH):
+        path = root / relative
+        if artifacts.get(relative) != {"path": relative, "owner": "controller", "sha256": sha256_file(path)}:
+            raise ValidationError("verdict evidence is not registered exactly")
+    reviews = report_path.parent
+    if {item.name for item in reviews.iterdir()} != {report_path.name}:
+        raise ValidationError("review directory contains unknown evidence")
+    return verdict
+
+
 def restore_proof_worktree(path: Path, branch: str, revision: str) -> None:
     subprocess.run(["git", "-C", str(path), "checkout", "-q", "-B", branch, revision], check=True)
     subprocess.run(["git", "-C", str(path), "reset", "--hard", "-q", revision], check=True)
@@ -4432,6 +4494,73 @@ def verify_step_output(root: Path, isolation: str) -> Dict[str, Any]:
         upsert_artifact(manifest, summary["receiptPath"], "controller", summary["receiptSha256"])
     upsert_artifact(manifest, AFTER_PATH, "controller", sha256_file(after_path))
     manifest["updatedAt"] = after["recordedAt"]
+    write_manifest(root, manifest)
+    return manifest
+
+
+def commit_step_verdict(root: Path, isolation: str, raw: bytes) -> Dict[str, Any]:
+    manifest = load_existing_manifest(root)
+    if manifest["resourceIsolation"] != isolation or manifest["currentState"] != "step-running":
+        raise ValidationError("verdict commitment requires the current step-running route")
+    validate_current_source(root, manifest)
+    worker = validate_step_worker(root, manifest)
+    output = validate_step_output(root, manifest, worker)
+    after_artifact = next((item for item in manifest["artifacts"] if item["path"] == AFTER_PATH), None)
+    if output is None or after_artifact is None:
+        raise ValidationError("verdict commitment requires registered output and after evidence")
+    after = validate_after_receipt(root, manifest, worker)
+    proposal = read_json(root / PROPOSAL_PATH, "proposal")
+    if not proposal["proof"]["independentReview"] or after["status"] != "passed":
+        raise ValidationError("verdict commitment requires independent review and passed mechanical proof")
+    draft = read_json_bytes(raw, "verdict draft")
+    if not isinstance(draft, dict) or set(draft) != VERDICT_DRAFT_FIELDS:
+        raise ValidationError("verdict draft has an invalid shape")
+    report_text = draft.get("report")
+    if (draft.get("schemaVersion") != 1 or draft.get("stepId") != "0001"
+            or draft.get("status") not in {"passed", "failed", "inconclusive"}
+            or draft.get("revision") != output["outputRevision"]
+            or not bounded_reviewer_identity(draft.get("reviewerSessionId"))
+            or draft.get("reviewerSessionId") == worker["workerSessionId"]
+            or not bounded_reviewer_identity(draft.get("reviewerModel"))
+            or not isinstance(report_text, str)):
+        raise ValidationError("verdict draft does not match one bounded external review")
+    report = report_text.encode("utf-8")
+    if not report or len(report) > REVIEW_LIMIT or b"\0" in report:
+        raise ValidationError("verdict report is empty, unsafe, or oversized")
+    report_digest = sha256_bytes(report)
+    report_relative = f".pi/jig/steps/0001/reviews/{report_digest}.md"
+    fixed = {
+        "schemaVersion": 1, "kind": "step-verdict", "stepId": "0001",
+        "status": draft["status"], "outputRevision": output["outputRevision"],
+        "reviewerSessionId": draft["reviewerSessionId"], "reviewerModel": draft["reviewerModel"],
+        "reportPath": report_relative, "reportSha256": report_digest,
+        "afterPath": AFTER_PATH, "afterSha256": sha256_file(root / AFTER_PATH),
+    }
+    verdict_path = fixed_artifact_path(root, VERDICT_PATH)
+    if verdict_path.exists() or verdict_path.is_symlink():
+        if verdict_path.is_symlink() or not verdict_path.is_file():
+            raise JigError("verdict receipt has an unknown identity")
+        verdict = read_json(verdict_path, "verdict receipt")
+        if (not isinstance(verdict, dict) or set(verdict) != set(fixed) | {"recordedAt"}
+                or any(verdict.get(key) != value for key, value in fixed.items())
+                or not isinstance(verdict.get("recordedAt"), str) or not valid_datetime(verdict["recordedAt"])
+                or canonical_json(verdict) != verdict_path.read_bytes()):
+            raise ValidationError("existing verdict receipt collides with this review")
+    else:
+        verdict = {**fixed, "recordedAt": now()}
+    report_path = fixed_artifact_path(root, report_relative)
+    for path, data in ((report_path, report), (verdict_path, canonical_json(verdict))):
+        if path.exists() or path.is_symlink():
+            if path.is_symlink() or not path.is_file() or path.read_bytes() != data:
+                raise ValidationError("verdict evidence collision")
+        else:
+            atomic_create(path, data)
+    if any(item["path"] == VERDICT_PATH for item in manifest["artifacts"]):
+        return manifest
+    upsert_artifact(manifest, report_relative, "controller", report_digest)
+    upsert_artifact(manifest, VERDICT_PATH, "controller", sha256_file(verdict_path))
+    manifest["updatedAt"] = verdict["recordedAt"]
+    validate_step_verdict(root, manifest, worker)
     write_manifest(root, manifest)
     return manifest
 
@@ -4767,6 +4896,10 @@ def render_result(root: Path, manifest: Mapping[str, Any]) -> None:
         if output is not None:
             result["stepOutput"] = {"path": OUTPUT_PATH, "outputRevision": output["outputRevision"],
                 "diffPath": CANDIDATE_DIFF_PATH, "diffSha256": output["diffSha256"]}
+            verdict = next((item for item in manifest["artifacts"] if item["path"] == VERDICT_PATH), None)
+            if verdict is not None:
+                receipt = read_json(root / VERDICT_PATH, "verdict receipt")
+                result["verdict"] = {"status": receipt["status"], "path": VERDICT_PATH}
         else:
             proposal = read_json(root / PROPOSAL_PATH, "proposal")
             result["workerHandoff"] = {
@@ -4816,6 +4949,7 @@ def parser() -> argparse.ArgumentParser:
         "activate-step-worker",
         "record-step-output",
         "verify-step-output",
+        "commit-step-verdict",
     )
     commands = {}
     for name in mutating:
@@ -4933,6 +5067,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             manifest = record_step_output(root, arguments.resource_isolation)
         elif arguments.command == "verify-step-output":
             manifest = verify_step_output(root, arguments.resource_isolation)
+        elif arguments.command == "commit-step-verdict":
+            raw = sys.stdin.buffer.read(MAX_INPUT_BYTES + 1)
+            manifest = commit_step_verdict(root, arguments.resource_isolation, raw)
         elif arguments.command == "finalize-no-candidate":
             manifest = finalize_no_candidate(root, arguments.resource_isolation)
         else:

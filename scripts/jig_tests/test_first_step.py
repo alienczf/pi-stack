@@ -163,6 +163,24 @@ class FirstStepTest(unittest.TestCase):
         self.fixture.git("-C", str(worktree), "commit", "-qm", "decouple client contract")
         return worktree, worker
 
+    def proved_candidate(self, proposal=None):
+        worktree, worker = self.commit_improvement(proposal)
+        self.assertEqual(self.ctl("record-step-output").returncode, 0)
+        proved = self.ctl("verify-step-output")
+        self.assertEqual(proved.returncode, 0, proved.stderr)
+        output = json.loads((self.repo / ".pi/jig/steps/0001/output.json").read_text())
+        return worktree, worker, output
+
+    def verdict_draft(self, output, **changed):
+        draft = {
+            "schemaVersion": 1, "stepId": "0001", "status": "passed",
+            "revision": output["outputRevision"], "reviewerSessionId": "external-review-run-1",
+            "reviewerModel": "stand-in-model",
+            "report": "Deterministic stand-in report. The parent different-model gate remains external.\n",
+        }
+        draft.update(changed)
+        return draft
+
     def test_ready_enters_selecting_without_step_artifacts(self):
         before = self.manifest()
         selected = self.ctl("begin-step-selection")
@@ -855,6 +873,111 @@ class FirstStepTest(unittest.TestCase):
         (worktree / "client.py").write_text((worktree / "client.py").read_text() + "\n")
         self.assertNotEqual(self.ctl("verify-step-output").returncode, 0)
         self.assertEqual((self.repo / ".pi/jig/manifest.json").read_bytes(), manifest)
+
+    def test_external_verdict_binds_passed_candidate_without_outcome(self):
+        _worktree, _worker, output = self.proved_candidate()
+        draft = self.verdict_draft(output)
+        committed = self.ctl("commit-step-verdict", input_value=draft)
+        self.assertEqual(committed.returncode, 0, committed.stderr)
+        report = draft["report"].encode()
+        digest = test_verification.jigctl.sha256_bytes(report)
+        report_relative = f".pi/jig/steps/0001/reviews/{digest}.md"
+        verdict_path = self.repo / ".pi/jig/steps/0001/verdict.json"
+        verdict = json.loads(verdict_path.read_text())
+        after_path = self.repo / ".pi/jig/steps/0001/after.json"
+        self.assertEqual((self.repo / report_relative).read_bytes(), report)
+        self.assertEqual(verdict, {
+            "schemaVersion": 1, "kind": "step-verdict", "stepId": "0001",
+            "status": "passed", "outputRevision": output["outputRevision"],
+            "reviewerSessionId": "external-review-run-1", "reviewerModel": "stand-in-model",
+            "reportPath": report_relative, "reportSha256": digest,
+            "afterPath": ".pi/jig/steps/0001/after.json",
+            "afterSha256": test_verification.jigctl.sha256_file(after_path),
+            "recordedAt": verdict["recordedAt"],
+        })
+        manifest = self.manifest()
+        artifacts = {item["path"]: item["sha256"] for item in manifest["artifacts"]}
+        self.assertEqual(artifacts[report_relative], digest)
+        self.assertEqual(artifacts[".pi/jig/steps/0001/verdict.json"],
+            test_verification.jigctl.sha256_file(verdict_path))
+        self.assertEqual((manifest["currentState"], manifest["firstStep"]["outcome"],
+            manifest["firstStep"]["resultPath"]), ("step-running", "pending", None))
+        self.assertFalse((self.repo / ".pi/jig/steps/0001/result.json").exists())
+        started = json.loads(self.ctl("start").stdout)
+        self.assertEqual(started["verdict"], {"status": "passed", "path": ".pi/jig/steps/0001/verdict.json"})
+        self.assertNotIn("resume", started)
+
+    def test_verdict_invalid_review_or_boundary_fails_closed(self):
+        _worktree, worker, output = self.proved_candidate()
+        base = self.verdict_draft(output)
+        invalid = [
+            dict(base, reviewerSessionId=worker["workerSessionId"]),
+            dict(base, reviewerSessionId=""), dict(base, reviewerSessionId="x" * 201),
+            dict(base, revision="0" * 40), dict(base, status="unknown"),
+            dict(base, reviewerModel=" "), dict(base, report=""),
+            dict(base, report="nul\0report"), dict(base, report="x" * (256 * 1024 + 1)),
+            {**base, "extra": True},
+        ]
+        for draft in invalid:
+            with self.subTest(draft={key: len(value) if key == "report" else value
+                    for key, value in draft.items()}):
+                self.assertNotEqual(self.ctl("commit-step-verdict", input_value=draft).returncode, 0)
+                self.assertFalse((self.repo / ".pi/jig/steps/0001/verdict.json").exists())
+        for scenario in ("failed-proof", "review-not-required", "candidate-drift"):
+            case = FirstStepTest(methodName="runTest")
+            case.setUp()
+            try:
+                candidate = case.selected_fixture()
+                proposal = case.proposal_draft(candidate)
+                if scenario == "failed-proof":
+                    proposal["proof"]["targeted"]["commands"] = ["exit 1"]
+                elif scenario == "review-not-required":
+                    proposal["proof"]["independentReview"] = False
+                worktree, _worker, output = case.proved_candidate(proposal)
+                if scenario == "candidate-drift":
+                    (worktree / "client.py").write_text((worktree / "client.py").read_text() + "\n")
+                rejected = case.ctl("commit-step-verdict", input_value=case.verdict_draft(output))
+                self.assertNotEqual(rejected.returncode, 0, scenario)
+                self.assertFalse((case.repo / ".pi/jig/steps/0001/verdict.json").exists())
+            finally:
+                case.tearDown()
+
+    def test_verdict_retry_interruption_changes_and_collisions_fail_or_converge(self):
+        _worktree, _worker, output = self.proved_candidate()
+        draft = self.verdict_draft(output)
+        raw = json.dumps(draft).encode()
+        with mock.patch.object(test_verification.jigctl, "write_manifest", side_effect=RuntimeError("crash")):
+            with self.assertRaises(RuntimeError):
+                test_verification.jigctl.commit_step_verdict(self.repo, "isolated-shell", raw)
+        digest = test_verification.jigctl.sha256_bytes(draft["report"].encode())
+        paths = [self.repo / f".pi/jig/steps/0001/reviews/{digest}.md", self.repo / ".pi/jig/steps/0001/verdict.json"]
+        before = [(path.read_bytes(), path.stat().st_ino, path.stat().st_mtime_ns) for path in paths]
+        recovered = self.ctl("commit-step-verdict", input_value=draft)
+        self.assertEqual(recovered.returncode, 0, recovered.stderr)
+        manifest_path = self.repo / ".pi/jig/manifest.json"
+        manifest = (manifest_path.read_bytes(), manifest_path.stat().st_ino, manifest_path.stat().st_mtime_ns)
+        self.assertEqual([(path.read_bytes(), path.stat().st_ino, path.stat().st_mtime_ns) for path in paths], before)
+        self.assertEqual(self.ctl("commit-step-verdict", input_value=draft).returncode, 0)
+        self.assertEqual((manifest_path.read_bytes(), manifest_path.stat().st_ino, manifest_path.stat().st_mtime_ns), manifest)
+        self.assertEqual([(path.read_bytes(), path.stat().st_ino, path.stat().st_mtime_ns) for path in paths], before)
+        self.assertNotEqual(self.ctl("commit-step-verdict", input_value=dict(draft, report="changed\n")).returncode, 0)
+        paths[0].write_bytes(b"collision\n")
+        self.assertNotEqual(self.ctl("start").returncode, 0)
+        for collision in ("report", "verdict"):
+            case = FirstStepTest(methodName="runTest")
+            case.setUp()
+            try:
+                _worktree, _worker, output = case.proved_candidate()
+                draft = case.verdict_draft(output)
+                digest = test_verification.jigctl.sha256_bytes(draft["report"].encode())
+                path = case.repo / (f".pi/jig/steps/0001/reviews/{digest}.md"
+                    if collision == "report" else ".pi/jig/steps/0001/verdict.json")
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"preserve me\n")
+                self.assertNotEqual(case.ctl("commit-step-verdict", input_value=draft).returncode, 0)
+                self.assertEqual(path.read_bytes(), b"preserve me\n")
+            finally:
+                case.tearDown()
 
 
 if __name__ == "__main__":
