@@ -42,6 +42,7 @@ TRANSITION_KIND_BY_EDGE = {
     ("verification-ready", "step-selecting"): "step-selection-started",
     ("step-selecting", "step-running"): "step-worker-activated",
     ("step-selecting", "initialized"): "no-candidate-finalized",
+    ("step-running", "initialized"): "selected-step-finalized",
     **{(state, f"failed-{state}"): "phase-failed" for state in (
         "surveying", "awaiting-commandments", "commandments-ratified",
         "verification-building", "verification-ready", "step-selecting", "step-running",
@@ -954,6 +955,12 @@ def validate_transition_receipt(
                 "selectionSha256", "resultPath", "resultSha256",
             }
         )
+    elif kind == "selected-step-finalized":
+        expected_fields.update({
+            "resourceIsolation", "commandmentsSha256", "selectionPath", "selectionSha256",
+            "proposalPath", "proposalSha256", "resultPath", "resultSha256",
+            "inputRevision", "outputRevision", "branch", "worktree", "diffSha256", "outcome",
+        })
     elif kind == "phase-failed":
         expected_fields.add("failureReason")
     if not isinstance(receipt, dict) or set(receipt) != expected_fields:
@@ -1377,6 +1384,14 @@ def validate_manifest_semantics(root: Path, manifest: Mapping[str, Any], schema:
             }
             if any(receipt_data.get(key) != value for key, value in fixed.items()):
                 raise ValidationError("worker activation transition differs from its authorization")
+        elif kind == "selected-step-finalized":
+            worker = read_json(root / WORKER_PATH, "worker receipt")
+            result = read_json(root / RESULT_PATH, "selected result")
+            result_artifact = next((item for item in artifacts if item["path"] == RESULT_PATH), None)
+            fixed = selected_transition_fields(manifest, worker, result,
+                result_artifact["sha256"] if result_artifact else None)
+            if any(receipt_data.get(key) != value for key, value in fixed.items()):
+                raise ValidationError("selected terminal transition differs from its result boundary")
         elif kind == "no-candidate-finalized":
             selection_artifact = next((item for item in artifacts if item["path"] == SELECTION_PATH), None)
             result_artifact = next((item for item in artifacts if item["path"] == RESULT_PATH), None)
@@ -1457,7 +1472,10 @@ def validate_manifest_semantics(root: Path, manifest: Mapping[str, Any], schema:
     if state in {"step-running", "failed-step-running"}:
         validate_step_worker(root, manifest)
     if state == "initialized":
-        validate_no_candidate_result(root, manifest)
+        if manifest["firstStep"]["selectedCandidateId"] is None:
+            validate_no_candidate_result(root, manifest)
+        else:
+            validate_selected_step_result(root, manifest)
 
 
 def receipt_value(kind: str, from_state: str, to_state: str, source: Mapping[str, Any], **extra: Any) -> Dict[str, Any]:
@@ -1497,6 +1515,26 @@ def append_transition(
     upsert_artifact(manifest, relative, "controller", digest)
     manifest["currentState"] = to_state
     manifest["updatedAt"] = receipt["at"]
+
+def append_recoverable_transition(root: Path, manifest: Dict[str, Any], from_state: str,
+    to_state: str, kind: str, **extra: Any) -> None:
+    index = len(manifest["transitions"]) + 1
+    relative = f".pi/jig/receipts/transition-{index:04d}-{to_state}.json"
+    path = safe_relative_path(root, relative)
+    if not path.exists() and not path.is_symlink():
+        append_transition(root, manifest, from_state, to_state, kind, **extra)
+        return
+    if path.is_symlink() or not path.is_file():
+        raise JigError("recoverable transition has an unknown identity")
+    receipt = read_json(path, "recoverable transition")
+    if (validate_transition_receipt(root, receipt, (from_state, to_state), manifest["source"]) != kind
+            or any(receipt.get(key) != value for key, value in extra.items())):
+        raise ValidationError("recoverable transition differs from the pending boundary")
+    digest = sha256_file(path)
+    manifest["transitions"].append({"from": from_state, "to": to_state, "at": receipt["at"],
+        "receiptPath": relative, "receiptSha256": digest})
+    upsert_artifact(manifest, relative, "controller", digest)
+    manifest["currentState"], manifest["updatedAt"] = to_state, receipt["at"]
 
 
 def detect_pi_version() -> str:
@@ -3711,16 +3749,16 @@ def validate_committed_proposal(
         validate_command_set(command_set, label)
     first_step = manifest["firstStep"]
     registered = any(item["path"] == PROPOSAL_PATH for item in manifest["artifacts"])
-    expected_proposal_path = PROPOSAL_PATH if registered else None
+    terminal = manifest["currentState"] == "initialized"
     if (
-        manifest["currentState"] not in {"step-selecting", "step-running", "failed-step-running"}
+        manifest["currentState"] not in {"step-selecting", "step-running", "failed-step-running", "initialized"}
         or first_step["selectionPath"] != SELECTION_PATH
         or first_step["selectedCandidateId"] != selected_id
-        or first_step["proposalPath"] != expected_proposal_path
-        or first_step["resultPath"] is not None
-        or first_step["outcome"] != "pending"
+        or first_step["proposalPath"] != (PROPOSAL_PATH if registered else None)
+        or first_step["resultPath"] != (RESULT_PATH if terminal else None)
+        or first_step["outcome"] not in ({"kept", "reverted"} if terminal else {"pending"})
     ):
-        raise ValidationError("proposal links do not match the pending first step")
+        raise ValidationError("proposal links do not match the first step")
 
 
 def validate_no_candidate_result(root: Path, manifest: Mapping[str, Any]) -> None:
@@ -3760,6 +3798,34 @@ def validate_no_candidate_result(root: Path, manifest: Mapping[str, Any]) -> Non
     step_dir = result_path.parent
     if {item.name for item in step_dir.iterdir()} != {"selection.json", "result.json"}:
         raise ValidationError("initialized step directory contains an unknown artifact")
+
+def selected_transition_fields(manifest: Mapping[str, Any], worker: Mapping[str, Any],
+    result: Mapping[str, Any], result_digest: Optional[str]) -> Dict[str, Any]:
+    return {
+        "resourceIsolation": manifest["resourceIsolation"],
+        "commandmentsSha256": manifest["commandments"]["sha256"],
+        "selectionPath": SELECTION_PATH, "selectionSha256": worker["selectionSha256"],
+        "proposalPath": PROPOSAL_PATH, "proposalSha256": worker["proposalSha256"],
+        "resultPath": RESULT_PATH, "resultSha256": result_digest,
+        "inputRevision": result["inputRevision"], "outputRevision": result["outputRevision"],
+        "branch": result["branch"], "worktree": result["worktree"],
+        "diffSha256": result["diffSha256"], "outcome": result["outcome"],
+    }
+
+
+def validate_selected_step_result(root: Path, manifest: Mapping[str, Any]) -> None:
+    validate_current_source(root, manifest)
+    worker = validate_step_worker(root, manifest)
+    result = validate_staged_step_result(root, manifest, worker)
+    expected = {
+        "selectionPath": SELECTION_PATH, "selectedCandidateId": worker["selectedCandidateId"],
+        "proposalPath": PROPOSAL_PATH, "resultPath": RESULT_PATH, "outcome": result["outcome"],
+    }
+    if manifest["firstStep"] != expected or result["outcome"] not in {"kept", "reverted"}:
+        raise ValidationError("initialized selected manifest differs from its terminal result")
+    transition = manifest["transitions"][-1]
+    if (transition["from"], transition["to"]) != ("step-running", "initialized"):
+        raise ValidationError("initialized selected result lacks its terminal transition")
 
 
 def atomic_create(path: Path, data: bytes) -> None:
@@ -4608,9 +4674,11 @@ def failed_worker_result_static(root: Path, manifest: Mapping[str, Any],
     forbidden = (CANDIDATE_DIFF_PATH, OUTPUT_PATH, AFTER_PATH, VERDICT_PATH)
     if any(name in artifacts or (root / name).exists() or (root / name).is_symlink() for name in forbidden):
         raise ValidationError("pre-edit failure cannot have output or proof evidence")
-    transition = manifest["transitions"][-1]
-    if (transition["from"], transition["to"]) != ("step-running", "failed-step-running"):
-        raise ValidationError("pre-edit failure requires the controller worker-failure edge")
+    failures = [item for item in manifest["transitions"]
+        if (item["from"], item["to"]) == ("step-running", "failed-step-running")]
+    if len(failures) != 1:
+        raise ValidationError("pre-edit failure requires one controller worker-failure edge")
+    transition = failures[0]
     receipt_path = safe_relative_path(root, transition["receiptPath"], must_exist=True)
     if (artifacts.get(transition["receiptPath"]) != {"path": transition["receiptPath"],
             "owner": "controller", "sha256": sha256_file(receipt_path)}
@@ -4667,7 +4735,7 @@ def validate_staged_step_result(root: Path, manifest: Mapping[str, Any],
     artifacts = {item["path"]: item for item in manifest["artifacts"]}
     path = safe_relative_path(root, RESULT_PATH, must_exist=True)
     result = read_json(path, "staged result")
-    if manifest["currentState"] == "failed-step-running":
+    if OUTPUT_PATH not in artifacts:
         fixed = failed_worker_result_static(root, manifest, worker)
     else:
         output, after, verdict = result_evidence(root, manifest, worker)
@@ -4717,6 +4785,35 @@ def prepare_step_result(root: Path, isolation: str) -> Dict[str, Any]:
     validate_staged_step_result(root, manifest, worker)
     write_manifest(root, manifest)
     return manifest
+def complete_step_result(root: Path, isolation: str) -> Dict[str, Any]:
+    manifest = load_existing_manifest(root)
+    if manifest["resourceIsolation"] != isolation:
+        raise JigError("the existing manifest uses a different resourceIsolation route")
+    validate_current_source(root, manifest)
+    if manifest["currentState"] == "initialized":
+        if manifest["firstStep"]["selectedCandidateId"] is None:
+            raise ValidationError("selected completion does not match a no-candidate terminal")
+        validate_selected_step_result(root, manifest)
+        return manifest
+    if manifest["currentState"] not in {"step-running", "failed-step-running"}:
+        raise ValidationError("selected completion requires a running or failed pre-edit result")
+    validate_verification_ready(root, manifest)
+    worker = validate_step_worker(root, manifest)
+    result = validate_staged_step_result(root, manifest, worker)
+    if manifest["currentState"] == "failed-step-running":
+        append_recoverable_transition(root, manifest, "failed-step-running", "step-running",
+            "failed-state-reconciled")
+    result_digest = sha256_file(root / RESULT_PATH)
+    extra = selected_transition_fields(manifest, worker, result, result_digest)
+    append_recoverable_transition(root, manifest, "step-running", "initialized",
+        "selected-step-finalized", **extra)
+    manifest["firstStep"] = {
+        "selectionPath": SELECTION_PATH, "selectedCandidateId": worker["selectedCandidateId"],
+        "proposalPath": PROPOSAL_PATH, "resultPath": RESULT_PATH, "outcome": result["outcome"],
+    }
+    write_manifest(root, manifest)
+    return manifest
+
 
 
 def activate_step_worker(root: Path, isolation: str, raw: bytes) -> Dict[str, Any]:
@@ -5044,6 +5141,14 @@ def render_result(root: Path, manifest: Mapping[str, Any]) -> None:
             "featureIndexPath": VERIFICATION_FEATURE_INDEX_PATH,
             "protectedFeatureId": plan["protectedFeatureId"],
         }
+    elif (manifest["currentState"] == "initialized"
+            and manifest["firstStep"]["selectedCandidateId"] is not None):
+        validate_selected_step_result(root, manifest)
+        receipt = read_json(root / RESULT_PATH, "terminal result")
+        result["terminalResult"] = {
+            "outcome": receipt["outcome"], "path": RESULT_PATH,
+            "branch": receipt["branch"], "worktree": receipt["worktree"],
+        }
     elif manifest["currentState"] in {"step-running", "failed-step-running"}:
         worker = validate_step_worker(root, manifest)
         output = validate_step_output(root, manifest, worker)
@@ -5109,6 +5214,7 @@ def parser() -> argparse.ArgumentParser:
         "verify-step-output",
         "commit-step-verdict",
         "prepare-step-result",
+        "complete-step-result",
     )
     commands = {}
     for name in mutating:
@@ -5231,6 +5337,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             manifest = commit_step_verdict(root, arguments.resource_isolation, raw)
         elif arguments.command == "prepare-step-result":
             manifest = prepare_step_result(root, arguments.resource_isolation)
+        elif arguments.command == "complete-step-result":
+            manifest = complete_step_result(root, arguments.resource_isolation)
         elif arguments.command == "finalize-no-candidate":
             manifest = finalize_no_candidate(root, arguments.resource_isolation)
         else:
