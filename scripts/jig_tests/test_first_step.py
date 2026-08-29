@@ -131,6 +131,35 @@ class FirstStepTest(unittest.TestCase):
             "allowedPaths": ["app.py", "client.py", "contract.py", "test_dependency.py"] if allowed is None else allowed,
         }
 
+    def activated_worker(self):
+        draft = self.worker_draft()
+        activated = self.ctl("activate-step-worker", input_value=draft)
+        self.assertEqual(activated.returncode, 0, activated.stderr)
+        worker = json.loads((self.repo / ".pi/jig/steps/0001/worker.json").read_text())
+        return self.repo / worker["worktree"], worker
+
+    def commit_improvement(self):
+        worktree, worker = self.activated_worker()
+        app = worktree / "app.py"
+        app.write_text(app.read_text().replace("from urllib.parse import parse_qs, urlparse\n",
+            "from urllib.parse import parse_qs, urlparse\n\nfrom contract import API_VERSION\n").replace(
+            "\nAPI_VERSION = \"fixture-v1\"\n", "\n"))
+        client = worktree / "client.py"
+        client.write_text(client.read_text().replace("from app import API_VERSION", "from contract import API_VERSION"))
+        (worktree / "contract.py").write_text('API_VERSION = "fixture-v1"\n')
+        (worktree / "test_dependency.py").write_text(
+            "import ast\nimport sys\nfrom pathlib import Path\n\n"
+            "path = Path('client.py')\noriginal = path.read_bytes()\n\n"
+            "def check():\n    tree = ast.parse(path.read_text())\n    if any((isinstance(n, ast.Import) and "
+            "any(x.name == 'app' for x in n.names)) or (isinstance(n, ast.ImportFrom) and n.module == 'app') "
+            "for n in ast.walk(tree)):\n        raise SystemExit('client.py imports app.py')\n\n"
+            "if '--seed' in sys.argv:\n    try:\n        path.write_bytes(original + b'\\nfrom app import API_VERSION\\n')\n"
+            "        try:\n            check()\n        except SystemExit:\n            pass\n        else:\n            raise SystemExit('seed escaped guard')\n"
+            "    finally:\n        path.write_bytes(original)\nelse:\n    check()\n")
+        self.fixture.git("-C", str(worktree), "add", "app.py", "client.py", "contract.py", "test_dependency.py")
+        self.fixture.git("-C", str(worktree), "commit", "-qm", "decouple client contract")
+        return worktree, worker
+
     def test_ready_enters_selecting_without_step_artifacts(self):
         before = self.manifest()
         selected = self.ctl("begin-step-selection")
@@ -653,6 +682,109 @@ class FirstStepTest(unittest.TestCase):
         self.assertEqual(resumed.returncode, 0, resumed.stderr)
         self.assertEqual((self.manifest()["currentState"], self.manifest()["transitions"][-1]["from"]),
             ("step-running", "failed-step-running"))
+
+    def test_record_output_pins_exact_committed_fixture_diff(self):
+        main_head = self.fixture.git("rev-parse", "HEAD").strip()
+        source = {name: (self.repo / name).read_bytes() for name in ("app.py", "client.py")}
+        worktree, worker = self.commit_improvement()
+        output_head = self.fixture.git("-C", str(worktree), "rev-parse", "HEAD").strip()
+        recorded = self.ctl("record-step-output")
+        self.assertEqual(recorded.returncode, 0, recorded.stderr)
+        output_path = self.repo / ".pi/jig/steps/0001/output.json"
+        diff_path = self.repo / ".pi/jig/steps/0001/candidate.diff"
+        receipt = json.loads(output_path.read_text())
+        expected_diff = subprocess.run(["git", "-C", str(worktree), "diff", "--binary", "--full-index",
+            "--no-ext-diff", f"{worker['inputRevision']}..{output_head}", "--"], check=True, stdout=subprocess.PIPE).stdout
+        self.assertEqual(diff_path.read_bytes(), expected_diff)
+        self.assertEqual(receipt["diffSha256"], test_verification.jigctl.sha256_bytes(expected_diff))
+        self.assertEqual((receipt["inputRevision"], receipt["outputRevision"], receipt["commitCount"]),
+            (worker["inputRevision"], output_head, 1))
+        self.assertEqual(receipt["changedPaths"], ["app.py", "client.py", "contract.py", "test_dependency.py"])
+        manifest = self.manifest()
+        self.assertEqual((manifest["currentState"], manifest["firstStep"]["outcome"], manifest["firstStep"]["resultPath"]),
+            ("step-running", "pending", None))
+        self.assertEqual(self.fixture.git("rev-parse", "HEAD").strip(), main_head)
+        self.assertEqual({name: (self.repo / name).read_bytes() for name in source}, source)
+        started = self.ctl("start")
+        self.assertEqual(started.returncode, 0, started.stderr)
+        self.assertEqual(json.loads(started.stdout)["stepOutput"]["outputRevision"], output_head)
+        self.assertNotIn("resume", json.loads(started.stdout))
+
+    def test_record_output_rejects_unfinished_or_unsafe_candidates(self):
+        scenarios = ("unchanged", "dirty", "non-descendant", "too-many", "symlink", "submodule", "outside")
+        for scenario in scenarios:
+            case = FirstStepTest(methodName="runTest")
+            case.setUp()
+            try:
+                worktree, worker = case.activated_worker()
+                if scenario == "dirty":
+                    (worktree / "app.py").write_text((worktree / "app.py").read_text() + "\n")
+                elif scenario == "non-descendant":
+                    case.fixture.git("-C", str(worktree), "checkout", "--orphan", "replacement", "-q")
+                    case.fixture.git("-C", str(worktree), "add", "-A")
+                    case.fixture.git("-C", str(worktree), "commit", "-qm", "replacement")
+                    case.fixture.git("-C", str(worktree), "branch", "-M", worker["branch"])
+                elif scenario == "too-many":
+                    for index in range(5):
+                        case.fixture.git("-C", str(worktree), "commit", "--allow-empty", "-qm", f"empty {index}")
+                    (worktree / "contract.py").write_text('API_VERSION = "fixture-v1"\n')
+                    case.fixture.git("-C", str(worktree), "add", "contract.py")
+                    case.fixture.git("-C", str(worktree), "commit", "-qm", "sixth")
+                elif scenario == "symlink":
+                    (worktree / "contract.py").symlink_to("app.py")
+                    case.fixture.git("-C", str(worktree), "add", "contract.py")
+                    case.fixture.git("-C", str(worktree), "commit", "-qm", "symlink")
+                elif scenario == "submodule":
+                    head = case.fixture.git("-C", str(worktree), "rev-parse", "HEAD").strip()
+                    case.fixture.git("-C", str(worktree), "update-index", "--add", "--cacheinfo", f"160000,{head},contract.py")
+                    case.fixture.git("-C", str(worktree), "commit", "-qm", "gitlink")
+                elif scenario == "outside":
+                    (worktree / "outside.py").write_text("outside\n")
+                    case.fixture.git("-C", str(worktree), "add", "outside.py")
+                    case.fixture.git("-C", str(worktree), "commit", "-qm", "outside")
+                rejected = case.ctl("record-step-output")
+                self.assertNotEqual(rejected.returncode, 0, scenario)
+                self.assertFalse((case.repo / ".pi/jig/steps/0001/output.json").exists(), scenario)
+            finally:
+                case.tearDown()
+
+    def test_output_retry_interruption_and_mutation_fail_closed(self):
+        worktree, _worker = self.commit_improvement()
+        with mock.patch.object(test_verification.jigctl, "write_manifest", side_effect=RuntimeError("crash")):
+            with self.assertRaises(RuntimeError):
+                test_verification.jigctl.record_step_output(self.repo, "isolated-shell")
+        paths = [self.repo / ".pi/jig/steps/0001/candidate.diff", self.repo / ".pi/jig/steps/0001/output.json"]
+        before = [(path.read_bytes(), path.stat().st_ino, path.stat().st_mtime_ns) for path in paths]
+        recovered = self.ctl("record-step-output")
+        self.assertEqual(recovered.returncode, 0, recovered.stderr)
+        manifest = (self.repo / ".pi/jig/manifest.json").read_bytes()
+        self.assertEqual([(path.read_bytes(), path.stat().st_ino, path.stat().st_mtime_ns) for path in paths], before)
+        self.assertEqual(self.ctl("record-step-output").returncode, 0)
+        self.assertEqual((self.repo / ".pi/jig/manifest.json").read_bytes(), manifest)
+        self.assertEqual([(path.read_bytes(), path.stat().st_ino, path.stat().st_mtime_ns) for path in paths], before)
+        paths[0].write_bytes(paths[0].read_bytes() + b"collision")
+        self.assertNotEqual(self.ctl("start").returncode, 0)
+        for mutation in ("head", "branch", "collision"):
+            case = FirstStepTest(methodName="runTest")
+            case.setUp()
+            try:
+                candidate, _worker = case.commit_improvement()
+                if mutation == "collision":
+                    diff = case.repo / ".pi/jig/steps/0001/candidate.diff"
+                    diff.write_bytes(b"preserve me\n")
+                    self.assertNotEqual(case.ctl("record-step-output").returncode, 0)
+                    self.assertEqual(diff.read_bytes(), b"preserve me\n")
+                    continue
+                self.assertEqual(case.ctl("record-step-output").returncode, 0)
+                if mutation == "head":
+                    (candidate / "app.py").write_text((candidate / "app.py").read_text() + "\n")
+                    case.fixture.git("-C", str(candidate), "add", "app.py")
+                    case.fixture.git("-C", str(candidate), "commit", "-qm", "later mutation")
+                else:
+                    case.fixture.git("-C", str(candidate), "checkout", "--detach", "-q")
+                self.assertNotEqual(case.ctl("start").returncode, 0)
+            finally:
+                case.tearDown()
 
 
 if __name__ == "__main__":
