@@ -27,19 +27,11 @@ SCHEMA_VERSION = 1
 MAX_INPUT_BYTES = 1024 * 1024
 MAX_OS_PID = (1 << 31) - 1
 IMPLEMENTED_STATES = {
-    "surveying",
-    "awaiting-commandments",
-    "commandments-ratified",
-    "verification-building",
-    "verification-ready",
-    "step-selecting",
-    "initialized",
-    "failed-surveying",
-    "failed-awaiting-commandments",
-    "failed-commandments-ratified",
-    "failed-verification-building",
-    "failed-verification-ready",
-    "failed-step-selecting",
+    "surveying", "awaiting-commandments", "commandments-ratified",
+    "verification-building", "verification-ready", "step-selecting", "step-running",
+    "initialized", "failed-surveying", "failed-awaiting-commandments",
+    "failed-commandments-ratified", "failed-verification-building",
+    "failed-verification-ready", "failed-step-selecting", "failed-step-running",
 }
 TRANSITION_KIND_BY_EDGE = {
     ("absent", "surveying"): "init-started",
@@ -48,19 +40,16 @@ TRANSITION_KIND_BY_EDGE = {
     ("commandments-ratified", "verification-building"): "verification-started",
     ("verification-building", "verification-ready"): "verification-ready",
     ("verification-ready", "step-selecting"): "step-selection-started",
+    ("step-selecting", "step-running"): "step-worker-activated",
     ("step-selecting", "initialized"): "no-candidate-finalized",
-    ("surveying", "failed-surveying"): "phase-failed",
-    ("awaiting-commandments", "failed-awaiting-commandments"): "phase-failed",
-    ("commandments-ratified", "failed-commandments-ratified"): "phase-failed",
-    ("verification-building", "failed-verification-building"): "phase-failed",
-    ("verification-ready", "failed-verification-ready"): "phase-failed",
-    ("step-selecting", "failed-step-selecting"): "phase-failed",
-    ("failed-surveying", "surveying"): "failed-state-reconciled",
-    ("failed-awaiting-commandments", "awaiting-commandments"): "failed-state-reconciled",
-    ("failed-commandments-ratified", "commandments-ratified"): "failed-state-reconciled",
-    ("failed-verification-building", "verification-building"): "failed-state-reconciled",
-    ("failed-verification-ready", "verification-ready"): "failed-state-reconciled",
-    ("failed-step-selecting", "step-selecting"): "failed-state-reconciled",
+    **{(state, f"failed-{state}"): "phase-failed" for state in (
+        "surveying", "awaiting-commandments", "commandments-ratified",
+        "verification-building", "verification-ready", "step-selecting", "step-running",
+    )},
+    **{(f"failed-{state}", state): "failed-state-reconciled" for state in (
+        "surveying", "awaiting-commandments", "commandments-ratified",
+        "verification-building", "verification-ready", "step-selecting", "step-running",
+    )},
 }
 TRANSITION_RECEIPT_PATTERN = re.compile(
     r"transition-([0-9]{4})-("
@@ -93,6 +82,9 @@ PROPOSAL_PATH = ".pi/jig/steps/0001/proposal.json"
 RESULT_PATH = ".pi/jig/steps/0001/result.json"
 BEFORE_PATH = ".pi/jig/steps/0001/before.json"
 STEP_WORKTREE = ".pi/jig/worktrees/0001"
+WORKER_PATH = ".pi/jig/steps/0001/worker.json"
+WORKER_DRAFT_FIELDS = {"schemaVersion", "stepId", "workerSessionId", "allowedPaths"}
+WORKER_PROTECTED_PATHS = [".git", ".pi", "COMMANDMENTS.md", "eval", "evals"]
 BASELINE_OUTPUT_LIMIT = 256 * 1024
 BASELINE_TIMEOUT_SECONDS = 120
 SELECTION_DRAFT_FIELDS = {
@@ -937,6 +929,12 @@ def validate_transition_receipt(
                 "runtimeReceiptSha256",
             }
         )
+    elif kind == "step-worker-activated":
+        expected_fields.update({
+            "resourceIsolation", "commandmentsSha256", "selectionSha256",
+            "proposalSha256", "beforeSha256", "workerSha256",
+            "inputRevision", "branch", "worktree",
+        })
     elif kind == "no-candidate-finalized":
         expected_fields.update(
             {
@@ -1212,7 +1210,7 @@ def validate_manifest_semantics(root: Path, manifest: Mapping[str, Any], schema:
         r"^(?:COMMANDMENTS\.md|\.pi/jig/(?:profile\.json|commandments/(?:interview\.json|"
         r"staging\.json|answers/[0-9a-f]{64}\.json|candidates/[0-9a-f]{64}\.md|"
         r"decisions/[0-9a-f]{64}\.json|proposals/[0-9a-f]{64}\.md)|"
-        r"steps/0001/(?:(?:selection|proposal|result|before)\.json|commands/baseline-[0-9]{2}\.json)|"
+        r"steps/0001/(?:(?:selection|proposal|result|before|worker)\.json|commands/baseline-[0-9]{2}\.json)|"
         r"verification/(?:plan\.json|receipts/runtime-[0-9a-f]{64}\.json|"
         r"evidence/[a-z0-9][a-z0-9._-]{0,127}\.json)|receipts/(?:transition-[0-9]{4}-(?:"
         + implemented_state
@@ -1352,6 +1350,21 @@ def validate_manifest_semantics(root: Path, manifest: Mapping[str, Any], schema:
                 )
             ):
                 raise ValidationError("step-selection transition differs from its verified boundary")
+        elif kind == "step-worker-activated":
+            worker_artifact = next((item for item in artifacts if item["path"] == WORKER_PATH), None)
+            worker = read_json(root / WORKER_PATH, "worker receipt")
+            fixed = {
+                "resourceIsolation": manifest["resourceIsolation"],
+                "commandmentsSha256": manifest["commandments"]["sha256"],
+                "selectionSha256": worker["selectionSha256"],
+                "proposalSha256": worker["proposalSha256"],
+                "beforeSha256": worker["beforeSha256"],
+                "workerSha256": worker_artifact["sha256"] if worker_artifact else None,
+                "inputRevision": worker["inputRevision"], "branch": worker["branch"],
+                "worktree": worker["worktree"],
+            }
+            if any(receipt_data.get(key) != value for key, value in fixed.items()):
+                raise ValidationError("worker activation transition differs from its authorization")
         elif kind == "no-candidate-finalized":
             selection_artifact = next((item for item in artifacts if item["path"] == SELECTION_PATH), None)
             result_artifact = next((item for item in artifacts if item["path"] == RESULT_PATH), None)
@@ -1384,11 +1397,9 @@ def validate_manifest_semantics(root: Path, manifest: Mapping[str, Any], schema:
         "failed-commandments-ratified",
         "verification-building",
         "failed-verification-building",
-        "verification-ready",
-        "failed-verification-ready",
-        "step-selecting",
-        "failed-step-selecting",
-        "initialized",
+        "verification-ready", "failed-verification-ready",
+        "step-selecting", "failed-step-selecting", "step-running",
+        "failed-step-running", "initialized",
     }:
         profile_artifact = next(
             (item for item in artifacts if item["path"] == ".pi/jig/profile.json"),
@@ -1404,11 +1415,9 @@ def validate_manifest_semantics(root: Path, manifest: Mapping[str, Any], schema:
         "failed-commandments-ratified",
         "verification-building",
         "failed-verification-building",
-        "verification-ready",
-        "failed-verification-ready",
-        "step-selecting",
-        "failed-step-selecting",
-        "initialized",
+        "verification-ready", "failed-verification-ready",
+        "step-selecting", "failed-step-selecting", "step-running",
+        "failed-step-running", "initialized",
     }:
         root_path = safe_relative_path(root, COMMANDMENTS_ROOT_PATH, must_exist=True)
         if not root_path.is_file() or root_path.is_symlink():
@@ -1428,13 +1437,13 @@ def validate_manifest_semantics(root: Path, manifest: Mapping[str, Any], schema:
         if artifact != {"path": COMMANDMENTS_ROOT_PATH, "owner": "human", "sha256": digest}:
             raise ValidationError("ratified COMMANDMENTS artifact ownership is inconsistent")
     if state in {
-        "verification-ready",
-        "failed-verification-ready",
-        "step-selecting",
-        "failed-step-selecting",
-        "initialized",
+        "verification-ready", "failed-verification-ready",
+        "step-selecting", "failed-step-selecting", "step-running",
+        "failed-step-running", "initialized",
     }:
         validate_verification_ready(root, manifest)
+    if state in {"step-running", "failed-step-running"}:
+        validate_step_worker(root, manifest)
     if state == "initialized":
         validate_no_candidate_result(root, manifest)
 
@@ -1541,9 +1550,8 @@ def verification_reserved_paths(root: Path, manifest: Mapping[str, Any]) -> List
         "failed-verification-building",
         "verification-ready",
         "failed-verification-ready",
-        "step-selecting",
-        "failed-step-selecting",
-        "initialized",
+        "step-selecting", "failed-step-selecting", "step-running",
+        "failed-step-running", "initialized",
     }:
         return []
     plan = read_json(root / VERIFICATION_PLAN_PATH, "verification plan")
@@ -1674,6 +1682,13 @@ def start(root: Path, isolation: str, lock: RepositoryLock) -> Dict[str, Any]:
         elif state == "failed-step-selecting":
             append_transition(
                 root, manifest, state, "step-selecting", "failed-state-reconciled"
+            )
+            changed = True
+            reconciled = True
+        elif state == "failed-step-running":
+            validate_step_worker(root, manifest)
+            append_transition(
+                root, manifest, state, "step-running", "failed-state-reconciled"
             )
             changed = True
             reconciled = True
@@ -3686,7 +3701,7 @@ def validate_committed_proposal(
     registered = any(item["path"] == PROPOSAL_PATH for item in manifest["artifacts"])
     expected_proposal_path = PROPOSAL_PATH if registered else None
     if (
-        manifest["currentState"] != "step-selecting"
+        manifest["currentState"] not in {"step-selecting", "step-running", "failed-step-running"}
         or first_step["selectionPath"] != SELECTION_PATH
         or first_step["selectedCandidateId"] != selected_id
         or first_step["proposalPath"] != expected_proposal_path
@@ -4037,6 +4052,176 @@ def prepare_step_worktree(root: Path, isolation: str) -> Dict[str, Any]:
     return manifest
 
 
+def validate_step_worker(root: Path, manifest: Mapping[str, Any]) -> Dict[str, Any]:
+    artifacts = {item["path"]: item for item in manifest["artifacts"]}
+    required = (SELECTION_PATH, PROPOSAL_PATH, BEFORE_PATH, WORKER_PATH)
+    paths = {name: safe_relative_path(root, name, must_exist=True) for name in required}
+    if any(artifacts.get(name) != {"path": name, "owner": "controller", "sha256": sha256_file(paths[name])} for name in required):
+        raise ValidationError("worker authorization artifacts do not match the manifest")
+    proposal = read_json(paths[PROPOSAL_PATH], "proposal")
+    validate_committed_proposal(root, manifest, proposal)
+    before = read_json(paths[BEFORE_PATH], "before receipt")
+    commands = proposal["baseline"]["commands"]
+    if (not isinstance(before, dict) or set(before) != {
+            "schemaVersion", "kind", "stepId", "proposalPath", "proposalSha256",
+            "inputRevision", "branch", "worktree", "commands", "recordedAt"}
+            or before["schemaVersion"] != 1 or before["kind"] != "step-before"
+            or before["stepId"] != "0001" or before["proposalPath"] != PROPOSAL_PATH
+            or before["proposalSha256"] != sha256_file(paths[PROPOSAL_PATH])
+            or before["inputRevision"] != proposal["repositoryRevision"]
+            or before["worktree"] != STEP_WORKTREE or len(before["commands"]) != len(commands)
+            or not valid_datetime(before["recordedAt"]) or canonical_json(before) != paths[BEFORE_PATH].read_bytes()):
+        raise ValidationError("worker authorization has an invalid before receipt")
+    for index, command in enumerate(commands, 1):
+        relative = f".pi/jig/steps/0001/commands/baseline-{index:02d}.json"
+        receipt_path = safe_relative_path(root, relative, must_exist=True)
+        expected = {"schemaVersion": 1, "kind": "step-command", "phase": "baseline",
+            "index": index, "command": command, "worktree": STEP_WORKTREE,
+            "branch": before["branch"], "revision": before["inputRevision"]}
+        receipt = read_json(receipt_path, "baseline command receipt")
+        validate_baseline_receipt(receipt, expected)
+        summary = before["commands"][index - 1]
+        if (canonical_json(receipt) != receipt_path.read_bytes() or receipt["exitCode"] != 0
+                or receipt["timedOut"] or summary != {
+                    "phase": "baseline", "index": index, "command": command,
+                    "receiptPath": relative, "receiptSha256": sha256_file(receipt_path),
+                    "exitCode": 0, "finishedAt": receipt["finishedAt"]}):
+            raise ValidationError("worker authorization baseline did not pass exactly")
+    worker_path = paths[WORKER_PATH]
+    worker = read_json(worker_path, "worker receipt")
+    expected = {
+        "schemaVersion": 1, "kind": "step-worker", "stepId": "0001",
+        "selectedCandidateId": proposal["candidateId"],
+        "selectionSha256": sha256_file(paths[SELECTION_PATH]),
+        "proposalSha256": sha256_file(paths[PROPOSAL_PATH]),
+        "beforeSha256": sha256_file(paths[BEFORE_PATH]),
+        "inputRevision": before["inputRevision"], "branch": before["branch"],
+        "worktree": STEP_WORKTREE, "protectedPaths": WORKER_PROTECTED_PATHS,
+    }
+    if (not isinstance(worker, dict) or set(worker) != set(expected) | {
+            "workerSessionId", "allowedPaths", "worktreeGitIdentity", "recordedAt"}
+            or any(worker.get(key) != value for key, value in expected.items())
+            or canonical_json(worker) != worker_path.read_bytes()):
+        raise ValidationError("worker receipt differs from its activation boundary")
+    session, allowed = worker["workerSessionId"], worker["allowedPaths"]
+    protected = WORKER_PROTECTED_PATHS + verification_reserved_paths(root, manifest)
+    if (not isinstance(session, str) or not session.strip() or len(session) > 200
+            or any(ord(char) < 32 for char in session)
+            or not isinstance(allowed, list) or not 1 <= len(allowed) <= 5
+            or len(allowed) != len(set(allowed)) or any(not isinstance(item, str) for item in allowed)
+            or not isinstance(worker["recordedAt"], str) or not valid_datetime(worker["recordedAt"])):
+        raise ValidationError("worker receipt has an invalid session or scope")
+    for relative in allowed:
+        path = safe_relative_path(root / STEP_WORKTREE, relative)
+        if (any(part in WORKER_PROTECTED_PATHS for part in PurePosixPath(relative).parts)
+                or any(relative == item or relative.startswith(item + "/") for item in protected)
+                or path.exists() and (path.is_symlink() or not path.is_file())):
+            raise ValidationError("worker receipt contains a protected or invalid path")
+    worktree = safe_relative_path(root, STEP_WORKTREE, must_exist=True)
+    entries = [item for item in worktree_entries(root) if item.get("worktree") == str(worktree)]
+    head = run_git(worktree, ["rev-parse", "HEAD"])
+    if (len(entries) != 1 or entries[0].get("branch") != f"refs/heads/{before['branch']}"
+            or entries[0].get("HEAD") != head or branch_revision(root, before["branch"]) != head
+            or worker["worktreeGitIdentity"] != repository_identity(worktree)
+            or subprocess.run(["git", "-C", str(worktree), "merge-base", "--is-ancestor",
+                before["inputRevision"], head]).returncode != 0):
+        raise ValidationError("worker worktree identity or ancestry changed")
+    changed = set(filter(None, run_git(worktree, ["diff", "--name-only", "-z", before["inputRevision"], head]).split("\0")))
+    status = run_git(worktree, ["status", "--porcelain=v1", "--untracked-files=all", "--", ".", ":(exclude).pi"])
+    changed.update(line[3:].split(" -> ")[-1] for line in status.splitlines() if len(line) > 3)
+    if changed - set(worker["allowedPaths"]):
+        raise ValidationError("worker changed source outside its authorized paths")
+    return worker
+
+
+def activate_step_worker(root: Path, isolation: str, raw: bytes) -> Dict[str, Any]:
+    manifest = load_existing_manifest(root)
+    if manifest["resourceIsolation"] != isolation:
+        raise JigError("the existing manifest uses a different resourceIsolation route")
+    validate_current_source(root, manifest)
+    if manifest["currentState"] == "step-running":
+        worker = validate_step_worker(root, manifest)
+        draft = read_json_bytes(raw, "worker draft")
+        if {key: worker[key] for key in WORKER_DRAFT_FIELDS} != draft:
+            raise ValidationError("worker activation retry differs from its authorization")
+        return manifest
+    if manifest["currentState"] != "step-selecting":
+        raise ValidationError("worker activation requires step-selecting")
+    manifest = prepare_step_worktree(root, isolation)
+    draft = read_json_bytes(raw, "worker draft")
+    if not isinstance(draft, dict) or set(draft) != WORKER_DRAFT_FIELDS:
+        raise ValidationError("worker draft has an invalid shape")
+    session = draft.get("workerSessionId")
+    allowed = draft.get("allowedPaths")
+    if (draft.get("schemaVersion") != 1 or draft.get("stepId") != "0001"
+            or not isinstance(session, str) or not session.strip() or len(session) > 200
+            or any(ord(char) < 32 for char in session)
+            or not isinstance(allowed, list) or not 1 <= len(allowed) <= 5
+            or len(allowed) != len(set(allowed)) or any(not isinstance(item, str) for item in allowed)):
+        raise ValidationError("worker draft is not one bounded authorization")
+    protected = WORKER_PROTECTED_PATHS + verification_reserved_paths(root, manifest)
+    for relative in allowed:
+        path = safe_relative_path(root / STEP_WORKTREE, relative)
+        if (any(part in WORKER_PROTECTED_PATHS for part in PurePosixPath(relative).parts)
+                or any(relative == item or relative.startswith(item + "/") for item in protected)):
+            raise ValidationError("worker allowed path targets protected state")
+        if path.exists() and (path.is_symlink() or not path.is_file()):
+            raise ValidationError("worker allowed path is not a regular file target")
+    artifacts = {item["path"]: item for item in manifest["artifacts"]}
+    for name in (SELECTION_PATH, PROPOSAL_PATH, BEFORE_PATH):
+        path = safe_relative_path(root, name, must_exist=True)
+        if artifacts.get(name) != {"path": name, "owner": "controller", "sha256": sha256_file(path)}:
+            raise ValidationError("worker activation requires exact registered step inputs")
+    before = read_json(root / BEFORE_PATH, "before receipt")
+    worktree = safe_relative_path(root, STEP_WORKTREE, must_exist=True)
+    worker_static = {
+        "schemaVersion": 1, "kind": "step-worker", "stepId": "0001",
+        "workerSessionId": session, "selectedCandidateId": manifest["firstStep"]["selectedCandidateId"],
+        "selectionSha256": sha256_file(root / SELECTION_PATH),
+        "proposalSha256": sha256_file(root / PROPOSAL_PATH),
+        "beforeSha256": sha256_file(root / BEFORE_PATH), "inputRevision": before["inputRevision"],
+        "branch": before["branch"], "worktree": STEP_WORKTREE, "allowedPaths": allowed,
+        "protectedPaths": WORKER_PROTECTED_PATHS, "worktreeGitIdentity": repository_identity(worktree),
+    }
+    worker_path = fixed_artifact_path(root, WORKER_PATH)
+    if worker_path.exists() or worker_path.is_symlink():
+        if worker_path.is_symlink() or not worker_path.is_file():
+            raise JigError("worker receipt has an unknown identity")
+        worker = read_json(worker_path, "worker receipt")
+        if (not isinstance(worker, dict) or set(worker) != set(worker_static) | {"recordedAt"}
+                or any(worker.get(key) != value for key, value in worker_static.items())
+                or canonical_json(worker) != worker_path.read_bytes()):
+            raise ValidationError("existing worker receipt differs from this authorization")
+    else:
+        worker = {**worker_static, "recordedAt": now()}
+        atomic_create(worker_path, canonical_json(worker))
+    worker_digest = sha256_file(worker_path)
+    upsert_artifact(manifest, WORKER_PATH, "controller", worker_digest)
+    extra = {
+        "resourceIsolation": isolation, "commandmentsSha256": manifest["commandments"]["sha256"],
+        "selectionSha256": worker["selectionSha256"], "proposalSha256": worker["proposalSha256"],
+        "beforeSha256": worker["beforeSha256"], "workerSha256": worker_digest,
+        "inputRevision": worker["inputRevision"], "branch": worker["branch"], "worktree": STEP_WORKTREE,
+    }
+    index = len(manifest["transitions"]) + 1
+    receipt_path = root / f".pi/jig/receipts/transition-{index:04d}-step-running.json"
+    if receipt_path.exists() or receipt_path.is_symlink():
+        receipt = read_json(receipt_path, "worker activation transition")
+        validate_transition_receipt(root, receipt, ("step-selecting", "step-running"), manifest["source"])
+        if any(receipt.get(key) != value for key, value in extra.items()):
+            raise ValidationError("worker activation transition differs from this authorization")
+        digest = sha256_file(receipt_path)
+        manifest["transitions"].append({"from": "step-selecting", "to": "step-running",
+            "at": receipt["at"], "receiptPath": relative_to_root(root, receipt_path), "receiptSha256": digest})
+        upsert_artifact(manifest, relative_to_root(root, receipt_path), "controller", digest)
+        manifest["currentState"], manifest["updatedAt"] = "step-running", receipt["at"]
+    else:
+        append_transition(root, manifest, "step-selecting", "step-running", "step-worker-activated", **extra)
+    validate_step_worker(root, manifest)
+    write_manifest(root, manifest)
+    return manifest
+
+
 def finalize_no_candidate(root: Path, isolation: str) -> Dict[str, Any]:
     manifest = load_existing_manifest(root)
     if manifest["resourceIsolation"] != isolation:
@@ -4274,6 +4459,15 @@ def render_result(root: Path, manifest: Mapping[str, Any]) -> None:
             "featureIndexPath": VERIFICATION_FEATURE_INDEX_PATH,
             "protectedFeatureId": plan["protectedFeatureId"],
         }
+    elif manifest["currentState"] in {"step-running", "failed-step-running"}:
+        worker = validate_step_worker(root, manifest)
+        proposal = read_json(root / PROPOSAL_PATH, "proposal")
+        result["workerHandoff"] = {
+            "worktree": worker["worktree"], "workerSessionId": worker["workerSessionId"],
+            "selectedCandidateId": worker["selectedCandidateId"], "proposalPath": PROPOSAL_PATH,
+            "potetoPlaybook": proposal["potetoPlaybook"],
+            "allowedPaths": worker["allowedPaths"], "protectedPaths": worker["protectedPaths"],
+        }
     elif manifest["currentState"] == "step-selecting":
         selection = next(
             (item for item in manifest["artifacts"] if item["path"] == SELECTION_PATH), None
@@ -4312,6 +4506,7 @@ def parser() -> argparse.ArgumentParser:
         "commit-step-proposal",
         "prepare-step-worktree",
         "finalize-no-candidate",
+        "activate-step-worker",
     )
     commands = {}
     for name in mutating:
@@ -4332,6 +4527,7 @@ def parser() -> argparse.ArgumentParser:
             "verification-building",
             "verification-ready",
             "step-selecting",
+            "step-running",
         ),
     )
     commands["record-failure"].add_argument("--reason", required=True)
@@ -4421,6 +4617,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             manifest = commit_step_proposal(root, arguments.resource_isolation, raw)
         elif arguments.command == "prepare-step-worktree":
             manifest = prepare_step_worktree(root, arguments.resource_isolation)
+        elif arguments.command == "activate-step-worker":
+            raw = sys.stdin.buffer.read(MAX_INPUT_BYTES + 1)
+            manifest = activate_step_worker(root, arguments.resource_isolation, raw)
         elif arguments.command == "finalize-no-candidate":
             manifest = finalize_no_candidate(root, arguments.resource_isolation)
         else:

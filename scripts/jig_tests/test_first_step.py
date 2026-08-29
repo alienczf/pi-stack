@@ -122,6 +122,15 @@ class FirstStepTest(unittest.TestCase):
     def commit_proposal(self, draft):
         return self.ctl("commit-step-proposal", input_value=draft)
 
+    def worker_draft(self, session="fresh-worker-1", allowed=None):
+        candidate = self.selected_fixture()
+        self.assertEqual(self.commit_proposal(self.proposal_draft(candidate)).returncode, 0)
+        self.assertEqual(self.ctl("prepare-step-worktree").returncode, 0)
+        return {
+            "schemaVersion": 1, "stepId": "0001", "workerSessionId": session,
+            "allowedPaths": ["app.py", "client.py", "contract.py", "test_dependency.py"] if allowed is None else allowed,
+        }
+
     def test_ready_enters_selecting_without_step_artifacts(self):
         before = self.manifest()
         selected = self.ctl("begin-step-selection")
@@ -558,6 +567,92 @@ class FirstStepTest(unittest.TestCase):
             finally:
                 if case is not self:
                     case.tearDown()
+
+
+    def test_activation_enters_running_and_renders_bounded_handoff(self):
+        draft = self.worker_draft()
+        source = {name: (self.repo / name).read_bytes() for name in ("app.py", "client.py")}
+        activated = self.ctl("activate-step-worker", input_value=draft)
+        self.assertEqual(activated.returncode, 0, activated.stderr)
+        output, manifest = json.loads(activated.stdout), self.manifest()
+        worker_path = self.repo / ".pi/jig/steps/0001/worker.json"
+        worker = json.loads(worker_path.read_text())
+        transition = manifest["transitions"][-1]
+        receipt = json.loads((self.repo / transition["receiptPath"]).read_text())
+        self.assertEqual((manifest["currentState"], transition["from"], transition["to"]),
+            ("step-running", "step-selecting", "step-running"))
+        self.assertEqual((receipt["kind"], receipt["workerSha256"]),
+            ("step-worker-activated", test_verification.jigctl.sha256_file(worker_path)))
+        self.assertEqual(output["workerHandoff"], {
+            "worktree": ".pi/jig/worktrees/0001", "workerSessionId": "fresh-worker-1",
+            "selectedCandidateId": "client-app-boundary",
+            "proposalPath": ".pi/jig/steps/0001/proposal.json",
+            "potetoPlaybook": "pstack/skills/poteto-mode/playbooks/refactoring.md",
+            "allowedPaths": draft["allowedPaths"],
+            "protectedPaths": [".git", ".pi", "COMMANDMENTS.md", "eval", "evals"],
+        })
+        self.assertEqual({name: (self.repo / name).read_bytes() for name in source}, source)
+        self.assertEqual((manifest["firstStep"]["outcome"], manifest["firstStep"]["resultPath"]), ("pending", None))
+
+    def test_activation_retry_and_interruptions_converge_or_fail_closed(self):
+        draft = self.worker_draft()
+        with mock.patch.object(test_verification.jigctl, "append_transition", side_effect=RuntimeError("crash")):
+            with self.assertRaises(RuntimeError):
+                test_verification.jigctl.activate_step_worker(
+                    self.repo, "isolated-shell", json.dumps(draft).encode())
+        worker_path = self.repo / ".pi/jig/steps/0001/worker.json"
+        worker_raw = worker_path.read_bytes()
+        worker_path.write_bytes(worker_raw + b" ")
+        self.assertNotEqual(self.ctl("activate-step-worker", input_value=draft).returncode, 0)
+        worker_path.write_bytes(worker_raw)
+        worker_before = (worker_path.read_bytes(), worker_path.stat().st_ino, worker_path.stat().st_mtime_ns)
+        recovered = self.ctl("activate-step-worker", input_value=draft)
+        self.assertEqual(recovered.returncode, 0, recovered.stderr)
+        manifest_path = self.repo / ".pi/jig/manifest.json"
+        transition_path = self.repo / self.manifest()["transitions"][-1]["receiptPath"]
+        stable = [(path.read_bytes(), path.stat().st_ino, path.stat().st_mtime_ns)
+            for path in (worker_path, transition_path, manifest_path)]
+        self.assertEqual(self.ctl("activate-step-worker", input_value=draft).returncode, 0)
+        self.assertEqual([(path.read_bytes(), path.stat().st_ino, path.stat().st_mtime_ns)
+            for path in (worker_path, transition_path, manifest_path)], stable)
+        changed = dict(draft, workerSessionId="different-worker")
+        self.assertNotEqual(self.ctl("activate-step-worker", input_value=changed).returncode, 0)
+        self.assertEqual((worker_path.read_bytes(), worker_path.stat().st_ino, worker_path.stat().st_mtime_ns), worker_before)
+        case = FirstStepTest(methodName="runTest")
+        case.setUp()
+        try:
+            other = case.worker_draft(session="fresh-worker-2")
+            with mock.patch.object(test_verification.jigctl, "write_manifest", side_effect=RuntimeError("crash")):
+                with self.assertRaises(RuntimeError):
+                    test_verification.jigctl.activate_step_worker(
+                        case.repo, "isolated-shell", json.dumps(other).encode())
+            receipt = case.repo / ".pi/jig/receipts/transition-0007-step-running.json"
+            before = (receipt.read_bytes(), receipt.stat().st_ino, receipt.stat().st_mtime_ns)
+            self.assertEqual(case.ctl("activate-step-worker", input_value=other).returncode, 0)
+            self.assertEqual((receipt.read_bytes(), receipt.stat().st_ino, receipt.stat().st_mtime_ns), before)
+        finally:
+            case.tearDown()
+
+    def test_running_scope_and_failed_recovery_fail_closed(self):
+        draft = self.worker_draft()
+        self.assertEqual(self.ctl("activate-step-worker", input_value=draft).returncode, 0)
+        worker = self.repo / ".pi/jig/worktrees/0001"
+        (worker / "app.py").write_text((worker / "app.py").read_text() + "\n")
+        self.assertEqual(self.ctl("start").returncode, 0)
+        (worker / "outside.py").write_text("outside\n")
+        self.assertNotEqual(self.ctl("start").returncode, 0)
+        (worker / "outside.py").unlink()
+        branch = json.loads((self.repo / ".pi/jig/steps/0001/worker.json").read_text())["branch"]
+        self.fixture.git("-C", str(worker), "checkout", "--detach", "-q")
+        self.assertNotEqual(self.ctl("start").returncode, 0)
+        self.fixture.git("-C", str(worker), "checkout", "-q", branch)
+        failed = self.ctl("record-failure", "--state", "step-running", "--reason", "seeded worker failure")
+        self.assertEqual(failed.returncode, 0, failed.stderr)
+        self.assertEqual(self.manifest()["currentState"], "failed-step-running")
+        resumed = self.ctl("start")
+        self.assertEqual(resumed.returncode, 0, resumed.stderr)
+        self.assertEqual((self.manifest()["currentState"], self.manifest()["transitions"][-1]["from"]),
+            ("step-running", "failed-step-running"))
 
 
 if __name__ == "__main__":
