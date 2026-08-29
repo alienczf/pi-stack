@@ -13,6 +13,7 @@ os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
 ROOT = Path.cwd()
 RUNTIME = ROOT / ".pi/jig/verification/runtime"
 STATE = RUNTIME / "state.json"
+DRIVE_RESULT = RUNTIME / "drive-result.json"
 EVIDENCE = ROOT / ".pi/jig/verification/evidence"
 OWNED_PROCESS = None
 
@@ -126,10 +127,13 @@ def drive():
     persisted = json.loads((Path(state_value()["dataDir"]) / "notes.json").read_text(encoding="utf-8"))
     if action["title"] != "Release" or listed != persisted or searched != [action]:
         raise RuntimeError("public drive did not prove persisted visible state")
-    return {"action": action, "listed": listed, "searched": searched, "persisted": persisted}
+    result = {"action": action, "listed": listed, "searched": searched, "persisted": persisted}
+    DRIVE_RESULT.write_bytes(canonical(result))
+    return result
 
 
-def evidence(value):
+def evidence():
+    value = json.loads(DRIVE_RESULT.read_text(encoding="utf-8"))
     EVIDENCE.mkdir(parents=True, exist_ok=True)
     action_path = EVIDENCE / "protected-action.json"
     result_path = EVIDENCE / "protected-result.json"
@@ -164,8 +168,8 @@ def self_test():
     state = launch()
     try:
         doctor()
-        driven = drive()
-        artifacts = evidence(driven)
+        drive()
+        artifacts = evidence()
     finally:
         cleanup()
     if process_start(state["pid"]) == state["processStart"]:
@@ -191,7 +195,7 @@ def main():
     elif command == "drive":
         print(json.dumps(drive(), sort_keys=True))
     elif command == "evidence":
-        print(json.dumps(evidence(drive()), sort_keys=True))
+        print(json.dumps(evidence(), sort_keys=True))
     elif command == "cleanup":
         cleanup()
     elif command == "self-test":

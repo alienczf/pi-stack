@@ -136,6 +136,45 @@ class VerificationTest(unittest.TestCase):
         shutil.copy2(FIXTURE / "generated/fixture-control.py", target / "helpers/fixture-control.py")
         (target / "helpers/fixture-control.py").chmod(0o755)
 
+    def test_documented_manual_phases_compose(self):
+        self.begin()
+        self.install_generated()
+        helper = self.repo / ".pi/skills/jig-verification/helpers/fixture-control.py"
+        completed = {}
+        snapshots = {}
+        for command in ("launch", "doctor", "drive", "evidence", "cleanup"):
+            completed[command] = subprocess.run(
+                [sys.executable, str(helper), command],
+                cwd=self.repo,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            self.assertEqual(completed[command].returncode, 0, completed[command].stderr)
+            if command == "launch":
+                launched = json.loads(completed[command].stdout)
+                notes_path = Path(launched["dataDir"]) / "notes.json"
+            elif command in ("drive", "evidence"):
+                snapshots[command] = json.loads(notes_path.read_text())
+
+        driven = json.loads(completed["drive"].stdout)
+        artifacts = json.loads(completed["evidence"].stdout)
+        evidence_root = self.repo / ".pi/jig/verification/evidence"
+        action = json.loads((evidence_root / "protected-action.json").read_text())
+        result = json.loads((evidence_root / "protected-result.json").read_text())
+
+        self.assertEqual(driven["listed"], [{"body": "Ship it", "id": 1, "title": "Release"}])
+        self.assertEqual(snapshots["drive"], driven["persisted"])
+        self.assertEqual(snapshots["evidence"], snapshots["drive"])
+        self.assertEqual(action["command"], ["python3", "client.py", "add", "--title", "Release", "--body", "Ship it"])
+        self.assertEqual(result["observed"], driven["listed"])
+        self.assertEqual(result["persisted"], driven["persisted"])
+        self.assertEqual(len(artifacts), 2)
+        self.assertFalse((self.repo / ".pi/jig/verification/runtime").exists())
+        self.assertFalse((Path("/proc") / str(launched["pid"])).exists())
+        self.assertTrue(all((self.repo / artifact["path"]).exists() for artifact in artifacts))
+
+
     def test_real_runtime_reaches_ready_and_preserves_evidence(self):
         started = self.begin()
         self.assertEqual(started["state"], "verification-building")
