@@ -109,10 +109,12 @@ class FirstStepTest(unittest.TestCase):
             "potetoPlaybook": candidate["potetoPlaybook"],
             "baseline": command_set("python3 -m unittest test_weak", "The weak existing proof passes."),
             "proof": {
-                "targeted": command_set("python3 -m unittest test_client", "The dependency guard passes."),
+                "targeted": command_set("python3 test_dependency.py", "The dependency guard passes."),
                 "regression": command_set("python3 -m unittest", "The fixture suite passes."),
-                "protectedUserPath": command_set("python3 client.py list", "The client remains usable."),
-                "seededViolation": command_set("python3 seed_violation.py", "The guard rejects the seeded import."),
+                "protectedUserPath": command_set(
+                    f"python3 {self.repo / '.pi/skills/jig-verification/helpers/fixture-control.py'} self-test",
+                    "The real add/list/search path persists and cleans up."),
+                "seededViolation": command_set("python3 test_dependency.py --seed", "The guard rejects the seeded import."),
                 "independentReview": True,
             },
             "rollback": {"method": "Revert the dependency guard change.", "commands": ["git revert --no-edit HEAD"]},
@@ -122,24 +124,25 @@ class FirstStepTest(unittest.TestCase):
     def commit_proposal(self, draft):
         return self.ctl("commit-step-proposal", input_value=draft)
 
-    def worker_draft(self, session="fresh-worker-1", allowed=None):
+    def worker_draft(self, session="fresh-worker-1", allowed=None, proposal=None):
         candidate = self.selected_fixture()
-        self.assertEqual(self.commit_proposal(self.proposal_draft(candidate)).returncode, 0)
+        self.assertEqual(self.commit_proposal(
+            self.proposal_draft(candidate) if proposal is None else proposal).returncode, 0)
         self.assertEqual(self.ctl("prepare-step-worktree").returncode, 0)
         return {
             "schemaVersion": 1, "stepId": "0001", "workerSessionId": session,
             "allowedPaths": ["app.py", "client.py", "contract.py", "test_dependency.py"] if allowed is None else allowed,
         }
 
-    def activated_worker(self):
-        draft = self.worker_draft()
+    def activated_worker(self, proposal=None):
+        draft = self.worker_draft(proposal=proposal)
         activated = self.ctl("activate-step-worker", input_value=draft)
         self.assertEqual(activated.returncode, 0, activated.stderr)
         worker = json.loads((self.repo / ".pi/jig/steps/0001/worker.json").read_text())
         return self.repo / worker["worktree"], worker
 
-    def commit_improvement(self):
-        worktree, worker = self.activated_worker()
+    def commit_improvement(self, proposal=None):
+        worktree, worker = self.activated_worker(proposal)
         app = worktree / "app.py"
         app.write_text(app.read_text().replace("from urllib.parse import parse_qs, urlparse\n",
             "from urllib.parse import parse_qs, urlparse\n\nfrom contract import API_VERSION\n").replace(
@@ -785,6 +788,73 @@ class FirstStepTest(unittest.TestCase):
                 self.assertNotEqual(case.ctl("start").returncode, 0)
             finally:
                 case.tearDown()
+
+    def test_proof_passes_ordered_phases_against_pinned_output(self):
+        worktree, _worker = self.commit_improvement()
+        self.assertEqual(self.ctl("record-step-output").returncode, 0)
+        output_path = self.repo / ".pi/jig/steps/0001/output.json"
+        diff = (self.repo / ".pi/jig/steps/0001/candidate.diff").read_bytes()
+        proved = self.ctl("verify-step-output")
+        self.assertEqual(proved.returncode, 0, proved.stderr)
+        after = json.loads((self.repo / ".pi/jig/steps/0001/after.json").read_text())
+        self.assertEqual(after["status"], "passed")
+        self.assertIsNone(after["firstFailure"])
+        self.assertEqual([item["phase"] for item in after["commands"]], [
+            "targeted", "regression", "protected-user-path", "seeded-violation"])
+        self.assertEqual(after["outputSha256"], test_verification.jigctl.sha256_file(output_path))
+        self.assertEqual((self.repo / ".pi/jig/steps/0001/candidate.diff").read_bytes(), diff)
+        protected = json.loads((self.repo / after["commands"][2]["receiptPath"]).read_text())
+        self.assertIn('"cleanup": true', protected["stdout"])
+        self.assertEqual(self.fixture.git("-C", str(worktree), "status", "--porcelain=v1",
+            "--untracked-files=all", "--", ".", ":(exclude).pi"), "")
+        manifest = self.manifest()
+        self.assertEqual((manifest["currentState"], manifest["firstStep"]["outcome"],
+            manifest["firstStep"]["resultPath"]), ("step-running", "pending", None))
+
+    def test_mutating_proof_fails_stops_and_restores_pinned_candidate(self):
+        candidate = self.selected_fixture()
+        proposal = self.proposal_draft(candidate)
+        proposal["proof"]["targeted"]["commands"] = ["printf '\\n# contamination\\n' >> client.py"]
+        worktree, _worker = self.commit_improvement(proposal)
+        output_head = self.fixture.git("-C", str(worktree), "rev-parse", "HEAD").strip()
+        self.assertEqual(self.ctl("record-step-output").returncode, 0)
+        proved = self.ctl("verify-step-output")
+        self.assertEqual(proved.returncode, 0, proved.stderr)
+        after = json.loads((self.repo / ".pi/jig/steps/0001/after.json").read_text())
+        self.assertEqual((after["status"], len(after["commands"]), after["firstFailure"]["reason"]),
+            ("failed", 1, "source-mutation"))
+        self.assertFalse((self.repo / ".pi/jig/steps/0001/commands/regression-01.json").exists())
+        self.assertEqual(self.fixture.git("-C", str(worktree), "rev-parse", "HEAD").strip(), output_head)
+        self.assertEqual(self.fixture.git("-C", str(worktree), "status", "--porcelain=v1",
+            "--untracked-files=all", "--", ".", ":(exclude).pi"), "")
+        self.assertFalse((self.repo / ".pi/jig/steps/0001/result.json").exists())
+        self.assertEqual(self.manifest()["firstStep"]["outcome"], "pending")
+
+    def test_proof_retry_interruption_and_collisions_fail_closed(self):
+        worktree, _worker = self.commit_improvement()
+        self.assertEqual(self.ctl("record-step-output").returncode, 0)
+        with mock.patch.object(test_verification.jigctl, "write_manifest", side_effect=RuntimeError("crash")):
+            with self.assertRaises(RuntimeError):
+                test_verification.jigctl.verify_step_output(self.repo, "isolated-shell")
+        command_paths = sorted((self.repo / ".pi/jig/steps/0001/commands").glob("*.json"))
+        after_path = self.repo / ".pi/jig/steps/0001/after.json"
+        paths = [*command_paths, after_path]
+        snapshots = [(path.read_bytes(), path.stat().st_ino, path.stat().st_mtime_ns) for path in paths]
+        recovered = self.ctl("verify-step-output")
+        self.assertEqual(recovered.returncode, 0, recovered.stderr)
+        manifest = (self.repo / ".pi/jig/manifest.json").read_bytes()
+        self.assertEqual([(path.read_bytes(), path.stat().st_ino, path.stat().st_mtime_ns)
+            for path in paths], snapshots)
+        self.assertEqual(self.ctl("verify-step-output").returncode, 0)
+        self.assertEqual((self.repo / ".pi/jig/manifest.json").read_bytes(), manifest)
+        after_raw = after_path.read_bytes()
+        after_path.write_bytes(after_raw + b" ")
+        self.assertNotEqual(self.ctl("verify-step-output").returncode, 0)
+        self.assertEqual(after_path.read_bytes(), after_raw + b" ")
+        after_path.write_bytes(after_raw)
+        (worktree / "client.py").write_text((worktree / "client.py").read_text() + "\n")
+        self.assertNotEqual(self.ctl("verify-step-output").returncode, 0)
+        self.assertEqual((self.repo / ".pi/jig/manifest.json").read_bytes(), manifest)
 
 
 if __name__ == "__main__":
