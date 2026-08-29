@@ -4567,8 +4567,7 @@ def commit_step_verdict(root: Path, isolation: str, raw: bytes) -> Dict[str, Any
     return manifest
 
 
-def step_result_static(root: Path, worker: Mapping[str, Any], output: Mapping[str, Any],
-    after: Mapping[str, Any], verdict: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
+def baseline_result_commands(root: Path) -> List[Dict[str, Any]]:
     before = read_json(root / BEFORE_PATH, "before receipt")
     commands = []
     for summary in before["commands"]:
@@ -4578,6 +4577,12 @@ def step_result_static(root: Path, worker: Mapping[str, Any], output: Mapping[st
             ("receiptPath", summary["receiptPath"]), ("outputSha256", receipt["outputSha256"]),
             ("finishedAt", summary["finishedAt"]),
         )})
+    return commands
+
+
+def step_result_static(root: Path, worker: Mapping[str, Any], output: Mapping[str, Any],
+    after: Mapping[str, Any], verdict: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
+    commands = baseline_result_commands(root)
     commands.extend({key: summary[key] for key in
         ("command", "exitCode", "receiptPath", "outputSha256", "finishedAt")}
         for summary in after["commands"])
@@ -4594,6 +4599,52 @@ def step_result_static(root: Path, worker: Mapping[str, Any], output: Mapping[st
         "inputRevision": worker["inputRevision"], "outputRevision": output["outputRevision"],
         "branch": worker["branch"], "worktree": worker["worktree"], "commands": commands,
         "diffSha256": output["diffSha256"], "independentVerdict": independent,
+    }
+
+
+def failed_worker_result_static(root: Path, manifest: Mapping[str, Any],
+    worker: Mapping[str, Any]) -> Dict[str, Any]:
+    artifacts = {item["path"]: item for item in manifest["artifacts"]}
+    forbidden = (CANDIDATE_DIFF_PATH, OUTPUT_PATH, AFTER_PATH, VERDICT_PATH)
+    if any(name in artifacts or (root / name).exists() or (root / name).is_symlink() for name in forbidden):
+        raise ValidationError("pre-edit failure cannot have output or proof evidence")
+    transition = manifest["transitions"][-1]
+    if (transition["from"], transition["to"]) != ("step-running", "failed-step-running"):
+        raise ValidationError("pre-edit failure requires the controller worker-failure edge")
+    receipt_path = safe_relative_path(root, transition["receiptPath"], must_exist=True)
+    if (artifacts.get(transition["receiptPath"]) != {"path": transition["receiptPath"],
+            "owner": "controller", "sha256": sha256_file(receipt_path)}
+            or validate_transition_receipt(root, read_json(receipt_path, "worker failure receipt"),
+                ("step-running", "failed-step-running"), manifest["source"],
+                expected_at=transition["at"]) != "phase-failed"):
+        raise ValidationError("pre-edit failure receipt is not exact")
+    worktree = root / worker["worktree"]
+    head = run_git(worktree, ["rev-parse", "HEAD"])
+    status = run_git(worktree, ["status", "--porcelain=v1", "--untracked-files=all",
+        "--", ".", ":(exclude).pi"])
+    diff = subprocess.run(["git", "-C", str(worktree), "diff", "--binary", "--full-index",
+        "--no-ext-diff", f"{worker['inputRevision']}..{head}", "--"], check=False,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if head != worker["inputRevision"] or status or diff.returncode != 0 or diff.stdout:
+        raise ValidationError("pre-edit failure worktree is not clean at its input revision")
+    baseline_names = {Path(summary["receiptPath"]).name
+        for summary in read_json(root / BEFORE_PATH, "before receipt")["commands"]}
+    command_dir = root / ".pi/jig/steps/0001/commands"
+    if {item.name for item in command_dir.iterdir()} != baseline_names:
+        raise ValidationError("pre-edit failure has non-baseline command evidence")
+    allowed = {"selection.json", "proposal.json", "before.json", "worker.json", "commands"}
+    if (root / RESULT_PATH).exists() or (root / RESULT_PATH).is_symlink():
+        allowed.add("result.json")
+    if {item.name for item in (root / ".pi/jig/steps/0001").iterdir()} != allowed:
+        raise ValidationError("pre-edit failure has unknown step evidence")
+    return {
+        "schemaVersion": 1, "stepId": "0001", "outcome": "reverted",
+        "selectionPath": SELECTION_PATH, "selectionSha256": worker["selectionSha256"],
+        "proposalPath": PROPOSAL_PATH, "proposalSha256": worker["proposalSha256"],
+        "inputRevision": worker["inputRevision"], "outputRevision": worker["inputRevision"],
+        "branch": worker["branch"], "worktree": worker["worktree"],
+        "commands": baseline_result_commands(root), "diffSha256": sha256_bytes(diff.stdout),
+        "independentVerdict": None,
     }
 
 
@@ -4616,8 +4667,11 @@ def validate_staged_step_result(root: Path, manifest: Mapping[str, Any],
     artifacts = {item["path"]: item for item in manifest["artifacts"]}
     path = safe_relative_path(root, RESULT_PATH, must_exist=True)
     result = read_json(path, "staged result")
-    output, after, verdict = result_evidence(root, manifest, worker)
-    fixed = step_result_static(root, worker, output, after, verdict)
+    if manifest["currentState"] == "failed-step-running":
+        fixed = failed_worker_result_static(root, manifest, worker)
+    else:
+        output, after, verdict = result_evidence(root, manifest, worker)
+        fixed = step_result_static(root, worker, output, after, verdict)
     validate_instance(result, load_schema("result"))
     if (not isinstance(result, dict) or set(result) != set(fixed) | {"recordedAt"}
             or any(result.get(key) != value for key, value in fixed.items())
@@ -4631,12 +4685,16 @@ def validate_staged_step_result(root: Path, manifest: Mapping[str, Any],
 
 def prepare_step_result(root: Path, isolation: str) -> Dict[str, Any]:
     manifest = load_existing_manifest(root)
-    if manifest["resourceIsolation"] != isolation or manifest["currentState"] != "step-running":
-        raise ValidationError("result preparation requires the current step-running route")
+    if (manifest["resourceIsolation"] != isolation
+            or manifest["currentState"] not in {"step-running", "failed-step-running"}):
+        raise ValidationError("result preparation requires a current running or failed pre-edit route")
     validate_current_source(root, manifest)
     worker = validate_step_worker(root, manifest)
-    output, after, verdict = result_evidence(root, manifest, worker)
-    fixed = step_result_static(root, worker, output, after, verdict)
+    if manifest["currentState"] == "failed-step-running":
+        fixed = failed_worker_result_static(root, manifest, worker)
+    else:
+        output, after, verdict = result_evidence(root, manifest, worker)
+        fixed = step_result_static(root, worker, output, after, verdict)
     path = fixed_artifact_path(root, RESULT_PATH)
     if path.exists() or path.is_symlink():
         if path.is_symlink() or not path.is_file():
