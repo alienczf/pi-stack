@@ -1173,5 +1173,105 @@ class FirstStepTest(unittest.TestCase):
 
 
 
+    def test_selected_kept_publishes_terminal_boundary_without_changing_main(self):
+        main_head = self.fixture.git("rev-parse", "HEAD").strip()
+        worktree, worker, output = self.proved_candidate()
+        self.assertEqual(self.ctl("commit-step-verdict",
+            input_value=self.verdict_draft(output)).returncode, 0)
+        self.assertEqual(self.ctl("prepare-step-result").returncode, 0)
+        result_path = self.repo / ".pi/jig/steps/0001/result.json"
+        result_before = result_path.read_bytes()
+        completed = self.ctl("complete-step-result")
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        manifest = self.manifest()
+        receipt = json.loads((self.repo / manifest["transitions"][-1]["receiptPath"]).read_text())
+        self.assertEqual((manifest["currentState"], manifest["firstStep"]["outcome"],
+            receipt["kind"]), ("initialized", "kept", "selected-step-finalized"))
+        self.assertEqual(manifest["firstStep"]["resultPath"], ".pi/jig/steps/0001/result.json")
+        self.assertEqual(result_path.read_bytes(), result_before)
+        self.assertEqual(self.fixture.git("rev-parse", "HEAD").strip(), main_head)
+        self.assertEqual(self.fixture.git("rev-parse", worker["branch"]).strip(), output["outputRevision"])
+        self.assertEqual(self.fixture.git("-C", str(worktree), "rev-parse", "HEAD").strip(),
+            output["outputRevision"])
+        terminal = json.loads(self.ctl("start").stdout)["terminalResult"]
+        self.assertEqual(terminal, {"outcome": "kept", "path": ".pi/jig/steps/0001/result.json",
+            "branch": worker["branch"], "worktree": worker["worktree"]})
+
+    def test_selected_reverted_proof_and_clean_failure_initialize_honestly(self):
+        for scenario in ("proof", "pre-edit-failure"):
+            case = FirstStepTest(methodName="runTest")
+            case.setUp()
+            try:
+                if scenario == "proof":
+                    candidate = case.selected_fixture()
+                    proposal = case.proposal_draft(candidate)
+                    proposal["proof"]["targeted"]["commands"] = ["exit 1"]
+                    case.proved_candidate(proposal)
+                else:
+                    case.activated_worker()
+                    self.assertEqual(case.ctl("record-failure", "--state", "step-running",
+                        "--reason", "forced before edit").returncode, 0)
+                self.assertEqual(case.ctl("prepare-step-result").returncode, 0)
+                completed = case.ctl("complete-step-result")
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                manifest = case.manifest()
+                self.assertEqual((manifest["currentState"], manifest["firstStep"]["outcome"]),
+                    ("initialized", "reverted"))
+                if scenario == "pre-edit-failure":
+                    edges = [(item["from"], item["to"]) for item in manifest["transitions"][-2:]]
+                    self.assertEqual(edges, [("failed-step-running", "step-running"),
+                        ("step-running", "initialized")])
+                    result = json.loads((case.repo / ".pi/jig/steps/0001/result.json").read_text())
+                    self.assertEqual((result["inputRevision"], result["outputRevision"], result["diffSha256"]),
+                        (result["inputRevision"], result["inputRevision"],
+                         test_verification.jigctl.sha256_bytes(b"")))
+            finally:
+                case.tearDown()
+
+    def test_selected_completion_retry_interruption_and_drift_fail_closed(self):
+        _worktree, _worker, output = self.proved_candidate()
+        self.assertEqual(self.ctl("commit-step-verdict",
+            input_value=self.verdict_draft(output)).returncode, 0)
+        self.assertEqual(self.ctl("prepare-step-result").returncode, 0)
+        with mock.patch.object(test_verification.jigctl, "write_manifest", side_effect=RuntimeError("crash")):
+            with self.assertRaises(RuntimeError):
+                test_verification.jigctl.complete_step_result(self.repo, "isolated-shell")
+        terminal_path = self.repo / ".pi/jig/receipts/transition-0008-initialized.json"
+        before = [(path.read_bytes(), path.stat().st_ino, path.stat().st_mtime_ns) for path in
+            (self.repo / ".pi/jig/steps/0001/result.json", terminal_path)]
+        self.assertEqual(self.ctl("complete-step-result").returncode, 0)
+        self.assertEqual(self.ctl("complete-step-result").returncode, 0)
+        self.assertEqual([(path.read_bytes(), path.stat().st_ino, path.stat().st_mtime_ns) for path in
+            (self.repo / ".pi/jig/steps/0001/result.json", terminal_path)], before)
+        for mutation in ("result", "transition", "manifest", "evidence"):
+            case = FirstStepTest(methodName="runTest")
+            case.setUp()
+            try:
+                _worktree, _worker, output = case.proved_candidate()
+                self.assertEqual(case.ctl("commit-step-verdict",
+                    input_value=case.verdict_draft(output)).returncode, 0)
+                self.assertEqual(case.ctl("prepare-step-result").returncode, 0)
+                self.assertEqual(case.ctl("complete-step-result").returncode, 0)
+                manifest = case.manifest()
+                paths = {
+                    "result": case.repo / ".pi/jig/steps/0001/result.json",
+                    "transition": case.repo / manifest["transitions"][-1]["receiptPath"],
+                    "evidence": case.repo / ".pi/jig/steps/0001/after.json",
+                }
+                if mutation == "manifest":
+                    path = case.repo / ".pi/jig/manifest.json"
+                    changed = manifest
+                    changed["firstStep"]["resultPath"] = None
+                    path.write_bytes(test_verification.jigctl.canonical_json(changed))
+                else:
+                    path = paths[mutation]
+                    path.write_bytes(path.read_bytes() + b" ")
+                changed_bytes = path.read_bytes()
+                self.assertNotEqual(case.ctl("complete-step-result").returncode, 0, mutation)
+                self.assertEqual(path.read_bytes(), changed_bytes)
+            finally:
+                case.tearDown()
+
+
 if __name__ == "__main__":
     unittest.main()
