@@ -198,6 +198,30 @@ class VerificationTest(unittest.TestCase):
             unrelated.terminate()
             unrelated.wait()
 
+    def test_unregistered_state_does_not_authorize_exception_cleanup(self):
+        self.begin()
+        self.install_generated()
+        unrelated = subprocess.Popen(["sleep", "30"])
+        try:
+            raw = (Path("/proc") / str(unrelated.pid) / "stat").read_text()
+            process_start = raw[raw.rfind(")") + 2:].split()[19]
+            state = self.repo / ".pi/jig/verification/runtime/state.json"
+            state.parent.mkdir(parents=True)
+            unknown = (json.dumps({"pid": unrelated.pid, "processStart": process_start, "unknown": "preserve"}, indent=2) + "\n").encode()
+            state.write_bytes(unknown)
+
+            completed = self.ctl("complete-verification")
+
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertEqual(self.manifest()["currentState"], "verification-building")
+            self.assertIsNone(unrelated.poll())
+            self.assertEqual(state.read_bytes(), unknown)
+        finally:
+            if unrelated.poll() is None:
+                unrelated.terminate()
+            unrelated.wait()
+
+
     def test_plan_precedes_generation_and_partial_state_does_not_advance(self):
         conflict = self.repo / ".pi/skills/jig-verification"
         conflict.mkdir(parents=True)

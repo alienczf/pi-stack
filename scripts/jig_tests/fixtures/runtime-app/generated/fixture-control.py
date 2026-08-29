@@ -208,6 +208,7 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as error:
-        cleanup()
+        if OWNED_PROCESS is not None:
+            cleanup()
         print(f"fixture-control: {error}", file=sys.stderr)
         raise SystemExit(1)
