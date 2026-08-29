@@ -33,7 +33,7 @@ grep -q 'skills-pstack' install.sh || fail "install.sh must write skills-pstack"
 grep -q 'pi-node' install.sh || fail "install.sh must find pi under pi-node"
 grep -q 'inherit' install.sh || fail "install.sh must rewrite cursor subagent models to inherit"
 grep -F -q '.local/bin/jig' install.sh || fail "install.sh must link jig into .local/bin"
-grep -q 'defaultProjectTrust' install.sh || fail "install.sh must set defaultProjectTrust when missing"
+grep -q 'without changing project trust' install.sh || fail "install.sh must document project trust preservation"
 grep -q 'poteto-mode/SKILL.md' overlay/APPEND_SYSTEM.md || fail "APPEND_SYSTEM.md must name poteto-mode/SKILL.md"
 grep -q 'Do not run `pi -p`' overlay/AGENTS.md || fail "AGENTS.md must forbid bash pi -p"
 grep -q 'subagent' overlay/AGENTS.md || fail "AGENTS.md must name the subagent tool"
@@ -181,8 +181,8 @@ if data.get("defaultModel") != "cursor/auto":
 	raise SystemExit("top-level defaultModel was rewritten")
 if data.get("enabledModels") != ["cursor/auto", "cursor/composer-2.5"]:
 	raise SystemExit("enabledModels was rewritten")
-if data.get("defaultProjectTrust") != "always":
-	raise SystemExit("defaultProjectTrust was not set to always")
+if "defaultProjectTrust" in data:
+	raise SystemExit("fresh settings gained defaultProjectTrust")
 subs = data.get("subagents") or {}
 if subs.get("defaultModel") != "inherit":
 	raise SystemExit("subagents.defaultModel was not inherit")
@@ -197,6 +197,13 @@ grep -q 'name: Poteto Mode' "$stub/skills/poteto-mode/SKILL.md" || fail "install
 test -L "$home/.pi/agent/skills-pstack/poteto-mode/playbooks" || fail "install did not symlink playbooks"
 test -L "$home/.local/bin/jig" || fail "install did not link ~/.local/bin/jig"
 test -x "$home/.local/bin/jig" || fail "linked jig is not executable"
+test -x "$home/.pi/agent/jig/bin/jig.sh" || fail "install did not copy the Jig launcher"
+test -x "$home/.pi/agent/jig/bin/jigctl.py" || fail "install did not copy the Jig controller"
+test -f "$home/.pi/agent/jig/skills/jig/references/public-routes.json" || fail "install did not copy the public route matrix"
+test -f "$home/.pi/agent/skills-pstack/jig/SKILL.md" || fail "install did not register the copied Jig skill"
+if grep -F -q "$root" "$home/.pi/agent/bin/jig" "$home/.pi/agent/skills-pstack/jig/SKILL.md"; then
+	fail "installed Jig entry points depend on the source checkout"
+fi
 test -f "$home/.pi/agent/agents/oracle.md" || fail "piped install did not write agents/oracle.md"
 grep -q poteto-mode "$home/.pi/agent/agents/worker.md" || fail "worker.md must mention poteto-mode"
 

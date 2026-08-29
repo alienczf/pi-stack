@@ -98,19 +98,19 @@ A selected candidate must clear every eligibility gate. It is ineligible when it
 
 For a selected candidate, the controller validates `proposal.json` before it creates the worktree. The proposal fixes the commandment IDs, active proof, rollback, and eval decision. The worker cannot change those fields. Init stops after the first terminal outcome and never selects a second candidate.
 
-## Command table
+## Public routes
 
-All supported forms use the Python standard-library controller for validation and state transitions. They differ in how Pi resources enter the process.
+[`public-routes.json`](public-routes.json) is the canonical public-route matrix. The generated table below must match it.
 
-| Command | Environment | Semantics |
-|---|---|---|
-| `jig init` | New shell-launched Pi process | The shell resolves the trusted pi-stack installation and delegates to the controller. The controller starts Pi with `--no-approve`, `--no-context-files`, `--no-extensions`, `--no-prompt-templates`, `--no-skills`, and one explicit `--skill <trusted-jig-skill>` argument. It records `resourceIsolation` as `isolated-shell`. |
-| `/skill:jig init` | Current Pi session | The Jig skill calls the controller in current-session mode and performs semantic work in the current session. It never launches `pi -p` from Bash. The controller still owns every transition and validation. It records `resourceIsolation` as `inherited-session` because already-loaded project resources cannot be removed. |
-| `/jig init` | Current Pi session through the `jig.md` prompt template | The template expands to an instruction to invoke `/skill:jig init`. It has the same state and safety contract as `/skill:jig init`, including the `inherited-session` receipt. It is not a separate engine. |
+<!-- public-routes:start -->
+| Command | Resource loading | Receipt | Controller | Pause and resume | Terminal state |
+| --- | --- | --- | --- | --- | --- |
+| `jig init` | Starts a fresh Pi process with --no-approve, --no-context-files, --no-extensions plus one explicit --extension, --no-skills plus one explicit --skill, --no-prompt-templates, --no-themes, and explicit system prompt overrides. Only the installed Jig skill and installed pi-subagents extension enter the campaign as resources. | `isolated-shell` | `${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/jig/bin/jigctl.py` | Exit at awaiting-commandments when the operator has not supplied a complete response. Resume with jig init. A clean exit at another active boundary also resumes with jig init. Resume with /skill:jig init or /jig init when the manifest records inherited-session. | `initialized with kept, reverted, or no-eligible-candidate` |
+| `/skill:jig init` | Uses the current trusted Pi session. Resources already loaded into that session remain loaded. It never starts a nested Pi process. | `inherited-session` | `${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/jig/bin/jigctl.py` | Stop at awaiting-commandments when the operator has not supplied a complete response. Resume with /skill:jig init in a trusted Pi session. Resume with jig init when the manifest records isolated-shell. | `initialized with kept, reverted, or no-eligible-candidate` |
+| `/jig init` | Expands to an instruction to load the registered Jig skill in the current trusted Pi session. Resources already loaded into that session remain loaded. It never starts a nested Pi process. | `inherited-session` | `${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/jig/bin/jigctl.py` | Stop at awaiting-commandments when the operator has not supplied a complete response. Resume with /jig init in a trusted Pi session. Resume with jig init when the manifest records isolated-shell. | `initialized with kept, reverted, or no-eligible-candidate` |
+<!-- public-routes:end -->
 
-Only `init` is a version 1 mutating verb. Unknown verbs, legacy flags, package selectors, and extra positional arguments exit with status 2 before a manifest write. Read-only `status` or `check` commands can be added later only if init needs them. They cannot advance state.
-
-A current-session invocation is convenient, but it cannot claim the resource isolation of the shell command. The command reports that difference instead of implying route parity.
+Only `init` is a version 1 mutating verb. Unknown verbs, legacy flags, package selectors, and extra positional arguments exit with status 2 before a manifest write. A current-session invocation cannot claim the shell command's resource isolation.
 
 ## Safe repository loading
 

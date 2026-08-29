@@ -1,51 +1,43 @@
 # Initialize one repository
 
-Use this playbook for `init` only. Stop after the manifest reaches the boundary implemented by the controller. This unit stops at `verification-ready`.
+Use this playbook only for the exact `init` argument. Keep the `resourceIsolation` value and controller path selected by `SKILL.md` for every operation.
 
 ## Start or resume
 
-Resolve the Git top level and run `jigctl.py start` with the current route. Use `inherited-session` for `/skill:jig init` and `/jig init`. Use `isolated-shell` only when the trusted shell launcher started the fresh Pi process.
+1. Resolve the Git top level with `git rev-parse --show-toplevel`.
+2. Reject every package selector, path argument, flag, and extra positional argument. Do not write state for a rejected invocation.
+3. Run `start --resource-isolation <route>` from the Git root.
+4. If `start` reports a route mismatch, stop and print the recovery command from [the public-route matrix](../references/public-routes.json).
+5. Resume only the state returned by the controller. Do not infer a state from file existence.
 
-Do not start another Pi process from the current Pi session. Do not change routes on resume.
+At `surveying`, inspect only the target repository. Submit one complete profile through `commit-profile --resource-isolation <route>` on standard input. The profile must satisfy the controller schema and cite target files. Run `start` again.
 
-At `surveying`, inspect the repository with read-only tools and commit the validated profile through `commit-profile`. Do not ask the operator for facts that the repository proves.
+## Obtain target COMMANDMENTS
 
-At `awaiting-commandments`, read [the COMMANDMENTS interview](../references/commandments-interview.md). Run `present-commandments` once and show its observed facts before its single question round. Show every recommended default. Do not select one for the operator.
+At `awaiting-commandments`, follow [the COMMANDMENTS interview](../references/commandments-interview.md).
 
-Submit only the operator's complete response to `stage-commandments`. Missing or partial answers stay unresolved. Do not infer values or ask a second round.
+Run `present-commandments` once. Show its `observedFacts`, its complete question set, and every `recommendedDefault` to the target operator. Ask one question round. A recommended default is not an answer.
 
-Show the exact staged candidate bytes and SHA-256 digest. Accept only one decision for that display:
+If no complete response exists, pause at `awaiting-commandments`. Ask the operator to write the complete JSON response to `.pi/jig/commandments/answers.input.json`. Do not infer missing values or start a second interview.
 
-1. Ratify the exact digest with the intended marker.
-2. Amend named entries in the original response.
+Pass those exact bytes to the emitted `stage-commandments` operation. Display the full candidate file, its exact SHA-256 digest, and its intended marker. Accept only one explicit decision:
+
+1. Ratify the displayed digest.
+2. Amend named answers.
 3. Defer.
 
-Record amend and defer with `record-commandments-decision`. Keep the state at `awaiting-commandments`. For an amendment, submit the complete amended response after the operator updates the original answer set.
+Use the emitted `record-commandments-decision` operation for amend or defer. For amend, pass a complete amended response through the emitted follow-up operation. Use `ratify-commandments` only after the target operator explicitly approves the digest and marker. Then run `validate-commandments` and `start`. Never write root `COMMANDMENTS.md` directly.
 
-Run `ratify-commandments` only after the operator explicitly approves the displayed digest. Then run `validate-commandments`. Continue only when the manifest reports `commandments-ratified`.
+## Build target verification
 
-## Build runtime verification
+At `commandments-ratified`, read [the runtime verification boundary](../references/runtime-verification.md) and the installed `create-verification-skill/SKILL.md`. Submit one complete target-local plan through the emitted `begin-verification` operation before writing reserved files.
 
-At `commandments-ratified`, read [the runtime verification boundary](../references/runtime-verification.md) and the canonical installed `pstack/skills/create-verification-skill/SKILL.md`. Inspect the repository's public surface, launch command, evidence, isolation, and cleanup behavior. Do not ask a second product interview.
+At `verification-building`, write only the controller-returned `reservedPaths`. Build the Pi verification skill, the feature index, three to five feature files when the target supports them, and target-local helpers. Run the emitted `complete-verification` operation. Fix reported defects while the controller remains at `verification-building`. Continue only after `validate-verification` succeeds and `start` reports `verification-ready`.
 
-Submit one complete strict plan through `begin-verification`. The transition to `verification-building` must happen before writing target skill files. Generate only the returned `reservedPaths` under `.pi/skills/jig-verification/`.
+## Complete one first step
 
-Build a Pi-native `SKILL.md`, a feature index, three to five feature files when available, and target-local helpers. Drive the public user surface. Do not call an internal setter or test-only endpoint. Keep Cursor paths and absolute pstack paths out of target artifacts.
+At `verification-ready` or a later first-step state, follow [the first-step playbook](first-step.md). Stop after the controller reaches `initialized`. Never select a second candidate.
 
-Run `complete-verification`. Correct any reported skill, map, runtime, evidence, or cleanup defect while state remains `verification-building`. Do not infer a pass from file existence or helper text.
+## Pause and recover
 
-Stop when `validate-verification` succeeds and the manifest reports `verification-ready`. Do not select a first-step candidate in this unit.
-
-## Noninteractive shell resume
-
-At `awaiting-commandments`, write no answers. Read the `resume.operations` array from `start`. Prepend the trusted `jigctl.py` path to each named controller operation.
-
-If `present` appears, run it and show the one question round. Ask the operator to write the complete response to `.pi/jig/commandments/answers.input.json`. Run the printed `stage` operation with that file as standard input. Do not tell the operator that `jig init` consumes the file. This launcher version does not consume response files on rerun.
-
-After staging, run `start` again. Print the exact candidate path, digest, and intended marker. The output names the `ratify`, `amend`, and `defer` operations. Run only the operation that matches the operator's explicit decision. Replace `<operator-written marker>` only with the operator's text. After an amend decision, run its `followUp` operation with the complete amended response.
-
-A later integration unit may add response-file handling to the public launcher. Until then, use the direct controller operations. Never claim `commandments-ratified` before the controller commits the transition. Never claim isolated resources after an inherited session performs semantic work.
-
-At `commandments-ratified`, follow the emitted `begin-verification` operation with `.pi/jig/verification/plan.input.json` on standard input. At `verification-building`, create only the listed files and run the emitted `complete-verification` operation. The launcher does not generate or execute those files on rerun yet.
-
-Never claim `verification-ready` before the controller records a passing runtime receipt, retained evidence, and exact Cleanup proof.
+A crash or clean operator pause resumes through `start` with the manifest's original route. Preserve existing `COMMANDMENTS.md` and `.pi/jig`. Do not delete, replace, relabel, or reconstruct controller-owned evidence.

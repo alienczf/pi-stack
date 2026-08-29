@@ -9,14 +9,15 @@ Copies the pi-stack overlay into $HOME/.pi/agent.
 Writes pstack-aligned user agents into $HOME/.pi/agent/agents/.
 Dated backups go to $HOME/.pi/agent/backups/subagents/.
 Rewrites Cursor skill names into $HOME/.pi/agent/skills-pstack. Does not edit pstack.
-Merges defaultTools, skills, and packages into settings.json.
+Copies the Jig launcher, controller, skill, and references into $HOME/.pi/agent/jig/.
+Merges defaultTools, skills, and packages into settings.json without changing project trust.
 Finds pi on PATH or under ~/.local/share/pi-node and installs
 npm:pi-web-access, npm:pi-hashline-edit, npm:pi-subagents, and
 npm:@narumitw/pi-goal.
 Creates pi-goal.json with unlimited automatic turns when that file is absent.
 Rewrites cursor/* subagent models to inherit. Links jig into ~/.local/bin.
 Never writes auth.json, models-store.json, private/, or sessions/.
-Does not search for git repositories. Fit a repo later with jig.
+Does not search for git repositories. Initialize one Git root later with jig init.
 
 If PI_STACK is unset and this script is not in a checkout, uses
 $HOME/.pi-stack. Clones alienczf/pi-stack there when overlay/ is missing.
@@ -133,6 +134,45 @@ fi
 
 agent="${HOME}/.pi/agent"
 mkdir -p "$agent/prompts" "$agent/bin"
+installed_jig="$agent/jig"
+export PI_STACK_SOURCE_ROOT="$here"
+export PI_STACK_INSTALLED_JIG="$installed_jig"
+python3 - <<'PY'
+import os
+import shutil
+from pathlib import Path
+
+source = Path(os.environ["PI_STACK_SOURCE_ROOT"])
+destination = Path(os.environ["PI_STACK_INSTALLED_JIG"])
+relative_files = [Path("bin/jig.sh"), Path("bin/jigctl.py")]
+relative_files.extend(
+    path.relative_to(source)
+    for path in sorted((source / "skills/jig").rglob("*"))
+    if path.is_file() and "__pycache__" not in path.parts
+)
+wanted = {path.as_posix() for path in relative_files}
+destination.mkdir(parents=True, exist_ok=True)
+for current in sorted(destination.rglob("*"), reverse=True):
+    relative = current.relative_to(destination).as_posix()
+    if current.is_symlink() or current.is_file():
+        if relative not in wanted:
+            current.unlink()
+    elif current.is_dir() and not any(current.iterdir()):
+        current.rmdir()
+for relative in relative_files:
+    src = source / relative
+    dest = destination / relative
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    data = src.read_bytes()
+    if dest.is_symlink() or (dest.exists() and not dest.is_file()):
+        if dest.is_dir():
+            shutil.rmtree(dest)
+        else:
+            dest.unlink()
+    if not dest.exists() or dest.read_bytes() != data:
+        dest.write_bytes(data)
+    dest.chmod(src.stat().st_mode & 0o777)
+PY
 
 install_md() {
 	local src="$1" dest="$2"
@@ -157,9 +197,9 @@ for src in "$here/prompts"/*.md; do
 	install_md "$src" "$agent/prompts/$(basename "$src")"
 done
 
-if [[ -x "$here/bin/jig.sh" ]]; then
+if [[ -x "$installed_jig/bin/jig.sh" ]]; then
 	wrapper="$agent/bin/jig"
-	wanted=$'#!/usr/bin/env bash\nexec '"$here/bin/jig.sh"$' "$@"\n'
+	wanted=$'#!/usr/bin/env bash\nset -euo pipefail\nagent_dir="${PI_CODING_AGENT_DIR:-${PI_AGENT_DIR:-${HOME}/.pi/agent}}"\nexec "$agent_dir/jig/bin/jig.sh" "$@"\n'
 	if [[ ! -f "$wrapper" ]] || [[ "$(cat "$wrapper")" != "$wanted" ]]; then
 		printf '%s' "$wanted" >"$wrapper"
 	fi
@@ -179,11 +219,12 @@ for name in poteto-mode how why architect interrogate tdd unslop technical-writi
 		conform_src+=("$pstack/skills/$name")
 	fi
 done
-for name in jig cross-repo; do
+for name in cross-repo; do
 	if [[ -f "$here/skills/$name/SKILL.md" ]]; then
 		conform_src+=("$here/skills/$name")
 	fi
 done
+conform_src+=("$installed_jig/skills/jig")
 if [[ ${#conform_src[@]} -gt 0 ]]; then
 	python3 "$here/bin/conform-skills.py" --out "$conform_out" "${conform_src[@]}"
 fi
@@ -231,8 +272,6 @@ else:
 
 data["defaultTools"] = tools
 data["skills"] = skills
-if "defaultProjectTrust" not in data:
-	data["defaultProjectTrust"] = "always"
 
 def is_cursor_model(value):
 	return isinstance(value, str) and (value == "cursor" or value.startswith("cursor/"))
@@ -465,8 +504,10 @@ pi-stack is installed for this user.
   skills    ${skill_n}
   packages  ${pkg_msg}
   jig       ${HOME}/.local/bin/jig
-Fit a repo:
-  cd /path/to/repo && jig
-or inside Pi:
-  /skill:jig
+  controller ${installed_jig}/bin/jigctl.py
+Fit one Git repository:
+  cd /path/to/repo && jig init
+Or use the current trusted Pi session:
+  /skill:jig init
+  /jig init
 EOF
