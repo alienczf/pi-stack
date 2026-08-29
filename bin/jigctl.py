@@ -33,6 +33,7 @@ IMPLEMENTED_STATES = {
     "verification-building",
     "verification-ready",
     "step-selecting",
+    "initialized",
     "failed-surveying",
     "failed-awaiting-commandments",
     "failed-commandments-ratified",
@@ -47,6 +48,7 @@ TRANSITION_KIND_BY_EDGE = {
     ("commandments-ratified", "verification-building"): "verification-started",
     ("verification-building", "verification-ready"): "verification-ready",
     ("verification-ready", "step-selecting"): "step-selection-started",
+    ("step-selecting", "initialized"): "no-candidate-finalized",
     ("surveying", "failed-surveying"): "phase-failed",
     ("awaiting-commandments", "failed-awaiting-commandments"): "phase-failed",
     ("commandments-ratified", "failed-commandments-ratified"): "phase-failed",
@@ -87,6 +89,7 @@ VERIFICATION_FEATURE_INDEX_PATH = ".pi/skills/jig-verification/references/featur
 VERIFICATION_OUTPUT_LIMIT = 256 * 1024
 VERIFICATION_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
 SELECTION_PATH = ".pi/jig/steps/0001/selection.json"
+RESULT_PATH = ".pi/jig/steps/0001/result.json"
 SELECTION_DRAFT_FIELDS = {
     "schemaVersion", "stepId", "repositoryRevision", "commandmentsSha256",
     "candidates", "selectedCandidateId", "rankingSummary",
@@ -929,6 +932,13 @@ def validate_transition_receipt(
                 "runtimeReceiptSha256",
             }
         )
+    elif kind == "no-candidate-finalized":
+        expected_fields.update(
+            {
+                "resourceIsolation", "commandmentsSha256", "selectionPath",
+                "selectionSha256", "resultPath", "resultSha256",
+            }
+        )
     elif kind == "phase-failed":
         expected_fields.add("failureReason")
     if not isinstance(receipt, dict) or set(receipt) != expected_fields:
@@ -1071,6 +1081,24 @@ def validate_transition_receipt(
         runtime_path = safe_relative_path(root, receipt["runtimeReceiptPath"], must_exist=True)
         if runtime_path.is_symlink() or not runtime_path.is_file() or sha256_file(runtime_path) != receipt["runtimeReceiptSha256"]:
             raise ValidationError("step-selection runtime receipt hash is inconsistent")
+    elif kind == "no-candidate-finalized":
+        fixed = {
+            "selectionPath": SELECTION_PATH,
+            "resultPath": RESULT_PATH,
+        }
+        if (
+            receipt["resourceIsolation"] not in {"isolated-shell", "inherited-session"}
+            or receipt["selectionPath"] != fixed["selectionPath"]
+            or receipt["resultPath"] != fixed["resultPath"]
+            or re.fullmatch(r"[0-9a-f]{64}", receipt["commandmentsSha256"]) is None
+            or re.fullmatch(r"[0-9a-f]{64}", receipt["selectionSha256"]) is None
+            or re.fullmatch(r"[0-9a-f]{64}", receipt["resultSha256"]) is None
+        ):
+            raise ValidationError("no-candidate transition receipt is inconsistent")
+        for path_key, digest_key in (("selectionPath", "selectionSha256"), ("resultPath", "resultSha256")):
+            path = safe_relative_path(root, receipt[path_key], must_exist=True)
+            if path.is_symlink() or not path.is_file() or sha256_file(path) != receipt[digest_key]:
+                raise ValidationError("no-candidate transition artifact hash is inconsistent")
     elif kind == "phase-failed":
         reason = receipt["failureReason"]
         if (
@@ -1179,7 +1207,7 @@ def validate_manifest_semantics(root: Path, manifest: Mapping[str, Any], schema:
         r"^(?:COMMANDMENTS\.md|\.pi/jig/(?:profile\.json|commandments/(?:interview\.json|"
         r"staging\.json|answers/[0-9a-f]{64}\.json|candidates/[0-9a-f]{64}\.md|"
         r"decisions/[0-9a-f]{64}\.json|proposals/[0-9a-f]{64}\.md)|"
-        r"steps/0001/selection\.json|"
+        r"steps/0001/(?:selection|result)\.json|"
         r"verification/(?:plan\.json|receipts/runtime-[0-9a-f]{64}\.json|"
         r"evidence/[a-z0-9][a-z0-9._-]{0,127}\.json)|receipts/(?:transition-[0-9]{4}-(?:"
         + implemented_state
@@ -1315,6 +1343,18 @@ def validate_manifest_semantics(root: Path, manifest: Mapping[str, Any], schema:
                 )
             ):
                 raise ValidationError("step-selection transition differs from its verified boundary")
+        elif kind == "no-candidate-finalized":
+            selection_artifact = next((item for item in artifacts if item["path"] == SELECTION_PATH), None)
+            result_artifact = next((item for item in artifacts if item["path"] == RESULT_PATH), None)
+            if (
+                receipt_data["resourceIsolation"] != manifest["resourceIsolation"]
+                or receipt_data["commandmentsSha256"] != manifest["commandments"]["sha256"]
+                or selection_artifact is None
+                or receipt_data["selectionSha256"] != selection_artifact["sha256"]
+                or result_artifact is None
+                or receipt_data["resultSha256"] != result_artifact["sha256"]
+            ):
+                raise ValidationError("no-candidate transition differs from its committed boundary")
         previous = transition["to"]
     transition_artifacts = {
         path
@@ -1339,6 +1379,7 @@ def validate_manifest_semantics(root: Path, manifest: Mapping[str, Any], schema:
         "failed-verification-ready",
         "step-selecting",
         "failed-step-selecting",
+        "initialized",
     }:
         profile_artifact = next(
             (item for item in artifacts if item["path"] == ".pi/jig/profile.json"),
@@ -1358,6 +1399,7 @@ def validate_manifest_semantics(root: Path, manifest: Mapping[str, Any], schema:
         "failed-verification-ready",
         "step-selecting",
         "failed-step-selecting",
+        "initialized",
     }:
         root_path = safe_relative_path(root, COMMANDMENTS_ROOT_PATH, must_exist=True)
         if not root_path.is_file() or root_path.is_symlink():
@@ -1381,8 +1423,11 @@ def validate_manifest_semantics(root: Path, manifest: Mapping[str, Any], schema:
         "failed-verification-ready",
         "step-selecting",
         "failed-step-selecting",
+        "initialized",
     }:
         validate_verification_ready(root, manifest)
+    if state == "initialized":
+        validate_no_candidate_result(root, manifest)
 
 
 def receipt_value(kind: str, from_state: str, to_state: str, source: Mapping[str, Any], **extra: Any) -> Dict[str, Any]:
@@ -1489,6 +1534,7 @@ def verification_reserved_paths(root: Path, manifest: Mapping[str, Any]) -> List
         "failed-verification-ready",
         "step-selecting",
         "failed-step-selecting",
+        "initialized",
     }:
         return []
     plan = read_json(root / VERIFICATION_PLAN_PATH, "verification plan")
@@ -3560,6 +3606,45 @@ def validate_committed_selection(
                 raise ValidationError("selection evidence is not a readable source file") from error
 
 
+def validate_no_candidate_result(root: Path, manifest: Mapping[str, Any]) -> None:
+    first_step = manifest["firstStep"]
+    if first_step != {
+        "selectionPath": SELECTION_PATH,
+        "selectedCandidateId": None,
+        "proposalPath": None,
+        "resultPath": RESULT_PATH,
+        "outcome": "no-eligible-candidate",
+    }:
+        raise ValidationError("initialized no-candidate manifest has an invalid first-step shape")
+    artifacts = {item["path"]: item for item in manifest["artifacts"]}
+    selection_path = safe_relative_path(root, SELECTION_PATH, must_exist=True)
+    result_path = safe_relative_path(root, RESULT_PATH, must_exist=True)
+    selection_digest = sha256_file(selection_path)
+    result_digest = sha256_file(result_path)
+    if artifacts.get(SELECTION_PATH) != {"path": SELECTION_PATH, "owner": "controller", "sha256": selection_digest}:
+        raise ValidationError("initialized selection ownership is inconsistent")
+    if artifacts.get(RESULT_PATH) != {"path": RESULT_PATH, "owner": "controller", "sha256": result_digest}:
+        raise ValidationError("initialized result ownership is inconsistent")
+    selection = read_json(selection_path, "selection")
+    validate_committed_selection(root, manifest, selection)
+    if selection["selectedCandidateId"] is not None:
+        raise ValidationError("no-candidate result requires a null selection")
+    result = read_json(result_path, "result")
+    validate_instance(result, load_schema("result"))
+    expected = {
+        "schemaVersion": 1, "stepId": "0001", "outcome": "no-eligible-candidate",
+        "selectionPath": SELECTION_PATH, "selectionSha256": selection_digest,
+        "proposalPath": None, "proposalSha256": None, "inputRevision": None,
+        "outputRevision": None, "branch": None, "worktree": None, "commands": [],
+        "diffSha256": None, "independentVerdict": None,
+    }
+    if not isinstance(result, dict) or any(result.get(key) != value for key, value in expected.items()):
+        raise ValidationError("no-candidate result differs from its selection boundary")
+    step_dir = result_path.parent
+    if {item.name for item in step_dir.iterdir()} != {"selection.json", "result.json"}:
+        raise ValidationError("initialized step directory contains an unknown artifact")
+
+
 def atomic_create(path: Path, data: bytes) -> None:
     temporary = path.parent / f".jigctl-{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
     descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -3614,6 +3699,85 @@ def commit_step_selection(root: Path, isolation: str, raw: bytes) -> Dict[str, A
         return manifest
     upsert_artifact(manifest, SELECTION_PATH, "controller", digest)
     manifest["updatedAt"] = selection["controllerReceipt"]["recordedAt"]
+    write_manifest(root, manifest)
+    return manifest
+
+
+def finalize_no_candidate(root: Path, isolation: str) -> Dict[str, Any]:
+    manifest = load_existing_manifest(root)
+    if manifest["resourceIsolation"] != isolation:
+        raise JigError("the existing manifest uses a different resourceIsolation route")
+    validate_current_source(root, manifest)
+    if manifest["currentState"] == "initialized":
+        return manifest
+    if manifest["currentState"] != "step-selecting":
+        raise ValidationError("no-candidate finalization requires step-selecting")
+    validate_verification_ready(root, manifest)
+    selection_artifact = next((item for item in manifest["artifacts"] if item["path"] == SELECTION_PATH), None)
+    if selection_artifact is None or selection_artifact["owner"] != "controller":
+        raise ValidationError("no-candidate finalization requires a registered controller selection")
+    selection_path = safe_relative_path(root, SELECTION_PATH, must_exist=True)
+    selection = read_json(selection_path, "selection")
+    validate_committed_selection(root, manifest, selection)
+    if selection["selectedCandidateId"] is not None:
+        raise ValidationError("no-candidate finalization requires a null selection")
+    selection_digest = sha256_file(selection_path)
+    if selection_artifact["sha256"] != selection_digest:
+        raise ValidationError("registered selection differs from the committed file")
+    result_path = fixed_artifact_path(root, RESULT_PATH)
+    names = {item.name for item in result_path.parent.iterdir()}
+    if names - {"selection.json", "result.json"}:
+        raise JigError("step directory contains an unknown artifact")
+    result_static = {
+        "schemaVersion": 1, "stepId": "0001", "outcome": "no-eligible-candidate",
+        "selectionPath": SELECTION_PATH, "selectionSha256": selection_digest,
+        "proposalPath": None, "proposalSha256": None, "inputRevision": None,
+        "outputRevision": None, "branch": None, "worktree": None, "commands": [],
+        "diffSha256": None, "independentVerdict": None,
+    }
+    if result_path.exists() or result_path.is_symlink():
+        if result_path.is_symlink() or not result_path.is_file():
+            raise JigError("existing result collision is not a regular file")
+        result = read_json(result_path, "result")
+        validate_instance(result, load_schema("result"))
+        if (not isinstance(result, dict) or canonical_json(result) != result_path.read_bytes()
+                or any(result.get(key) != value for key, value in result_static.items())):
+            raise ValidationError("existing result is not the exact recoverable no-candidate result")
+    else:
+        result = {**result_static, "recordedAt": now()}
+        atomic_create(result_path, canonical_json(result))
+    result_digest = sha256_file(result_path)
+    upsert_artifact(manifest, RESULT_PATH, "controller", result_digest)
+    extra = {
+        "resourceIsolation": isolation,
+        "commandmentsSha256": manifest["commandments"]["sha256"],
+        "selectionPath": SELECTION_PATH, "selectionSha256": selection_digest,
+        "resultPath": RESULT_PATH, "resultSha256": result_digest,
+    }
+    index = len(manifest["transitions"]) + 1
+    receipt_relative = f".pi/jig/receipts/transition-{index:04d}-initialized.json"
+    receipt_path = safe_relative_path(root, receipt_relative)
+    if receipt_path.exists() or receipt_path.is_symlink():
+        if receipt_path.is_symlink() or not receipt_path.is_file():
+            raise JigError("initialized transition collision is not a regular file")
+        receipt = read_json(receipt_path, "initialized transition receipt")
+        validate_transition_receipt(root, receipt, ("step-selecting", "initialized"), manifest["source"])
+        if any(receipt.get(key) != value for key, value in extra.items()):
+            raise ValidationError("initialized transition differs from the recoverable result")
+        receipt_digest = sha256_file(receipt_path)
+        manifest["transitions"].append({
+            "from": "step-selecting", "to": "initialized", "at": receipt["at"],
+            "receiptPath": receipt_relative, "receiptSha256": receipt_digest,
+        })
+        upsert_artifact(manifest, receipt_relative, "controller", receipt_digest)
+        manifest["currentState"] = "initialized"
+        manifest["updatedAt"] = receipt["at"]
+    else:
+        append_transition(root, manifest, "step-selecting", "initialized", "no-candidate-finalized", **extra)
+    manifest["firstStep"] = {
+        "selectionPath": SELECTION_PATH, "selectedCandidateId": None,
+        "proposalPath": None, "resultPath": RESULT_PATH, "outcome": "no-eligible-candidate",
+    }
     write_manifest(root, manifest)
     return manifest
 
@@ -3811,6 +3975,7 @@ def parser() -> argparse.ArgumentParser:
         "validate-verification",
         "begin-step-selection",
         "commit-step-selection",
+        "finalize-no-candidate",
     )
     commands = {}
     for name in mutating:
@@ -3915,6 +4080,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         elif arguments.command == "commit-step-selection":
             raw = sys.stdin.buffer.read(MAX_INPUT_BYTES + 1)
             manifest = commit_step_selection(root, arguments.resource_isolation, raw)
+        elif arguments.command == "finalize-no-candidate":
+            manifest = finalize_no_candidate(root, arguments.resource_isolation)
         else:
             raw = sys.stdin.buffer.read(MAX_INPUT_BYTES + 1)
             manifest, output = propose_commandments_amendment(
