@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import time
@@ -20,6 +21,26 @@ OWNED_PROCESS = None
 
 def canonical(value):
     return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
+
+
+def write_exact(directory, name, wanted):
+    try:
+        descriptor = os.open(name, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW, dir_fd=directory)
+    except FileNotFoundError:
+        try:
+            descriptor = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644, dir_fd=directory)
+        except FileExistsError as error:
+            raise RuntimeError(f"evidence target appeared while publishing: {name}") from error
+        with os.fdopen(descriptor, "wb") as target:
+            target.write(wanted)
+        return
+    metadata = os.fstat(descriptor)
+    if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+        os.close(descriptor)
+        raise RuntimeError(f"evidence target is not an owned regular file: {name}")
+    with os.fdopen(descriptor, "rb") as target:
+        if target.read() != wanted:
+            raise RuntimeError(f"evidence target has unknown contents: {name}")
 
 
 def process_start(pid):
@@ -134,33 +155,39 @@ def drive():
 
 def evidence():
     value = json.loads(DRIVE_RESULT.read_text(encoding="utf-8"))
-    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    try:
+        EVIDENCE.mkdir(parents=True)
+    except FileExistsError:
+        pass
+    root = EVIDENCE.lstat()
+    if not stat.S_ISDIR(root.st_mode) or EVIDENCE.is_symlink():
+        raise RuntimeError("evidence root is not an owned directory")
     action_path = EVIDENCE / "protected-action.json"
     result_path = EVIDENCE / "protected-result.json"
-    action_path.write_bytes(
-        canonical(
-            {
-                "kind": "protected-action",
-                "action": "Run python3 client.py add --title \"Release\" --body \"Ship it\" using the launched fixture.",
-                "command": ["python3", "client.py", "add", "--title", "Release", "--body", "Ship it"],
-            }
-        )
-    )
-    result_path.write_bytes(
-        canonical(
-            {
-                "kind": "protected-result",
-                "visibleResult": "The public list command returns the saved Release note.",
-                "evidence": "Capture the add command, list output, and persisted notes.json bytes.",
-                "thresholds": "Complete within five seconds.",
-                "observed": value["listed"],
-                "persisted": value["persisted"],
-            }
-        )
-    )
+    wanted = {
+        "protected-action.json": canonical({
+            "kind": "protected-action",
+            "action": "Run python3 client.py add --title \"Release\" --body \"Ship it\" using the launched fixture.",
+            "command": ["python3", "client.py", "add", "--title", "Release", "--body", "Ship it"],
+        }),
+        "protected-result.json": canonical({
+            "kind": "protected-result",
+            "visibleResult": "The public list command returns the saved Release note.",
+            "evidence": "Capture the add command, list output, and persisted notes.json bytes.",
+            "thresholds": "Complete within five seconds.",
+            "observed": value["listed"],
+            "persisted": value["persisted"],
+        }),
+    }
+    directory = os.open(EVIDENCE, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        for name, content in wanted.items():
+            write_exact(directory, name, content)
+    finally:
+        os.close(directory)
     return [
-        {"path": action_path.relative_to(ROOT).as_posix(), "sha256": hashlib.sha256(action_path.read_bytes()).hexdigest()},
-        {"path": result_path.relative_to(ROOT).as_posix(), "sha256": hashlib.sha256(result_path.read_bytes()).hexdigest()},
+        {"path": action_path.relative_to(ROOT).as_posix(), "sha256": hashlib.sha256(wanted[action_path.name]).hexdigest()},
+        {"path": result_path.relative_to(ROOT).as_posix(), "sha256": hashlib.sha256(wanted[result_path.name]).hexdigest()},
     ]
 
 

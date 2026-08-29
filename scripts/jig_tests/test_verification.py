@@ -198,6 +198,42 @@ class VerificationTest(unittest.TestCase):
             unrelated.terminate()
             unrelated.wait()
 
+    def test_stale_evidence_is_preserved_and_rejected(self):
+        self.begin()
+        self.install_generated()
+        evidence = self.repo / ".pi/jig/verification/evidence"
+        evidence.mkdir(parents=True)
+        action = evidence / "protected-action.json"
+        result = evidence / "protected-result.json"
+        sentinel = b"unknown stale evidence\x00\xff\n"
+        action.write_bytes(sentinel)
+        state = self.repo / ".pi/jig/verification/runtime/state.json"
+        running = subprocess.Popen(
+            [sys.executable, str(CONTROLLER), "complete-verification", "--resource-isolation", "isolated-shell"],
+            cwd=self.repo, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            env={**os.environ, "JIG_PI_VERSION": "fixture-pi"},
+        )
+        pid = None
+        for _ in range(100):
+            if state.exists():
+                pid = json.loads(state.read_text())["pid"]
+                break
+            if running.poll() is not None:
+                break
+            time.sleep(0.02)
+        stdout, stderr = running.communicate()
+        self.assertNotEqual(running.returncode, 0, stdout)
+        self.assertEqual(self.manifest()["currentState"], "verification-building")
+        self.assertEqual(action.read_bytes(), sentinel)
+        self.assertFalse(result.exists())
+        self.assertFalse(state.parent.exists())
+        self.assertIsNotNone(pid, stderr)
+        self.assertFalse((Path("/proc") / str(pid)).exists())
+        action.unlink()
+        retried = self.ctl("complete-verification")
+        self.assertEqual(retried.returncode, 0, retried.stderr)
+
+
     def test_unregistered_state_does_not_authorize_exception_cleanup(self):
         self.begin()
         self.install_generated()
