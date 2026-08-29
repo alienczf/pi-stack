@@ -196,6 +196,91 @@ class FirstStepTest(unittest.TestCase):
         self.assertNotEqual(changed.returncode, 0)
         self.assertEqual((path.read_bytes(), path.stat().st_ino, path.stat().st_mtime_ns), before)
 
+    def test_empty_selection_finalizes_schema_valid_no_candidate_result(self):
+        self.assertEqual(self.ctl("begin-step-selection").returncode, 0)
+        self.assertEqual(self.commit_selection(self.selection_draft()).returncode, 0)
+        refs_before = self.fixture.git("for-each-ref", "--format=%(refname):%(objectname)")
+        finalized = self.ctl("finalize-no-candidate")
+        self.assertEqual(finalized.returncode, 0, finalized.stderr)
+        manifest = self.manifest()
+        result_path = self.repo / ".pi/jig/steps/0001/result.json"
+        result = json.loads(result_path.read_text())
+        test_verification.jigctl.validate_instance(result, test_verification.jigctl.load_schema("result"))
+        self.assertEqual(manifest["currentState"], "initialized")
+        self.assertEqual(manifest["firstStep"], {
+            "selectionPath": ".pi/jig/steps/0001/selection.json",
+            "selectedCandidateId": None, "proposalPath": None,
+            "resultPath": ".pi/jig/steps/0001/result.json",
+            "outcome": "no-eligible-candidate",
+        })
+        self.assertEqual(
+            {key: result[key] for key in ("proposalPath", "proposalSha256", "inputRevision",
+                "outputRevision", "branch", "worktree", "diffSha256", "independentVerdict")},
+            {key: None for key in ("proposalPath", "proposalSha256", "inputRevision",
+                "outputRevision", "branch", "worktree", "diffSha256", "independentVerdict")},
+        )
+        self.assertEqual(result["commands"], [])
+        selection_path = self.repo / result["selectionPath"]
+        self.assertEqual(result["selectionSha256"], test_verification.jigctl.sha256_file(selection_path))
+        transition = manifest["transitions"][-1]
+        receipt = json.loads((self.repo / transition["receiptPath"]).read_text())
+        self.assertEqual((transition["from"], transition["to"], receipt["kind"]),
+            ("step-selecting", "initialized", "no-candidate-finalized"))
+        self.assertEqual((receipt["selectionSha256"], receipt["resultSha256"]),
+            (result["selectionSha256"], test_verification.jigctl.sha256_file(result_path)))
+        self.assertEqual(self.fixture.git("for-each-ref", "--format=%(refname):%(objectname)"), refs_before)
+
+    def test_rejected_selection_finalizes_idempotently(self):
+        self.assertEqual(self.ctl("begin-step-selection").returncode, 0)
+        draft = self.selection_draft([self.rejected_candidate()])
+        self.assertEqual(self.commit_selection(draft).returncode, 0)
+        self.assertEqual(self.ctl("finalize-no-candidate").returncode, 0)
+        paths = [
+            self.repo / ".pi/jig/steps/0001/result.json",
+            self.repo / self.manifest()["transitions"][-1]["receiptPath"],
+            self.repo / ".pi/jig/manifest.json",
+        ]
+        before = [(path.read_bytes(), path.stat().st_ino, path.stat().st_mtime_ns) for path in paths]
+        self.assertEqual(self.ctl("finalize-no-candidate").returncode, 0)
+        self.assertEqual(self.ctl("start").returncode, 0)
+        self.assertEqual([(path.read_bytes(), path.stat().st_ino, path.stat().st_mtime_ns) for path in paths], before)
+
+    def test_finalization_collisions_and_interruptions_fail_or_converge(self):
+        self.assertEqual(self.ctl("begin-step-selection").returncode, 0)
+        self.assertNotEqual(self.ctl("finalize-no-candidate").returncode, 0)
+        self.assertEqual(self.commit_selection(self.selection_draft()).returncode, 0)
+        selection_path = self.repo / ".pi/jig/steps/0001/selection.json"
+        selection_raw = selection_path.read_bytes()
+        selection = json.loads(selection_raw)
+        selection["rankingSummary"] = "Changed after commitment."
+        selection_path.write_text(json.dumps(selection))
+        self.assertNotEqual(self.ctl("finalize-no-candidate").returncode, 0)
+        selection_path.write_bytes(selection_raw)
+        collision = selection_path.parent / "proposal.json"
+        collision.write_text("preserve me\n")
+        self.assertNotEqual(self.ctl("finalize-no-candidate").returncode, 0)
+        self.assertEqual(collision.read_text(), "preserve me\n")
+        collision.unlink()
+        with mock.patch.object(test_verification.jigctl, "append_transition", side_effect=RuntimeError("crash")):
+            with self.assertRaises(RuntimeError):
+                test_verification.jigctl.finalize_no_candidate(self.repo, "isolated-shell")
+        result_path = selection_path.parent / "result.json"
+        result_before = (result_path.read_bytes(), result_path.stat().st_ino, result_path.stat().st_mtime_ns)
+        result_path.write_bytes(result_before[0] + b" ")
+        self.assertNotEqual(self.ctl("finalize-no-candidate").returncode, 0)
+        self.assertEqual(result_path.read_bytes(), result_before[0] + b" ")
+        result_path.write_bytes(result_before[0])
+        result_before = (result_path.read_bytes(), result_path.stat().st_ino, result_path.stat().st_mtime_ns)
+        with mock.patch.object(test_verification.jigctl, "write_manifest", side_effect=RuntimeError("crash")):
+            with self.assertRaises(RuntimeError):
+                test_verification.jigctl.finalize_no_candidate(self.repo, "isolated-shell")
+        transition_path = self.repo / ".pi/jig/receipts/transition-0007-initialized.json"
+        transition_before = (transition_path.read_bytes(), transition_path.stat().st_ino, transition_path.stat().st_mtime_ns)
+        recovered = self.ctl("finalize-no-candidate")
+        self.assertEqual(recovered.returncode, 0, recovered.stderr)
+        self.assertEqual((result_path.read_bytes(), result_path.stat().st_ino, result_path.stat().st_mtime_ns), result_before)
+        self.assertEqual((transition_path.read_bytes(), transition_path.stat().st_ino, transition_path.stat().st_mtime_ns), transition_before)
+
 
 if __name__ == "__main__":
     unittest.main()
