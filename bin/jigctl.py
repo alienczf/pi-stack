@@ -85,6 +85,11 @@ STEP_WORKTREE = ".pi/jig/worktrees/0001"
 WORKER_PATH = ".pi/jig/steps/0001/worker.json"
 OUTPUT_PATH = ".pi/jig/steps/0001/output.json"
 CANDIDATE_DIFF_PATH = ".pi/jig/steps/0001/candidate.diff"
+AFTER_PATH = ".pi/jig/steps/0001/after.json"
+PROOF_PHASES = (
+    ("targeted", "targeted"), ("regression", "regression"),
+    ("protectedUserPath", "protected-user-path"), ("seededViolation", "seeded-violation"),
+)
 WORKER_DRAFT_FIELDS = {"schemaVersion", "stepId", "workerSessionId", "allowedPaths"}
 WORKER_PROTECTED_PATHS = [".git", ".pi", "COMMANDMENTS.md", "eval", "evals"]
 BASELINE_OUTPUT_LIMIT = 256 * 1024
@@ -1212,7 +1217,7 @@ def validate_manifest_semantics(root: Path, manifest: Mapping[str, Any], schema:
         r"^(?:COMMANDMENTS\.md|\.pi/jig/(?:profile\.json|commandments/(?:interview\.json|"
         r"staging\.json|answers/[0-9a-f]{64}\.json|candidates/[0-9a-f]{64}\.md|"
         r"decisions/[0-9a-f]{64}\.json|proposals/[0-9a-f]{64}\.md)|"
-        r"steps/0001/(?:(?:selection|proposal|result|before|worker|output)\.json|candidate\.diff|commands/baseline-[0-9]{2}\.json)|"
+        r"steps/0001/(?:(?:selection|proposal|result|before|worker|output|after)\.json|candidate\.diff|commands/(?:baseline|targeted|regression|protected-user-path|seeded-violation)-[0-9]{2}\.json)|"
         r"verification/(?:plan\.json|receipts/runtime-[0-9a-f]{64}\.json|"
         r"evidence/[a-z0-9][a-z0-9._-]{0,127}\.json)|receipts/(?:transition-[0-9]{4}-(?:"
         + implemented_state
@@ -3916,7 +3921,7 @@ def clean_step_worktree(path: Path, revision: str) -> None:
 def validate_baseline_receipt(value: Any, expected: Mapping[str, Any]) -> None:
     fields = set(expected) | {
         "exitCode", "timedOut", "finishedAt", "stdout", "stdoutSha256",
-        "stdoutTruncated", "stderr", "stderrSha256", "stderrTruncated",
+        "stdoutTruncated", "stderr", "stderrSha256", "stderrTruncated", "outputSha256",
     }
     if not isinstance(value, dict) or set(value) != fields:
         raise ValidationError("baseline command receipt has an invalid shape")
@@ -3931,6 +3936,9 @@ def validate_baseline_receipt(value: Any, expected: Mapping[str, Any]) -> None:
                 or value[f"{stream}Sha256"] != sha256_bytes(output.encode("utf-8"))
                 or type(value[f"{stream}Truncated"]) is not bool):
             raise ValidationError("baseline command receipt has invalid bounded output")
+    if value["outputSha256"] != sha256_bytes(canonical_json({
+            "stdout": value["stdout"], "stderr": value["stderr"]})):
+        raise ValidationError("command receipt has an invalid canonical output hash")
 
 
 def run_baseline_command(path: Path, command: str) -> Dict[str, Any]:
@@ -3956,12 +3964,15 @@ def run_baseline_command(path: Path, command: str) -> Dict[str, Any]:
             stream.seek(0)
             outputs.append(stream.read(BASELINE_OUTPUT_LIMIT).decode("utf-8", errors="replace"))
     code = 124 if timed_out else (process.returncode if process.returncode >= 0 else 128 - process.returncode)
-    return {
+    result = {
         "exitCode": code, "timedOut": timed_out, "finishedAt": now(),
         "stdout": outputs[0], "stdoutSha256": sha256_bytes(outputs[0].encode()),
         "stdoutTruncated": truncated[0], "stderr": outputs[1],
         "stderrSha256": sha256_bytes(outputs[1].encode()), "stderrTruncated": truncated[1],
     }
+    result["outputSha256"] = sha256_bytes(canonical_json({
+        "stdout": result["stdout"], "stderr": result["stderr"]}))
+    return result
 
 
 def prepare_step_worktree(root: Path, isolation: str) -> Dict[str, Any]:
@@ -4135,13 +4146,16 @@ def validate_step_worker(root: Path, manifest: Mapping[str, Any]) -> Dict[str, A
         raise ValidationError("worker changed source outside its authorized paths")
     if any(path in artifacts for path in (CANDIDATE_DIFF_PATH, OUTPUT_PATH)):
         validate_step_output(root, manifest, worker)
+    if AFTER_PATH in artifacts:
+        validate_after_receipt(root, manifest, worker)
     return worker
 
 
 def candidate_snapshot(root: Path, manifest: Mapping[str, Any], worker: Mapping[str, Any]) -> Tuple[str, int, List[str], bytes]:
     worktree = root / worker["worktree"]
     head = run_git(worktree, ["rev-parse", "HEAD"])
-    status = run_git(worktree, ["status", "--porcelain=v1", "--untracked-files=all"])
+    status = run_git(worktree, ["status", "--porcelain=v1", "--untracked-files=all",
+        "--", ".", ":(exclude).pi"])
     entries = [item for item in worktree_entries(root) if item.get("worktree") == str(worktree)]
     if (status or len(entries) != 1 or entries[0].get("branch") != f"refs/heads/{worker['branch']}"
             or entries[0].get("HEAD") != head or branch_revision(root, worker["branch"]) != head):
@@ -4174,7 +4188,8 @@ def candidate_snapshot(root: Path, manifest: Mapping[str, Any], worker: Mapping[
     ancestry = subprocess.run(["git", "-C", str(worktree), "merge-base", "--is-ancestor",
         worker["inputRevision"], head], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     if (run_git(worktree, ["rev-parse", "HEAD"]) != head
-            or run_git(worktree, ["status", "--porcelain=v1", "--untracked-files=all"])
+            or run_git(worktree, ["status", "--porcelain=v1", "--untracked-files=all",
+                "--", ".", ":(exclude).pi"])
             or len(entries) != 1 or entries[0].get("branch") != f"refs/heads/{worker['branch']}"
             or entries[0].get("HEAD") != head or branch_revision(root, worker["branch"]) != head
             or ancestry.returncode != 0):
@@ -4252,6 +4267,171 @@ def record_step_output(root: Path, isolation: str) -> Dict[str, Any]:
     upsert_artifact(manifest, CANDIDATE_DIFF_PATH, "controller", sha256_bytes(diff))
     upsert_artifact(manifest, OUTPUT_PATH, "controller", sha256_file(output_path))
     manifest["updatedAt"] = output["recordedAt"]
+    write_manifest(root, manifest)
+    return manifest
+
+
+def proof_commands(proposal: Mapping[str, Any]) -> List[Tuple[str, int, str]]:
+    commands = []
+    for key, phase in PROOF_PHASES:
+        command_set = proposal["proof"][key]
+        if command_set is not None:
+            commands.extend((phase, index, command)
+                for index, command in enumerate(command_set["commands"], 1))
+    return commands
+
+
+def proof_boundary(root: Path, worker: Mapping[str, Any], output: Mapping[str, Any]) -> Dict[str, Any]:
+    return {
+        "schemaVersion": 1, "kind": "step-after", "stepId": "0001",
+        "selectionSha256": worker["selectionSha256"], "proposalSha256": worker["proposalSha256"],
+        "beforeSha256": worker["beforeSha256"], "workerSha256": sha256_file(root / WORKER_PATH),
+        "outputSha256": sha256_file(root / OUTPUT_PATH), "diffSha256": output["diffSha256"],
+        "inputRevision": worker["inputRevision"], "outputRevision": output["outputRevision"],
+        "branch": worker["branch"], "worktree": worker["worktree"],
+    }
+
+
+def validate_after_receipt(root: Path, manifest: Mapping[str, Any], worker: Mapping[str, Any]) -> Dict[str, Any]:
+    proposal = read_json(root / PROPOSAL_PATH, "proposal")
+    output = read_json(root / OUTPUT_PATH, "step output receipt")
+    path = safe_relative_path(root, AFTER_PATH, must_exist=True)
+    after = read_json(path, "after receipt")
+    fixed = proof_boundary(root, worker, output)
+    if (not isinstance(after, dict) or set(after) != set(fixed) | {"status", "commands", "firstFailure", "recordedAt"}
+            or any(after.get(key) != value for key, value in fixed.items())
+            or after.get("status") not in {"passed", "failed"}
+            or not isinstance(after.get("recordedAt"), str) or not valid_datetime(after["recordedAt"])
+            or canonical_json(after) != path.read_bytes()):
+        raise ValidationError("after receipt has an invalid pinned boundary")
+    declared, summaries, receipt_failures = proof_commands(proposal), after.get("commands"), []
+    if not isinstance(summaries, list) or len(summaries) > len(declared):
+        raise ValidationError("after receipt has an invalid command sequence")
+    for summary, (phase, index, command) in zip(summaries, declared):
+        relative = f".pi/jig/steps/0001/commands/{phase}-{index:02d}.json"
+        receipt_path = safe_relative_path(root, relative, must_exist=True)
+        expected = {"schemaVersion": 1, "kind": "step-command", "phase": phase, "index": index,
+            "command": command, "worktree": worker["worktree"], "branch": worker["branch"],
+            "revision": output["outputRevision"]}
+        receipt = read_json(receipt_path, "proof command receipt")
+        reason = receipt.get("failureReason")
+        if reason not in {None, "nonzero-exit", "timed-out", "candidate-drift", "source-mutation"}:
+            raise ValidationError("proof command receipt has an invalid boundary result")
+        validate_baseline_receipt(receipt, {**expected, "failureReason": reason})
+        receipt_failures.append(reason)
+        wanted = {"phase": phase, "index": index, "command": command, "receiptPath": relative,
+            "receiptSha256": sha256_file(receipt_path), "exitCode": receipt["exitCode"],
+            "timedOut": receipt["timedOut"], "outputSha256": receipt["outputSha256"],
+            "finishedAt": receipt["finishedAt"]}
+        if summary != wanted or canonical_json(receipt) != receipt_path.read_bytes():
+            raise ValidationError("after receipt command summary is inconsistent")
+    failure = after["firstFailure"]
+    if ((after["status"] == "passed" and (len(summaries) != len(declared) or failure is not None
+                or any(receipt_failures)))
+            or (after["status"] == "failed" and (not summaries or not isinstance(failure, dict)
+                or set(failure) != {"phase", "index", "command", "reason"}
+                or {key: failure[key] for key in ("phase", "index", "command")}
+                    != {key: summaries[-1][key] for key in ("phase", "index", "command")}
+                or receipt_failures != [None] * (len(summaries) - 1) + [failure["reason"]]))):
+        raise ValidationError("after receipt result is inconsistent")
+    return after
+
+
+def restore_proof_worktree(path: Path, branch: str, revision: str) -> None:
+    subprocess.run(["git", "-C", str(path), "checkout", "-q", "-B", branch, revision], check=True)
+    subprocess.run(["git", "-C", str(path), "reset", "--hard", "-q", revision], check=True)
+    subprocess.run(["git", "-C", str(path), "clean", "-ffd", "-e", ".pi/"], check=True,
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def verify_step_output(root: Path, isolation: str) -> Dict[str, Any]:
+    manifest = load_existing_manifest(root)
+    if manifest["resourceIsolation"] != isolation or manifest["currentState"] != "step-running":
+        raise ValidationError("proof execution requires the current step-running route")
+    validate_current_source(root, manifest)
+    worker = validate_step_worker(root, manifest)
+    output = validate_step_output(root, manifest, worker)
+    if output is None:
+        raise ValidationError("proof execution requires a pinned candidate output")
+    registered = {item["path"]: item for item in manifest["artifacts"]}
+    if AFTER_PATH in registered:
+        validate_after_receipt(root, manifest, worker)
+        return manifest
+    proposal = read_json(root / PROPOSAL_PATH, "proposal")
+    declared = proof_commands(proposal)
+    allowed = {f"baseline-{index:02d}.json" for index in range(1, len(proposal["baseline"]["commands"]) + 1)}
+    allowed.update(f"{phase}-{index:02d}.json" for phase, index, _command in declared)
+    command_dir = root / ".pi/jig/steps/0001/commands"
+    if {item.name for item in command_dir.iterdir()} - allowed:
+        raise ValidationError("proof command directory contains unknown bytes")
+    if {item.name for item in (root / ".pi/jig/steps/0001").iterdir()} - {
+            "selection.json", "proposal.json", "before.json", "worker.json", "commands",
+            "candidate.diff", "output.json", "after.json"}:
+        raise ValidationError("step directory contains unknown proof bytes")
+    after_path = root / AFTER_PATH
+    if after_path.exists() or after_path.is_symlink():
+        after = validate_after_receipt(root, manifest, worker)
+        for summary in after["commands"]:
+            upsert_artifact(manifest, summary["receiptPath"], "controller", summary["receiptSha256"])
+        upsert_artifact(manifest, AFTER_PATH, "controller", sha256_file(after_path))
+        manifest["updatedAt"] = after["recordedAt"]
+        write_manifest(root, manifest)
+        return manifest
+    summaries, failure = [], None
+    worktree = root / worker["worktree"]
+    for phase, index, command in declared:
+        validate_step_output(root, manifest, worker)
+        relative = f".pi/jig/steps/0001/commands/{phase}-{index:02d}.json"
+        path = root / relative
+        expected = {"schemaVersion": 1, "kind": "step-command", "phase": phase, "index": index,
+            "command": command, "worktree": worker["worktree"], "branch": worker["branch"],
+            "revision": output["outputRevision"]}
+        if path.exists() or path.is_symlink():
+            if path.is_symlink() or not path.is_file():
+                raise JigError("proof command receipt has an unknown identity")
+            receipt = read_json(path, "proof command receipt")
+            reason = receipt.get("failureReason")
+            if reason not in {None, "nonzero-exit", "timed-out", "candidate-drift", "source-mutation"}:
+                raise ValidationError("proof command receipt has an invalid boundary result")
+            validate_baseline_receipt(receipt, {**expected, "failureReason": reason})
+            if canonical_json(receipt) != path.read_bytes():
+                raise ValidationError("proof command receipt has unknown bytes")
+        else:
+            receipt = {**expected, **run_baseline_command(worktree, command)}
+            head = run_git(worktree, ["rev-parse", "HEAD"])
+            branch = run_git(worktree, ["branch", "--show-current"])
+            dirty = bool(run_git(worktree, ["status", "--porcelain=v1", "--untracked-files=all",
+                "--", ".", ":(exclude).pi"]))
+            drifted = head != output["outputRevision"] or branch != worker["branch"]
+            reason = ("timed-out" if receipt["timedOut"] else "nonzero-exit" if receipt["exitCode"]
+                else "candidate-drift" if drifted else "source-mutation" if dirty else None)
+            if drifted or dirty:
+                restore_proof_worktree(worktree, worker["branch"], output["outputRevision"])
+            receipt["failureReason"] = reason
+            validate_baseline_receipt(receipt, {**expected, "failureReason": reason})
+            validate_current_source(root, manifest)
+            validate_step_output(root, manifest, worker)
+            atomic_create(path, canonical_json(receipt))
+            if reason is not None:
+                failure = {"phase": phase, "index": index, "command": command, "reason": reason}
+        digest = sha256_file(path)
+        summaries.append({"phase": phase, "index": index, "command": command, "receiptPath": relative,
+            "receiptSha256": digest, "exitCode": receipt["exitCode"], "timedOut": receipt["timedOut"],
+            "outputSha256": receipt["outputSha256"], "finishedAt": receipt["finishedAt"]})
+        if failure is None and receipt["failureReason"] is not None:
+            failure = {"phase": phase, "index": index, "command": command,
+                "reason": receipt["failureReason"]}
+        if failure is not None:
+            break
+    after = {**proof_boundary(root, worker, output), "status": "failed" if failure else "passed",
+        "commands": summaries, "firstFailure": failure, "recordedAt": now()}
+    after_path = root / AFTER_PATH
+    atomic_create(after_path, canonical_json(after))
+    validate_after_receipt(root, manifest, worker)
+    for summary in after["commands"]:
+        upsert_artifact(manifest, summary["receiptPath"], "controller", summary["receiptSha256"])
+    upsert_artifact(manifest, AFTER_PATH, "controller", sha256_file(after_path))
+    manifest["updatedAt"] = after["recordedAt"]
     write_manifest(root, manifest)
     return manifest
 
@@ -4635,6 +4815,7 @@ def parser() -> argparse.ArgumentParser:
         "finalize-no-candidate",
         "activate-step-worker",
         "record-step-output",
+        "verify-step-output",
     )
     commands = {}
     for name in mutating:
@@ -4750,6 +4931,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             manifest = activate_step_worker(root, arguments.resource_isolation, raw)
         elif arguments.command == "record-step-output":
             manifest = record_step_output(root, arguments.resource_isolation)
+        elif arguments.command == "verify-step-output":
+            manifest = verify_step_output(root, arguments.resource_isolation)
         elif arguments.command == "finalize-no-candidate":
             manifest = finalize_no_candidate(root, arguments.resource_isolation)
         else:
