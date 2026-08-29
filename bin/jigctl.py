@@ -4155,6 +4155,8 @@ def validate_step_worker(root: Path, manifest: Mapping[str, Any]) -> Dict[str, A
         validate_after_receipt(root, manifest, worker)
     if VERDICT_PATH in artifacts:
         validate_step_verdict(root, manifest, worker)
+    if RESULT_PATH in artifacts:
+        validate_staged_step_result(root, manifest, worker)
     return worker
 
 
@@ -4565,6 +4567,100 @@ def commit_step_verdict(root: Path, isolation: str, raw: bytes) -> Dict[str, Any
     return manifest
 
 
+def step_result_static(root: Path, worker: Mapping[str, Any], output: Mapping[str, Any],
+    after: Mapping[str, Any], verdict: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
+    before = read_json(root / BEFORE_PATH, "before receipt")
+    commands = []
+    for summary in before["commands"]:
+        receipt = read_json(root / summary["receiptPath"], "baseline command receipt")
+        commands.append({key: value for key, value in (
+            ("command", summary["command"]), ("exitCode", summary["exitCode"]),
+            ("receiptPath", summary["receiptPath"]), ("outputSha256", receipt["outputSha256"]),
+            ("finishedAt", summary["finishedAt"]),
+        )})
+    commands.extend({key: summary[key] for key in
+        ("command", "exitCode", "receiptPath", "outputSha256", "finishedAt")}
+        for summary in after["commands"])
+    independent = None if verdict is None else {
+        "status": verdict["status"], "evidencePath": verdict["reportPath"],
+        "evidenceSha256": verdict["reportSha256"], "revision": verdict["outputRevision"],
+    }
+    outcome = ("reverted" if after["status"] == "failed" or
+        verdict is not None and verdict["status"] != "passed" else "kept")
+    return {
+        "schemaVersion": 1, "stepId": "0001", "outcome": outcome,
+        "selectionPath": SELECTION_PATH, "selectionSha256": worker["selectionSha256"],
+        "proposalPath": PROPOSAL_PATH, "proposalSha256": worker["proposalSha256"],
+        "inputRevision": worker["inputRevision"], "outputRevision": output["outputRevision"],
+        "branch": worker["branch"], "worktree": worker["worktree"], "commands": commands,
+        "diffSha256": output["diffSha256"], "independentVerdict": independent,
+    }
+
+
+def result_evidence(root: Path, manifest: Mapping[str, Any],
+    worker: Mapping[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any], Optional[Dict[str, Any]]]:
+    artifacts = {item["path"]: item for item in manifest["artifacts"]}
+    output = validate_step_output(root, manifest, worker)
+    if output is None or AFTER_PATH not in artifacts:
+        raise ValidationError("result preparation requires registered output and proof evidence")
+    after = validate_after_receipt(root, manifest, worker)
+    proposal = read_json(root / PROPOSAL_PATH, "proposal")
+    verdict = validate_step_verdict(root, manifest, worker) if VERDICT_PATH in artifacts else None
+    if after["status"] == "passed" and proposal["proof"]["independentReview"] and verdict is None:
+        raise ValidationError("passed mechanical proof requires its independent verdict")
+    return output, after, verdict
+
+
+def validate_staged_step_result(root: Path, manifest: Mapping[str, Any],
+    worker: Mapping[str, Any]) -> Dict[str, Any]:
+    artifacts = {item["path"]: item for item in manifest["artifacts"]}
+    path = safe_relative_path(root, RESULT_PATH, must_exist=True)
+    result = read_json(path, "staged result")
+    output, after, verdict = result_evidence(root, manifest, worker)
+    fixed = step_result_static(root, worker, output, after, verdict)
+    validate_instance(result, load_schema("result"))
+    if (not isinstance(result, dict) or set(result) != set(fixed) | {"recordedAt"}
+            or any(result.get(key) != value for key, value in fixed.items())
+            or not isinstance(result.get("recordedAt"), str) or not valid_datetime(result["recordedAt"])
+            or canonical_json(result) != path.read_bytes()
+            or artifacts.get(RESULT_PATH) != {"path": RESULT_PATH, "owner": "controller",
+                "sha256": sha256_file(path)}):
+        raise ValidationError("staged result differs from its immutable evidence")
+    return result
+
+
+def prepare_step_result(root: Path, isolation: str) -> Dict[str, Any]:
+    manifest = load_existing_manifest(root)
+    if manifest["resourceIsolation"] != isolation or manifest["currentState"] != "step-running":
+        raise ValidationError("result preparation requires the current step-running route")
+    validate_current_source(root, manifest)
+    worker = validate_step_worker(root, manifest)
+    output, after, verdict = result_evidence(root, manifest, worker)
+    fixed = step_result_static(root, worker, output, after, verdict)
+    path = fixed_artifact_path(root, RESULT_PATH)
+    if path.exists() or path.is_symlink():
+        if path.is_symlink() or not path.is_file():
+            raise JigError("result has an unknown identity")
+        result = read_json(path, "staged result")
+        if (not isinstance(result, dict) or set(result) != set(fixed) | {"recordedAt"}
+                or any(result.get(key) != value for key, value in fixed.items())
+                or not isinstance(result.get("recordedAt"), str) or not valid_datetime(result["recordedAt"])
+                or canonical_json(result) != path.read_bytes()):
+            raise ValidationError("existing result collides with the selected evidence")
+    else:
+        result = {**fixed, "recordedAt": now()}
+        validate_instance(result, load_schema("result"))
+        atomic_create(path, canonical_json(result))
+    if any(item["path"] == RESULT_PATH for item in manifest["artifacts"]):
+        validate_staged_step_result(root, manifest, worker)
+        return manifest
+    upsert_artifact(manifest, RESULT_PATH, "controller", sha256_file(path))
+    manifest["updatedAt"] = result["recordedAt"]
+    validate_staged_step_result(root, manifest, worker)
+    write_manifest(root, manifest)
+    return manifest
+
+
 def activate_step_worker(root: Path, isolation: str, raw: bytes) -> Dict[str, Any]:
     manifest = load_existing_manifest(root)
     if manifest["resourceIsolation"] != isolation:
@@ -4900,6 +4996,10 @@ def render_result(root: Path, manifest: Mapping[str, Any]) -> None:
             if verdict is not None:
                 receipt = read_json(root / VERDICT_PATH, "verdict receipt")
                 result["verdict"] = {"status": receipt["status"], "path": VERDICT_PATH}
+            staged = next((item for item in manifest["artifacts"] if item["path"] == RESULT_PATH), None)
+            if staged is not None:
+                receipt = read_json(root / RESULT_PATH, "staged result")
+                result["stagedResult"] = {"outcome": receipt["outcome"], "path": RESULT_PATH}
         else:
             proposal = read_json(root / PROPOSAL_PATH, "proposal")
             result["workerHandoff"] = {
@@ -4950,6 +5050,7 @@ def parser() -> argparse.ArgumentParser:
         "record-step-output",
         "verify-step-output",
         "commit-step-verdict",
+        "prepare-step-result",
     )
     commands = {}
     for name in mutating:
@@ -5070,6 +5171,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         elif arguments.command == "commit-step-verdict":
             raw = sys.stdin.buffer.read(MAX_INPUT_BYTES + 1)
             manifest = commit_step_verdict(root, arguments.resource_isolation, raw)
+        elif arguments.command == "prepare-step-result":
+            manifest = prepare_step_result(root, arguments.resource_isolation)
         elif arguments.command == "finalize-no-candidate":
             manifest = finalize_no_candidate(root, arguments.resource_isolation)
         else:
