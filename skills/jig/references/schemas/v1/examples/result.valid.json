@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "stepId": "0001",
+  "outcome": "no-eligible-candidate",
+  "selectionPath": ".pi/jig/steps/0001/selection.json",
+  "selectionSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "proposalPath": null,
+  "proposalSha256": null,
+  "inputRevision": null,
+  "outputRevision": null,
+  "branch": null,
+  "worktree": null,
+  "commands": [],
+  "diffSha256": null,
+  "independentVerdict": null,
+  "recordedAt": "2026-08-28T12:30:00Z"
+}

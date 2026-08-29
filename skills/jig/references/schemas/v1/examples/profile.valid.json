@@ -1,0 +1,74 @@
+{
+  "schemaVersion": 1,
+  "repositoryRevision": "1111111111111111111111111111111111111111",
+  "productType": {
+    "value": "command-line application",
+    "evidence": [
+      { "path": "README.md", "line": 8, "note": "The documented entry point is a shell command." }
+    ]
+  },
+  "languages": [
+    {
+      "value": "Python",
+      "evidence": [
+        { "path": "pyproject.toml", "line": 1, "note": "The project metadata defines a Python package." }
+      ]
+    }
+  ],
+  "frameworks": [],
+  "buildTools": [
+    {
+      "value": "pytest",
+      "evidence": [
+        { "path": "pyproject.toml", "line": 20, "note": "The test configuration names pytest." }
+      ]
+    }
+  ],
+  "ci": [
+    {
+      "value": "GitHub Actions",
+      "evidence": [
+        { "path": ".github/workflows/check.yml", "line": 1, "note": "The workflow runs repository checks." }
+      ]
+    }
+  ],
+  "entryPoints": [
+    {
+      "value": "example-cli",
+      "evidence": [
+        { "path": "pyproject.toml", "line": 12, "note": "The project script maps to the CLI module." }
+      ]
+    }
+  ],
+  "topology": [
+    {
+      "value": "single package",
+      "evidence": [
+        { "path": "pyproject.toml", "line": 6, "note": "The package configuration names one source package." }
+      ]
+    }
+  ],
+  "unknowns": [
+    {
+      "id": "release-owner",
+      "question": "Who approves a release?",
+      "reason": "The repository has no ownership file."
+    }
+  ],
+  "failureModes": [
+    {
+      "id": "P14",
+      "applicability": "applicable",
+      "status": "present-unencoded",
+      "evidence": [
+        { "path": "README.md", "line": 30, "note": "The proof command only imports the package." }
+      ]
+    },
+    {
+      "id": "D5",
+      "applicability": "not-applicable",
+      "status": "not-assessed",
+      "evidence": []
+    }
+  ]
+}

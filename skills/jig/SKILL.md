@@ -10,6 +10,8 @@ Fit this git repo so a cold agent takes the conventional path. You write drafts.
 
 Read [interview.md](references/interview.md), [failure-modes.md](references/failure-modes.md), and [lexicon-style.md](references/lexicon-style.md) before Pass 1.
 
+The version 1 init contract is [init-contract.md](references/init-contract.md). Its design choices and rejected alternatives are in [architecture-rationale.md](references/architecture-rationale.md).
+
 ## Pass 0. One git repo
 
 Cwd must be inside one git repo. `git rev-parse --show-toplevel` must succeed. Operate only on that root. Do not walk parent directories. Do not `find` sibling `.git` dirs.

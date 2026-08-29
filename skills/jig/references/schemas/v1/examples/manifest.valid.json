@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 1,
+  "repository": {
+    "root": ".",
+    "identity": "example-repository",
+    "scope": "repository"
+  },
+  "source": {
+    "revision": "1111111111111111111111111111111111111111",
+    "dirty": false,
+    "statusSummary": []
+  },
+  "commandments": {
+    "path": "COMMANDMENTS.md",
+    "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "version": 1,
+    "ratifiedAt": "2026-08-28T12:00:00Z"
+  },
+  "currentState": "initialized",
+  "resourceIsolation": "isolated-shell",
+  "transitions": [
+    {
+      "from": "step-selecting",
+      "to": "initialized",
+      "at": "2026-08-28T12:30:00Z",
+      "receiptPath": ".pi/jig/steps/0001/result.json",
+      "receiptSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "COMMANDMENTS.md",
+      "owner": "human",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "path": ".pi/jig/steps/0001/result.json",
+      "owner": "controller",
+      "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+  ],
+  "verification": [
+    {
+      "kind": "runtime",
+      "command": "bash .pi/skills/jig-verification/scripts/self-test.sh",
+      "exitCode": 0,
+      "receiptPath": ".pi/jig/receipts/verification-runtime.txt",
+      "outputSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "revision": "1111111111111111111111111111111111111111",
+      "finishedAt": "2026-08-28T12:20:00Z"
+    }
+  ],
+  "firstStep": {
+    "selectionPath": ".pi/jig/steps/0001/selection.json",
+    "selectedCandidateId": null,
+    "proposalPath": null,
+    "resultPath": ".pi/jig/steps/0001/result.json",
+    "outcome": "no-eligible-candidate"
+  },
+  "evaluation": {
+    "required": false,
+    "status": "not-required",
+    "verdictPath": null
+  },
+  "tools": {
+    "jig": "1.0.0",
+    "pi": "0.58.0",
+    "python": "3.12.3"
+  },
+  "createdAt": "2026-08-28T12:00:00Z",
+  "updatedAt": "2026-08-28T12:30:00Z"
+}

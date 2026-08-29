@@ -1,0 +1,164 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:pi-stack:jig:schema:v1:selection",
+  "title": "Jig first-step selection version 1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "stepId", "repositoryRevision", "commandmentsSha256", "candidates", "selectedCandidateId", "rankingSummary", "controllerReceipt"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "stepId": { "const": "0001" },
+    "repositoryRevision": { "$ref": "#/$defs/revision" },
+    "commandmentsSha256": { "$ref": "#/$defs/sha256" },
+    "candidates": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/candidate" }
+    },
+    "selectedCandidateId": { "anyOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }] },
+    "rankingSummary": { "type": "string", "minLength": 1 },
+    "controllerReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["recordedAt", "inputSha256"],
+      "properties": {
+        "recordedAt": { "$ref": "#/$defs/timestamp" },
+        "inputSha256": { "$ref": "#/$defs/sha256" }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "selectedCandidateId": { "type": "null" } }, "required": ["selectedCandidateId"] },
+      "then": {
+        "properties": {
+          "candidates": {
+            "items": {
+              "properties": {
+                "eligibility": { "properties": { "eligible": { "const": false } } }
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "candidates": {
+            "contains": {
+              "properties": {
+                "eligibility": { "properties": { "eligible": { "const": true } }, "required": ["eligible"] }
+              },
+              "required": ["eligibility"]
+            },
+            "minContains": 1
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
+    "revision": { "type": "string", "pattern": "^[0-9a-f]{40,64}$" },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*//).+$"
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "line", "note"],
+      "properties": {
+        "path": { "$ref": "#/$defs/relativePath" },
+        "line": { "type": "integer", "minimum": 1 },
+        "note": { "type": "string", "minLength": 1 }
+      }
+    },
+    "level": { "enum": ["low", "medium", "high"] },
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title", "commandmentIds", "evidence", "responseLayer", "expectedGain", "riskCost", "eligibility", "verificationPlan", "rollback", "potetoPlaybook", "behavioralEval"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "title": { "type": "string", "minLength": 1 },
+        "commandmentIds": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^CMD-[0-9]{3}$" }
+        },
+        "evidence": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/evidence" } },
+        "responseLayer": { "enum": ["code", "architecture", "deterministic-guard", "runtime-verification", "verification-skill", "behavioral-eval"] },
+        "expectedGain": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["priority", "severity", "recurrence", "preventionValue", "confidence"],
+          "properties": {
+            "priority": { "$ref": "#/$defs/level" },
+            "severity": { "$ref": "#/$defs/level" },
+            "recurrence": { "$ref": "#/$defs/level" },
+            "preventionValue": { "$ref": "#/$defs/level" },
+            "confidence": { "$ref": "#/$defs/level" }
+          }
+        },
+        "riskCost": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["implementationCost", "blastRadius", "uncertainty", "rollbackDifficulty"],
+          "properties": {
+            "implementationCost": { "$ref": "#/$defs/level" },
+            "blastRadius": { "$ref": "#/$defs/level" },
+            "uncertainty": { "$ref": "#/$defs/level" },
+            "rollbackDifficulty": { "$ref": "#/$defs/level" }
+          }
+        },
+        "eligibility": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["eligible", "rejectionReasons"],
+          "properties": {
+            "eligible": { "type": "boolean" },
+            "rejectionReasons": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "enum": [
+                  "hard-commandment-conflict",
+                  "unanswered-product-choice",
+                  "missing-reproducible-evidence",
+                  "missing-proof-path",
+                  "changes-protected-input",
+                  "blast-radius-exceeded",
+                  "unsafe-rollback",
+                  "recurring-scope-required"
+                ]
+              }
+            }
+          },
+          "allOf": [
+            {
+              "if": { "properties": { "eligible": { "const": true } }, "required": ["eligible"] },
+              "then": { "properties": { "rejectionReasons": { "maxItems": 0 } } },
+              "else": { "properties": { "rejectionReasons": { "minItems": 1 } } }
+            }
+          ]
+        },
+        "verificationPlan": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+        "rollback": { "type": "string", "minLength": 1 },
+        "potetoPlaybook": {
+          "enum": [
+            "pstack/skills/create-verification-skill/SKILL.md",
+            "pstack/skills/poteto-mode/playbooks/refactoring.md",
+            "pstack/skills/poteto-mode/playbooks/bug-fix.md",
+            "pstack/skills/poteto-mode/playbooks/feature.md",
+            "pstack/skills/poteto-mode/playbooks/eval.md",
+            "pstack/skills/poteto-mode/playbooks/perf-issue.md"
+          ]
+        },
+        "behavioralEval": { "enum": ["required", "not-required"] }
+      }
+    }
+  }
+}

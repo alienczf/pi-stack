@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:pi-stack:jig:schema:v1:profile",
+  "title": "Jig repository profile version 1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "repositoryRevision",
+    "productType",
+    "languages",
+    "frameworks",
+    "buildTools",
+    "ci",
+    "entryPoints",
+    "topology",
+    "unknowns",
+    "failureModes"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "repositoryRevision": { "$ref": "#/$defs/revision" },
+    "productType": { "$ref": "#/$defs/observation" },
+    "languages": { "$ref": "#/$defs/observations" },
+    "frameworks": { "$ref": "#/$defs/observations" },
+    "buildTools": { "$ref": "#/$defs/observations" },
+    "ci": { "$ref": "#/$defs/observations" },
+    "entryPoints": { "$ref": "#/$defs/observations" },
+    "topology": { "$ref": "#/$defs/observations" },
+    "unknowns": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "question", "reason"],
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "question": { "type": "string", "minLength": 1 },
+          "reason": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "failureModes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "applicability", "status", "evidence"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[A-Z][A-Z0-9-]{0,31}$" },
+          "applicability": { "enum": ["applicable", "not-applicable", "unknown"] },
+          "status": { "enum": ["absent", "present-unencoded", "already-guarded", "not-assessed"] },
+          "evidence": { "$ref": "#/$defs/evidenceList" }
+        },
+        "allOf": [
+          {
+            "if": { "properties": { "applicability": { "const": "not-applicable" } }, "required": ["applicability"] },
+            "then": { "properties": { "status": { "const": "not-assessed" } } }
+          }
+        ]
+      }
+    }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
+    "revision": { "type": "string", "pattern": "^[0-9a-f]{40,64}$" },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*//).+$"
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "line", "note"],
+      "properties": {
+        "path": { "$ref": "#/$defs/relativePath" },
+        "line": { "type": "integer", "minimum": 1 },
+        "note": { "type": "string", "minLength": 1 }
+      }
+    },
+    "evidenceList": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/evidence" }
+    },
+    "observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "evidence"],
+      "properties": {
+        "value": { "type": "string", "minLength": 1 },
+        "evidence": { "$ref": "#/$defs/evidenceList", "minItems": 1 }
+      }
+    },
+    "observations": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/observation" }
+    }
+  }
+}
