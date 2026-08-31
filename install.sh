@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
 	cat <<'EOF'
-usage: install.sh
+usage: install.sh [-y]
 
 Copies the pi-stack overlay into $HOME/.pi/agent.
 Writes pstack-aligned user agents into $HOME/.pi/agent/agents/.
@@ -19,11 +19,15 @@ Rewrites cursor/* subagent models to inherit. Links jig into ~/.local/bin.
 Never writes auth.json, models-store.json, private/, or sessions/.
 Does not search for git repositories. Initialize one Git root later with jig init.
 
-If PI_STACK is unset and this script is not in a checkout, uses
+If PI_STACK is unset and this script has no adjacent checkout, uses
 $HOME/.pi-stack. Clones alienczf/pi-stack there when overlay/ is missing.
+A bootstrap invocation prompts before fast-forwarding that existing checkout.
 If PSTACK is unset, uses $PI_STACK/.plugins/pstack. Clones cursor/plugins
 (sparse, pstack only) into $PI_STACK/.plugins when that tree is missing.
-Neither clone is refreshed on a later run.
+The pstack clone is not refreshed on a later run.
+
+Options
+  -y            update the bootstrap-selected default checkout without prompting
 
 Environment
   HOME          install target (default is your home)
@@ -35,10 +39,59 @@ Environment
 EOF
 }
 
+update_managed_pi_stack() {
+	local checkout="$1"
+	local checkout_status branch upstream current_revision upstream_revision
+	if ! command -v git >/dev/null 2>&1; then
+		printf 'git is required to update %s\n' "$checkout" >&2
+		return 1
+	fi
+	if [[ ! -d "$checkout/.git" ]]; then
+		printf '%s is not an installer-managed Git checkout. Set PI_STACK to use it without updates.\n' "$checkout" >&2
+		return 1
+	fi
+	if ! checkout_status="$(git -C "$checkout" status --short --untracked-files=no)"; then
+		printf 'Could not inspect %s before updating it.\n' "$checkout" >&2
+		return 1
+	fi
+	if [[ -n "$checkout_status" ]]; then
+		printf '%s has tracked or staged changes. Commit or discard them before updating.\n' "$checkout" >&2
+		return 1
+	fi
+	if ! branch="$(git -C "$checkout" symbolic-ref --quiet --short HEAD)"; then
+		printf '%s is not on a branch. Check out its tracked branch before updating.\n' "$checkout" >&2
+		return 1
+	fi
+	if ! upstream="$(git -C "$checkout" rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null)"; then
+		printf 'Branch %s in %s has no upstream. Configure one before updating.\n' "$branch" "$checkout" >&2
+		return 1
+	fi
+	if ! git -C "$checkout" fetch --prune; then
+		printf 'Could not fetch the upstream for %s.\n' "$checkout" >&2
+		return 1
+	fi
+	if ! git -C "$checkout" merge --ff-only "$upstream"; then
+		printf 'Could not fast-forward %s to %s. Resolve the checkout before retrying.\n' "$checkout" "$upstream" >&2
+		return 1
+	fi
+	if ! current_revision="$(git -C "$checkout" rev-parse HEAD)" || ! upstream_revision="$(git -C "$checkout" rev-parse "$upstream")"; then
+		printf 'Could not verify the upstream revision for %s.\n' "$checkout" >&2
+		return 1
+	fi
+	if [[ "$current_revision" != "$upstream_revision" ]]; then
+		printf '%s has local commits. Reset it to %s before updating.\n' "$checkout" "$upstream" >&2
+		return 1
+	fi
+}
+
+update_decision="ask"
 case "${1:-}" in
 	-h | --help)
 		usage
 		exit 0
+		;;
+	-y)
+		update_decision="yes"
 		;;
 	"")
 		;;
@@ -47,6 +100,10 @@ case "${1:-}" in
 		exit 2
 		;;
 esac
+if [[ $# -gt 1 ]]; then
+	usage >&2
+	exit 2
+fi
 
 if ! command -v python3 >/dev/null 2>&1; then
 	printf 'python3 is required\n' >&2
@@ -63,13 +120,40 @@ default_pi_stack="${HOME}/.pi-stack"
 pi_stack_git="${PI_STACK_GIT:-https://github.com/alienczf/pi-stack.git}"
 if [[ -n "${PI_STACK:-}" ]]; then
 	pi_stack="$PI_STACK"
+	source_kind="explicit"
 elif [[ -n "$here" && -f "$here/overlay/APPEND_SYSTEM.md" ]]; then
 	pi_stack="$here"
+	source_kind="checkout"
 else
 	pi_stack="$default_pi_stack"
+	source_kind="bootstrap"
 fi
 
-# ponytail: skip clone when overlay exists; git pull when you want a newer tree
+if [[ "$source_kind" == "bootstrap" && -f "$pi_stack/overlay/APPEND_SYSTEM.md" ]]; then
+	if [[ "$update_decision" == "ask" ]]; then
+		if { exec 3<>/dev/tty; } 2>/dev/null; then
+			while [[ "$update_decision" == "ask" ]]; do
+				printf 'Update existing pi-stack checkout at %s? [y/N] ' "$pi_stack" >&3
+				if ! IFS= read -r answer <&3; then
+					answer=""
+				fi
+				case "$answer" in
+					y | Y) update_decision="yes" ;;
+					"" | n | N) update_decision="no" ;;
+					*) printf 'Enter y or n.\n' >&3 ;;
+				esac
+			done
+			exec 3>&-
+		else
+			printf 'Existing pi-stack checkout not updated. Rerun with -y to update %s.\n' "$pi_stack" >&2
+			update_decision="no"
+		fi
+	fi
+	if [[ "$update_decision" == "yes" ]]; then
+		update_managed_pi_stack "$pi_stack" || exit 1
+	fi
+fi
+
 if [[ ! -f "$pi_stack/overlay/APPEND_SYSTEM.md" ]]; then
 	if [[ -e "$pi_stack" ]]; then
 		if [[ ! -d "$pi_stack" ]]; then

@@ -53,6 +53,10 @@ if [ "$chars" -gt 1200 ]; then
 fi
 
 help="$(bash install.sh --help)"
+printf '%s\n' "$help" | grep -q -- '  -y ' || fail "install.sh --help must document -y"
+if bash install.sh -y extra >/dev/null 2>&1; then
+	fail "install.sh accepted an extra argument after -y"
+fi
 printf '%s\n' "$help" | grep -q -- '--repos' && fail "install.sh --help must not name --repos"
 printf '%s\n' "$help" | grep -qi workspace && fail "install.sh --help must not name workspace"
 printf '%s\n' "$help" | grep -qi trading && fail "install.sh --help must not name trading"
@@ -307,33 +311,242 @@ EOF
 git init -q "$fake"
 git -C "$fake" add pstack
 git -C "$fake" -c user.email=t@t -c user.name=t commit -qm stub
+initial_pstack_head="$(git -C "$fake" rev-parse HEAD)"
 
-# Seed repo is this working tree, so the cloned install.sh matches uncommitted edits.
 seed="$tmp/seed"
 mkdir -p "$seed"
 cp -a "$root/install.sh" "$root/overlay" "$root/prompts" "$root/bin" "$root/skills" "$root/.gitignore" "$seed/"
 git init -q "$seed"
 git -C "$seed" add .
 git -C "$seed" -c user.email=t@t -c user.name=t commit -qm seed
+initial_seed_head="$(git -C "$seed" rev-parse HEAD)"
+seed_url="file://$seed"
+pstack_url="file://$fake"
 
-# curl|bash: one prefix. Second run must not replace either tree.
 home2="$tmp/home2"
 mkdir -p "$home2"
 (
 	cd "$tmp"
-	HOME="$home2" PI_STACK_GIT="$seed" PSTACK_GIT="$fake" PI_STACK_SKIP_PACKAGES=1 bash <"$root/install.sh"
+	HOME="$home2" PI_STACK_GIT="$seed_url" PSTACK_GIT="$pstack_url" PI_STACK_SKIP_PACKAGES=1 bash <"$root/install.sh"
 ) || fail "piped install with default PI_STACK failed"
 test -f "$home2/.pi-stack/overlay/APPEND_SYSTEM.md" || fail "default PI_STACK was not cloned"
 test -f "$home2/.pi-stack/.plugins/pstack/skills/poteto-mode/SKILL.md" || fail "pstack was not cloned into PI_STACK/.plugins"
 test ! -d "$home2/.pistack" || fail "install wrote a second home dir .pistack"
+test "$(git -C "$home2/.pi-stack" rev-parse HEAD)" = "$initial_seed_head" || fail "fresh install cloned the wrong pi-stack revision"
+test "$(git -C "$home2/.pi-stack/.plugins" rev-parse HEAD)" = "$initial_pstack_head" || fail "fresh install cloned the wrong pstack revision"
+test "$(git -C "$home2/.pi-stack" rev-parse --is-shallow-repository)" = true || fail "default PI_STACK fixture is not shallow"
+managed_branch="$(git -C "$home2/.pi-stack" symbolic-ref --short HEAD)"
 printf 'keep\n' >"$home2/.pi-stack/.skip-marker"
 printf 'keep\n' >"$home2/.pi-stack/.plugins/.skip-marker"
-(
-	cd "$tmp"
-	HOME="$home2" PI_STACK_GIT="$seed" PSTACK_GIT="$fake" PI_STACK_SKIP_PACKAGES=1 bash <"$root/install.sh"
-) || fail "second piped install failed"
-test -f "$home2/.pi-stack/.skip-marker" || fail "second piped install recloned PI_STACK"
-test -f "$home2/.pi-stack/.plugins/.skip-marker" || fail "second piped install recloned .plugins"
+
+python3 - "$seed/install.sh" <<'PY'
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+text = path.read_text()
+needle = "\t@narumitw/pi-goal\n"
+if text.count(needle) != 1:
+	raise SystemExit("required package insertion point changed")
+path.write_text(text.replace(needle, needle + "\tpi-update-fixture\n"))
+PY
+git -C "$seed" add install.sh
+git -C "$seed" -c user.email=t@t -c user.name=t commit -qm update
+updated_seed_head="$(git -C "$seed" rev-parse HEAD)"
+printf 'updated\n' >"$fake/pstack/update-marker"
+git -C "$fake" add pstack/update-marker
+git -C "$fake" -c user.email=t@t -c user.name=t commit -qm update
+tty_runner="$tmp/run-with-tty.py"
+cat >"$tty_runner" <<'PY'
+import errno
+import os
+import pty
+import sys
+
+script, answer = sys.argv[1:]
+pid, terminal = pty.fork()
+if pid == 0:
+	script_fd = os.open(script, os.O_RDONLY)
+	os.dup2(script_fd, 0)
+	if script_fd != 0:
+		os.close(script_fd)
+	os.execvp("bash", ["bash"])
+
+output = bytearray()
+sent = False
+while True:
+	try:
+		chunk = os.read(terminal, 4096)
+	except OSError as error:
+		if error.errno == errno.EIO:
+			break
+		raise
+	if not chunk:
+		break
+	output.extend(chunk)
+	if not sent and b"? [y/N] " in output:
+		os.write(terminal, answer.encode() + b"\n")
+		sent = True
+
+_, status = os.waitpid(pid, 0)
+sys.stdout.buffer.write(output)
+if not sent:
+	raise SystemExit("installer did not prompt on /dev/tty")
+if os.WIFEXITED(status):
+	raise SystemExit(os.WEXITSTATUS(status))
+raise SystemExit(128 + os.WTERMSIG(status))
+PY
+no_tty_runner="$tmp/run-without-tty.py"
+cat >"$no_tty_runner" <<'PY'
+import subprocess
+import sys
+
+with open(sys.argv[1], "rb") as script:
+	result = subprocess.run(
+		["bash"],
+		stdin=script,
+		stdout=subprocess.PIPE,
+		stderr=subprocess.STDOUT,
+		start_new_session=True,
+	)
+sys.stdout.buffer.write(result.stdout)
+raise SystemExit(result.returncode)
+PY
+
+if ! reject_out="$(HOME="$home2" PI_STACK_GIT="$seed_url" PSTACK_GIT="$pstack_url" PI_STACK_SKIP_PACKAGES=1 python3 "$tty_runner" "$root/install.sh" n 2>&1)"; then
+	printf '%s\n' "$reject_out" >&2
+	fail "update prompt rejection failed"
+fi
+printf '%s\n' "$reject_out" | grep -q 'Update existing pi-stack checkout' || fail "existing install did not prompt for an update"
+test "$(git -C "$home2/.pi-stack" rev-parse HEAD)" = "$initial_seed_head" || fail "n updated the pi-stack checkout"
+
+if ! piped_out="$(HOME="$home2" PI_STACK_GIT="$seed_url" PSTACK_GIT="$pstack_url" PI_STACK_SKIP_PACKAGES=1 python3 "$no_tty_runner" "$root/install.sh" 2>&1)"; then
+	printf '%s\n' "$piped_out" >&2
+	fail "noninteractive piped reinstall failed"
+fi
+printf '%s\n' "$piped_out" | grep -q 'Rerun with -y' || fail "noninteractive piped reinstall did not explain how to update"
+test "$(git -C "$home2/.pi-stack" rev-parse HEAD)" = "$initial_seed_head" || fail "noninteractive piped reinstall updated without consent"
+
+if ! explicit_out="$(HOME="$home2" PI_STACK="$home2/.pi-stack" PI_STACK_GIT="$seed_url" PSTACK_GIT="$pstack_url" PI_STACK_SKIP_PACKAGES=1 bash -s -- -y <"$root/install.sh" 2>&1)"; then
+	printf '%s\n' "$explicit_out" >&2
+	fail "explicit PI_STACK reinstall failed"
+fi
+test "$(git -C "$home2/.pi-stack" rev-parse HEAD)" = "$initial_seed_head" || fail "-y updated an explicit PI_STACK checkout"
+if printf '%s\n' "$explicit_out" | grep -q 'Update existing pi-stack checkout'; then
+	fail "-y prompted for an explicit PI_STACK checkout"
+fi
+
+if ! direct_out="$(HOME="$home2" PI_STACK_GIT="$seed_url" PSTACK_GIT="$pstack_url" PI_STACK_SKIP_PACKAGES=1 bash "$home2/.pi-stack/install.sh" -y 2>&1)"; then
+	printf '%s\n' "$direct_out" >&2
+	fail "direct checkout reinstall failed"
+fi
+test "$(git -C "$home2/.pi-stack" rev-parse HEAD)" = "$initial_seed_head" || fail "-y updated a directly executed checkout"
+if printf '%s\n' "$direct_out" | grep -q 'Update existing pi-stack checkout'; then
+	fail "-y prompted for a directly executed checkout"
+fi
+
+npm_root="$home2/.pi/agent/npm/node_modules"
+for package in pi-web-access pi-hashline-edit pi-subagents; do
+	mkdir -p "$npm_root/$package"
+done
+mkdir -p "$npm_root/@narumitw/pi-goal"
+printf '%s\n' '{"name":"@narumitw/pi-goal","version":"fixture"}' >"$npm_root/@narumitw/pi-goal/package.json"
+fake_bin="$tmp/fake-bin"
+mkdir -p "$fake_bin"
+cat >"$fake_bin/pi" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "${1:-}" == install && "${2:-}" == npm:* ]]
+package="${2#npm:}"
+printf '%s\n' "$2" >>"$PI_INSTALL_LOG"
+mkdir -p "$PI_CODING_AGENT_DIR/npm/node_modules/$package"
+EOF
+chmod +x "$fake_bin/pi"
+install_log="$tmp/pi-install.log"
+if ! accept_out="$(PATH="$fake_bin:$PATH" HOME="$home2" PI_STACK_GIT="$seed_url" PSTACK_GIT="$pstack_url" PI_INSTALL_LOG="$install_log" python3 "$tty_runner" "$root/install.sh" y 2>&1)"; then
+	printf '%s\n' "$accept_out" >&2
+	fail "update prompt acceptance failed"
+fi
+test "$(git -C "$home2/.pi-stack" rev-parse HEAD)" = "$updated_seed_head" || fail "y did not update the pi-stack checkout"
+test "$(git -C "$home2/.pi-stack/.plugins" rev-parse HEAD)" = "$initial_pstack_head" || fail "pi-stack update also updated pstack"
+test -f "$home2/.pi-stack/.skip-marker" || fail "pi-stack update removed an untracked file"
+test -f "$home2/.pi-stack/.plugins/.skip-marker" || fail "pi-stack update replaced .plugins"
+test -d "$npm_root/pi-update-fixture" || fail "updated installer did not install its new dependency"
+test "$(cat "$install_log")" = "npm:pi-update-fixture" || fail "updated installer reinstalled existing Pi packages"
+grep -q 'npm:pi-update-fixture' "$home2/.pi/agent/settings.json" || fail "updated installer did not register its new dependency"
+
+printf 'next\n' >"$seed/update-marker"
+git -C "$seed" add update-marker
+git -C "$seed" -c user.email=t@t -c user.name=t commit -qm next
+next_seed_head="$(git -C "$seed" rev-parse HEAD)"
+printf '\nlocal change\n' >>"$home2/.pi-stack/install.sh"
+if dirty_out="$(HOME="$home2" PI_STACK_GIT="$seed_url" PSTACK_GIT="$pstack_url" PI_STACK_SKIP_PACKAGES=1 bash -s -- -y <"$root/install.sh" 2>&1)"; then
+	fail "-y updated a checkout with tracked changes"
+fi
+printf '%s\n' "$dirty_out" | grep -q 'has tracked or staged changes' || fail "dirty checkout failure was not useful"
+test "$(git -C "$home2/.pi-stack" rev-parse HEAD)" = "$updated_seed_head" || fail "dirty checkout advanced before failing"
+git -C "$home2/.pi-stack" checkout -- install.sh
+: >"$install_log"
+if ! yes_out="$(PATH="$fake_bin:$PATH" HOME="$home2" PI_STACK_GIT="$seed_url" PSTACK_GIT="$pstack_url" PI_INSTALL_LOG="$install_log" bash -s -- -y <"$root/install.sh" 2>&1)"; then
+	printf '%s\n' "$yes_out" >&2
+	fail "-y update failed"
+fi
+if printf '%s\n' "$yes_out" | grep -q 'Update existing pi-stack checkout'; then
+	fail "-y prompted before updating"
+fi
+test "$(git -C "$home2/.pi-stack" rev-parse HEAD)" = "$next_seed_head" || fail "-y did not update the pi-stack checkout"
+test ! -s "$install_log" || fail "-y reinstalled existing Pi packages"
+test "$(git -C "$home2/.pi-stack/.plugins" rev-parse HEAD)" = "$initial_pstack_head" || fail "-y updated pstack"
+if ! repeat_out="$(PATH="$fake_bin:$PATH" HOME="$home2" PI_STACK_GIT="$seed_url" PSTACK_GIT="$pstack_url" PI_INSTALL_LOG="$install_log" bash -s -- -y <"$root/install.sh" 2>&1)"; then
+	printf '%s\n' "$repeat_out" >&2
+	fail "repeated -y update failed"
+fi
+test "$(git -C "$home2/.pi-stack" rev-parse HEAD)" = "$next_seed_head" || fail "repeated -y changed the pi-stack revision"
+test ! -s "$install_log" || fail "repeated -y reinstalled existing Pi packages"
+
+printf 'local\n' >"$home2/.pi-stack/local-history"
+git -C "$home2/.pi-stack" add local-history
+git -C "$home2/.pi-stack" -c user.email=t@t -c user.name=t commit -qm local
+local_ahead_head="$(git -C "$home2/.pi-stack" rev-parse HEAD)"
+if local_out="$(HOME="$home2" PI_STACK_GIT="$seed_url" PSTACK_GIT="$pstack_url" PI_STACK_SKIP_PACKAGES=1 bash -s -- -y <"$root/install.sh" 2>&1)"; then
+	fail "-y accepted local pi-stack history"
+fi
+printf '%s\n' "$local_out" | grep -q 'has local commits' || fail "local-ahead failure was not useful"
+test "$(git -C "$home2/.pi-stack" rev-parse HEAD)" = "$local_ahead_head" || fail "local-ahead history changed while update was refused"
+git -C "$home2/.pi-stack" reset --hard -q "$next_seed_head"
+
+printf 'local\n' >"$home2/.pi-stack/local-history"
+git -C "$home2/.pi-stack" add local-history
+git -C "$home2/.pi-stack" -c user.email=t@t -c user.name=t commit -qm local
+diverged_local_head="$(git -C "$home2/.pi-stack" rev-parse HEAD)"
+printf 'remote\n' >"$seed/remote-history"
+git -C "$seed" add remote-history
+git -C "$seed" -c user.email=t@t -c user.name=t commit -qm remote
+diverged_seed_head="$(git -C "$seed" rev-parse HEAD)"
+if diverged_out="$(HOME="$home2" PI_STACK_GIT="$seed_url" PSTACK_GIT="$pstack_url" PI_STACK_SKIP_PACKAGES=1 bash -s -- -y <"$root/install.sh" 2>&1)"; then
+	fail "-y accepted diverged pi-stack history"
+fi
+printf '%s\n' "$diverged_out" | grep -q 'Could not fast-forward' || fail "diverged history failure was not useful"
+test "$(git -C "$home2/.pi-stack" rev-parse HEAD)" = "$diverged_local_head" || fail "diverged history changed while update was refused"
+git -C "$home2/.pi-stack" reset --hard -q "$diverged_seed_head"
+
+git -C "$home2/.pi-stack" checkout --detach -q
+detached_head="$(git -C "$home2/.pi-stack" rev-parse HEAD)"
+if detached_out="$(HOME="$home2" PI_STACK_GIT="$seed_url" PSTACK_GIT="$pstack_url" PI_STACK_SKIP_PACKAGES=1 bash -s -- -y <"$root/install.sh" 2>&1)"; then
+	fail "-y accepted a detached pi-stack checkout"
+fi
+printf '%s\n' "$detached_out" | grep -q 'is not on a branch' || fail "detached checkout failure was not useful"
+test "$(git -C "$home2/.pi-stack" rev-parse HEAD)" = "$detached_head" || fail "detached checkout changed while update was refused"
+git -C "$home2/.pi-stack" checkout -q "$managed_branch"
+
+git -C "$home2/.pi-stack" branch --unset-upstream
+missing_upstream_head="$(git -C "$home2/.pi-stack" rev-parse HEAD)"
+if missing_upstream_out="$(HOME="$home2" PI_STACK_GIT="$seed_url" PSTACK_GIT="$pstack_url" PI_STACK_SKIP_PACKAGES=1 bash -s -- -y <"$root/install.sh" 2>&1)"; then
+	fail "-y accepted a checkout without an upstream"
+fi
+printf '%s\n' "$missing_upstream_out" | grep -q 'has no upstream' || fail "missing upstream failure was not useful"
+test "$(git -C "$home2/.pi-stack" rev-parse HEAD)" = "$missing_upstream_head" || fail "checkout without upstream changed while update was refused"
+git -C "$home2/.pi-stack" branch --set-upstream-to="origin/$managed_branch" >/dev/null
 
 if grep -R -E '/home/[^$]|workspace root' -- install.sh overlay skills/jig skills/cross-repo | grep -v '^Binary'; then
 	fail "hardcoded home path or workspace root in overlay files"

@@ -10,6 +10,12 @@ Install Pi and sign in before you install pi-stack.
 curl -fsSL https://raw.githubusercontent.com/alienczf/pi-stack/main/install.sh | bash
 ```
 
+On a later quickstart run, the piped installer asks before it fast-forwards `$HOME/.pi-stack`. Enter `y`, or pass `-y`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/alienczf/pi-stack/main/install.sh | bash -s -- -y
+```
+
 To install from a checkout, run:
 
 ```bash
@@ -40,7 +46,9 @@ The installer keeps the Jig launcher, controller, skill, and references under `$
 
 The installer preserves unrelated settings and package rows. It preserves an existing `defaultProjectTrust` value and does not add one to a fresh settings file. The shell command denies project trust for its own Pi process with explicit flags. It does not make every project trusted.
 
-Run the same installer again after you update a checkout. A second run with the same inputs leaves all owned file bytes unchanged and removes stale files only from the installed Jig resource directory. It never writes `auth.json`, `models-store.json`, `private/`, or `sessions/`.
+The prompt and `-y` update only when a bootstrap invocation selects the default `$HOME/.pi-stack` checkout. Running that checkout's `install.sh` directly or setting `PI_STACK` uses the selected source as-is. The installer does not update the nested pstack clone or installed package versions. After a source update, it installs each newly required package that is absent.
+
+A second run with the same inputs leaves all owned file bytes unchanged and removes stale files only from the installed Jig resource directory. It never writes `auth.json`, `models-store.json`, `private/`, or `sessions/`.
 
 To use existing source trees, run:
 
