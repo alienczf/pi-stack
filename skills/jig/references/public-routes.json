@@ -1,35 +1,35 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "routes": [
     {
       "route": "shell",
       "userCommand": "jig init",
-      "trustResourceLoading": "Starts a fresh Pi process with --no-approve, --no-context-files, --no-extensions plus one explicit --extension, --no-skills plus one explicit --skill, --no-prompt-templates, --no-themes, and explicit system prompt overrides. Only the installed Jig skill and installed pi-subagents extension enter the campaign as resources.",
+      "trustResourceLoading": "Starts a fresh Pi process with project context, extensions, prompts, themes, and discovered skills disabled. It explicitly loads only the installed Jig and create-verification-skill procedures.",
       "resourceIsolation": "isolated-shell",
-      "controllerLocation": "${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/jig/bin/jigctl.py",
-      "pauseResumeBehavior": "Exit at awaiting-commandments when the operator has not supplied a complete response. Resume with jig init. A clean exit at another active boundary also resumes with jig init.",
+      "controllerLocation": "${PI_CODING_AGENT_DIR:-${PI_AGENT_DIR:-$HOME/.pi/agent}}/jig/bin/jigctl.py",
+      "pauseResumeBehavior": "Exit at awaiting-principles when the operator has not supplied a complete response. Resume active work with jig init.",
       "routeMismatchRecovery": "Resume with /skill:jig init or /jig init when the manifest records inherited-session.",
-      "terminalState": "initialized with kept, reverted, or no-eligible-candidate"
+      "terminalState": "configured"
     },
     {
       "route": "skill",
       "userCommand": "/skill:jig init",
-      "trustResourceLoading": "Uses the current trusted Pi session. Resources already loaded into that session remain loaded. It never starts a nested Pi process.",
+      "trustResourceLoading": "Uses the current trusted Pi session and its installed pstack skills. It never starts a nested Pi process.",
       "resourceIsolation": "inherited-session",
-      "controllerLocation": "${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/jig/bin/jigctl.py",
-      "pauseResumeBehavior": "Stop at awaiting-commandments when the operator has not supplied a complete response. Resume with /skill:jig init in a trusted Pi session.",
+      "controllerLocation": "${PI_CODING_AGENT_DIR:-${PI_AGENT_DIR:-$HOME/.pi/agent}}/jig/bin/jigctl.py",
+      "pauseResumeBehavior": "Stop at awaiting-principles when the operator has not supplied a complete response. Resume active work with /skill:jig init.",
       "routeMismatchRecovery": "Resume with jig init when the manifest records isolated-shell.",
-      "terminalState": "initialized with kept, reverted, or no-eligible-candidate"
+      "terminalState": "configured"
     },
     {
       "route": "prompt-template",
       "userCommand": "/jig init",
-      "trustResourceLoading": "Expands to an instruction to load the registered Jig skill in the current trusted Pi session. Resources already loaded into that session remain loaded. It never starts a nested Pi process.",
+      "trustResourceLoading": "Expands to the registered Jig skill in the current trusted Pi session. It never starts a nested Pi process.",
       "resourceIsolation": "inherited-session",
-      "controllerLocation": "${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/jig/bin/jigctl.py",
-      "pauseResumeBehavior": "Stop at awaiting-commandments when the operator has not supplied a complete response. Resume with /jig init in a trusted Pi session.",
+      "controllerLocation": "${PI_CODING_AGENT_DIR:-${PI_AGENT_DIR:-$HOME/.pi/agent}}/jig/bin/jigctl.py",
+      "pauseResumeBehavior": "Stop at awaiting-principles when the operator has not supplied a complete response. Resume active work with /jig init.",
       "routeMismatchRecovery": "Resume with jig init when the manifest records isolated-shell.",
-      "terminalState": "initialized with kept, reverted, or no-eligible-candidate"
+      "terminalState": "configured"
     }
   ]
 }

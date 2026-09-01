@@ -1,0 +1,1 @@
+{"schemaVersion":2,"repositoryRevision":"1111111111111111111111111111111111111111","productType":{"value":"CLI","evidence":[{"path":"README.md","line":1,"note":"Documents the CLI."}]},"entryPoints":[{"value":"example","evidence":[{"path":"README.md","line":1,"note":"Shows the command."}]}],"existingPolicies":[],"unknowns":[]}

@@ -1,1095 +1,383 @@
-import ast
-import importlib.util
-import hashlib
 import json
 import os
-import shutil
-import socket
 import subprocess
 import sys
 import tempfile
 import unittest
-from unittest import mock
-import uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 CONTROLLER = ROOT / "bin" / "jigctl.py"
-LAUNCHER = ROOT / "bin" / "jig.sh"
-SCHEMAS = ROOT / "skills" / "jig" / "references" / "schemas" / "v1"
-
-spec = importlib.util.spec_from_file_location("jigctl", CONTROLLER)
-jigctl = importlib.util.module_from_spec(spec)
-assert spec.loader is not None
-spec.loader.exec_module(jigctl)
 
 
 class JigControllerTest(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
-        self.external = tempfile.TemporaryDirectory()
-        self.repo = Path(self.temporary.name)
-        self.git("init", "-q")
-        self.git("config", "user.email", "jig@example.invalid")
-        self.git("config", "user.name", "Jig Fixture")
-        (self.repo / "README.md").write_text("fixture\n", encoding="utf-8")
-        self.git("add", "README.md")
-        self.git("commit", "-qm", "fixture")
+        self.repo = Path(self.temporary.name) / "repo"
+        self.repo.mkdir()
+        (self.repo / "README.md").write_text("# Fixture CLI\n\nRun `fixture`.\n", encoding="utf-8")
+        subprocess.run(["git", "init", "-q", str(self.repo)], check=True)
+        subprocess.run(["git", "-C", str(self.repo), "config", "user.email", "jig@example.invalid"], check=True)
+        subprocess.run(["git", "-C", str(self.repo), "config", "user.name", "Jig Fixture"], check=True)
+        subprocess.run(["git", "-C", str(self.repo), "add", "README.md"], check=True)
+        subprocess.run(["git", "-C", str(self.repo), "commit", "-qm", "fixture"], check=True)
+        self.revision = subprocess.check_output(["git", "-C", str(self.repo), "rev-parse", "HEAD"], text=True).strip()
 
     def tearDown(self):
-        self.external.cleanup()
         self.temporary.cleanup()
 
-    def git(self, *arguments):
+    def ctl(self, command, *arguments, input_value=None, isolation="isolated-shell"):
         return subprocess.run(
-            ["git", "-C", str(self.repo), *arguments],
-            check=True,
+            [sys.executable, str(CONTROLLER), command, "--resource-isolation", isolation, *arguments],
+            cwd=self.repo,
+            input=None if input_value is None else json.dumps(input_value),
+            text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True,
-        ).stdout
-
-    def ctl(self, *arguments, cwd=None, input_text=None, python=sys.executable, env=None):
-        environment = os.environ.copy()
-        environment["JIG_PI_VERSION"] = "fixture-pi"
-        if env:
-            environment.update(env)
-        return subprocess.run(
-            [python, str(CONTROLLER), *arguments],
-            cwd=cwd or self.repo,
-            input=input_text,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            env=environment,
+            env={**os.environ, "JIG_PI_VERSION": "fixture-pi"},
         )
 
-    def start(self, cwd=None):
-        result = self.ctl("start", "--resource-isolation", "isolated-shell", cwd=cwd)
+    def output(self, result):
         self.assertEqual(result.returncode, 0, result.stderr)
-        return result
-
-    def manifest_path(self):
-        return self.repo / ".pi" / "jig" / "manifest.json"
+        return json.loads(result.stdout)
 
     def manifest(self):
-        return json.loads(self.manifest_path().read_text(encoding="utf-8"))
+        return json.loads((self.repo / ".pi/jig/manifest.json").read_text(encoding="utf-8"))
 
-    def profile(self, evidence="README.md"):
-        revision = self.git("rev-parse", "HEAD").strip()
+    def profile(self):
+        evidence = [{"path": "README.md", "line": 1, "note": "Documents the fixture CLI."}]
         return {
-            "schemaVersion": 1,
-            "repositoryRevision": revision,
-            "productType": {
-                "value": "test repository",
-                "evidence": [{"path": evidence, "line": 1, "note": "Fixture evidence."}],
-            },
-            "languages": [],
-            "frameworks": [],
-            "buildTools": [],
-            "ci": [],
-            "entryPoints": [],
-            "topology": [],
+            "schemaVersion": 2,
+            "repositoryRevision": self.revision,
+            "productType": {"value": "CLI", "evidence": evidence},
+            "entryPoints": [{"value": "fixture", "evidence": evidence}],
+            "existingPolicies": [],
             "unknowns": [],
-            "failureModes": [],
         }
 
-    def commit_profile(self, profile=None):
-        value = self.profile() if profile is None else profile
-        return self.ctl(
-            "commit-profile",
-            "--resource-isolation",
-            "isolated-shell",
-            input_text=json.dumps(value),
-        )
-
-    def valid_lock(self, pid=999999999, host=None, process_start=None):
+    def answers(self, marker="I ratify these repository Principles."):
         return {
-            "schemaVersion": 1,
-            "pid": pid,
-            "host": socket.gethostname() if host is None else host,
-            "processStart": process_start,
-            "token": uuid.uuid4().hex,
-            "acquiredAt": "2026-01-01T00:00:00Z",
+            "schemaVersion": 2,
+            "protectedUserPaths": [
+                {
+                    "name": "Run the CLI",
+                    "action": "Run fixture from a clean checkout.",
+                    "visibleResult": "The CLI prints the fixture result.",
+                    "thresholds": "Exit zero within five seconds.",
+                }
+            ],
+            "forbiddenOutcomes": ["Do not delete user-owned fixture data."],
+            "compatibilityPolicy": "Breaking the documented CLI requires operator approval.",
+            "priorityTradeoffs": ["Preserve CLI correctness", "Keep startup below five seconds"],
+            "authority": {
+                "owner": "Fixture Operator",
+                "exceptions": ["No standing exceptions."],
+                "amendmentPolicy": "The operator approves an exact replacement digest.",
+                "ratificationMarker": marker,
+            },
+            "freeTextAmendments": "",
         }
 
-    def transition_path(self, index, state):
-        return self.repo / ".pi" / "jig" / "receipts" / f"transition-{index:04d}-{state}.json"
+    def reach_awaiting(self):
+        started = self.output(self.ctl("start"))
+        self.assertEqual(started["state"], "surveying")
+        committed = self.output(self.ctl("commit-profile", input_value=self.profile()))
+        self.assertEqual(committed["state"], "awaiting-principles")
 
-    def write_orphan_receipt(self, index, from_state, to_state, kind, **extra):
-        source = self.manifest()["source"] if self.manifest_path().exists() else jigctl.source_record(self.repo)
-        receipt = jigctl.receipt_value(kind, from_state, to_state, source, **extra)
-        path = self.transition_path(index, to_state)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        raw = jigctl.canonical_json(receipt)
-        path.write_bytes(raw)
-        return path, raw
-
-    def jig_snapshot(self):
-        jig = self.repo / ".pi" / "jig"
-        return {
-            path.relative_to(jig).as_posix(): path.read_bytes()
-            for path in sorted(jig.rglob("*"))
-            if path.is_file() and path.name != "init.lock"
-        }
-
-    def assert_source_drift_fails_without_state_changes(self):
-        before = self.jig_snapshot()
-        result = self.ctl("start", "--resource-isolation", "isolated-shell")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("source revision or dirty summary changed", result.stderr)
-        self.assertEqual(self.jig_snapshot(), before)
-
-    def test_outside_git_fails_without_writes(self):
-        outside = Path(tempfile.mkdtemp())
-        self.addCleanup(shutil.rmtree, outside)
-        result = self.ctl("start", "--resource-isolation", "isolated-shell", cwd=outside)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertFalse((outside / ".pi").exists())
-
-    def test_subdirectory_resolves_same_root(self):
-        child = self.repo / "src" / "nested"
-        child.mkdir(parents=True)
-        self.start(cwd=child)
-        self.assertTrue(self.manifest_path().is_file())
-        self.assertFalse((child / ".pi").exists())
-
-    def test_clean_run_and_explicit_profile_commit(self):
-        self.start()
-        before = self.manifest()
-        self.assertEqual(before["currentState"], "surveying")
-        self.assertEqual(before["commandments"], {
-            "path": "COMMANDMENTS.md", "sha256": None, "version": None, "ratifiedAt": None
-        })
-        result = self.commit_profile()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        after = self.manifest()
-        self.assertEqual(after["currentState"], "awaiting-commandments")
-        self.assertEqual([item["to"] for item in after["transitions"]], ["surveying", "awaiting-commandments"])
-        self.assertFalse((self.repo / "COMMANDMENTS.md").exists())
-
-    def test_idempotent_rerun_at_both_boundaries(self):
-        self.start()
-        surveying = self.manifest_path().read_bytes()
-        self.start()
-        self.assertEqual(self.manifest_path().read_bytes(), surveying)
-        self.assertEqual(self.commit_profile().returncode, 0)
-        awaiting = self.manifest_path().read_bytes()
-        self.start()
-        self.assertEqual(self.manifest_path().read_bytes(), awaiting)
-        self.assertEqual(self.commit_profile().returncode, 0)
-        self.assertEqual(self.manifest_path().read_bytes(), awaiting)
-
-    def test_failed_state_reconciliation_returns_to_last_valid_boundary(self):
-        self.start()
-        failed = self.ctl(
-            "record-failure",
-            "--resource-isolation", "isolated-shell",
-            "--state", "surveying",
-            "--reason", "seeded survey failure",
-        )
-        self.assertEqual(failed.returncode, 0, failed.stderr)
-        self.start()
-        self.assertEqual(self.manifest()["currentState"], "surveying")
-        result = self.commit_profile()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.manifest()["currentState"], "awaiting-commandments")
-        failed = self.ctl(
-            "record-failure",
-            "--resource-isolation", "isolated-shell",
-            "--state", "awaiting-commandments",
-            "--reason", "seeded interview-boundary failure",
-        )
-        self.assertEqual(failed.returncode, 0, failed.stderr)
-        self.start()
-        self.assertEqual(self.manifest()["currentState"], "awaiting-commandments")
-
-    def test_invalid_and_file_only_profiles_do_not_advance(self):
-        self.start()
-        before = self.manifest_path().read_bytes()
-        invalid = self.profile()
-        invalid["schemaVersion"] = 2
-        result = self.commit_profile(invalid)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(self.manifest_path().read_bytes(), before)
-        profile_path = self.repo / ".pi" / "jig" / "profile.json"
-        profile_path.write_text(json.dumps(self.profile()), encoding="utf-8")
-        self.start()
-        self.assertEqual(self.manifest()["currentState"], "surveying")
-        self.assertEqual(len(self.manifest()["transitions"]), 1)
-
-    def test_profile_input_requires_strict_json_and_canonical_json_is_finite(self):
-        self.start()
-        profile = json.dumps(self.profile())
-        lexical_cases = [
-            profile.replace('"schemaVersion": 1', '"schemaVersion": 1, "schemaVersion": 1', 1),
-            profile.replace('"line": 1', '"line": NaN', 1),
-            profile.replace('"line": 1', '"line": Infinity', 1),
-            profile.replace('"line": 1', '"line": -Infinity', 1),
-        ]
-        before = self.jig_snapshot()
-        for raw in lexical_cases:
-            with self.subTest(raw=raw[:80]):
-                result = self.ctl(
-                    "commit-profile",
-                    "--resource-isolation",
-                    "isolated-shell",
-                    input_text=raw,
-                )
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn("not valid UTF-8 JSON", result.stderr)
-                self.assertNotIn("Traceback", result.stderr)
-                self.assertLess(len(result.stderr), 600)
-                self.assertEqual(self.jig_snapshot(), before)
-        for value in (float("nan"), float("inf"), float("-inf")):
-            with self.subTest(value=value):
-                with self.assertRaises(jigctl.ValidationError):
-                    jigctl.canonical_json(value)
-
-    def test_interrupted_temporary_write_is_retained_as_evidence(self):
-        self.start()
-        temporary = self.repo / ".pi" / "jig" / f".jigctl-manifest.json.123.{uuid.uuid4().hex}.tmp"
-        temporary.write_bytes(b"partial")
-        self.start()
-        self.assertFalse(temporary.exists())
-        evidence = list((self.repo / ".pi" / "jig" / "receipts").glob("interrupted-write-*.bin"))
-        self.assertEqual(len(evidence), 1)
-        paths = {item["path"] for item in self.manifest()["artifacts"]}
-        self.assertIn(evidence[0].relative_to(self.repo).as_posix(), paths)
-
-    def test_zero_byte_and_malformed_manifest_fail_closed(self):
-        self.start()
-        for raw in (b"", b"{not-json"):
-            self.manifest_path().write_bytes(raw)
-            result = self.ctl("start", "--resource-isolation", "isolated-shell")
-            self.assertNotEqual(result.returncode, 0)
-            self.assertEqual(self.manifest_path().read_bytes(), raw)
-            self.assertIn("Recovery:", result.stderr)
-
-    def test_unsupported_version_and_corrupt_state_fail_closed(self):
-        self.start()
-        manifest = self.manifest()
-        manifest["schemaVersion"] = 2
-        self.manifest_path().write_text(json.dumps(manifest), encoding="utf-8")
-        raw = self.manifest_path().read_bytes()
-        result = self.ctl("start", "--resource-isolation", "isolated-shell")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(self.manifest_path().read_bytes(), raw)
-        manifest["schemaVersion"] = 1
-        manifest["currentState"] = "awaiting-commandments"
-        self.manifest_path().write_text(json.dumps(manifest), encoding="utf-8")
-        result = self.ctl("start", "--resource-isolation", "isolated-shell")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("transition", result.stderr)
-
-    def test_stale_lock_is_reclaimed_with_evidence(self):
-        self.start()
-        lock = self.repo / ".pi" / "jig" / "init.lock"
-        lock.write_text(json.dumps(self.valid_lock()), encoding="utf-8")
-        result = self.start()
-        self.assertEqual(result.returncode, 0)
-        evidence = list((self.repo / ".pi" / "jig" / "receipts").glob("lock-reclaimed-*.json"))
-        self.assertEqual(len(evidence), 1)
-        self.assertFalse(lock.exists())
-        self.assertIn(evidence[0].relative_to(self.repo).as_posix(), {item["path"] for item in self.manifest()["artifacts"]})
-
-    def test_live_and_uncertain_locks_are_refused(self):
-        self.start()
-        lock = self.repo / ".pi" / "jig" / "init.lock"
-        live = self.valid_lock(
-            pid=os.getpid(),
-            process_start=jigctl.process_start(os.getpid()),
-        )
-        for raw in (json.dumps(live).encode(), b"uncertain"):
-            lock.write_bytes(raw)
-            result = self.ctl("start", "--resource-isolation", "isolated-shell")
-            self.assertNotEqual(result.returncode, 0)
-            self.assertEqual(lock.read_bytes(), raw)
-            lock.unlink()
-
-    def test_lexical_path_rejection(self):
-        self.start()
-        for path in ("/tmp/outside", "../outside", "dir//file"):
-            profile = self.profile(path)
-            before = self.manifest_path().read_bytes()
-            result = self.commit_profile(profile)
-            self.assertNotEqual(result.returncode, 0, path)
-            self.assertEqual(self.manifest_path().read_bytes(), before)
-
-    def test_controller_output_directory_symlink_cannot_escape_root(self):
-        outside = Path(tempfile.mkdtemp())
-        self.addCleanup(shutil.rmtree, outside)
-        (self.repo / ".pi").symlink_to(outside, target_is_directory=True)
-        result = self.ctl("start", "--resource-isolation", "isolated-shell")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(list(outside.iterdir()), [])
-
-    def test_symlink_escape_and_symlinked_ancestor_rejection(self):
-        self.start()
-        outside = Path(tempfile.mkdtemp())
-        self.addCleanup(shutil.rmtree, outside)
-        (outside / "evidence.txt").write_text("secret\n", encoding="utf-8")
-        (self.repo / "escape").symlink_to(outside / "evidence.txt")
-        (self.repo / "linked").symlink_to(outside, target_is_directory=True)
-        for path in ("escape", "linked/evidence.txt"):
-            before = self.manifest_path().read_bytes()
-            result = self.commit_profile(self.profile(path))
-            self.assertNotEqual(result.returncode, 0)
-            self.assertEqual(self.manifest_path().read_bytes(), before)
-
-    def test_shell_rejects_package_scope_and_extra_arguments_before_writes(self):
-        forms = [[], ["run"], ["--force"], ["init", "package"], ["init", "."]]
-        for arguments in forms:
-            result = subprocess.run(
-                ["bash", str(LAUNCHER), *arguments],
-                cwd=self.repo,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
+    def ratify(self):
+        self.reach_awaiting()
+        interview = self.output(self.ctl("present-principles"))
+        self.assertEqual(interview["kind"], "repository-principles-interview")
+        self.assertNotIn("recommendedDefault", json.dumps(interview))
+        staged = self.output(self.ctl("stage-principles", input_value=self.answers()))
+        candidate = self.repo / staged["candidatePath"]
+        self.assertEqual(staged["candidateSha256"], __import__("hashlib").sha256(candidate.read_bytes()).hexdigest())
+        answers_path = self.repo / ".pi/jig/principles/answers.input.json"
+        self.assertEqual(json.loads(answers_path.read_text(encoding="utf-8")), self.answers())
+        answers_digest = __import__("hashlib").sha256(answers_path.read_bytes()).hexdigest()
+        artifact = next(item for item in self.manifest()["artifacts"] if item["path"] == ".pi/jig/principles/answers.input.json")
+        self.assertEqual(artifact, {"path": ".pi/jig/principles/answers.input.json", "owner": "human", "sha256": answers_digest})
+        ratified = self.output(
+            self.ctl(
+                "ratify-principles",
+                "--candidate-sha",
+                staged["candidateSha256"],
+                "--operator-marker",
+                staged["intendedMarker"],
             )
-            self.assertEqual(result.returncode, 2, arguments)
-            self.assertFalse((self.repo / ".pi").exists(), arguments)
+        )
+        self.assertEqual(ratified["state"], "verification-building")
+        principle = self.repo / ".cursor/skills/principle-repository/SKILL.md"
+        self.assertEqual(principle.read_bytes(), candidate.read_bytes())
+        self.assertIn("name: principle-repository", principle.read_text(encoding="utf-8"))
+        return staged
 
-    def test_source_revision_and_dirty_state_are_captured(self):
-        (self.repo / "dirty.txt").write_text("dirty\n", encoding="utf-8")
-        self.start()
-        source = self.manifest()["source"]
-        self.assertEqual(source["revision"], self.git("rev-parse", "HEAD").strip())
-        self.assertTrue(source["dirty"])
-        self.assertIn("?? dirty.txt", source["statusSummary"])
-
-    def test_shell_argv_disables_project_resources_and_pins_skill(self):
-        (self.repo / "AGENTS.md").write_text("untrusted\n", encoding="utf-8")
-        (self.repo / ".pi" / "skills" / "bad").mkdir(parents=True)
-        (self.repo / ".pi" / "extensions").mkdir()
-        (self.repo / ".pi" / "prompts").mkdir()
-        (self.repo / ".pi" / "settings.json").write_text("{}\n", encoding="utf-8")
-        external = Path(self.external.name)
-        receipt = external / "argv.json"
-        stub = external / "pi-stub.py"
-        stub.write_text(
-            "#!/usr/bin/env python3\nimport json, os, sys\n"
-            "open(os.environ['ARGV_RECEIPT'], 'w').write(json.dumps(sys.argv[1:]))\n",
+    def write_verification_skill(self, name="fixture"):
+        path = self.repo / f".cursor/skills/verify-{name}/SKILL.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            f"---\nname: verify-{name}\ndescription: Drive and verify the fixture CLI.\n---\n\n# Verify fixture\n",
             encoding="utf-8",
         )
-        stub.chmod(0o755)
-        environment = os.environ.copy()
-        environment.update({"PI": str(stub), "PI_STACK_ROOT": str(ROOT), "JIG_PI_VERSION": "fixture-pi", "ARGV_RECEIPT": str(receipt)})
-        result = subprocess.run(
-            ["bash", str(LAUNCHER), "init"],
-            cwd=self.repo,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            env=environment,
-        )
-        self.assertNotEqual(result.returncode, 0, result.stderr)
-        argv = json.loads(receipt.read_text(encoding="utf-8"))
-        expected_prefix = [
-            "-p", "--no-approve", "--no-session", "--no-context-files", "--no-extensions",
-            "--no-prompt-templates", "--no-skills", "--skill", str(ROOT / "skills" / "jig" / "SKILL.md"),
-            "--tools", "read,grep,find,ls,bash,write,edit", "--",
-        ]
-        self.assertEqual(argv[:-1], expected_prefix)
-        self.assertIn("commit-profile", argv[-1])
-        self.assertEqual(self.manifest()["resourceIsolation"], "isolated-shell")
-        self.assertEqual(self.manifest()["currentState"], "failed-surveying")
-        self.assertIn("before the awaiting-commandments boundary", result.stderr)
-        transition = self.manifest()["transitions"][-1]
-        failure_receipt = json.loads((self.repo / transition["receiptPath"]).read_text(encoding="utf-8"))
-        self.assertEqual(failure_receipt["kind"], "phase-failed")
+        return path
 
-    def test_controller_runs_without_site_packages_or_jsonschema(self):
-        result = self.ctl(
-            "start", "--resource-isolation", "isolated-shell", python=sys.executable,
-            env={"PYTHONPATH": ""},
-        )
-        self.assertEqual(result.returncode, 0, result.stderr)
-        isolated = subprocess.run(
-            [sys.executable, "-S", str(CONTROLLER), "start", "--resource-isolation", "isolated-shell"],
-            cwd=self.repo,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            env={**os.environ, "JIG_PI_VERSION": "fixture-pi", "PYTHONPATH": ""},
-        )
-        self.assertEqual(isolated.returncode, 0, isolated.stderr)
-        imports = {
-            node.names[0].name.split(".")[0]
-            for node in ast.walk(ast.parse(CONTROLLER.read_text(encoding="utf-8")))
-            if isinstance(node, ast.Import)
+    def test_v2_flow_configures_principle_verification_and_pi_path_idempotently(self):
+        self.ratify()
+        settings = self.repo / ".pi/settings.json"
+        settings.write_text(json.dumps({"theme": "keep", "skills": ["../other/skills"]}), encoding="utf-8")
+        verification = self.write_verification_skill()
+        completion = {"schemaVersion": 2, "verificationSkillPath": verification.relative_to(self.repo).as_posix()}
+        configured = self.output(self.ctl("complete-configuration", input_value=completion))
+        self.assertEqual(configured["state"], "configured")
+        self.assertEqual(configured["outcome"], "configured")
+        self.assertIn("maintain-verification-skill", configured["maintenance"])
+        merged = json.loads(settings.read_text(encoding="utf-8"))
+        self.assertEqual(merged["theme"], "keep")
+        self.assertEqual(merged["skills"], ["../other/skills", "../.cursor/skills"])
+        before = {
+            path.relative_to(self.repo).as_posix(): path.read_bytes()
+            for path in (self.repo / ".pi").rglob("*")
+            if path.is_file()
         }
-        imports.update(
-            node.module.split(".")[0]
-            for node in ast.walk(ast.parse(CONTROLLER.read_text(encoding="utf-8")))
-            if isinstance(node, ast.ImportFrom) and node.module and node.module != "__future__"
+        repeated = self.output(self.ctl("complete-configuration", input_value=completion))
+        self.assertEqual(repeated["state"], "configured")
+        wrong_repeat = self.ctl(
+            "complete-configuration",
+            input_value={"schemaVersion": 2, "verificationSkillPath": ".cursor/skills/verify-other/SKILL.md"},
         )
-        self.assertTrue(imports <= sys.stdlib_module_names, imports - sys.stdlib_module_names)
-
-    def test_controller_matches_draft_202012_examples(self):
-        try:
-            import jsonschema
-        except ImportError:
-            self.skipTest("development-only jsonschema is unavailable")
-        for schema_path in sorted(SCHEMAS.glob("*.schema.json")):
-            schema = json.loads(schema_path.read_text(encoding="utf-8"))
-            jsonschema.Draft202012Validator.check_schema(schema)
-            validator = jsonschema.Draft202012Validator(schema, format_checker=jsonschema.FormatChecker())
-            prefix = schema_path.name.removesuffix(".schema.json")
-            examples = sorted((SCHEMAS / "examples").glob(f"{prefix}.*.json"))
-            examples += sorted((SCHEMAS / "examples").glob(f"{prefix}.json"))
-            seen = set()
-            for example in examples:
-                if example in seen:
-                    continue
-                seen.add(example)
-                value = json.loads(example.read_text(encoding="utf-8"))
-                conforming = validator.is_valid(value)
-                try:
-                    jigctl.validate_instance(value, schema)
-                    controller = True
-                except jigctl.ValidationError:
-                    controller = False
-                self.assertEqual(controller, conforming, example.name)
-                self.assertEqual(controller, ".invalid." not in example.name, example.name)
-
-    def test_scalar_equality_matches_draft_202012_validator(self):
-        try:
-            import jsonschema
-        except ImportError:
-            self.skipTest("development-only jsonschema is unavailable")
-        cases = [
-            ({"type": "integer"}, True, False),
-            ({"type": "integer"}, 1, True),
-            ({"type": "integer"}, 1.0, True),
-            ({"type": "integer"}, -0.0, True),
-            ({"type": "integer"}, 1.5, False),
-            ({"const": 1}, True, False),
-            ({"const": 0}, False, False),
-            ({"const": 1}, 1.0, True),
-            ({"const": {"nested": [1]}}, {"nested": [1.0]}, True),
-            ({"const": {"nested": [True]}}, {"nested": [1]}, False),
-            ({"enum": [1]}, True, False),
-            ({"enum": [0]}, False, False),
-            ({"enum": [1]}, 1.0, True),
-            ({"enum": [{"nested": [1]}]}, {"nested": [1.0]}, True),
-            ({"enum": [{"nested": [False]}]}, {"nested": [0]}, False),
-            ({"type": "array", "uniqueItems": True}, [True, 1], True),
-            ({"type": "array", "uniqueItems": True}, [False, 0], True),
-            ({"type": "array", "uniqueItems": True}, [1, 1.0], False),
-            (
-                {"type": "array", "uniqueItems": True},
-                [{"nested": [True]}, {"nested": [1]}],
-                True,
-            ),
-            (
-                {"type": "array", "uniqueItems": True},
-                [{"nested": [1]}, {"nested": [1.0]}],
-                False,
-            ),
-        ]
-        for schema, instance, expected in cases:
-            with self.subTest(schema=schema, instance=instance):
-                conforming = jsonschema.Draft202012Validator(schema).is_valid(instance)
-                try:
-                    jigctl.validate_instance(instance, schema)
-                    controller = True
-                except jigctl.ValidationError:
-                    controller = False
-                self.assertEqual(conforming, expected)
-                self.assertEqual(controller, conforming)
-
-    def test_datetime_format_matches_draft_202012_checker(self):
-        try:
-            import jsonschema
-        except ImportError:
-            self.skipTest("development-only jsonschema is unavailable")
-        values = [
-            "2026-01-01T00:00:00Z",
-            "2026-01-01t00:00:00z",
-            "1937-01-01T12:00:27.87+00:20",
-            "2026-01-01T00:00:00.123z",
-            "2026-01-01T00:00:00.1Z",
-            "2026-01-01T00:00:00.123456789123Z",
-            "2026-01-01t00:00:00+23:59",
-            "2026-01-01 00:00:00Z",
-            "2026-01-01T24:00:00Z",
-            "2026-02-29T00:00:00Z",
-            "1990-12-31T23:59:60Z",
-            "2026-01-01T00:00:00+24:00",
-            "2026-01-01T00:00:00,Z",
-            "٢٠٢٦-٠١-٠١T٠٠:٠٠:٠٠Z",
-            "２０２６-０１-０１T００:００:００Z",
-        ]
-        checker = jsonschema.FormatChecker()
-        for value in values:
-            try:
-                checker.check(value, "date-time")
-                conforming = True
-            except jsonschema.exceptions.FormatError:
-                conforming = False
-            self.assertEqual(jigctl.valid_datetime(value), conforming, value)
-
-    def test_dirty_summary_drift_fails_at_surveying(self):
-        self.start()
-        (self.repo / "dirty.txt").write_text("dirty\n", encoding="utf-8")
-        self.assert_source_drift_fails_without_state_changes()
-
-    def test_dirty_summary_drift_fails_at_awaiting_commandments(self):
-        self.start()
-        self.assertEqual(self.commit_profile().returncode, 0)
-        (self.repo / "dirty.txt").write_text("dirty\n", encoding="utf-8")
-        self.assert_source_drift_fails_without_state_changes()
-
-    def test_head_drift_fails_at_surveying(self):
-        self.start()
-        (self.repo / "README.md").write_text("new head\n", encoding="utf-8")
-        self.git("add", "README.md")
-        self.git("commit", "-qm", "new head")
-        self.assert_source_drift_fails_without_state_changes()
-
-    def test_head_drift_fails_at_awaiting_commandments(self):
-        self.start()
-        self.assertEqual(self.commit_profile().returncode, 0)
-        (self.repo / "README.md").write_text("new head\n", encoding="utf-8")
-        self.git("add", "README.md")
-        self.git("commit", "-qm", "new head")
-        self.assert_source_drift_fails_without_state_changes()
-
-    def test_mutating_commands_reject_source_drift_before_writes(self):
-        self.start()
-        (self.repo / "dirty.txt").write_text("dirty\n", encoding="utf-8")
-        before = self.jig_snapshot()
-        failure = self.ctl(
-            "record-failure",
-            "--resource-isolation", "isolated-shell",
-            "--state", "surveying",
-            "--reason", "must not be recorded",
-        )
-        profile = self.commit_profile()
-        self.assertNotEqual(failure.returncode, 0)
-        self.assertNotEqual(profile.returncode, 0)
-        self.assertEqual(self.jig_snapshot(), before)
-
-    def test_lock_records_are_validated_before_liveness(self):
-        self.start()
-        lock = self.repo / ".pi" / "jig" / "init.lock"
-        malformed = [
-            {"pid": 999999999, "host": socket.gethostname()},
-            {**self.valid_lock(), "unexpected": True},
-            {**self.valid_lock(), "schemaVersion": 2},
-            {**self.valid_lock(), "processStart": "not-numeric"},
-            {**self.valid_lock(), "token": "short"},
-            {**self.valid_lock(), "acquiredAt": "not-a-date"},
-            self.valid_lock(host="foreign.invalid"),
-        ]
-        for value in malformed:
-            with self.subTest(value=value):
-                raw = json.dumps(value).encode("utf-8")
-                lock.write_bytes(raw)
-                result = self.ctl("start", "--resource-isolation", "isolated-shell")
-                self.assertNotEqual(result.returncode, 0)
-                self.assertEqual(lock.read_bytes(), raw)
-                lock.unlink()
-
-    def test_lock_scalar_shapes_and_oversized_pid_fail_bounded(self):
-        self.start()
-        lock = self.repo / ".pi" / "jig" / "init.lock"
-        invalid = [
-            {**self.valid_lock(), "schemaVersion": True},
-            {**self.valid_lock(), "schemaVersion": 1.0},
-            {**self.valid_lock(), "pid": 1.0},
-            {**self.valid_lock(), "pid": 10**100},
-        ]
-        for value in invalid:
-            with self.subTest(value=value):
-                raw = json.dumps(value).encode("utf-8")
-                lock.write_bytes(raw)
-                result = self.ctl("start", "--resource-isolation", "isolated-shell")
-                self.assertNotEqual(result.returncode, 0)
-                self.assertNotIn("Traceback", result.stderr)
-                self.assertLess(len(result.stderr), 600)
-                self.assertEqual(lock.read_bytes(), raw)
-                lock.unlink()
-
-    def test_stale_lock_hard_link_failure_is_bounded_and_preserves_bytes(self):
-        self.start()
-        lock_path = self.repo / ".pi" / "jig" / "init.lock"
-        raw = json.dumps(self.valid_lock(), sort_keys=True).encode("utf-8")
-        lock_path.write_bytes(raw)
-        before = self.jig_snapshot()
-        lock = jigctl.RepositoryLock(self.repo)
-        with mock.patch.object(jigctl.os, "link", side_effect=OSError("hard links unsupported")):
-            with self.assertRaises(jigctl.JigError) as caught:
-                lock.acquire()
-        message = str(caught.exception)
-        self.assertNotIn("Traceback", message)
-        self.assertLess(len(message), 600)
-        self.assertEqual(lock_path.read_bytes(), raw)
-        self.assertEqual(self.jig_snapshot(), before)
-
-    def test_stale_lock_collision_with_different_evidence_fails_closed(self):
-        self.start()
-        lock = self.repo / ".pi" / "jig" / "init.lock"
-        raw = json.dumps(self.valid_lock(), sort_keys=True).encode("utf-8")
-        lock.write_bytes(raw)
-        evidence = self.repo / ".pi" / "jig" / "receipts" / f"lock-reclaimed-{hashlib.sha256(raw).hexdigest()[:16]}.json"
-        existing = b"existing evidence\n"
-        evidence.write_bytes(existing)
-        result = self.ctl("start", "--resource-isolation", "isolated-shell")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(lock.read_bytes(), raw)
-        self.assertEqual(evidence.read_bytes(), existing)
-
-    def test_stale_lock_collision_with_same_evidence_reconciles(self):
-        self.start()
-        lock = self.repo / ".pi" / "jig" / "init.lock"
-        raw = json.dumps(self.valid_lock(), sort_keys=True).encode("utf-8")
-        lock.write_bytes(raw)
-        evidence = self.repo / ".pi" / "jig" / "receipts" / f"lock-reclaimed-{hashlib.sha256(raw).hexdigest()[:16]}.json"
-        evidence.write_bytes(raw)
-        before = evidence.read_bytes()
-        result = self.ctl("start", "--resource-isolation", "isolated-shell")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertFalse(lock.exists())
-        self.assertEqual(evidence.read_bytes(), before)
-        self.assertIn(evidence.relative_to(self.repo).as_posix(), {item["path"] for item in self.manifest()["artifacts"]})
-
-    def test_concurrent_stale_lock_reclamation_preserves_evidence(self):
-        self.start()
-        lock = self.repo / ".pi" / "jig" / "init.lock"
-        raw = json.dumps(self.valid_lock(), sort_keys=True).encode("utf-8")
-        lock.write_bytes(raw)
-        command = [sys.executable, str(CONTROLLER), "start", "--resource-isolation", "isolated-shell"]
-        environment = {**os.environ, "JIG_PI_VERSION": "fixture-pi"}
-        processes = [
-            subprocess.Popen(command, cwd=self.repo, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=environment)
-            for _ in range(2)
-        ]
-        results = [process.communicate(timeout=10) + (process.returncode,) for process in processes]
-        self.assertTrue(any(returncode == 0 for _stdout, _stderr, returncode in results), results)
-        evidence = list((self.repo / ".pi" / "jig" / "receipts").glob("lock-reclaimed-*.json"))
-        self.assertEqual(len(evidence), 1)
-        self.assertEqual(evidence[0].read_bytes(), raw)
-        self.assertFalse(lock.exists())
-        jigctl.validate_manifest_semantics(self.repo, self.manifest(), jigctl.load_schema("manifest"))
-
-    def test_transition_receipt_source_contradiction_fails_closed(self):
-        self.start()
+        self.assertNotEqual(wrong_repeat.returncode, 0)
+        after = {
+            path.relative_to(self.repo).as_posix(): path.read_bytes()
+            for path in (self.repo / ".pi").rglob("*")
+            if path.is_file()
+        }
+        self.assertEqual(after, before)
+        self.output(self.ctl("validate-configuration"))
         manifest = self.manifest()
-        transition = manifest["transitions"][0]
-        receipt_path = self.repo / transition["receiptPath"]
-        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
-        receipt["sourceDirty"] = not manifest["source"]["dirty"]
-        raw = jigctl.canonical_json(receipt)
-        receipt_path.write_bytes(raw)
-        digest = hashlib.sha256(raw).hexdigest()
-        transition["receiptSha256"] = digest
-        for artifact in manifest["artifacts"]:
-            if artifact["path"] == transition["receiptPath"]:
-                artifact["sha256"] = digest
-        self.manifest_path().write_bytes(jigctl.canonical_json(manifest))
-        before = self.jig_snapshot()
-        result = self.ctl("start", "--resource-isolation", "isolated-shell")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("receipt", result.stderr)
-        self.assertEqual(self.jig_snapshot(), before)
+        self.assertEqual(manifest["schemaVersion"], 2)
+        self.assertEqual(manifest["verification"]["createdBy"], "pstack/skills/create-verification-skill/SKILL.md")
+        self.assertEqual(manifest["verification"]["maintainedBy"], "pstack/skills/maintain-verification-skill/SKILL.md")
+        self.assertNotIn("firstStep", manifest)
 
-    def test_manifest_semantics_are_validated_before_write(self):
-        self.start()
-        before = self.manifest_path().read_bytes()
+    def test_ratification_requires_exact_digest_and_marker(self):
+        self.reach_awaiting()
+        staged = self.output(self.ctl("stage-principles", input_value=self.answers()))
+        wrong_digest = self.ctl(
+            "ratify-principles",
+            "--candidate-sha",
+            "0" * 64,
+            "--operator-marker",
+            staged["intendedMarker"],
+        )
+        self.assertNotEqual(wrong_digest.returncode, 0)
+        wrong_marker = self.ctl(
+            "ratify-principles",
+            "--candidate-sha",
+            staged["candidateSha256"],
+            "--operator-marker",
+            "different",
+        )
+        self.assertNotEqual(wrong_marker.returncode, 0)
+        self.assertFalse((self.repo / ".cursor/skills/principle-repository/SKILL.md").exists())
+
+    def test_existing_principle_is_preserved_and_can_be_adopted(self):
+        self.reach_awaiting()
+        principle = self.repo / ".cursor/skills/principle-repository/SKILL.md"
+        principle.parent.mkdir(parents=True)
+        existing = (
+            "---\nname: principle-repository\ndescription: Existing repository constraints.\n---\n\n"
+            "# Repository Principles\n\nStatus: RATIFIED\nOwner: Existing\nVersion: 4\nRatified at: 2026-09-01T00:00:00Z\n"
+        ).encode()
+        principle.write_bytes(existing)
+        refused = self.ctl("stage-principles", input_value=self.answers())
+        self.assertNotEqual(refused.returncode, 0)
+        staged = self.output(self.ctl("stage-principles", "--adopt-existing", input_value=self.answers()))
+        self.assertTrue(staged["adoptedExisting"])
+        self.assertEqual((self.repo / staged["candidatePath"]).read_bytes(), existing)
+        self.output(
+            self.ctl(
+                "ratify-principles",
+                "--candidate-sha",
+                staged["candidateSha256"],
+                "--operator-marker",
+                staged["intendedMarker"],
+            )
+        )
+        self.assertEqual(principle.read_bytes(), existing)
         manifest = self.manifest()
-        manifest["artifacts"][0]["owner"] = "repository"
-        with self.assertRaises(jigctl.ValidationError):
-            jigctl.write_manifest(self.repo, manifest)
-        self.assertEqual(self.manifest_path().read_bytes(), before)
+        self.assertEqual(manifest["principle"]["version"], 4)
+        self.assertEqual(manifest["principle"]["ratifiedAt"], "2026-09-01T00:00:00Z")
 
-    def test_control_characters_are_bounded_path_failures(self):
-        self.start()
-        for path in ("README.md\0suffix", "README.md\nsuffix", "README.md\x7fsuffix"):
-            with self.subTest(path=repr(path)):
-                before = self.jig_snapshot()
-                result = self.commit_profile(self.profile(path))
-                self.assertNotEqual(result.returncode, 0)
-                self.assertNotIn("Traceback", result.stderr)
-                self.assertLess(len(result.stderr), 600)
-                self.assertEqual(self.jig_snapshot(), before)
-
-    def test_profile_evidence_must_be_a_regular_file(self):
-        directory = self.repo / "evidence-dir"
-        fifo = self.repo / "evidence-fifo"
-        unix_socket_path = self.repo / "evidence.sock"
-        directory.mkdir()
-        os.mkfifo(fifo)
-        unix_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.addCleanup(unix_socket.close)
-        unix_socket.bind(str(unix_socket_path))
-        self.start()
-        for path in (directory, fifo, unix_socket_path):
-            with self.subTest(path=path.name):
-                before = self.jig_snapshot()
-                result = self.commit_profile(self.profile(path.name))
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn("not a regular file", result.stderr)
-                self.assertEqual(self.jig_snapshot(), before)
-
-    def test_unknown_lookalike_temporary_file_is_preserved(self):
-        self.start()
-        unknown_directory = self.repo / ".pi" / "jig" / "unknown"
-        unknown_directory.mkdir()
-        identifier = uuid.uuid4().hex
-        unknown = unknown_directory / f".jigctl-manifest.json.123.{identifier}.tmp"
-        unknown.write_bytes(b"unknown\n")
-        genuine = self.repo / ".pi" / "jig" / f".jigctl-manifest.json.123.{uuid.uuid4().hex}.tmp"
-        genuine.write_bytes(b"genuine\n")
-        result = self.ctl("start", "--resource-isolation", "isolated-shell")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(unknown.read_bytes(), b"unknown\n")
-        self.assertFalse(genuine.exists())
-        artifact_paths = {item["path"] for item in self.manifest()["artifacts"]}
-        self.assertNotIn(unknown.relative_to(self.repo).as_posix(), artifact_paths)
-        self.assertTrue(any(path.startswith(".pi/jig/receipts/interrupted-write-") for path in artifact_paths))
-
-    def test_receipt_lookalikes_remain_unclaimed_across_reruns(self):
-        receipts = self.repo / ".pi" / "jig" / "receipts"
-        receipts.mkdir(parents=True)
-        names = [
-            "lock-reclaimed-not-a-digest.json",
-            "lock-reclaimed-0000000000000000.json",
-            "interrupted-write-not-a-digest.bin",
-            f"interrupted-write-{'0' * 64}.bin",
-            "interrupted-transition-not-a-digest.json",
-            f"interrupted-transition-{'0' * 64}.json",
-        ]
-        seeded = {}
-        for index, name in enumerate(names):
-            path = receipts / name
-            raw = f"unknown receipt {index}\n".encode("utf-8")
-            path.write_bytes(raw)
-            seeded[path] = raw
-        self.start()
-        first = self.manifest_path().read_bytes()
-        artifact_paths = {item["path"] for item in self.manifest()["artifacts"]}
-        for path, raw in seeded.items():
-            self.assertEqual(path.read_bytes(), raw)
-            self.assertNotIn(path.relative_to(self.repo).as_posix(), artifact_paths)
-        self.start()
-        self.assertEqual(self.manifest_path().read_bytes(), first)
-        artifact_paths = {item["path"] for item in self.manifest()["artifacts"]}
-        for path, raw in seeded.items():
-            self.assertEqual(path.read_bytes(), raw)
-            self.assertNotIn(path.relative_to(self.repo).as_posix(), artifact_paths)
-
-    def test_unknown_transition_lookalikes_remain_untouched_at_all_entry_points(self):
-        receipts = self.repo / ".pi" / "jig" / "receipts"
-        receipts.mkdir(parents=True)
-        log = receipts / "transition-log.json"
-        log.write_bytes(b"operator log\n")
-        self.start()
-        notes = receipts / "transition-notes.json"
-        userdata = receipts / "transition-userdata.json"
-        lookalikes = [
-            receipts / "transition-٠٠٠٢-failed-surveying.json",
-            receipts / "transition-０００２-failed-surveying.json",
-            receipts / "transition-2-failed-surveying.json",
-            receipts / "transition-00002-failed-surveying.json",
-            receipts / "transition-0002-initialized.json",
-        ]
-        seeded = {log: b"operator log\n", notes: b"operator notes\n", userdata: b"operator data\n"}
-        seeded.update({path: f"lookalike {index}\n".encode() for index, path in enumerate(lookalikes)})
-        for path, raw in seeded.items():
-            if not path.exists():
-                path.write_bytes(raw)
-        before = self.manifest_path().read_bytes()
-        invalid = self.commit_profile({"schemaVersion": 2})
-        self.assertNotEqual(invalid.returncode, 0)
-        self.assertEqual(self.manifest_path().read_bytes(), before)
-        self.start()
-        artifact_paths = {item["path"] for item in self.manifest()["artifacts"]}
-        for path, raw in seeded.items():
-            with self.subTest(path=path.name):
-                self.assertEqual(path.read_bytes(), raw)
-                self.assertNotIn(path.relative_to(self.repo).as_posix(), artifact_paths)
-
-    def test_exact_transition_candidates_require_the_complete_ownership_proof(self):
-        self.start()
-        source = self.manifest()["source"]
-        valid = jigctl.receipt_value(
-            "phase-failed",
-            "surveying",
-            "failed-surveying",
-            source,
-            failureReason="seeded failure",
+    def test_verification_path_and_symlink_escape_fail_closed(self):
+        self.ratify()
+        outside = Path(self.temporary.name) / "outside.md"
+        outside.write_text("---\nname: verify-outside\ndescription: outside\n---\n", encoding="utf-8")
+        target = self.repo / ".cursor/skills/verify-fixture/SKILL.md"
+        target.parent.mkdir(parents=True)
+        target.symlink_to(outside)
+        rejected = self.ctl(
+            "complete-configuration",
+            input_value={"schemaVersion": 2, "verificationSkillPath": ".cursor/skills/verify-fixture/SKILL.md"},
         )
-        cases = []
-        cases.append(("malformed-json", b"{not-json"))
-        for name, mutate in [
-            ("extra-field", lambda value: value.update({"unknown": True})),
-            ("missing-field", lambda value: value.pop("failureReason")),
-            ("wrong-from", lambda value: value.update({"from": "absent"})),
-            ("wrong-to", lambda value: value.update({"to": "awaiting-commandments"})),
-            ("wrong-kind", lambda value: value.update({"kind": "init-started"})),
-            ("wrong-revision", lambda value: value.update({"sourceRevision": "0" * 40})),
-            ("wrong-dirty", lambda value: value.update({"sourceDirty": not source["dirty"]})),
-            ("wrong-status", lambda value: value.update({"sourceStatusSha256": "0" * 64})),
-        ]:
-            candidate = dict(valid)
-            mutate(candidate)
-            cases.append((name, jigctl.canonical_json(candidate)))
-        for name, raw in cases:
-            with self.subTest(case=name):
-                path = self.transition_path(2, "failed-surveying")
-                path.write_bytes(raw)
-                before = self.manifest_path().read_bytes()
-                result = self.ctl(
-                    "record-failure",
-                    "--resource-isolation", "isolated-shell",
-                    "--state", "surveying",
-                    "--reason", "retry failure",
-                )
-                self.assertNotEqual(result.returncode, 0)
-                self.assertEqual(path.read_bytes(), raw)
-                self.assertEqual(self.manifest_path().read_bytes(), before)
-                artifact_paths = {item["path"] for item in self.manifest()["artifacts"]}
-                self.assertNotIn(path.relative_to(self.repo).as_posix(), artifact_paths)
-                path.unlink()
-        wrong_index = self.transition_path(3, "failed-surveying")
-        wrong_index.write_bytes(jigctl.canonical_json(valid))
-        suffix_mismatch = self.transition_path(2, "awaiting-commandments")
-        suffix_mismatch.write_bytes(jigctl.canonical_json(valid))
-        before = self.manifest_path().read_bytes()
-        self.start()
-        self.assertEqual(self.manifest_path().read_bytes(), before)
-        for path in (wrong_index, suffix_mismatch):
-            self.assertEqual(path.read_bytes(), jigctl.canonical_json(valid))
-            artifact_paths = {item["path"] for item in self.manifest()["artifacts"]}
-            self.assertNotIn(path.relative_to(self.repo).as_posix(), artifact_paths)
-
-    def test_genuine_fresh_orphan_is_quarantined_then_init_reruns_cleanly(self):
-        path, raw = self.write_orphan_receipt(1, "absent", "surveying", "init-started")
-        digest = hashlib.sha256(raw).hexdigest()
-        evidence = path.parent / f"interrupted-transition-{digest}.json"
-        self.start()
-        manifest = self.manifest()
-        self.assertEqual(manifest["currentState"], "surveying")
-        self.assertEqual(len(manifest["transitions"]), 1)
-        self.assertEqual(evidence.read_bytes(), raw)
-        self.assertTrue(path.is_file())
-        artifact_paths = {item["path"] for item in manifest["artifacts"]}
-        self.assertIn(evidence.relative_to(self.repo).as_posix(), artifact_paths)
-        self.assertIn(path.relative_to(self.repo).as_posix(), artifact_paths)
-        before = self.manifest_path().read_bytes()
-        self.start()
-        self.assertEqual(self.manifest_path().read_bytes(), before)
-
-    def test_record_failure_retries_after_a_genuine_orphan(self):
-        self.start()
-        path, raw = self.write_orphan_receipt(
-            2,
-            "surveying",
-            "failed-surveying",
-            "phase-failed",
-            failureReason="crashed failure",
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("not a contained regular file", rejected.stderr)
+        traversal = self.ctl(
+            "complete-configuration",
+            input_value={"schemaVersion": 2, "verificationSkillPath": ".cursor/skills/verify-fixture/../../outside.md"},
         )
-        digest = hashlib.sha256(raw).hexdigest()
-        evidence = path.parent / f"interrupted-transition-{digest}.json"
-        result = self.ctl(
-            "record-failure",
-            "--resource-isolation", "isolated-shell",
-            "--state", "surveying",
-            "--reason", "retried failure",
+        self.assertNotEqual(traversal.returncode, 0)
+        self.assertEqual(self.manifest()["currentState"], "verification-building")
+
+    def test_configured_validation_rejects_settings_symlinks(self):
+        self.ratify()
+        verification = self.write_verification_skill()
+        completion = {"schemaVersion": 2, "verificationSkillPath": verification.relative_to(self.repo).as_posix()}
+        self.output(self.ctl("complete-configuration", input_value=completion))
+        settings = self.repo / ".pi/settings.json"
+        outside = Path(self.temporary.name) / "outside-settings.json"
+        outside.write_text('{"skills":["../.cursor/skills"]}\n', encoding="utf-8")
+        settings.unlink()
+        settings.symlink_to(outside)
+        rejected = self.ctl("validate-configuration")
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("not a contained regular file", rejected.stderr)
+
+
+    def test_settings_conflicts_fail_without_overwrite(self):
+        self.ratify()
+        verification = self.write_verification_skill()
+        settings = self.repo / ".pi/settings.json"
+        settings.parent.mkdir(parents=True, exist_ok=True)
+        settings.write_text('{"skills":"wrong","theme":"keep"}\n', encoding="utf-8")
+        before = settings.read_bytes()
+        rejected = self.ctl(
+            "complete-configuration",
+            input_value={"schemaVersion": 2, "verificationSkillPath": verification.relative_to(self.repo).as_posix()},
         )
-        self.assertEqual(result.returncode, 0, result.stderr)
-        manifest = self.manifest()
-        self.assertEqual(manifest["currentState"], "failed-surveying")
-        self.assertEqual(evidence.read_bytes(), raw)
-        self.assertIn(
-            evidence.relative_to(self.repo).as_posix(),
-            {item["path"] for item in manifest["artifacts"]},
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertEqual(settings.read_bytes(), before)
+        self.assertEqual(self.manifest()["currentState"], "verification-building")
+
+    def test_lock_rejects_symlinked_ancestors_and_incomplete_owner_records(self):
+        outside = Path(self.temporary.name) / "outside"
+        outside.mkdir()
+        (self.repo / ".pi").symlink_to(outside, target_is_directory=True)
+        rejected = self.ctl("start")
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("controller directory is unsafe", rejected.stderr)
+        self.assertFalse((outside / "jig").exists())
+        (self.repo / ".pi").unlink()
+        lock = self.repo / ".pi/jig/init.lock"
+        lock.parent.mkdir(parents=True)
+        lock.write_bytes(b"")
+        incomplete = self.ctl("start")
+        self.assertNotEqual(incomplete.returncode, 0)
+        self.assertIn("lock owner is uncertain", incomplete.stderr)
+        self.assertEqual(lock.read_bytes(), b"")
+
+    def test_concurrent_controller_cannot_take_a_live_lock(self):
+        holder_code = (
+            "import importlib.util,sys,time\n"
+            "from pathlib import Path\n"
+            "spec=importlib.util.spec_from_file_location('jigctl',sys.argv[1])\n"
+            "module=importlib.util.module_from_spec(spec)\n"
+            "spec.loader.exec_module(module)\n"
+            "with module.RepositoryLock(Path(sys.argv[2])):\n"
+            " print('locked',flush=True)\n"
+            " time.sleep(30)\n"
         )
-
-    def test_genuine_existing_orphans_recover_without_advancing_before_retry(self):
-        self.start()
-
-        def quarantine(path, raw):
-            before = self.manifest_path().read_bytes()
-            recovered = jigctl.reconcile_orphan_transitions(self.repo, self.manifest())
-            digest = hashlib.sha256(raw).hexdigest()
-            evidence = path.parent / f"interrupted-transition-{digest}.json"
-            self.assertEqual(recovered, [(evidence.relative_to(self.repo).as_posix(), digest)])
-            self.assertEqual(evidence.read_bytes(), raw)
-            self.assertEqual(self.manifest_path().read_bytes(), before)
-            return evidence
-
-        path, raw = self.write_orphan_receipt(
-            2,
-            "surveying",
-            "failed-surveying",
-            "phase-failed",
-            failureReason="crashed failure",
-        )
-        failure_evidence = quarantine(path, raw)
-        failure = self.ctl(
-            "record-failure",
-            "--resource-isolation", "isolated-shell",
-            "--state", "surveying",
-            "--reason", "retried failure",
-        )
-        self.assertEqual(failure.returncode, 0, failure.stderr)
-        self.assertEqual(self.manifest()["currentState"], "failed-surveying")
-
-        path, raw = self.write_orphan_receipt(
-            3,
-            "failed-surveying",
-            "surveying",
-            "failed-state-reconciled",
-        )
-        reconciliation_evidence = quarantine(path, raw)
-        self.start()
-        self.assertEqual(self.manifest()["currentState"], "surveying")
-
-        profile = self.profile()
-        profile_path = self.repo / ".pi" / "jig" / "profile.json"
-        profile_raw = jigctl.canonical_json(profile)
-        profile_path.write_bytes(profile_raw)
-        profile_digest = hashlib.sha256(profile_raw).hexdigest()
-        path, raw = self.write_orphan_receipt(
-            4,
-            "surveying",
-            "awaiting-commandments",
-            "profile-committed",
-            profilePath=".pi/jig/profile.json",
-            profileSha256=profile_digest,
-            commandmentsGenerated=False,
-        )
-        profile_evidence = quarantine(path, raw)
-        committed = self.commit_profile(profile)
-        self.assertEqual(committed.returncode, 0, committed.stderr)
-        manifest = self.manifest()
-        self.assertEqual(manifest["currentState"], "awaiting-commandments")
-        artifact_paths = {item["path"] for item in manifest["artifacts"]}
-        for evidence in (failure_evidence, reconciliation_evidence, profile_evidence):
-            self.assertIn(evidence.relative_to(self.repo).as_posix(), artifact_paths)
-        before = self.manifest_path().read_bytes()
-        self.start()
-        self.assertEqual(self.manifest_path().read_bytes(), before)
-
-    def test_genuine_orphan_digest_collisions_are_no_clobber_and_bounded(self):
-        path, raw = self.write_orphan_receipt(1, "absent", "surveying", "init-started")
-        digest = hashlib.sha256(raw).hexdigest()
-        evidence = path.parent / f"interrupted-transition-{digest}.json"
-        different = b"existing operator bytes\n"
-        evidence.write_bytes(different)
-        result = self.ctl("start", "--resource-isolation", "isolated-shell")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertNotIn("Traceback", result.stderr)
-        self.assertEqual(path.read_bytes(), raw)
-        self.assertEqual(evidence.read_bytes(), different)
-        evidence.write_bytes(raw)
-        self.start()
-        self.assertEqual(evidence.read_bytes(), raw)
-        self.assertTrue(path.is_file())
-
-    def test_transition_artifact_bijection_and_recovery_digest_names_are_enforced(self):
-        self.start()
-        before = self.manifest_path().read_bytes()
-        manifest = self.manifest()
-        extra_path, extra_raw = self.write_orphan_receipt(
-            2,
-            "surveying",
-            "failed-surveying",
-            "phase-failed",
-            failureReason="extra artifact",
-        )
-        manifest["artifacts"].append({
-            "path": extra_path.relative_to(self.repo).as_posix(),
-            "owner": "controller",
-            "sha256": hashlib.sha256(extra_raw).hexdigest(),
-        })
-        with self.assertRaisesRegex(jigctl.ValidationError, "transition receipt artifacts"):
-            jigctl.write_manifest(self.repo, manifest)
-        self.assertEqual(self.manifest_path().read_bytes(), before)
-        extra_path.unlink()
-
-        mismatch = extra_path.parent / f"interrupted-transition-{'0' * 64}.json"
-        mismatch_raw = b"recovery evidence\n"
-        mismatch.write_bytes(mismatch_raw)
-        manifest = self.manifest()
-        manifest["artifacts"].append({
-            "path": mismatch.relative_to(self.repo).as_posix(),
-            "owner": "controller",
-            "sha256": hashlib.sha256(mismatch_raw).hexdigest(),
-        })
-        with self.assertRaisesRegex(jigctl.ValidationError, "name does not match its digest"):
-            jigctl.write_manifest(self.repo, manifest)
-        self.assertEqual(self.manifest_path().read_bytes(), before)
-
-    def test_shell_valid_profile_stub_reaches_awaiting_commandments(self):
-        external = Path(self.external.name)
-        stub = external / "pi-profile-stub.py"
-        stub.write_text(
-            "#!/usr/bin/env python3\n"
-            "import json, os, subprocess, sys\n"
-            "revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()\n"
-            "profile = {'schemaVersion': 1, 'repositoryRevision': revision, 'productType': {'value': 'fixture', 'evidence': [{'path': 'README.md', 'line': 1, 'note': 'Fixture.'}]}, 'languages': [], 'frameworks': [], 'buildTools': [], 'ci': [], 'entryPoints': [], 'topology': [], 'unknowns': [], 'failureModes': []}\n"
-            "controller = os.path.join(os.environ['PI_STACK_ROOT'], 'bin', 'jigctl.py')\n"
-            "result = subprocess.run([sys.executable, controller, 'commit-profile', '--resource-isolation', 'isolated-shell'], input=json.dumps(profile), text=True)\n"
-            "raise SystemExit(result.returncode)\n",
-            encoding="utf-8",
-        )
-        stub.chmod(0o755)
-        result = subprocess.run(
-            ["bash", str(LAUNCHER), "init"],
-            cwd=self.repo,
+        holder = subprocess.Popen(
+            [sys.executable, "-c", holder_code, str(CONTROLLER), str(self.repo)],
+            text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True,
-            env={**os.environ, "PI": str(stub), "PI_STACK_ROOT": str(ROOT), "JIG_PI_VERSION": "fixture-pi"},
         )
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.manifest()["currentState"], "awaiting-commandments")
+        try:
+            self.assertEqual(holder.stdout.readline().strip(), "locked")
+            rejected = self.ctl("start")
+            self.assertNotEqual(rejected.returncode, 0)
+            self.assertIn("live or uncertain owner", rejected.stderr)
+        finally:
+            holder.terminate()
+            holder.wait(timeout=10)
+            holder.stdout.close()
+            holder.stderr.close()
 
-    def test_shell_nonzero_stub_records_failure(self):
-        stub = Path(self.external.name) / "pi-failing-stub.sh"
-        stub.write_text("#!/usr/bin/env bash\nexit 7\n", encoding="utf-8")
-        stub.chmod(0o755)
-        result = subprocess.run(
-            ["bash", str(LAUNCHER), "init"],
-            cwd=self.repo,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            env={**os.environ, "PI": str(stub), "PI_STACK_ROOT": str(ROOT), "JIG_PI_VERSION": "fixture-pi"},
+    def test_ratification_recovers_after_exact_principle_publication(self):
+        self.reach_awaiting()
+        staged = self.output(self.ctl("stage-principles", input_value=self.answers()))
+        candidate = self.repo / staged["candidatePath"]
+        target = self.repo / ".cursor/skills/principle-repository/SKILL.md"
+        target.parent.mkdir(parents=True)
+        target.write_bytes(candidate.read_bytes())
+        ratified = self.output(
+            self.ctl(
+                "ratify-principles",
+                "--candidate-sha",
+                staged["candidateSha256"],
+                "--operator-marker",
+                staged["intendedMarker"],
+            )
         )
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("status 7", result.stderr)
-        self.assertEqual(self.manifest()["currentState"], "failed-surveying")
+        self.assertEqual(ratified["state"], "verification-building")
+        self.assertEqual(target.read_bytes(), candidate.read_bytes())
 
-    def test_failure_guidance_is_bounded_and_unknown_state_is_preserved(self):
-        self.start()
-        self.manifest_path().write_text("{}\n", encoding="utf-8")
-        before = self.manifest_path().read_bytes()
-        result = self.ctl("start", "--resource-isolation", "isolated-shell")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(self.manifest_path().read_bytes(), before)
-        self.assertLess(len(result.stderr), 600)
-        self.assertIn("preserve .pi/jig", result.stderr)
-        self.assertNotIn("delete", result.stderr.lower())
+    def test_configuration_requires_exactly_one_verification_skill(self):
+        self.ratify()
+        verification = self.write_verification_skill("fixture")
+        self.write_verification_skill("other")
+        rejected = self.ctl(
+            "complete-configuration",
+            input_value={"schemaVersion": 2, "verificationSkillPath": verification.relative_to(self.repo).as_posix()},
+        )
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("exactly one", rejected.stderr)
+        self.assertEqual(self.manifest()["currentState"], "verification-building")
 
-    def test_concurrent_attempts_leave_one_transition_and_valid_manifest(self):
-        command = [sys.executable, str(CONTROLLER), "start", "--resource-isolation", "isolated-shell"]
-        environment = {**os.environ, "JIG_PI_VERSION": "fixture-pi"}
-        processes = [
-            subprocess.Popen(command, cwd=self.repo, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=environment)
-            for _ in range(2)
-        ]
-        results = [process.communicate(timeout=10) + (process.returncode,) for process in processes]
-        self.assertTrue(any(returncode == 0 for _stdout, _stderr, returncode in results), results)
-        manifest = self.manifest()
-        jigctl.validate_instance(manifest, jigctl.load_schema("manifest"))
-        self.assertEqual(len(manifest["transitions"]), 1)
-        self.assertEqual(manifest["currentState"], "surveying")
-        self.assertFalse((self.repo / ".pi" / "jig" / "init.lock").exists())
+    def test_source_and_profile_drift_fail_closed(self):
+        self.output(self.ctl("start"))
+        (self.repo / "README.md").write_text("changed\n", encoding="utf-8")
+        source_drift = self.ctl("commit-profile", input_value=self.profile())
+        self.assertNotEqual(source_drift.returncode, 0)
+        self.assertIn("source revision or dirty summary changed", source_drift.stderr)
+
+        subprocess.run(["git", "-C", str(self.repo), "checkout", "--", "README.md"], check=True)
+        self.output(self.ctl("commit-profile", input_value=self.profile()))
+        profile_path = self.repo / ".pi/jig/profile.json"
+        profile_path.write_text("{}\n", encoding="utf-8")
+        profile_drift = self.ctl("present-principles")
+        self.assertNotEqual(profile_drift.returncode, 0)
+        self.assertIn("manifest artifact changed", profile_drift.stderr)
+
+
+    def test_legacy_v1_manifest_is_rejected_with_preservation_guidance(self):
+        path = self.repo / ".pi/jig/manifest.json"
+        path.parent.mkdir(parents=True)
+        path.write_text('{"schemaVersion":1}\n', encoding="utf-8")
+        rejected = self.ctl("start")
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("unsupported legacy Jig v1 campaign", rejected.stderr)
+        self.assertIn("preserve .pi/jig", rejected.stderr)
+        self.assertEqual(path.read_text(encoding="utf-8"), '{"schemaVersion":1}\n')
+
+    def test_route_mismatch_and_failed_state_recovery_are_explicit(self):
+        self.output(self.ctl("start", isolation="inherited-session"))
+        mismatch = self.ctl("start", isolation="isolated-shell")
+        self.assertNotEqual(mismatch.returncode, 0)
+        self.assertIn("/skill:jig init or /jig init", mismatch.stderr)
+        failed = self.output(
+            self.ctl(
+                "record-failure",
+                "--state",
+                "surveying",
+                "--reason",
+                "fixture interruption",
+                isolation="inherited-session",
+            )
+        )
+        self.assertEqual(failed["state"], "failed-surveying")
+        recovered = self.output(self.ctl("start", isolation="inherited-session"))
+        self.assertEqual(recovered["state"], "surveying")
 
 
 if __name__ == "__main__":

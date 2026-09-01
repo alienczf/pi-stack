@@ -39,4 +39,4 @@ Use `jig init` from the human shell for a fresh resource-isolated Pi campaign. U
 
 Every route uses the installed controller at `${PI_CODING_AGENT_DIR:-${PI_AGENT_DIR:-$HOME/.pi/agent}}/jig/bin/jigctl.py`. Preserve the manifest's `resourceIsolation` value. An `isolated-shell` campaign resumes with `jig init`. An `inherited-session` campaign resumes with `/skill:jig init` or `/jig init`.
 
-Target-repository COMMANDMENTS are mandatory. Stop at `awaiting-commandments` until the target operator supplies one complete response and explicitly ratifies the displayed candidate digest. The controller may finish one first step as `kept`, `reverted`, or `no-eligible-candidate`. Never offer a second step or merge automatically.
+Repository Principles are mandatory. Stop at `awaiting-principles` until the target operator supplies one complete response and explicitly ratifies the displayed candidate digest. Pstack's `create-verification-skill` owns verification generation. Jig stops at `configured` and never selects or performs a product-code improvement.

@@ -1,6 +1,7 @@
 # Sticky process
 
 Non-trivial work. Read `__PSTACK__/skills/poteto-mode/SKILL.md` in full, including the Principles index, before you act. Trivial one-liners skip that read.
+After pstack's built-in Principles, read every trusted project `.cursor/skills/principle-*/SKILL.md` in full when present.
 
 Also read `~/.pi/agent/AGENTS.md`. Read `TODO.md` and `PLAN.md` in the working tree when they exist.
 

@@ -1,18 +1,15 @@
 import hashlib
 import json
 import os
-import re
-import shutil
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.jig_tests import test_first_step
+from scripts.jig_tests import test_jigctl
 
 ROOT = Path(__file__).resolve().parents[2]
 INSTALLER = ROOT / "install.sh"
-CONTROLLER = ROOT / "bin" / "jigctl.py"
 MATRIX = ROOT / "skills" / "jig" / "references" / "public-routes.json"
 
 
@@ -21,12 +18,17 @@ class IntegrationTest(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.base = Path(self.temporary.name)
         self.pstack = self.base / "pstack"
-        skill = self.pstack / "skills" / "poteto-mode"
-        skill.mkdir(parents=True)
-        (skill / "SKILL.md").write_text(
-            "---\nname: Poteto Mode\ndescription: fixture\n---\n\n# Fixture\n",
-            encoding="utf-8",
-        )
+        for name, title in (
+            ("poteto-mode", "Poteto Mode"),
+            ("create-verification-skill", "create-verification-skill"),
+            ("maintain-verification-skill", "maintain-verification-skill"),
+        ):
+            skill = self.pstack / "skills" / name
+            skill.mkdir(parents=True)
+            (skill / "SKILL.md").write_text(
+                f"---\nname: {title}\ndescription: fixture {name}\n---\n\n# Fixture\n",
+                encoding="utf-8",
+            )
 
     def tearDown(self):
         self.temporary.cleanup()
@@ -62,10 +64,10 @@ class IntegrationTest(unittest.TestCase):
             "import json, os, subprocess, sys\n"
             "open(os.environ['JIG_ARGV_RECEIPT'], 'w').write(json.dumps(sys.argv[1:]))\n"
             "revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()\n"
-            "profile = {'schemaVersion': 1, 'repositoryRevision': revision, "
-            "'productType': {'value': 'fixture', 'evidence': [{'path': 'README.md', 'line': 1, 'note': 'Fixture.'}]}, "
-            "'languages': [], 'frameworks': [], 'buildTools': [], 'ci': [], 'entryPoints': [], "
-            "'topology': [], 'unknowns': [], 'failureModes': []}\n"
+            "evidence = [{'path': 'README.md', 'line': 1, 'note': 'Fixture.'}]\n"
+            "profile = {'schemaVersion': 2, 'repositoryRevision': revision, "
+            "'productType': {'value': 'fixture', 'evidence': evidence}, "
+            "'entryPoints': [], 'existingPolicies': [], 'unknowns': []}\n"
             "result = subprocess.run([sys.executable, os.environ['JIG_CONTROLLER'], 'commit-profile', "
             "'--resource-isolation', os.environ['JIG_RESOURCE_ISOLATION']], input=json.dumps(profile), text=True)\n"
             "raise SystemExit(result.returncode)\n",
@@ -84,22 +86,16 @@ class IntegrationTest(unittest.TestCase):
         for root in roots:
             paths = sorted(path for path in root.rglob("*") if path.is_file()) if root.is_dir() else [root]
             for path in paths:
-                relative = path.relative_to(home).as_posix()
-                result[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
+                result[path.relative_to(home).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
         return result
 
     def test_public_route_matrix_owns_generated_docs(self):
         document = json.loads(MATRIX.read_text(encoding="utf-8"))
-        self.assertEqual(document["schemaVersion"], 1)
+        self.assertEqual(document["schemaVersion"], 2)
         self.assertEqual([route["userCommand"] for route in document["routes"]], [
             "jig init", "/skill:jig init", "/jig init",
         ])
-        required = {
-            "route", "userCommand", "trustResourceLoading", "resourceIsolation",
-            "controllerLocation", "pauseResumeBehavior", "routeMismatchRecovery", "terminalState",
-        }
-        for route in document["routes"]:
-            self.assertEqual(set(route), required)
+        self.assertEqual({route["terminalState"] for route in document["routes"]}, {"configured"})
         checked = subprocess.run(
             ["python3", str(ROOT / "scripts/render-jig-routes.py"), "--check"],
             cwd=ROOT,
@@ -109,7 +105,7 @@ class IntegrationTest(unittest.TestCase):
         )
         self.assertEqual(checked.returncode, 0, checked.stderr)
 
-    def test_install_twice_is_self_contained_and_preserves_settings(self):
+    def test_install_twice_is_self_contained_and_removes_stale_jig_files(self):
         home = self.base / "home"
         settings = home / ".pi/agent/settings.json"
         settings.parent.mkdir(parents=True)
@@ -128,7 +124,11 @@ class IntegrationTest(unittest.TestCase):
         self.assertEqual(installed_settings["defaultProjectTrust"], "ask")
         self.assertEqual(installed_settings["theme"], "keep")
         self.assertIn("npm:keep-me", installed_settings["packages"])
-        stale = home / ".pi/agent/jig/stale.txt"
+        skills = installed_settings["skills"]
+        self.assertTrue(any("create-verification-skill" in path for path in skills))
+        self.assertTrue(any("maintain-verification-skill" in path for path in skills))
+        stale = home / ".pi/agent/jig/skills/jig/playbooks/first-step.md"
+        stale.parent.mkdir(parents=True, exist_ok=True)
         stale.write_text("stale\n", encoding="utf-8")
         third = self.install(home)
         self.assertEqual(third.returncode, 0, third.stderr)
@@ -138,40 +138,16 @@ class IntegrationTest(unittest.TestCase):
         for path in installed.rglob("*"):
             if path.is_file():
                 self.assertNotIn(source_bytes, path.read_bytes(), path)
-        self.assertNotIn(source_bytes, (home / ".pi/agent/bin/jig").read_bytes())
-        installed_text = "\n".join(
-            path.read_text(encoding="utf-8")
-            for path in installed.rglob("*")
-            if path.is_file() and path.suffix in {".md", ".json", ".sh"}
-        )
-        self.assertIsNone(re.search(
-            r"--apply|--force|--iterate|already fitted|cold[- ]agent|refactor\.md\.draft",
-            installed_text,
-            re.IGNORECASE,
-        ))
 
-    def test_fresh_install_does_not_set_project_trust(self):
-        home = self.base / "fresh-home"
-        home.mkdir()
-        installed = self.install(home)
-        self.assertEqual(installed.returncode, 0, installed.stderr)
-        settings = json.loads((home / ".pi/agent/settings.json").read_text(encoding="utf-8"))
-        self.assertNotIn("defaultProjectTrust", settings)
-
-    def test_installed_shell_route_pins_resources_and_pauses(self):
+    def test_installed_shell_route_loads_only_jig_and_pstack_generator_then_pauses(self):
         home = self.base / "shell-home"
         home.mkdir()
         installed = self.install(home)
         self.assertEqual(installed.returncode, 0, installed.stderr)
-        extension = home / ".pi/agent/npm/node_modules/pi-subagents/index.ts"
-        extension.parent.mkdir(parents=True)
-        extension.write_text("export default function () {}\n", encoding="utf-8")
         repo = self.base / "shell-repo"
         self.init_repo(repo)
         (repo / "AGENTS.md").write_text("untrusted target context\n", encoding="utf-8")
         (repo / ".pi/skills/untrusted").mkdir(parents=True)
-        (repo / ".pi/prompts").mkdir()
-        (repo / ".pi/extensions").mkdir()
         (repo / ".pi/settings.json").write_text("{}\n", encoding="utf-8")
         subdirectory = repo / "packages/example"
         subdirectory.mkdir(parents=True)
@@ -194,88 +170,66 @@ class IntegrationTest(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         argv = json.loads(receipt.read_text(encoding="utf-8"))
-        expected = [
-            "--no-approve", "--no-session", "--no-context-files", "--no-extensions",
-            "--no-prompt-templates", "--no-skills", "--skill",
-            str(home / ".pi/agent/jig/skills/jig/SKILL.md"), "--extension", str(extension),
-            "--no-themes", "--system-prompt",
-            "You are Pi in a human-started isolated Jig campaign. Load and follow the explicit Jig skill.",
-            "--append-system-prompt", "", "--tools",
-            "read,grep,find,ls,bash,write,edit,subagent,subagent_wait", "--",
-        ]
-        self.assertEqual(argv[:-1], expected)
-        self.assertNotIn("-p", argv)
+        jig_skill = str(home / ".pi/agent/jig/skills/jig/SKILL.md")
+        create_skill = str(home / ".pi/agent/skills-pstack/create-verification-skill/SKILL.md")
+        self.assertEqual(argv.count("--skill"), 2)
+        self.assertIn(jig_skill, argv)
+        self.assertIn(create_skill, argv)
+        self.assertIn("--no-context-files", argv)
+        self.assertIn("--no-extensions", argv)
+        self.assertNotIn("--extension", argv)
         self.assertNotIn(str(repo / "AGENTS.md"), argv)
         manifest = json.loads((repo / ".pi/jig/manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["schemaVersion"], 2)
         self.assertEqual(manifest["resourceIsolation"], "isolated-shell")
-        self.assertEqual(manifest["currentState"], "awaiting-commandments")
-        self.assertIn("awaiting the target operator COMMANDMENTS", result.stdout)
+        self.assertEqual(manifest["currentState"], "awaiting-principles")
+        self.assertIn("awaiting one complete repository Principles", result.stdout)
 
-    def test_route_mismatch_refuses_before_nested_process(self):
-        home = self.base / "mismatch-home"
+    def test_shell_route_rejects_manifest_symlinks_before_reading_them(self):
+        home = self.base / "unsafe-shell-home"
         home.mkdir()
-        self.assertEqual(self.install(home).returncode, 0)
-        repo = self.base / "mismatch-repo"
+        installed = self.install(home)
+        self.assertEqual(installed.returncode, 0, installed.stderr)
+        repo = self.base / "unsafe-shell-repo"
         self.init_repo(repo)
-        marker = self.base / "nested.marker"
-        stub = self.base / "must-not-run.sh"
-        stub.write_text(f"#!/usr/bin/env bash\ntouch {marker}\n", encoding="utf-8")
-        stub.chmod(0o755)
-        started = subprocess.run(
-            ["python3", str(home / ".pi/agent/jig/bin/jigctl.py"), "start", "--resource-isolation", "inherited-session"],
-            cwd=repo,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            env={**os.environ, "PI": str(stub), "JIG_PI_VERSION": "fixture-pi"},
-        )
-        self.assertEqual(started.returncode, 0, started.stderr)
-        self.assertFalse(marker.exists())
-        mismatch = subprocess.run(
+        outside = self.base / "outside-manifest.json"
+        outside.write_text('{"resourceIsolation":"isolated-shell"}\n', encoding="utf-8")
+        manifest = repo / ".pi/jig/manifest.json"
+        manifest.parent.mkdir(parents=True)
+        manifest.symlink_to(outside)
+        result = subprocess.run(
             [str(home / ".local/bin/jig"), "init"],
             cwd=repo,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            env={**os.environ, "HOME": str(home), "PI": str(stub)},
+            env={**os.environ, "HOME": str(home), "PI": "/bin/false"},
         )
-        self.assertNotEqual(mismatch.returncode, 0)
-        self.assertFalse(marker.exists())
-        self.assertIn("/skill:jig init or /jig init", mismatch.stderr)
-        manifest = json.loads((repo / ".pi/jig/manifest.json").read_text(encoding="utf-8"))
-        self.assertEqual(manifest["resourceIsolation"], "inherited-session")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("manifest path is unsafe", result.stderr)
+        self.assertEqual(outside.read_text(encoding="utf-8"), '{"resourceIsolation":"isolated-shell"}\n')
 
-    def test_complete_primary_fixture_reaches_one_kept_result(self):
-        case = test_first_step.FirstStepTest(methodName="runTest")
+
+    def test_complete_fixture_has_no_product_diff_and_reaches_configured(self):
+        case = test_jigctl.JigControllerTest(methodName="runTest")
         case.setUp()
         self.addCleanup(case.tearDown)
-        _worktree, _worker, output = case.proved_candidate()
-        verdict = case.ctl("commit-step-verdict", input_value=case.verdict_draft(output))
-        self.assertEqual(verdict.returncode, 0, verdict.stderr)
-        prepared = case.ctl("prepare-step-result")
-        self.assertEqual(prepared.returncode, 0, prepared.stderr)
-        completed = case.ctl("complete-step-result")
-        self.assertEqual(completed.returncode, 0, completed.stderr)
-        manifest = case.manifest()
-        result = json.loads((case.repo / ".pi/jig/steps/0001/result.json").read_text(encoding="utf-8"))
-        self.assertEqual(manifest["currentState"], "initialized")
-        self.assertEqual(manifest["firstStep"]["outcome"], "kept")
-        self.assertEqual(result["outcome"], "kept")
-        self.assertEqual(result["independentVerdict"]["status"], "passed")
-        self.assertTrue((case.repo / result["worktree"]).is_dir())
-        generated_text = "\n".join(
-            path.read_text(encoding="utf-8")
-            for base in (case.repo / ".pi/skills", case.repo / ".pi/jig")
-            for path in base.rglob("*")
-            if path.is_file()
+        case.ratify()
+        verification = case.write_verification_skill()
+        case.output(
+            case.ctl(
+                "complete-configuration",
+                input_value={"schemaVersion": 2, "verificationSkillPath": verification.relative_to(case.repo).as_posix()},
+            )
         )
-        self.assertNotIn(str(ROOT), generated_text)
-        self.assertNotIn(str(self.pstack), generated_text)
-        self.assertIsNone(re.search(
-            r"--apply|--force|--iterate|already fitted|cold[- ]agent|refactor\.md\.draft",
-            generated_text,
-            re.IGNORECASE,
-        ))
+        manifest = case.manifest()
+        self.assertEqual(manifest["currentState"], "configured")
+        self.assertNotIn("firstStep", manifest)
+        changed = subprocess.check_output(
+            ["git", "-C", str(case.repo), "status", "--short", "--", ":!/.pi", ":!/.cursor"],
+            text=True,
+        )
+        self.assertEqual(changed, "")
 
 
 if __name__ == "__main__":

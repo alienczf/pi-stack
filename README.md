@@ -1,6 +1,6 @@
 # pi-stack
 
-pi-stack installs a user-level Pi overlay and two explicit skills. Jig initializes one whole Git repository through target COMMANDMENTS, runtime verification, and one terminal first improvement result.
+pi-stack installs a user-level Pi overlay and pstack process skills. Jig configures one Git repository with human-ratified repository Principles and a pstack-generated verification skill. It does not change product code.
 
 ## Install pi-stack
 
@@ -35,7 +35,7 @@ pi-stack is installed for this user.
   packages  pi-web-access, pi-hashline-edit, pi-subagents, @narumitw/pi-goal
   jig       $HOME/.local/bin/jig
   controller $HOME/.pi/agent/jig/bin/jigctl.py
-Fit one Git repository:
+Configure one Git repository:
   cd /path/to/repo && jig init
 Or use the current trusted Pi session:
   /skill:jig init
@@ -77,9 +77,9 @@ The overlay does not install an MCP adapter, a todo tool, plan mode, pi-lens, an
 - `/goal <objective>` starts a session-scoped objective. Give it a checkable exit predicate. Arrange a wake message before you call `goal_wait` for an external wait.
 - `/skill:cross-repo` reads the current repository's registry and starts one subagent for each listed path. It stops when no registry exists.
 
-## Initialize one repository
+## Configure one repository
 
-Run one of these commands from any directory inside the target Git repository:
+Run one command from any directory inside the target Git repository:
 
 ```text
 jig init
@@ -87,7 +87,7 @@ jig init
 /jig init
 ```
 
-All commands resolve the Git top level. Version 1 rejects package names, subtree paths, flags, and extra arguments before it writes `.pi/jig`. A monorepo is one repository-wide Jig scope.
+All routes resolve the Git top level. Jig rejects package names, subtree paths, flags, and extra arguments before it writes `.pi/jig`. A monorepo has one repository-wide Jig scope.
 
 ### Public routes
 
@@ -96,67 +96,37 @@ All commands resolve the Git top level. Version 1 rejects package names, subtree
 <!-- public-routes:start -->
 | Command | Resource loading | Receipt | Controller | Pause and resume | Terminal state |
 | --- | --- | --- | --- | --- | --- |
-| `jig init` | Starts a fresh Pi process with --no-approve, --no-context-files, --no-extensions plus one explicit --extension, --no-skills plus one explicit --skill, --no-prompt-templates, --no-themes, and explicit system prompt overrides. Only the installed Jig skill and installed pi-subagents extension enter the campaign as resources. | `isolated-shell` | `${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/jig/bin/jigctl.py` | Exit at awaiting-commandments when the operator has not supplied a complete response. Resume with jig init. A clean exit at another active boundary also resumes with jig init. Resume with /skill:jig init or /jig init when the manifest records inherited-session. | `initialized with kept, reverted, or no-eligible-candidate` |
-| `/skill:jig init` | Uses the current trusted Pi session. Resources already loaded into that session remain loaded. It never starts a nested Pi process. | `inherited-session` | `${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/jig/bin/jigctl.py` | Stop at awaiting-commandments when the operator has not supplied a complete response. Resume with /skill:jig init in a trusted Pi session. Resume with jig init when the manifest records isolated-shell. | `initialized with kept, reverted, or no-eligible-candidate` |
-| `/jig init` | Expands to an instruction to load the registered Jig skill in the current trusted Pi session. Resources already loaded into that session remain loaded. It never starts a nested Pi process. | `inherited-session` | `${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/jig/bin/jigctl.py` | Stop at awaiting-commandments when the operator has not supplied a complete response. Resume with /jig init in a trusted Pi session. Resume with jig init when the manifest records isolated-shell. | `initialized with kept, reverted, or no-eligible-candidate` |
+| `jig init` | Starts a fresh Pi process with project context, extensions, prompts, themes, and discovered skills disabled. It explicitly loads only the installed Jig and create-verification-skill procedures. | `isolated-shell` | `${PI_CODING_AGENT_DIR:-${PI_AGENT_DIR:-$HOME/.pi/agent}}/jig/bin/jigctl.py` | Exit at awaiting-principles when the operator has not supplied a complete response. Resume active work with jig init. Resume with /skill:jig init or /jig init when the manifest records inherited-session. | `configured` |
+| `/skill:jig init` | Uses the current trusted Pi session and its installed pstack skills. It never starts a nested Pi process. | `inherited-session` | `${PI_CODING_AGENT_DIR:-${PI_AGENT_DIR:-$HOME/.pi/agent}}/jig/bin/jigctl.py` | Stop at awaiting-principles when the operator has not supplied a complete response. Resume active work with /skill:jig init. Resume with jig init when the manifest records isolated-shell. | `configured` |
+| `/jig init` | Expands to the registered Jig skill in the current trusted Pi session. It never starts a nested Pi process. | `inherited-session` | `${PI_CODING_AGENT_DIR:-${PI_AGENT_DIR:-$HOME/.pi/agent}}/jig/bin/jigctl.py` | Stop at awaiting-principles when the operator has not supplied a complete response. Resume active work with /jig init. Resume with jig init when the manifest records isolated-shell. | `configured` |
 <!-- public-routes:end -->
 
-A manifest keeps its original route. If a route mismatch occurs, use the recovery command in the table. Never relabel inherited work as isolated work.
+A manifest keeps its original route. A version 1 manifest is an unsupported legacy campaign. Preserve `.pi/jig` and its worktrees, then archive or migrate it explicitly. Jig version 2 never reinterprets old state.
 
-### Ratify target COMMANDMENTS
+### What init does
 
-Jig surveys the repository first. It pauses at `awaiting-commandments` until the target operator supplies one complete response.
+1. Jig surveys one Git root and records cited product entry points and existing policies.
+2. It asks one round of repository-specific questions. Generic pstack process rules are not questions.
+3. The operator approves the exact digest and marker for `.cursor/skills/principle-repository/SKILL.md`.
+4. Jig follows the installed pstack `create-verification-skill` procedure. That procedure owns Launch, Doctor, Drive, Evidence, Cleanup, Helpers, the feature map, and live proof.
+5. The controller records the generated `.cursor/skills/verify-*/SKILL.md` path and hash.
+6. The controller idempotently adds `../.cursor/skills` to `.pi/settings.json` while preserving unrelated valid settings.
+7. Jig reports `configured` and stops.
 
-1. Jig runs `present-commandments` and shows observed facts, every question, and every recommended default.
-2. The target operator answers every key once. A default counts only when the response explicitly selects it.
-3. Jig passes `.pi/jig/commandments/answers.input.json` to the emitted `stage-commandments` operation. The operator can provide the same complete JSON in the interactive Pi session.
-4. Jig displays the complete candidate bytes, the exact SHA-256 digest, and the intended marker.
-5. The operator chooses ratify, amend, or defer. Jig records amend and defer through `record-commandments-decision`.
-6. Only `ratify-commandments` publishes root `COMMANDMENTS.md`. Jig continues only after `validate-commandments` succeeds.
+Jig never selects, edits, verifies, or merges a product-code improvement. Later verification audits belong to `/skill:maintain-verification-skill`.
 
-Jig preserves an existing `COMMANDMENTS.md`. Agents can propose later amendments under `.pi/jig/commandments/proposals/`, but they do not edit or weaken the ratified file.
-
-### Finish verification and one first step
-
-After ratification, Jig builds `.pi/skills/jig-verification/` from target facts and the canonical installed `create-verification-skill` procedure. The controller accepts it only after the protected public path passes Launch, Doctor, Drive, retained Evidence, and exact Cleanup.
-
-Jig then records every considered candidate in `.pi/jig/steps/0001/selection.json`. It either selects no candidate or exactly one eligible candidate. Selected work runs only in `.pi/jig/worktrees/0001` on the controller-owned branch. The controller pins the output, runs the baseline and required proof, requires an independent verdict when the proposal says so, and writes `.pi/jig/steps/0001/result.json`.
-
-`initialized` has exactly one outcome:
-
-- `kept`
-- `reverted`
-- `no-eligible-candidate`
-
-Jig leaves a kept candidate branch and worktree for operator review. It does not merge.
-
-## Inspect artifacts and ownership
-
-The target repository stores these durable artifacts:
+### Repository artifacts
 
 | Path | Owner | Purpose |
 | --- | --- | --- |
-| `COMMANDMENTS.md` | Target operator through controller ratification | Target intent, exceptions, proof policy, and authority. |
-| `.pi/jig/manifest.json` | Controller | Route, state, hashes, receipts, and terminal pointers. |
-| `.pi/jig/profile.json` | Jig skill through the controller | Cited repository survey. |
-| `.pi/jig/commandments/` | Controller and target operator input | Interview, staged candidate, decisions, and amendment proposals. |
-| `.pi/skills/jig-verification/` | Jig skill inside controller-reserved paths | Target-local verification skill, feature map, and helpers. |
-| `.pi/jig/steps/0001/` | Controller | Selection, proposal, worker handoff, pinned output, proof, verdict, and result. |
-| `.pi/jig/worktrees/0001` | Controller | Isolated selected-candidate worktree. |
+| `.pi/jig/manifest.json` | Controller | Version 2 state, route, hashes, transitions, and configured capability paths. |
+| `.pi/jig/profile.json` | Jig skill through controller validation | Cited repository survey. |
+| `.pi/jig/principles/` | Controller and operator input | Candidate, answers, and decision receipts. |
+| `.cursor/skills/principle-repository/SKILL.md` | Target operator through exact ratification | Repository-specific priorities and constraints. |
+| `.cursor/skills/verify-*/` | pstack create-verification-skill | Runtime verification skill, feature map, helpers, and named evidence. |
+| `.pi/settings.json` | Repository, merged by controller | Loads the canonical `.cursor/skills` tree in Pi. |
 
-The controller owns locks, transitions, path containment, hashes, proof execution, and terminal results. The Jig skill owns repository interpretation and candidate recommendations. A selected worker owns only the proposal's allowed product paths in the isolated worktree. The target operator owns merge decisions.
-
-## Recover after interruption
-
-Run the same owning route again after a crash or a clean pause. `start` validates the manifest and receipts, reconciles controller-owned interrupted writes, and resumes from the last valid boundary.
-
-Preserve `.pi/jig`, `COMMANDMENTS.md`, the selected branch, and the selected worktree. Do not delete partial evidence or copy a manifest from another route. A source revision change or candidate revision change invalidates stale evidence and fails closed.
-
-## Version 1 limits
-
-Version 1 has no package-only scope, second improvement step, recurring run, scheduler, automatic learning, automatic COMMANDMENTS change, deployment, or automatic merge. It does not provide an operating-system sandbox for hostile repositories.
-
-Program-level behavioral evaluation was deferred. This release makes no claim that Jig improves agent placement, import selection, routing, proof choices, or agent behavior.
+Run the owning route again after a crash or clean pause. Preserve the recorded artifacts. Do not copy a manifest from another route.
 
 ## Verify the repository
 

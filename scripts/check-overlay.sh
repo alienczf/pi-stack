@@ -34,6 +34,8 @@ grep -q 'pi-node' install.sh || fail "install.sh must find pi under pi-node"
 grep -q 'inherit' install.sh || fail "install.sh must rewrite cursor subagent models to inherit"
 grep -F -q '.local/bin/jig' install.sh || fail "install.sh must link jig into .local/bin"
 grep -q 'without changing project trust' install.sh || fail "install.sh must document project trust preservation"
+grep -q 'maintain-verification-skill' install.sh || fail "install.sh must register maintain-verification-skill"
+grep -q 'principle-\*/SKILL.md' overlay/APPEND_SYSTEM.md || fail "APPEND_SYSTEM.md must load project Principles"
 grep -q 'poteto-mode/SKILL.md' overlay/APPEND_SYSTEM.md || fail "APPEND_SYSTEM.md must name poteto-mode/SKILL.md"
 grep -q 'Do not run `pi -p`' overlay/AGENTS.md || fail "AGENTS.md must forbid bash pi -p"
 grep -q 'subagent' overlay/AGENTS.md || fail "AGENTS.md must name the subagent tool"
@@ -95,6 +97,16 @@ description: stub for install test
 # stub
 EOF
 printf 'playbook\n' >"$tmp/pstack/skills/poteto-mode/playbooks/investigation.md"
+for name in create-verification-skill maintain-verification-skill; do
+	mkdir -p "$tmp/pstack/skills/$name"
+	cat >"$tmp/pstack/skills/$name/SKILL.md" <<EOF
+---
+name: $name
+description: stub for $name install test
+---
+# stub
+EOF
+done
 stub="$tmp/pstack"
 home="$tmp/home"
 mkdir -p "$home/.pi/agent/prompts"
@@ -181,6 +193,10 @@ if not any("skills-pstack/poteto-mode" in s for s in skills):
 	raise SystemExit("skills do not point at skills-pstack/poteto-mode")
 if any("/pstack/skills/poteto-mode" in s for s in skills):
 	raise SystemExit("skills still point at raw pstack")
+if not any("skills-pstack/create-verification-skill" in s for s in skills):
+	raise SystemExit("create-verification-skill is not installed")
+if not any("skills-pstack/maintain-verification-skill" in s for s in skills):
+	raise SystemExit("maintain-verification-skill is not installed")
 if data.get("defaultModel") != "cursor/auto":
 	raise SystemExit("top-level defaultModel was rewritten")
 if data.get("enabledModels") != ["cursor/auto", "cursor/composer-2.5"]:
@@ -205,6 +221,8 @@ test -x "$home/.pi/agent/jig/bin/jig.sh" || fail "install did not copy the Jig l
 test -x "$home/.pi/agent/jig/bin/jigctl.py" || fail "install did not copy the Jig controller"
 test -f "$home/.pi/agent/jig/skills/jig/references/public-routes.json" || fail "install did not copy the public route matrix"
 test -f "$home/.pi/agent/skills-pstack/jig/SKILL.md" || fail "install did not register the copied Jig skill"
+test -f "$home/.pi/agent/skills-pstack/create-verification-skill/SKILL.md" || fail "install did not register create-verification-skill"
+test -f "$home/.pi/agent/skills-pstack/maintain-verification-skill/SKILL.md" || fail "install did not register maintain-verification-skill"
 if grep -F -q "$root" "$home/.pi/agent/bin/jig" "$home/.pi/agent/skills-pstack/jig/SKILL.md"; then
 	fail "installed Jig entry points depend on the source checkout"
 fi

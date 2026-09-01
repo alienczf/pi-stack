@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:pi-stack:jig:schema:v2:profile",
+  "title": "Jig repository profile version 2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "repositoryRevision", "productType", "entryPoints", "existingPolicies", "unknowns"],
+  "properties": {
+    "schemaVersion": {"const": 2},
+    "repositoryRevision": {"type": "string", "pattern": "^[0-9a-f]{40,64}$"},
+    "productType": {"$ref": "#/$defs/observation"},
+    "entryPoints": {"type": "array", "items": {"$ref": "#/$defs/observation"}},
+    "existingPolicies": {"type": "array", "items": {"$ref": "#/$defs/observation"}},
+    "unknowns": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["question", "reason"],
+        "properties": {
+          "question": {"type": "string", "minLength": 1},
+          "reason": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "evidence"],
+      "properties": {
+        "value": {"type": "string", "minLength": 1},
+        "evidence": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path", "line", "note"],
+            "properties": {
+              "path": {"type": "string", "minLength": 1},
+              "line": {"type": "integer", "minimum": 1},
+              "note": {"type": "string", "minLength": 1}
+            }
+          }
+        }
+      }
+    }
+  }
+}

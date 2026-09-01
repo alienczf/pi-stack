@@ -298,7 +298,7 @@ fi
 conform_out="${agent}/skills-pstack"
 mkdir -p "$conform_out"
 conform_src=()
-for name in poteto-mode how why architect interrogate tdd unslop technical-writing figure-it-out show-me-your-work reflect create-verification-skill; do
+for name in poteto-mode how why architect interrogate tdd unslop technical-writing figure-it-out show-me-your-work reflect create-verification-skill maintain-verification-skill; do
 	if [[ -f "$pstack/skills/$name/SKILL.md" ]]; then
 		conform_src+=("$pstack/skills/$name")
 	fi
@@ -340,12 +340,13 @@ wanted = [
 	"show-me-your-work",
 	"reflect",
 	"create-verification-skill",
+	"maintain-verification-skill",
 	"jig",
 	"cross-repo",
 ]
 skills = [str((conformed / n).resolve()) for n in wanted if (conformed / n / "SKILL.md").is_file()]
-if len(skills) > 14:
-	sys.exit("skills allowlist grew past 14")
+if len(skills) > 15:
+	sys.exit("skills allowlist grew past 15")
 
 if path.exists():
 	data = json.loads(path.read_text())
@@ -589,7 +590,7 @@ pi-stack is installed for this user.
   packages  ${pkg_msg}
   jig       ${HOME}/.local/bin/jig
   controller ${installed_jig}/bin/jigctl.py
-Fit one Git repository:
+Configure one Git repository:
   cd /path/to/repo && jig init
 Or use the current trusted Pi session:
   /skill:jig init

@@ -1,484 +1,146 @@
 #!/usr/bin/env python3
-"""Deterministic state controller for Jig init."""
-
 from __future__ import annotations
 
 import argparse
-import datetime as dt
-import errno
 import hashlib
 import json
 import os
-import platform
 import re
-import resource
-import signal
 import socket
 import stat
 import subprocess
 import sys
-import tempfile
+import time
 import uuid
-from pathlib import Path, PurePosixPath
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
-JIG_VERSION = "1.0.0"
-SCHEMA_VERSION = 1
-MAX_INPUT_BYTES = 1024 * 1024
+SCHEMA_VERSION = 2
+MANIFEST_PATH = ".pi/jig/manifest.json"
+PROFILE_PATH = ".pi/jig/profile.json"
+LOCK_PATH = ".pi/jig/init.lock"
+STAGING_PATH = ".pi/jig/principles/staging.json"
+CANDIDATE_PATH = ".pi/jig/principles/candidate.md"
+ANSWERS_PATH = ".pi/jig/principles/answers.input.json"
+PRINCIPLE_PATH = ".cursor/skills/principle-repository/SKILL.md"
+PI_SETTINGS_PATH = ".pi/settings.json"
+PI_CURSOR_SKILLS_PATH = "../.cursor/skills"
+PSTACK_CREATE_SKILL = "pstack/skills/create-verification-skill/SKILL.md"
+PSTACK_MAINTAIN_SKILL = "pstack/skills/maintain-verification-skill/SKILL.md"
+MAX_INPUT_BYTES = 256 * 1024
+MAX_TEXT = 4000
 MAX_OS_PID = (1 << 31) - 1
-IMPLEMENTED_STATES = {
-    "surveying", "awaiting-commandments", "commandments-ratified",
-    "verification-building", "verification-ready", "step-selecting", "step-running",
-    "initialized", "failed-surveying", "failed-awaiting-commandments",
-    "failed-commandments-ratified", "failed-verification-building",
-    "failed-verification-ready", "failed-step-selecting", "failed-step-running",
+STATES = {
+    "surveying",
+    "awaiting-principles",
+    "verification-building",
+    "configured",
+    "failed-surveying",
+    "failed-awaiting-principles",
+    "failed-verification-building",
 }
-TRANSITION_KIND_BY_EDGE = {
-    ("absent", "surveying"): "init-started",
-    ("surveying", "awaiting-commandments"): "profile-committed",
-    ("awaiting-commandments", "commandments-ratified"): "commandments-ratified",
-    ("commandments-ratified", "verification-building"): "verification-started",
-    ("verification-building", "verification-ready"): "verification-ready",
-    ("verification-ready", "step-selecting"): "step-selection-started",
-    ("step-selecting", "step-running"): "step-worker-activated",
-    ("step-selecting", "initialized"): "no-candidate-finalized",
-    ("step-running", "initialized"): "selected-step-finalized",
-    **{(state, f"failed-{state}"): "phase-failed" for state in (
-        "surveying", "awaiting-commandments", "commandments-ratified",
-        "verification-building", "verification-ready", "step-selecting", "step-running",
-    )},
-    **{(f"failed-{state}", state): "failed-state-reconciled" for state in (
-        "surveying", "awaiting-commandments", "commandments-ratified",
-        "verification-building", "verification-ready", "step-selecting", "step-running",
-    )},
+ACTIVE_STATES = {"surveying", "awaiting-principles", "verification-building"}
+STATE_EDGES = {
+    ("absent", "surveying"),
+    ("surveying", "awaiting-principles"),
+    ("awaiting-principles", "verification-building"),
+    ("verification-building", "configured"),
 }
-TRANSITION_RECEIPT_PATTERN = re.compile(
-    r"transition-([0-9]{4})-("
-    + "|".join(sorted(re.escape(state) for state in IMPLEMENTED_STATES))
-    + r")\.json"
-)
-SENSITIVE_NAMES = {
-    ".env",
-    "auth.json",
-    "private_key.pem",
-    "public_key.pem",
-    "id_rsa",
-    "id_ed25519",
-}
-
-COMMANDMENTS_TEMPLATE = "skills/jig/references/COMMANDMENTS.template.md"
-COMMANDMENTS_INTERVIEW_PATH = ".pi/jig/commandments/interview.json"
-COMMANDMENTS_STAGING_PATH = ".pi/jig/commandments/staging.json"
-COMMANDMENTS_ROOT_PATH = "COMMANDMENTS.md"
-COMMANDMENTS_ROOT_TEMP_PATTERN = re.compile(
-    r"\.jigctl-COMMANDMENTS\.md\.([0-9a-f]{64})\.([0-9]+)\.([0-9a-f]{32})\.tmp"
-)
-VERIFICATION_PLAN_PATH = ".pi/jig/verification/plan.json"
-VERIFICATION_SKILL_PATH = ".pi/skills/jig-verification/SKILL.md"
-VERIFICATION_FEATURE_INDEX_PATH = ".pi/skills/jig-verification/references/features/index.md"
-VERIFICATION_OUTPUT_LIMIT = 256 * 1024
-VERIFICATION_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
-SELECTION_PATH = ".pi/jig/steps/0001/selection.json"
-PROPOSAL_PATH = ".pi/jig/steps/0001/proposal.json"
-RESULT_PATH = ".pi/jig/steps/0001/result.json"
-BEFORE_PATH = ".pi/jig/steps/0001/before.json"
-STEP_WORKTREE = ".pi/jig/worktrees/0001"
-WORKER_PATH = ".pi/jig/steps/0001/worker.json"
-OUTPUT_PATH = ".pi/jig/steps/0001/output.json"
-CANDIDATE_DIFF_PATH = ".pi/jig/steps/0001/candidate.diff"
-AFTER_PATH = ".pi/jig/steps/0001/after.json"
-VERDICT_PATH = ".pi/jig/steps/0001/verdict.json"
-REVIEW_LIMIT = 256 * 1024
-VERDICT_DRAFT_FIELDS = {
-    "schemaVersion", "stepId", "status", "revision", "reviewerSessionId", "reviewerModel", "report",
-}
-PROOF_PHASES = (
-    ("targeted", "targeted"), ("regression", "regression"),
-    ("protectedUserPath", "protected-user-path"), ("seededViolation", "seeded-violation"),
-)
-WORKER_DRAFT_FIELDS = {"schemaVersion", "stepId", "workerSessionId", "allowedPaths"}
-WORKER_PROTECTED_PATHS = [".git", ".pi", "COMMANDMENTS.md", "eval", "evals"]
-BASELINE_OUTPUT_LIMIT = 256 * 1024
-BASELINE_TIMEOUT_SECONDS = 120
-SELECTION_DRAFT_FIELDS = {
-    "schemaVersion", "stepId", "repositoryRevision", "commandmentsSha256",
-    "candidates", "selectedCandidateId", "rankingSummary",
-}
-COMMANDMENTS_ANSWER_KEYS = (
-    "requiredInitOutcome",
-    "hardForbiddenOutcomes",
-    "protectedUserPath",
-    "proofPolicy",
-    "compatibilityPolicy",
-    "autonomyPolicy",
-    "tradeoffOrder",
-    "authority",
-)
-COMMANDMENTS_DEFAULTS: Dict[str, Any] = {
-    "requiredInitOutcome": "Jig init records human-ratified COMMANDMENTS, crash-safe state, real verification, a feature map, and one evidence-backed first-step outcome before it reports success.",
-    "hardForbiddenOutcomes": [
-        "Do not invent human intent.",
-        "Do not report completion after an interruption.",
-        "Do not write outside the Git root.",
-        "Do not load untrusted project resources during shell init.",
-        "Do not store an absolute dependency on the operator's pstack checkout.",
-        "Do not weaken verification to pass.",
-        "Do not merge automatically.",
-    ],
-    "protectedUserPath": {
-        "action": "Run the repository's primary documented user command.",
-        "visibleResult": "The command completes its documented user-visible result.",
-        "evidence": "Capture runtime output or persisted state that proves the visible result.",
-        "cleanup": "Stop owned processes and restore the repository to its pre-run state.",
-        "thresholds": "No additional threshold.",
-    },
-    "proofPolicy": {
-        "baselineRequirement": "Reproduce the current behavior before the change.",
-        "targetedVerification": "Prove the changed behavior before and after the change.",
-        "productRegressionFloor": "Run the repository's full product regression check.",
-        "seededGuardProof": "Seed and detect a negative case for every deterministic guard.",
-        "independentReview": "Require independent review for high-blast-radius changes.",
-        "behavioralEval": "Use blinded pstack Eval for agent-behavior claims.",
-    },
-    "compatibilityPolicy": "Do not introduce a user-visible compatibility break in the first improvement.",
-    "autonomyPolicy": [
-        "Agents may edit and test in isolated worktrees.",
-        "Agents may open pull requests and drive them to merge-ready.",
-        "Agents may revert failed attempts.",
-        "Agents may run bounded evaluations after ratification.",
-        "Agents may not merge, deploy, or amend COMMANDMENTS automatically.",
-    ],
-    "tradeoffOrder": [
-        "Correctness and safety",
-        "User-visible reliability",
-        "Agent determinism",
-        "Maintainability",
-        "Performance",
-        "Compatibility",
-        "Implementation cost",
-    ],
-    "authority": {
-        "owner": "Repository operator",
-        "exceptions": "No exceptions without operator approval.",
-        "amendmentPolicy": "Agents may propose amendments. The repository operator approves and ratifies them.",
-        "ratificationMarker": "I ratify these exact repository COMMANDMENTS.",
-    },
-}
+VERIFICATION_PATH = re.compile(r"^\.cursor/skills/verify-[a-z0-9][a-z0-9-]{0,55}/SKILL\.md$")
+SKILL_NAME = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+REVISION = re.compile(r"^[0-9a-f]{40,64}$")
+SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
 class JigError(Exception):
-    """A bounded operator-facing failure."""
+    pass
 
 
 class ValidationError(JigError):
-    """A schema or semantic validation failure."""
+    pass
 
 
-def is_object(value: Any) -> bool:
-    return isinstance(value, dict)
-
-
-def is_json_number(value: Any) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
-
-
-def json_equal(left: Any, right: Any) -> bool:
-    if is_json_number(left) and is_json_number(right):
-        return left == right
-    if type(left) is not type(right):
-        return False
-    if isinstance(left, list):
-        return len(left) == len(right) and all(
-            json_equal(left_item, right_item)
-            for left_item, right_item in zip(left, right)
-        )
-    if isinstance(left, dict):
-        return set(left) == set(right) and all(
-            json_equal(left[key], right[key]) for key in left
-        )
-    return left == right
-
-
-def type_matches(value: Any, expected: str) -> bool:
-    if expected == "object":
-        return isinstance(value, dict)
-    if expected == "array":
-        return isinstance(value, list)
-    if expected == "string":
-        return isinstance(value, str)
-    if expected == "integer":
-        if isinstance(value, bool):
-            return False
-        return isinstance(value, int) or (
-            isinstance(value, float) and value.is_integer()
-        )
-    if expected == "number":
-        return is_json_number(value)
-    if expected == "boolean":
-        return isinstance(value, bool)
-    if expected == "null":
-        return value is None
-    raise ValidationError("schema uses an unsupported type")
-
-
-def resolve_ref(root_schema: Mapping[str, Any], reference: str) -> Mapping[str, Any]:
-    if not reference.startswith("#/"):
-        raise ValidationError("schema uses a non-local reference")
-    value: Any = root_schema
-    for raw_part in reference[2:].split("/"):
-        part = raw_part.replace("~1", "/").replace("~0", "~")
-        if not isinstance(value, dict) or part not in value:
-            raise ValidationError("schema contains an unresolved reference")
-        value = value[part]
-    if not isinstance(value, dict):
-        raise ValidationError("schema reference does not name an object")
-    return value
-
-
-def valid_datetime(value: str) -> bool:
-    match = re.fullmatch(
-        r"([0-9]{4})-([0-9]{2})-([0-9]{2})[Tt]([0-9]{2}):([0-9]{2}):([0-9]{2})"
-        r"(?:\.[0-9]+)?(?:[Zz]|([+-])([0-9]{2}):([0-9]{2}))",
-        value,
-    )
-    if match is None:
-        return False
-    year, month, day, hour, minute, second = map(int, match.groups()[:6])
-    offset_hour = int(match.group(8) or 0)
-    offset_minute = int(match.group(9) or 0)
-    try:
-        dt.date(year, month, day)
-    except ValueError:
-        return False
-    return (
-        hour <= 23
-        and minute <= 59
-        and second <= 59
-        and offset_hour <= 23
-        and offset_minute <= 59
-    )
-
-
-def validate_instance(
-    instance: Any,
-    schema: Mapping[str, Any],
-    root_schema: Optional[Mapping[str, Any]] = None,
-    location: str = "$",
-) -> None:
-    root = schema if root_schema is None else root_schema
-    if "$ref" in schema:
-        validate_instance(instance, resolve_ref(root, schema["$ref"]), root, location)
-
-    if "type" in schema:
-        expected = schema["type"]
-        accepted = [expected] if isinstance(expected, str) else expected
-        if not isinstance(accepted, list) or not all(isinstance(item, str) for item in accepted):
-            raise ValidationError("schema has an invalid type rule")
-        if not any(type_matches(instance, item) for item in accepted):
-            raise ValidationError(f"{location} has the wrong type")
-
-    if "const" in schema and not json_equal(instance, schema["const"]):
-        raise ValidationError(f"{location} does not match its required value")
-    if "enum" in schema and not any(json_equal(instance, item) for item in schema["enum"]):
-        raise ValidationError(f"{location} is not an allowed value")
-
-    if isinstance(instance, dict):
-        required = schema.get("required", [])
-        if not isinstance(required, list):
-            raise ValidationError("schema has an invalid required rule")
-        missing = [name for name in required if name not in instance]
-        if missing:
-            raise ValidationError(f"{location} is missing {missing[0]}")
-        properties = schema.get("properties", {})
-        if not isinstance(properties, dict):
-            raise ValidationError("schema has an invalid properties rule")
-        for name, subschema in properties.items():
-            if name in instance:
-                validate_instance(instance[name], subschema, root, f"{location}.{name}")
-        if schema.get("additionalProperties") is False:
-            extras = sorted(set(instance) - set(properties))
-            if extras:
-                raise ValidationError(f"{location} has unexpected property {extras[0]}")
-
-    if isinstance(instance, list):
-        if "minItems" in schema and len(instance) < schema["minItems"]:
-            raise ValidationError(f"{location} has too few items")
-        if "maxItems" in schema and len(instance) > schema["maxItems"]:
-            raise ValidationError(f"{location} has too many items")
-        if schema.get("uniqueItems") is True:
-            for index, item in enumerate(instance):
-                if any(json_equal(item, other) for other in instance[index + 1 :]):
-                    raise ValidationError(f"{location} has duplicate items")
-        items = schema.get("items")
-        if isinstance(items, dict):
-            for index, item in enumerate(instance):
-                validate_instance(item, items, root, f"{location}[{index}]")
-        if "contains" in schema:
-            matches = 0
-            for item in instance:
-                try:
-                    validate_instance(item, schema["contains"], root, location)
-                    matches += 1
-                except ValidationError:
-                    pass
-            minimum = schema.get("minContains", 1)
-            maximum = schema.get("maxContains")
-            if matches < minimum or (maximum is not None and matches > maximum):
-                raise ValidationError(f"{location} does not satisfy contains")
-
-    if isinstance(instance, str):
-        if "minLength" in schema and len(instance) < schema["minLength"]:
-            raise ValidationError(f"{location} is too short")
-        if "maxLength" in schema and len(instance) > schema["maxLength"]:
-            raise ValidationError(f"{location} is too long")
-        if "pattern" in schema and re.search(schema["pattern"], instance) is None:
-            raise ValidationError(f"{location} does not match its pattern")
-        if schema.get("format") == "date-time" and not valid_datetime(instance):
-            raise ValidationError(f"{location} is not a date-time")
-
-    if isinstance(instance, (int, float)) and not isinstance(instance, bool):
-        if "minimum" in schema and instance < schema["minimum"]:
-            raise ValidationError(f"{location} is below its minimum")
-        if "maximum" in schema and instance > schema["maximum"]:
-            raise ValidationError(f"{location} is above its maximum")
-
-    for subschema in schema.get("allOf", []):
-        validate_instance(instance, subschema, root, location)
-    if "anyOf" in schema:
-        matches = 0
-        for subschema in schema["anyOf"]:
-            try:
-                validate_instance(instance, subschema, root, location)
-                matches += 1
-            except ValidationError:
-                pass
-        if matches == 0:
-            raise ValidationError(f"{location} does not satisfy any allowed shape")
-    if "if" in schema:
-        try:
-            validate_instance(instance, schema["if"], root, location)
-            matched = True
-        except ValidationError:
-            matched = False
-        branch = schema.get("then") if matched else schema.get("else")
-        if isinstance(branch, dict):
-            validate_instance(instance, branch, root, location)
-
-
-def read_json_bytes(raw: bytes, label: str) -> Any:
-    if not raw:
-        raise ValidationError(f"{label} is empty")
-    if len(raw) > MAX_INPUT_BYTES:
-        raise ValidationError(f"{label} exceeds {MAX_INPUT_BYTES} bytes")
-
-    def reject_constant(_value: str) -> Any:
-        raise ValueError("non-standard JSON constant")
-
-    def reject_duplicate_keys(pairs: List[Tuple[str, Any]]) -> Dict[str, Any]:
-        value: Dict[str, Any] = {}
-        for key, item in pairs:
-            if key in value:
-                raise ValueError("duplicate JSON object key")
-            value[key] = item
-        return value
-
-    try:
-        return json.loads(
-            raw.decode("utf-8"),
-            parse_constant=reject_constant,
-            object_pairs_hook=reject_duplicate_keys,
-        )
-    except (UnicodeDecodeError, ValueError) as error:
-        raise ValidationError(f"{label} is not valid UTF-8 JSON") from error
-
-
-def read_json(path: Path, label: str) -> Any:
-    try:
-        return read_json_bytes(path.read_bytes(), label)
-    except FileNotFoundError as error:
-        raise ValidationError(f"{label} is missing") from error
-    except OSError as error:
-        raise ValidationError(f"{label} cannot be read") from error
+def now() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def canonical_json(value: Any) -> bytes:
-    try:
-        rendered = json.dumps(value, allow_nan=False, indent=2, sort_keys=True)
-    except (TypeError, ValueError) as error:
-        raise ValidationError("value cannot be encoded as canonical JSON") from error
-    return (rendered + "\n").encode("utf-8")
+    return (json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False) + "\n").encode("utf-8")
 
 
 def sha256_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
 
-def sha256_file(path: Path) -> str:
+def read_json_bytes(raw: bytes, label: str) -> Any:
+    if not raw or len(raw) > MAX_INPUT_BYTES:
+        raise ValidationError(f"{label} is empty or too large")
     try:
-        return sha256_bytes(path.read_bytes())
-    except OSError as error:
-        raise ValidationError(f"owned artifact {path.name} cannot be hashed") from error
-
-
-def now() -> str:
-    return dt.datetime.now(dt.timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
-
-
-def run_git(root: Path, arguments: Sequence[str]) -> str:
-    result = subprocess.run(
-        ["git", "-C", str(root), *arguments],
-        check=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    if result.returncode != 0:
-        raise JigError("Git could not inspect the repository")
-    return result.stdout.rstrip("\n")
+        value = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValidationError(f"{label} is not valid UTF-8 JSON") from error
+    return value
 
 
 def resolve_git_root() -> Path:
-    result = subprocess.run(
-        ["git", "rev-parse", "--show-toplevel"],
-        check=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        text=True,
-    )
-    if result.returncode != 0 or not result.stdout.strip():
-        raise JigError("cwd is not inside a Git repository")
-    root = Path(result.stdout.strip()).resolve()
+    try:
+        output = subprocess.check_output(
+            ["git", "rev-parse", "--show-toplevel"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise JigError("jig init must run inside one Git repository") from error
+    root = Path(output).resolve()
     if not root.is_dir():
-        raise JigError("Git returned an invalid repository root")
+        raise JigError("the resolved Git root is not a directory")
     return root
 
 
-def source_record(root: Path, excluded_paths: Sequence[str] = ()) -> Dict[str, Any]:
-    revision = run_git(root, ["rev-parse", "HEAD"])
-    if re.fullmatch(r"[0-9a-f]{40,64}", revision) is None:
+def git_output(root: Path, *arguments: str) -> str:
+    try:
+        return subprocess.check_output(
+            ["git", "-C", str(root), *arguments],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise JigError(f"git {' '.join(arguments)} failed") from error
+
+
+def source_record(root: Path) -> Dict[str, Any]:
+    revision = git_output(root, "rev-parse", "HEAD")
+    if not REVISION.fullmatch(revision):
         raise JigError("the repository has no valid HEAD revision")
-    pathspecs = [".", ":(exclude).pi/jig", ":(exclude)COMMANDMENTS.md"]
-    for value in excluded_paths:
-        pure = PurePosixPath(value)
-        if (
-            not isinstance(value, str)
-            or pure.is_absolute()
-            or any(part in {"", ".", ".."} for part in pure.parts)
-            or "\\" in value
-        ):
-            raise ValidationError("source exclusion is not a contained relative path")
-        pathspecs.append(f":(exclude){value}")
-    raw_status = run_git(
-        root,
-        ["status", "--porcelain=v1", "--untracked-files=all", "--", *pathspecs],
+    status = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(root),
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=all",
+            "--",
+            ".",
+            ":(exclude).pi/jig",
+            f":(exclude){PI_SETTINGS_PATH}",
+            f":(exclude){PRINCIPLE_PATH}",
+            ":(exclude,glob).cursor/skills/verify-*/**",
+        ],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
     )
-    summary = [] if not raw_status else raw_status.splitlines()
-    return {"revision": revision, "dirty": bool(summary), "statusSummary": summary}
+    if status.returncode != 0:
+        raise JigError("git status failed")
+    lines = sorted(line for line in status.stdout.splitlines() if line)
+    return {"revision": revision, "dirty": bool(lines), "statusSummary": lines}
 
 
 def repository_identity(root: Path) -> str:
-    git_dir = Path(run_git(root, ["rev-parse", "--absolute-git-dir"]))
-    common_value = Path(run_git(root, ["rev-parse", "--git-common-dir"]))
+    git_dir = Path(git_output(root, "rev-parse", "--absolute-git-dir"))
+    common_value = Path(git_output(root, "rev-parse", "--git-common-dir"))
     common_dir = common_value if common_value.is_absolute() else root / common_value
     material = f"{git_dir.resolve()}\0{common_dir.resolve()}".encode("utf-8")
     return sha256_bytes(material)
@@ -495,32 +157,215 @@ def process_start(pid: int) -> Optional[str]:
     return fields[19] if len(fields) > 19 else None
 
 
-def ensure_owned_directory(root: Path, relative: str) -> Path:
+def safe_relative_path(
+    root: Path,
+    value: str,
+    *,
+    must_exist: bool = False,
+    create_parent: bool = False,
+    allow_owned_symlink: bool = False,
+) -> Path:
+    if not isinstance(value, str) or not value or "\x00" in value:
+        raise ValidationError("artifact path is invalid")
+    candidate = Path(value)
+    if candidate.is_absolute() or any(part in {"", ".", ".."} for part in candidate.parts):
+        raise ValidationError(f"artifact path is not a contained relative path: {value}")
     current = root
-    for part in relative.split("/"):
+    parts = list(candidate.parts)
+    for index, part in enumerate(parts):
         current = current / part
-        try:
+        if current.exists() or current.is_symlink():
             mode = current.lstat().st_mode
-        except FileNotFoundError:
-            current.mkdir()
-            mode = current.lstat().st_mode
-            fsync_directory(current.parent)
-        if stat.S_ISLNK(mode) or not stat.S_ISDIR(mode):
-            raise JigError(f"controller directory is unsafe: {relative}")
-        try:
-            current.resolve().relative_to(root)
-        except ValueError as error:
-            raise JigError(f"controller directory escapes the Git root: {relative}") from error
+            final = index == len(parts) - 1
+            if stat.S_ISLNK(mode) and not (final and allow_owned_symlink):
+                raise ValidationError(f"artifact path crosses a symlink: {value}")
+            if not final and not stat.S_ISDIR(mode):
+                raise ValidationError(f"artifact path has a non-directory ancestor: {value}")
+        elif create_parent and index < len(parts) - 1:
+            continue
+    resolved = current.resolve(strict=False)
+    try:
+        resolved.relative_to(root)
+    except ValueError as error:
+        raise ValidationError(f"artifact path escapes the Git root: {value}") from error
+    if must_exist and not current.exists():
+        raise ValidationError(f"artifact path is missing: {value}")
     return current
+
+
+def read_contained_bytes(root: Path, value: str, label: str) -> bytes:
+    if not isinstance(value, str) or not value or "\x00" in value:
+        raise ValidationError(f"{label} path is not contained")
+    candidate = Path(value)
+    if candidate.is_absolute() or any(part in {"", ".", ".."} for part in candidate.parts):
+        raise ValidationError(f"{label} path is not contained")
+    descriptors = []
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    directory = getattr(os, "O_DIRECTORY", 0)
+    try:
+        descriptor = os.open(root, os.O_RDONLY | directory | nofollow)
+        descriptors.append(descriptor)
+        for part in candidate.parts[:-1]:
+            descriptor = os.open(part, os.O_RDONLY | directory | nofollow, dir_fd=descriptor)
+            descriptors.append(descriptor)
+        descriptor = os.open(
+            candidate.parts[-1],
+            os.O_RDONLY | os.O_NONBLOCK | nofollow,
+            dir_fd=descriptor,
+        )
+        descriptors.append(descriptor)
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > MAX_INPUT_BYTES:
+            raise ValidationError(f"{label} is not a bounded regular file")
+        chunks = []
+        total = 0
+        while True:
+            chunk = os.read(descriptor, min(65536, MAX_INPUT_BYTES + 1 - total))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+            if total > MAX_INPUT_BYTES:
+                raise ValidationError(f"{label} exceeds {MAX_INPUT_BYTES} bytes")
+        return b"".join(chunks)
+    except ValidationError:
+        raise
+    except OSError as error:
+        raise ValidationError(f"{label} is not a contained regular file") from error
+    finally:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+
+
+def read_contained_json(root: Path, value: str, label: str) -> Any:
+    return read_json_bytes(read_contained_bytes(root, value, label), label)
+
+
+def unlink_contained(root: Path, value: str, *, missing_ok: bool = False) -> None:
+    candidate = Path(value)
+    if candidate.is_absolute() or not candidate.parts or any(part in {"", ".", ".."} for part in candidate.parts):
+        raise ValidationError("unlink path is not contained")
+    descriptors = []
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    directory = getattr(os, "O_DIRECTORY", 0)
+    try:
+        descriptor = os.open(root, os.O_RDONLY | directory | nofollow)
+        descriptors.append(descriptor)
+        for part in candidate.parts[:-1]:
+            descriptor = os.open(part, os.O_RDONLY | directory | nofollow, dir_fd=descriptor)
+            descriptors.append(descriptor)
+        os.unlink(candidate.parts[-1], dir_fd=descriptor)
+        os.fsync(descriptor)
+    except FileNotFoundError:
+        if not missing_ok:
+            raise ValidationError(f"contained path is missing: {value}")
+    except OSError as error:
+        raise JigError(f"unlink path is unsafe: {value}") from error
+    finally:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+
+
+def open_contained_directory(root: Path, value: str) -> int:
+    candidate = Path(value)
+    if candidate.is_absolute() or not candidate.parts or any(part in {"", ".", ".."} for part in candidate.parts):
+        raise ValidationError("controller directory path is not contained")
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    directory = getattr(os, "O_DIRECTORY", 0)
+    current = None
+    try:
+        current = os.open(root, os.O_RDONLY | directory | nofollow)
+        for part in candidate.parts:
+            try:
+                child = os.open(part, os.O_RDONLY | directory | nofollow, dir_fd=current)
+            except FileNotFoundError:
+                os.mkdir(part, mode=0o755, dir_fd=current)
+                os.fsync(current)
+                child = os.open(part, os.O_RDONLY | directory | nofollow, dir_fd=current)
+            os.close(current)
+            current = child
+        result = current
+        current = None
+        return result
+    except ValidationError:
+        raise
+    except OSError as error:
+        raise JigError(f"controller directory is unsafe: {value}") from error
+    finally:
+        if current is not None:
+            os.close(current)
+
+
+def atomic_write(root: Path, value: str, raw: bytes, mode: int = 0o644) -> None:
+    if not isinstance(value, str) or not value or "\x00" in value:
+        raise ValidationError("atomic-write path is not contained")
+    candidate = Path(value)
+    if candidate.is_absolute() or any(part in {"", ".", ".."} for part in candidate.parts):
+        raise ValidationError("atomic-write path is not contained")
+    descriptors = []
+    temporary = f".jigctl.{os.getpid()}.{uuid.uuid4().hex}.tmp"
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    directory = getattr(os, "O_DIRECTORY", 0)
+    parent_descriptor = None
+    try:
+        parent_descriptor = os.open(root, os.O_RDONLY | directory | nofollow)
+        descriptors.append(parent_descriptor)
+        for part in candidate.parts[:-1]:
+            try:
+                child = os.open(part, os.O_RDONLY | directory | nofollow, dir_fd=parent_descriptor)
+            except FileNotFoundError:
+                os.mkdir(part, mode=0o755, dir_fd=parent_descriptor)
+                os.fsync(parent_descriptor)
+                child = os.open(part, os.O_RDONLY | directory | nofollow, dir_fd=parent_descriptor)
+            descriptors.append(child)
+            parent_descriptor = child
+        descriptor = os.open(
+            temporary,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | nofollow,
+            mode,
+            dir_fd=parent_descriptor,
+        )
+        try:
+            offset = 0
+            while offset < len(raw):
+                offset += os.write(descriptor, raw[offset:])
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        os.replace(
+            temporary,
+            candidate.parts[-1],
+            src_dir_fd=parent_descriptor,
+            dst_dir_fd=parent_descriptor,
+        )
+        os.fsync(parent_descriptor)
+    except ValidationError:
+        raise
+    except OSError as error:
+        raise JigError(f"atomic-write path is unsafe: {value}") from error
+    finally:
+        if parent_descriptor is not None:
+            try:
+                os.unlink(temporary, dir_fd=parent_descriptor)
+            except FileNotFoundError:
+                pass
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+
+
+def atomic_json(root: Path, value: str, document: Any) -> str:
+    raw = canonical_json(document)
+    atomic_write(root, value, raw)
+    return sha256_bytes(raw)
 
 
 class RepositoryLock:
     FIELDS = {"schemaVersion", "pid", "host", "processStart", "token", "acquiredAt"}
+    LOCK_NAME = "init.lock"
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path):
         self.root = root
-        self.directory = root / ".pi" / "jig"
-        self.path = self.directory / "init.lock"
+        self.directory_descriptor: Optional[int] = None
         self.token = uuid.uuid4().hex
         self.owner = {
             "schemaVersion": 1,
@@ -530,21 +375,49 @@ class RepositoryLock:
             "token": self.token,
             "acquiredAt": now(),
         }
-        self.reclaimed: List[Path] = []
 
-    def _write_owner(self) -> None:
-        descriptor = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    def _directory(self) -> int:
+        if self.directory_descriptor is None:
+            raise JigError("the init lock directory is not open")
+        return self.directory_descriptor
+
+    def _publish_owner(self) -> None:
+        directory = self._directory()
+        temporary = f".init.lock.{self.token}.tmp"
+        nofollow = getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(
+            temporary,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | nofollow,
+            0o600,
+            dir_fd=directory,
+        )
         try:
-            os.write(descriptor, canonical_json(self.owner))
+            raw = canonical_json(self.owner)
+            offset = 0
+            while offset < len(raw):
+                offset += os.write(descriptor, raw[offset:])
             os.fsync(descriptor)
         finally:
             os.close(descriptor)
-        fsync_directory(self.directory)
-
-    def _snapshot(self, path: Path, label: str) -> Tuple[bytes, Tuple[int, int]]:
-        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
         try:
-            descriptor = os.open(path, flags)
+            os.link(
+                temporary,
+                self.LOCK_NAME,
+                src_dir_fd=directory,
+                dst_dir_fd=directory,
+                follow_symlinks=False,
+            )
+            os.fsync(directory)
+        finally:
+            try:
+                os.unlink(temporary, dir_fd=directory)
+            except FileNotFoundError:
+                pass
+
+    def _snapshot_at(self, directory: int, name: str, label: str) -> Tuple[bytes, Tuple[int, int]]:
+        flags = os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            descriptor = os.open(name, flags, dir_fd=directory)
         except OSError as error:
             raise JigError(f"{label} is not a contained regular file") from error
         try:
@@ -554,7 +427,7 @@ class RepositoryLock:
             chunks = []
             total = 0
             while True:
-                chunk = os.read(descriptor, 65536)
+                chunk = os.read(descriptor, min(65536, MAX_INPUT_BYTES + 1 - total))
                 if not chunk:
                     break
                 total += len(chunk)
@@ -570,31 +443,24 @@ class RepositoryLock:
             raise JigError("the init lock record has an invalid shape")
         pid = value.get("pid")
         host = value.get("host")
-        process_start_value = value.get("processStart")
+        started = value.get("processStart")
         token = value.get("token")
-        acquired_at = value.get("acquiredAt")
+        acquired = value.get("acquiredAt")
         if type(value.get("schemaVersion")) is not int or value["schemaVersion"] != 1:
             raise JigError("the init lock record has an unsupported version")
         if type(pid) is not int or pid <= 0 or pid > MAX_OS_PID:
             raise JigError("the init lock record has an invalid PID")
-        if (
-            not isinstance(host, str)
-            or not host
-            or len(host) > 255
-            or any(ord(character) < 32 or 127 <= ord(character) <= 159 for character in host)
-        ):
+        if not isinstance(host, str) or not host or len(host) > 255:
             raise JigError("the init lock record has an invalid host")
-        if not (
-            process_start_value is None
-            or (
-                isinstance(process_start_value, str)
-                and re.fullmatch(r"[0-9]+", process_start_value) is not None
-            )
-        ):
+        if started is not None and (not isinstance(started, str) or not started.isdigit()):
             raise JigError("the init lock record has an invalid process start")
-        if not isinstance(token, str) or re.fullmatch(r"[0-9a-f]{32}", token) is None:
+        if not isinstance(token, str) or not re.fullmatch(r"[0-9a-f]{32}", token):
             raise JigError("the init lock record has an invalid token")
-        if not isinstance(acquired_at, str) or not valid_datetime(acquired_at):
+        try:
+            parsed = datetime.fromisoformat(acquired.replace("Z", "+00:00"))
+        except (AttributeError, ValueError) as error:
+            raise JigError("the init lock record has an invalid acquisition time") from error
+        if parsed.tzinfo is None:
             raise JigError("the init lock record has an invalid acquisition time")
         return value
 
@@ -602,4752 +468,1052 @@ class RepositoryLock:
         if value["host"] != socket.gethostname():
             return False
         pid = value["pid"]
-        expected_start = value["processStart"]
         try:
             os.kill(pid, 0)
         except ProcessLookupError:
             return True
-        except PermissionError:
+        except (PermissionError, OSError):
             return False
-        except OverflowError:
-            return False
-        except OSError as error:
-            return error.errno == errno.ESRCH
-        current_start = process_start(pid)
-        return (
-            current_start is not None
-            and expected_start is not None
-            and current_start != expected_start
-        )
-
-    def _evidence_matches(self, evidence: Path, raw: bytes) -> bool:
-        try:
-            existing, _identity = self._snapshot(evidence, "stale-lock evidence")
-        except JigError:
-            return False
-        return existing == raw
+        current = process_start(pid)
+        expected = value["processStart"]
+        return current is not None and expected is not None and current != expected
 
     def _unlink_snapshot(self, raw: bytes, identity: Tuple[int, int]) -> None:
-        current, current_identity = self._snapshot(self.path, "init lock")
+        directory = self._directory()
+        current, current_identity = self._snapshot_at(directory, self.LOCK_NAME, "init lock")
         if current != raw or current_identity != identity:
             raise JigError("the init lock changed during stale-owner reconciliation")
-        try:
-            self.path.unlink()
-        except FileNotFoundError as error:
-            raise JigError("the init lock changed during stale-owner reconciliation") from error
-        except OSError as error:
-            raise JigError("the init lock could not be removed during stale-owner reconciliation") from error
-        fsync_directory(self.directory)
+        os.unlink(self.LOCK_NAME, dir_fd=directory)
+        os.fsync(directory)
 
-    def _preserve_stale(self, raw: bytes, identity: Tuple[int, int], evidence: Path) -> None:
-        created = False
+    def _preserve_stale(self, raw: bytes, identity: Tuple[int, int]) -> None:
+        directory = self._directory()
+        receipts = open_contained_directory(self.root, ".pi/jig/receipts")
+        evidence = f"lock-reclaimed-{sha256_bytes(raw)[:16]}.json"
         try:
-            os.link(self.path, evidence, follow_symlinks=False)
-            created = True
-            fsync_directory(evidence.parent)
-        except FileExistsError:
-            if not self._evidence_matches(evidence, raw):
-                raise JigError(
-                    "stale-lock evidence collides with an existing different file; both were preserved"
+            try:
+                os.link(
+                    self.LOCK_NAME,
+                    evidence,
+                    src_dir_fd=directory,
+                    dst_dir_fd=receipts,
+                    follow_symlinks=False,
                 )
-        except FileNotFoundError as error:
-            raise JigError("the init lock changed during stale-owner reconciliation") from error
-        except OSError as error:
-            raise JigError("stale-lock evidence could not be preserved safely") from error
-        if created:
-            evidence_raw, evidence_identity = self._snapshot(evidence, "stale-lock evidence")
-            if evidence_raw != raw or evidence_identity != identity:
-                try:
-                    evidence.unlink()
-                except OSError:
-                    pass
-                raise JigError("the init lock changed during stale-owner reconciliation")
+                os.fsync(receipts)
+            except FileExistsError:
+                existing, _ = self._snapshot_at(receipts, evidence, "stale-lock evidence")
+                if existing != raw:
+                    raise JigError("stale-lock evidence collides with a different file")
+        finally:
+            os.close(receipts)
         self._unlink_snapshot(raw, identity)
 
-    def acquire(self) -> "RepositoryLock":
-        ensure_owned_directory(self.root, ".pi/jig")
-        try:
-            self._write_owner()
-            return self
-        except FileExistsError:
-            pass
-        try:
-            raw, identity = self._snapshot(self.path, "init lock")
-            holder = self._validate_holder(read_json_bytes(raw, "init lock"))
-        except (OSError, ValidationError, JigError) as error:
-            raise JigError(
-                "the init lock owner is uncertain; preserve .pi/jig/init.lock and inspect it"
-            ) from error
-        if not self._stale(holder):
-            raise JigError("the init lock has a live or uncertain owner; wait for that owner to finish")
-        receipts = ensure_owned_directory(self.root, ".pi/jig/receipts")
-        evidence = receipts / f"lock-reclaimed-{sha256_bytes(raw)[:16]}.json"
-        self._preserve_stale(raw, identity, evidence)
-        self.reclaimed.append(evidence)
-        try:
-            self._write_owner()
-        except FileExistsError as error:
-            raise JigError("another init acquired the lock during stale-owner reconciliation") from error
-        return self
-
-    def release(self) -> None:
-        try:
-            current = read_json(self.path, "init lock")
-            if isinstance(current, dict) and current.get("token") == self.token:
-                self.path.unlink()
-                fsync_directory(self.directory)
-        except (OSError, ValidationError):
-            pass
-
     def __enter__(self) -> "RepositoryLock":
-        return self.acquire()
-
-    def __exit__(self, _kind: Any, _value: Any, _traceback: Any) -> None:
-        self.release()
-
-
-def fsync_directory(path: Path) -> None:
-    try:
-        descriptor = os.open(path, os.O_RDONLY)
-    except OSError:
-        return
-    try:
-        os.fsync(descriptor)
-    except OSError:
-        pass
-    finally:
-        os.close(descriptor)
-
-
-def atomic_write(path: Path, data: bytes, ownership_token: Optional[str] = None) -> None:
-    if not path.parent.is_dir() or path.parent.is_symlink():
-        raise JigError(f"atomic-write parent is unsafe: {path.parent.name}")
-    token = f".{ownership_token}" if ownership_token is not None else ""
-    temporary = (
-        path.parent
-        / f".jigctl-{path.name}{token}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
-    )
-    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    try:
-        offset = 0
-        while offset < len(data):
-            offset += os.write(descriptor, data[offset:])
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
-    os.replace(temporary, path)
-    fsync_directory(path.parent)
-
-
-def atomic_write_json(path: Path, value: Any, schema: Optional[Mapping[str, Any]] = None) -> None:
-    if schema is not None:
-        validate_instance(value, schema)
-    atomic_write(path, canonical_json(value))
-
-
-def schema_root() -> Path:
-    return Path(__file__).resolve().parent.parent / "skills" / "jig" / "references" / "schemas" / "v1"
-
-
-def load_schema(name: str) -> Mapping[str, Any]:
-    allowed = {"manifest", "profile", "proposal", "result", "selection"}
-    if name not in allowed:
-        raise ValidationError("schema name is not supported")
-    value = read_json(schema_root() / f"{name}.schema.json", f"{name} schema")
-    if not isinstance(value, dict):
-        raise ValidationError(f"{name} schema is not an object")
-    return value
-
-
-def safe_relative_path(root: Path, value: str, must_exist: bool = False) -> Path:
-    if (
-        not isinstance(value, str)
-        or not value
-        or "\\" in value
-        or "//" in value
-        or any(ord(character) < 32 or 127 <= ord(character) <= 159 for character in value)
-    ):
-        raise ValidationError("artifact path is not a portable repository-relative path")
-    raw_parts = value.split("/")
-    pure = PurePosixPath(value)
-    if pure.is_absolute() or any(part in {"", ".", ".."} for part in raw_parts):
-        raise ValidationError("artifact path is not a contained repository-relative path")
-    if any(part.lower() in SENSITIVE_NAMES for part in pure.parts):
-        raise ValidationError("artifact path names protected key material")
-    current = root
-    for index, part in enumerate(pure.parts):
-        current = current / part
+        self.directory_descriptor = open_contained_directory(self.root, ".pi/jig")
         try:
-            mode = current.lstat().st_mode
-        except FileNotFoundError:
-            if must_exist or index < len(pure.parts) - 1:
-                raise ValidationError(f"artifact path does not exist: {value}")
-            break
-        except OSError as error:
-            raise ValidationError(f"artifact path cannot be inspected: {value}") from error
-        if stat.S_ISLNK(mode):
-            raise ValidationError(f"artifact path traverses a symlink: {value}")
-        if index < len(pure.parts) - 1 and not stat.S_ISDIR(mode):
-            raise ValidationError(f"artifact path has a non-directory ancestor: {value}")
-    resolved = current.resolve(strict=False)
-    try:
-        resolved.relative_to(root)
-    except ValueError as error:
-        raise ValidationError(f"artifact path escapes the Git root: {value}") from error
-    return current
-
-
-def profile_evidence_paths(profile: Mapping[str, Any]) -> Iterable[str]:
-    observations: List[Any] = [profile.get("productType")]
-    for key in ("languages", "frameworks", "buildTools", "ci", "entryPoints", "topology"):
-        value = profile.get(key, [])
-        if isinstance(value, list):
-            observations.extend(value)
-    for observation in observations:
-        if isinstance(observation, dict):
-            for evidence in observation.get("evidence", []):
-                if isinstance(evidence, dict) and isinstance(evidence.get("path"), str):
-                    yield evidence["path"]
-    for failure in profile.get("failureModes", []):
-        if isinstance(failure, dict):
-            for evidence in failure.get("evidence", []):
-                if isinstance(evidence, dict) and isinstance(evidence.get("path"), str):
-                    yield evidence["path"]
-
-
-def validate_profile_semantics(root: Path, profile: Mapping[str, Any], revision: str) -> None:
-    if profile.get("repositoryRevision") != revision:
-        raise ValidationError("profile repositoryRevision does not match the recorded source revision")
-    for path in profile_evidence_paths(profile):
-        evidence = safe_relative_path(root, path, must_exist=True)
-        try:
-            mode = evidence.lstat().st_mode
-        except OSError as error:
-            raise ValidationError(f"profile evidence cannot be inspected: {path}") from error
-        if not stat.S_ISREG(mode):
-            raise ValidationError(f"profile evidence is not a regular file: {path}")
-
-
-def upsert_artifact(manifest: Dict[str, Any], path: str, owner: str, digest: str) -> None:
-    artifacts = manifest["artifacts"]
-    replacement = {"path": path, "owner": owner, "sha256": digest}
-    for index, artifact in enumerate(artifacts):
-        if artifact.get("path") == path:
-            artifacts[index] = replacement
-            return
-    artifacts.append(replacement)
-
-
-def relative_to_root(root: Path, path: Path) -> str:
-    return path.relative_to(root).as_posix()
-
-
-def known_receipt_artifacts(root: Path) -> List[Tuple[str, str]]:
-    receipts = root / ".pi" / "jig" / "receipts"
-    if not receipts.is_dir() or receipts.is_symlink():
-        return []
-    reserved = (
-        (re.compile(r"lock-reclaimed-([0-9a-f]{16})\.json"), True),
-        (re.compile(r"interrupted-write-([0-9a-f]{64})\.bin"), False),
-        (re.compile(r"interrupted-transition-([0-9a-f]{64})\.json"), False),
-    )
-    result = []
-    for path in sorted(receipts.iterdir()):
-        if path.is_symlink() or not path.is_file():
-            continue
-        for pattern, prefix_digest in reserved:
-            match = pattern.fullmatch(path.name)
-            if match is None:
-                continue
-            digest = sha256_file(path)
-            expected = match.group(1)
-            digest_matches = digest.startswith(expected) if prefix_digest else digest == expected
-            if digest_matches:
-                result.append((relative_to_root(root, path), digest))
-            break
-    return result
-
-
-def validate_transition_receipt(
-    root: Path,
-    receipt: Any,
-    edge: Tuple[str, str],
-    source: Mapping[str, Any],
-    expected_at: Optional[str] = None,
-) -> str:
-    kind = TRANSITION_KIND_BY_EDGE.get(edge)
-    if kind is None:
-        raise ValidationError("transition receipt has an unimplemented edge")
-    expected_values = {
-        "schemaVersion": 1,
-        "kind": kind,
-        "from": edge[0],
-        "to": edge[1],
-        "sourceRevision": source["revision"],
-        "sourceDirty": source["dirty"],
-        "sourceStatusSha256": sha256_bytes(canonical_json(source["statusSummary"])),
-    }
-    expected_fields = set(expected_values) | {"at"}
-    if kind == "profile-committed":
-        expected_fields.update({"profilePath", "profileSha256", "commandmentsGenerated"})
-    elif kind == "commandments-ratified":
-        expected_fields.update(
-            {
-                "recordedAt",
-                "resourceIsolation",
-                "interviewPath",
-                "interviewSha256",
-                "answersPath",
-                "answersSha256",
-                "candidatePath",
-                "commandmentsPath",
-                "commandmentsSha256",
-                "version",
-                "operatorMarker",
-                "approvalDigest",
-            }
-        )
-    elif kind == "verification-started":
-        expected_fields.update(
-            {
-                "resourceIsolation",
-                "planPath",
-                "planSha256",
-                "commandmentsSha256",
-                "protectedFeatureId",
-            }
-        )
-    elif kind == "verification-ready":
-        expected_fields.update(
-            {
-                "resourceIsolation",
-                "planPath",
-                "planSha256",
-                "commandmentsSha256",
-                "protectedFeatureId",
-                "skillPath",
-                "skillSha256",
-                "featureIndexPath",
-                "featureIndexSha256",
-                "runtimeReceiptPath",
-                "runtimeReceiptSha256",
-            }
-        )
-    elif kind == "step-selection-started":
-        expected_fields.update(
-            {
-                "resourceIsolation",
-                "commandmentsSha256",
-                "runtimeReceiptPath",
-                "runtimeReceiptSha256",
-            }
-        )
-    elif kind == "step-worker-activated":
-        expected_fields.update({
-            "resourceIsolation", "commandmentsSha256", "selectionSha256",
-            "proposalSha256", "beforeSha256", "workerSha256",
-            "inputRevision", "branch", "worktree",
-        })
-    elif kind == "no-candidate-finalized":
-        expected_fields.update(
-            {
-                "resourceIsolation", "commandmentsSha256", "selectionPath",
-                "selectionSha256", "resultPath", "resultSha256",
-            }
-        )
-    elif kind == "selected-step-finalized":
-        expected_fields.update({
-            "resourceIsolation", "commandmentsSha256", "selectionPath", "selectionSha256",
-            "proposalPath", "proposalSha256", "resultPath", "resultSha256",
-            "inputRevision", "outputRevision", "branch", "worktree", "diffSha256", "outcome",
-        })
-    elif kind == "phase-failed":
-        expected_fields.add("failureReason")
-    if not isinstance(receipt, dict) or set(receipt) != expected_fields:
-        raise ValidationError("transition receipt has an invalid implemented shape")
-    if type(receipt["schemaVersion"]) is not int:
-        raise ValidationError("transition receipt has an invalid schema version")
-    if type(receipt["sourceDirty"]) is not bool:
-        raise ValidationError("transition receipt has an invalid source dirty flag")
-    if any(receipt.get(key) != value for key, value in expected_values.items()):
-        raise ValidationError("transition receipt does not match its boundary")
-    if not isinstance(receipt["at"], str) or not valid_datetime(receipt["at"]):
-        raise ValidationError("transition receipt has an invalid timestamp")
-    if expected_at is not None and receipt["at"] != expected_at:
-        raise ValidationError("transition receipt does not match its transition timestamp")
-    if kind == "profile-committed":
-        if (
-            receipt["profilePath"] != ".pi/jig/profile.json"
-            or receipt["commandmentsGenerated"] is not False
-            or not isinstance(receipt["profileSha256"], str)
-            or re.fullmatch(r"[0-9a-f]{64}", receipt["profileSha256"]) is None
-        ):
-            raise ValidationError("profile transition receipt is inconsistent")
-        profile_path = safe_relative_path(root, receipt["profilePath"], must_exist=True)
-        try:
-            mode = profile_path.lstat().st_mode
-        except OSError as error:
-            raise ValidationError("committed profile cannot be inspected") from error
-        if not stat.S_ISREG(mode) or sha256_file(profile_path) != receipt["profileSha256"]:
-            raise ValidationError("profile transition receipt hash is inconsistent")
-    elif kind == "commandments-ratified":
-        marker = receipt["operatorMarker"]
-        digest = receipt["commandmentsSha256"]
-        approval = sha256_bytes(
-            canonical_json({"candidateSha256": digest, "operatorMarker": marker})
-        )
-        fixed = {
-            "interviewPath": COMMANDMENTS_INTERVIEW_PATH,
-            "commandmentsPath": COMMANDMENTS_ROOT_PATH,
-        }
-        if any(receipt.get(key) != value for key, value in fixed.items()):
-            raise ValidationError("COMMANDMENTS transition receipt has inconsistent paths")
-        if receipt["resourceIsolation"] not in {"isolated-shell", "inherited-session"}:
-            raise ValidationError("COMMANDMENTS transition receipt has invalid isolation")
-        if (
-            not isinstance(marker, str)
-            or not marker.strip()
-            or len(marker) > 200
-            or "\n" in marker
-            or "\r" in marker
-            or receipt["approvalDigest"] != approval
-            or type(receipt["version"]) is not int
-            or receipt["version"] < 1
-            or not isinstance(receipt["recordedAt"], str)
-            or not valid_datetime(receipt["recordedAt"])
-        ):
-            raise ValidationError("COMMANDMENTS transition receipt has invalid approval evidence")
-        for digest_key in ("interviewSha256", "answersSha256", "commandmentsSha256"):
-            digest_value = receipt[digest_key]
-            if (
-                not isinstance(digest_value, str)
-                or re.fullmatch(r"[0-9a-f]{64}", digest_value) is None
-            ):
-                raise ValidationError("COMMANDMENTS transition receipt has an invalid digest")
-        expected_paths = {
-            "answersPath": (
-                f".pi/jig/commandments/answers/{receipt['answersSha256']}.json"
-            ),
-            "candidatePath": (
-                f".pi/jig/commandments/candidates/{digest}.md"
-            ),
-        }
-        if any(receipt.get(key) != value for key, value in expected_paths.items()):
-            raise ValidationError("COMMANDMENTS transition receipt has invalid content addresses")
-        for path_key, digest_key in (
-            ("interviewPath", "interviewSha256"),
-            ("answersPath", "answersSha256"),
-            ("candidatePath", "commandmentsSha256"),
-            ("commandmentsPath", "commandmentsSha256"),
-        ):
-            path_value = receipt[path_key]
-            digest_value = receipt[digest_key]
-            if (
-                not isinstance(path_value, str)
-                or not isinstance(digest_value, str)
-                or re.fullmatch(r"[0-9a-f]{64}", digest_value) is None
-            ):
-                raise ValidationError("COMMANDMENTS transition receipt has invalid artifact evidence")
-            artifact_path = safe_relative_path(root, path_value, must_exist=True)
-            if not artifact_path.is_file() or artifact_path.is_symlink() or sha256_file(artifact_path) != digest_value:
-                raise ValidationError("COMMANDMENTS transition receipt artifact hash is inconsistent")
-        candidate = safe_relative_path(root, receipt["candidatePath"], must_exist=True).read_bytes()
-        metadata = validate_commandments_bytes(candidate)
-        if (
-            metadata["version"] != receipt["version"]
-            or metadata["ratifiedAt"] != receipt["at"]
-            or metadata["marker"] != marker
-        ):
-            raise ValidationError("COMMANDMENTS transition receipt does not match the exact candidate")
-    elif kind in {"verification-started", "verification-ready"}:
-        if (
-            not isinstance(receipt["resourceIsolation"], str)
-            or receipt["resourceIsolation"] not in {"isolated-shell", "inherited-session"}
-            or receipt["planPath"] != VERIFICATION_PLAN_PATH
-            or not isinstance(receipt["planSha256"], str)
-            or re.fullmatch(r"[0-9a-f]{64}", receipt["planSha256"]) is None
-            or not isinstance(receipt["commandmentsSha256"], str)
-            or re.fullmatch(r"[0-9a-f]{64}", receipt["commandmentsSha256"]) is None
-            or not isinstance(receipt["protectedFeatureId"], str)
-            or VERIFICATION_ID.fullmatch(receipt["protectedFeatureId"]) is None
-        ):
-            raise ValidationError("verification transition receipt is inconsistent")
-        paths = [(receipt["planPath"], receipt["planSha256"])]
-        if kind == "verification-ready":
-            if (
-                receipt["skillPath"] != VERIFICATION_SKILL_PATH
-                or receipt["featureIndexPath"] != VERIFICATION_FEATURE_INDEX_PATH
-                or re.fullmatch(r"[0-9a-f]{64}", receipt["skillSha256"]) is None
-                or re.fullmatch(r"[0-9a-f]{64}", receipt["featureIndexSha256"]) is None
-                or re.fullmatch(r"[0-9a-f]{64}", receipt["runtimeReceiptSha256"]) is None
-            ):
-                raise ValidationError("verification-ready receipt has invalid artifacts")
-            paths.extend(
-                [
-                    (receipt["skillPath"], receipt["skillSha256"]),
-                    (receipt["featureIndexPath"], receipt["featureIndexSha256"]),
-                    (receipt["runtimeReceiptPath"], receipt["runtimeReceiptSha256"]),
-                ]
-            )
-        for path_value, digest in paths:
-            path = safe_relative_path(root, path_value, must_exist=True)
-            if path.is_symlink() or not path.is_file() or sha256_file(path) != digest:
-                raise ValidationError("verification transition artifact hash is inconsistent")
-    elif kind == "step-selection-started":
-        if (
-            receipt["resourceIsolation"] not in {"isolated-shell", "inherited-session"}
-            or re.fullmatch(r"[0-9a-f]{64}", receipt["commandmentsSha256"]) is None
-            or re.fullmatch(r"[0-9a-f]{64}", receipt["runtimeReceiptSha256"]) is None
-        ):
-            raise ValidationError("step-selection transition receipt is inconsistent")
-        runtime_path = safe_relative_path(root, receipt["runtimeReceiptPath"], must_exist=True)
-        if runtime_path.is_symlink() or not runtime_path.is_file() or sha256_file(runtime_path) != receipt["runtimeReceiptSha256"]:
-            raise ValidationError("step-selection runtime receipt hash is inconsistent")
-    elif kind == "no-candidate-finalized":
-        fixed = {
-            "selectionPath": SELECTION_PATH,
-            "resultPath": RESULT_PATH,
-        }
-        if (
-            receipt["resourceIsolation"] not in {"isolated-shell", "inherited-session"}
-            or receipt["selectionPath"] != fixed["selectionPath"]
-            or receipt["resultPath"] != fixed["resultPath"]
-            or re.fullmatch(r"[0-9a-f]{64}", receipt["commandmentsSha256"]) is None
-            or re.fullmatch(r"[0-9a-f]{64}", receipt["selectionSha256"]) is None
-            or re.fullmatch(r"[0-9a-f]{64}", receipt["resultSha256"]) is None
-        ):
-            raise ValidationError("no-candidate transition receipt is inconsistent")
-        for path_key, digest_key in (("selectionPath", "selectionSha256"), ("resultPath", "resultSha256")):
-            path = safe_relative_path(root, receipt[path_key], must_exist=True)
-            if path.is_symlink() or not path.is_file() or sha256_file(path) != receipt[digest_key]:
-                raise ValidationError("no-candidate transition artifact hash is inconsistent")
-    elif kind == "phase-failed":
-        reason = receipt["failureReason"]
-        if (
-            not isinstance(reason, str)
-            or not reason.strip()
-            or len(reason) > 500
-            or "\n" in reason
-            or "\r" in reason
-        ):
-            raise ValidationError("failure transition receipt has an invalid reason")
-    return kind
-
-
-def reconcile_orphan_transitions(root: Path, manifest: Optional[Mapping[str, Any]]) -> List[Tuple[str, str]]:
-    receipts = ensure_owned_directory(root, ".pi/jig/receipts")
-    referenced = set() if manifest is None else {item["receiptPath"] for item in manifest["transitions"]}
-    expected_index = 1 if manifest is None else len(manifest["transitions"]) + 1
-    boundary = "absent" if manifest is None else manifest["currentState"]
-    source = source_record(root) if manifest is None else manifest["source"]
-    recovered = []
-    for path in sorted(receipts.iterdir()):
-        match = TRANSITION_RECEIPT_PATTERN.fullmatch(path.name)
-        if match is None or int(match.group(1)) != expected_index:
-            continue
-        relative = relative_to_root(root, path)
-        if relative in referenced or path.is_symlink() or not path.is_file():
-            continue
-        edge = (boundary, match.group(2))
-        try:
-            receipt = read_json(path, "orphan transition receipt")
-            kind = validate_transition_receipt(root, receipt, edge, source)
-        except JigError:
-            continue
-        if kind == "commandments-ratified":
-            continue
-        digest = sha256_file(path)
-        destination = receipts / f"interrupted-transition-{digest}.json"
-        try:
-            if destination.exists() or destination.is_symlink():
-                if (
-                    destination.is_symlink()
-                    or not destination.is_file()
-                    or sha256_file(destination) != digest
-                ):
-                    raise JigError(
-                        "interrupted-transition evidence collides with an existing unknown file"
-                    )
-                path.unlink()
-            else:
-                os.rename(path, destination)
-        except OSError as error:
-            raise JigError("orphan transition receipt could not be preserved safely") from error
-        recovered.append((relative_to_root(root, destination), digest))
-    return recovered
-
-
-def reconcile_temporary_files(root: Path) -> List[Tuple[str, str]]:
-    jig_dir = root / ".pi" / "jig"
-    if not jig_dir.exists() or jig_dir.is_symlink():
-        return []
-    receipts = ensure_owned_directory(root, ".pi/jig/receipts")
-    reserved = (
-        (jig_dir, re.compile(r"\.jigctl-(?:manifest|profile)\.json\.[0-9]+\.[0-9a-f]{32}\.tmp")),
-        (receipts, re.compile(r"\.jigctl-transition-[0-9]{4}-[a-z-]+\.json\.[0-9]+\.[0-9a-f]{32}\.tmp")),
-    )
-    recovered: List[Tuple[str, str]] = []
-    for parent, name_pattern in reserved:
-        try:
-            candidates = sorted(parent.iterdir())
-        except OSError as error:
-            raise JigError("controller temporary files cannot be inspected") from error
-        for path in candidates:
-            if name_pattern.fullmatch(path.name) is None:
-                continue
             try:
-                mode = path.lstat().st_mode
-            except OSError as error:
-                raise JigError("controller temporary file cannot be inspected") from error
-            if not stat.S_ISREG(mode):
-                raise JigError("controller temporary file is not a regular file")
-            digest = sha256_file(path)
-            destination = receipts / f"interrupted-write-{digest}.bin"
-            if destination.exists():
-                if destination.is_symlink() or not destination.is_file() or sha256_file(destination) != digest:
-                    raise JigError("interrupted-write evidence collides with an existing unknown file")
-                path.unlink()
-            else:
-                os.rename(path, destination)
-            recovered.append((relative_to_root(root, destination), digest))
-    return recovered
+                self._publish_owner()
+                return self
+            except FileExistsError:
+                pass
+            raw, identity = self._snapshot_at(self._directory(), self.LOCK_NAME, "init lock")
+            try:
+                holder = self._validate_holder(read_json_bytes(raw, "init lock"))
+            except (ValidationError, JigError) as error:
+                raise JigError(
+                    "the init lock owner is uncertain; preserve .pi/jig/init.lock and inspect it"
+                ) from error
+            if not self._stale(holder):
+                raise JigError("the init lock has a live or uncertain owner; wait for it to finish")
+            self._preserve_stale(raw, identity)
+            try:
+                self._publish_owner()
+            except FileExistsError as error:
+                raise JigError("another init acquired the lock during stale-owner reconciliation") from error
+            return self
+        except BaseException:
+            os.close(self._directory())
+            self.directory_descriptor = None
+            raise
+
+    def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
+        try:
+            directory = self._directory()
+            raw, identity = self._snapshot_at(directory, self.LOCK_NAME, "init lock")
+            holder = self._validate_holder(read_json_bytes(raw, "init lock"))
+            if holder["token"] == self.token:
+                self._unlink_snapshot(raw, identity)
+        except (ValidationError, JigError, OSError):
+            pass
+        finally:
+            if self.directory_descriptor is not None:
+                os.close(self.directory_descriptor)
+                self.directory_descriptor = None
 
 
-def validate_manifest_semantics(root: Path, manifest: Mapping[str, Any], schema: Mapping[str, Any]) -> None:
-    validate_instance(manifest, schema)
-    state = manifest["currentState"]
-    if state not in IMPLEMENTED_STATES:
-        raise ValidationError(f"manifest state {state} is outside this controller unit")
+def validate_source(value: Any) -> Dict[str, Any]:
+    if not isinstance(value, dict) or set(value) != {"revision", "dirty", "statusSummary"}:
+        raise ValidationError("manifest source has the wrong shape")
+    revision = value["revision"]
+    status = value["statusSummary"]
+    if not isinstance(revision, str) or not REVISION.fullmatch(revision):
+        raise ValidationError("manifest source revision is invalid")
+    if not isinstance(value["dirty"], bool) or not isinstance(status, list):
+        raise ValidationError("manifest source status is invalid")
+    if any(not isinstance(item, str) or not item for item in status) or status != sorted(set(status)):
+        raise ValidationError("manifest source status summary is invalid")
+    return dict(value)
+
+
+def valid_state_edge(source: str, target: str) -> bool:
+    if (source, target) in STATE_EDGES:
+        return True
+    if source in ACTIVE_STATES and target == f"failed-{source}":
+        return True
+    return source.startswith("failed-") and target == source.removeprefix("failed-")
+
+
+def validate_manifest(value: Any) -> Dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValidationError("manifest is not an object")
+    schema = value.get("schemaVersion")
+    if schema == 1:
+        raise ValidationError(
+            "unsupported legacy Jig v1 campaign; preserve .pi/jig and its worktrees, "
+            "then archive or migrate it explicitly before running Jig v2"
+        )
+    required = {
+        "schemaVersion",
+        "repository",
+        "source",
+        "principle",
+        "verification",
+        "currentState",
+        "resourceIsolation",
+        "transitions",
+        "artifacts",
+        "tools",
+        "createdAt",
+        "updatedAt",
+    }
+    if schema != SCHEMA_VERSION or set(value) != required:
+        raise ValidationError("manifest has the wrong v2 shape")
+    repository = value["repository"]
+    if repository != {"root": ".", "scope": "repository", "identity": repository.get("identity") if isinstance(repository, dict) else None}:
+        raise ValidationError("manifest repository record is invalid")
+    if not isinstance(repository.get("identity"), str) or not SHA256.fullmatch(repository["identity"]):
+        raise ValidationError("manifest repository identity is invalid")
+    validate_source(value["source"])
+    principle = value["principle"]
+    if not isinstance(principle, dict) or set(principle) != {"path", "sha256", "version", "ratifiedAt"}:
+        raise ValidationError("manifest principle record is invalid")
+    if principle["path"] != PRINCIPLE_PATH:
+        raise ValidationError("manifest principle path is invalid")
+    verification = value["verification"]
+    if verification is not None:
+        if not isinstance(verification, dict) or set(verification) != {
+            "skillPath", "sha256", "createdBy", "maintainedBy", "completedAt"
+        }:
+            raise ValidationError("manifest verification record is invalid")
+        if not VERIFICATION_PATH.fullmatch(verification["skillPath"]):
+            raise ValidationError("manifest verification skill path is invalid")
+        if not SHA256.fullmatch(verification["sha256"]):
+            raise ValidationError("manifest verification hash is invalid")
+        if verification["createdBy"] != PSTACK_CREATE_SKILL or verification["maintainedBy"] != PSTACK_MAINTAIN_SKILL:
+            raise ValidationError("manifest verification ownership is invalid")
+    state = value["currentState"]
+    if state not in STATES:
+        raise ValidationError("manifest state is invalid")
+    if value["resourceIsolation"] not in {"isolated-shell", "inherited-session"}:
+        raise ValidationError("manifest isolation is invalid")
+    if not isinstance(value["transitions"], list) or not isinstance(value["artifacts"], list):
+        raise ValidationError("manifest transition or artifact list is invalid")
+    previous = None
+    for index, item in enumerate(value["transitions"]):
+        if not isinstance(item, dict) or set(item) != {
+            "from", "to", "at", "receiptPath", "receiptSha256"
+        }:
+            raise ValidationError("manifest transition has the wrong shape")
+        if item["from"] not in STATES | {"absent"} or item["to"] not in STATES:
+            raise ValidationError("manifest transition names an invalid state")
+        if not valid_state_edge(item["from"], item["to"]):
+            raise ValidationError("manifest transition is outside the v2 state graph")
+        if index == 0 and item["from"] != "absent":
+            raise ValidationError("manifest transition history does not start at absent")
+        if previous is not None and item["from"] != previous:
+            raise ValidationError("manifest transition history is not contiguous")
+        if (
+            not isinstance(item["receiptPath"], str)
+            or not item["receiptPath"].startswith(".pi/jig/receipts/")
+            or not isinstance(item["receiptSha256"], str)
+            or not SHA256.fullmatch(item["receiptSha256"])
+            or not isinstance(item["at"], str)
+            or not item["at"]
+        ):
+            raise ValidationError("manifest transition receipt is invalid")
+        previous = item["to"]
+    if previous is not None and previous != state:
+        raise ValidationError("manifest state differs from its transition history")
+    artifact_paths = []
+    for item in value["artifacts"]:
+        if (
+            not isinstance(item, dict)
+            or set(item) != {"path", "owner", "sha256"}
+            or not isinstance(item["path"], str)
+            or not item["path"]
+            or item["owner"] not in {"human", "controller", "jig-skill", "repository"}
+            or not isinstance(item["sha256"], str)
+            or not SHA256.fullmatch(item["sha256"])
+        ):
+            raise ValidationError("manifest artifact record is invalid")
+        artifact_paths.append(item["path"])
+    if artifact_paths != sorted(set(artifact_paths)):
+        raise ValidationError("manifest artifact paths are duplicated or unsorted")
+    artifacts_by_path = {item["path"]: item for item in value["artifacts"]}
+    receipt_paths = []
+    for transition_item in value["transitions"]:
+        receipt_path = transition_item["receiptPath"]
+        receipt_paths.append(receipt_path)
+        artifact = artifacts_by_path.get(receipt_path)
+        if (
+            artifact is None
+            or artifact["owner"] != "controller"
+            or artifact["sha256"] != transition_item["receiptSha256"]
+        ):
+            raise ValidationError("manifest transition receipt is not linked to its controller artifact")
+    if len(receipt_paths) != len(set(receipt_paths)):
+        raise ValidationError("manifest transition receipt paths are duplicated")
+    if (
+        not isinstance(value["tools"], dict)
+        or set(value["tools"]) != {"jig", "pi", "python"}
+        or any(not isinstance(item, str) or not item for item in value["tools"].values())
+        or not isinstance(value["createdAt"], str)
+        or not isinstance(value["updatedAt"], str)
+    ):
+        raise ValidationError("manifest tool or timestamp metadata is invalid")
+    if state in {"verification-building", "configured", "failed-verification-building"}:
+        if not isinstance(principle["sha256"], str) or not SHA256.fullmatch(principle["sha256"]):
+            raise ValidationError("ratified state lacks a principle hash")
+        if not isinstance(principle["version"], int) or principle["version"] < 1 or not principle["ratifiedAt"]:
+            raise ValidationError("ratified state lacks principle metadata")
+    else:
+        if any(principle[key] is not None for key in ("sha256", "version", "ratifiedAt")):
+            raise ValidationError("unratified state contains principle metadata")
+    if state == "configured" and verification is None:
+        raise ValidationError("configured state lacks a verification skill")
+    if state != "configured" and verification is not None:
+        raise ValidationError("non-configured state contains a verification skill")
+    return dict(value)
+
+
+def load_manifest(root: Path) -> Dict[str, Any]:
+    manifest = validate_manifest(read_contained_json(root, MANIFEST_PATH, "Jig manifest"))
     if manifest["repository"]["identity"] != repository_identity(root):
-        raise ValidationError("manifest repository identity does not match this Git repository")
-    artifacts = manifest["artifacts"]
-    artifact_paths = [artifact["path"] for artifact in artifacts]
-    if len(artifact_paths) != len(set(artifact_paths)):
-        raise ValidationError("manifest has duplicate artifact paths")
-    implemented_state = "|".join(sorted(re.escape(item) for item in IMPLEMENTED_STATES))
-    allowed_artifact = re.compile(
-        r"^(?:COMMANDMENTS\.md|\.pi/jig/(?:profile\.json|commandments/(?:interview\.json|"
-        r"staging\.json|answers/[0-9a-f]{64}\.json|candidates/[0-9a-f]{64}\.md|"
-        r"decisions/[0-9a-f]{64}\.json|proposals/[0-9a-f]{64}\.md)|"
-        r"steps/0001/(?:(?:selection|proposal|result|before|worker|output|after|verdict)\.json|candidate\.diff|reviews/[0-9a-f]{64}\.md|commands/(?:baseline|targeted|regression|protected-user-path|seeded-violation)-[0-9]{2}\.json)|"
-        r"verification/(?:plan\.json|receipts/runtime-[0-9a-f]{64}\.json|"
-        r"evidence/[a-z0-9][a-z0-9._-]{0,127}\.json)|receipts/(?:transition-[0-9]{4}-(?:"
-        + implemented_state
-        + r")\.json|lock-reclaimed-[0-9a-f]{16}\.json|"
-        + r"interrupted-write-[0-9a-f]{64}\.bin|interrupted-transition-[0-9a-f]{64}\.json))|"
-        + r"\.pi/skills/jig-verification/(?:SKILL\.md|helpers/[a-z0-9][a-z0-9-]{0,63}\.py|"
-        + r"references/features/(?:index|[a-z0-9][a-z0-9-]{0,63})\.md))$"
-    )
-    for artifact in artifacts:
-        artifact_path = artifact["path"]
-        if allowed_artifact.fullmatch(artifact_path) is None:
-            raise ValidationError(f"manifest names an unknown owned artifact: {artifact_path}")
-        if artifact_path == COMMANDMENTS_ROOT_PATH or "/answers/" in artifact_path:
-            expected_owner = "human"
-        elif (
-            artifact_path == ".pi/jig/profile.json"
-            or artifact_path == VERIFICATION_PLAN_PATH
-            or artifact_path.startswith(".pi/skills/jig-verification/")
-            or "/proposals/" in artifact_path
-        ):
-            expected_owner = "jig-skill"
-        elif "/verification/evidence/" in artifact_path:
-            expected_owner = "repository"
-        else:
-            expected_owner = "controller"
-        if artifact["owner"] != expected_owner:
-            raise ValidationError(f"owned artifact has the wrong owner: {artifact_path}")
-        path = safe_relative_path(root, artifact_path, must_exist=True)
-        if sha256_file(path) != artifact["sha256"]:
-            if artifact_path == COMMANDMENTS_ROOT_PATH:
-                raise ValidationError(
-                    "ratified COMMANDMENTS changed; preserve it and use the amendment and re-ratification flow"
-                )
-            raise ValidationError(f"owned artifact hash mismatch: {artifact_path}")
-        receipt_name = Path(artifact_path).name
-        digest_name = re.fullmatch(r"lock-reclaimed-([0-9a-f]{16})\.json", receipt_name)
-        if digest_name is not None and not artifact["sha256"].startswith(digest_name.group(1)):
-            raise ValidationError(f"recovery artifact name does not match its digest: {artifact_path}")
-        digest_name = re.fullmatch(
-            r"interrupted-(?:write|transition)-([0-9a-f]{64})\.(?:bin|json)",
-            receipt_name,
-        )
-        if digest_name is not None and artifact["sha256"] != digest_name.group(1):
-            raise ValidationError(f"recovery artifact name does not match its digest: {artifact_path}")
-        content_name = re.fullmatch(
-            r"(?:answers|candidates|decisions|proposals)/([0-9a-f]{64})\.(?:json|md)",
-            "/".join(Path(artifact_path).parts[-2:]),
-        )
-        if content_name is not None and artifact["sha256"] != content_name.group(1):
-            raise ValidationError(f"content-addressed artifact name does not match its digest: {artifact_path}")
-        if artifact_path == SELECTION_PATH:
-            validate_committed_selection(root, manifest, read_json(path, "selection"))
-    proposal_artifact = next((item for item in artifacts if item["path"] == PROPOSAL_PATH), None)
-    if proposal_artifact is not None:
-        proposal_path = safe_relative_path(root, PROPOSAL_PATH, must_exist=True)
-        validate_committed_proposal(root, manifest, read_json(proposal_path, "proposal"))
-    transitions = manifest["transitions"]
-    if not transitions or transitions[0]["from"] != "absent":
-        raise ValidationError("manifest transition history does not start at absent")
-    expected_transition_artifacts = set()
-    previous = "absent"
-    for index, transition in enumerate(transitions, start=1):
-        edge = (transition["from"], transition["to"])
-        if transition["from"] != previous or edge not in TRANSITION_KIND_BY_EDGE:
-            raise ValidationError("manifest transition history has an invalid edge")
-        expected_path = f".pi/jig/receipts/transition-{index:04d}-{edge[1]}.json"
-        if transition["receiptPath"] != expected_path:
-            raise ValidationError("transition receipt path does not match the implemented transition")
-        expected_transition_artifacts.add(expected_path)
-        receipt_artifact = next(
-            (item for item in artifacts if item["path"] == expected_path), None
-        )
-        if (
-            receipt_artifact is None
-            or receipt_artifact["owner"] != "controller"
-            or receipt_artifact["sha256"] != transition["receiptSha256"]
-        ):
-            raise ValidationError("transition receipt artifact does not match the manifest")
-        receipt = safe_relative_path(root, expected_path, must_exist=True)
-        if sha256_file(receipt) != transition["receiptSha256"]:
-            raise ValidationError("transition receipt hash mismatch")
-        receipt_data = read_json(receipt, "transition receipt")
-        kind = validate_transition_receipt(
-            root,
-            receipt_data,
-            edge,
-            manifest["source"],
-            expected_at=transition["at"],
-        )
-        if kind == "profile-committed":
-            profile_artifact = next(
-                (item for item in artifacts if item["path"] == ".pi/jig/profile.json"), None
-            )
-            if (
-                profile_artifact is None
-                or receipt_data["profileSha256"] != profile_artifact["sha256"]
-            ):
-                raise ValidationError("profile transition receipt is inconsistent")
-        elif kind == "commandments-ratified":
-            if (
-                receipt_data["resourceIsolation"] != manifest["resourceIsolation"]
-                or receipt_data["commandmentsSha256"] != manifest["commandments"]["sha256"]
-                or receipt_data["version"] != manifest["commandments"]["version"]
-                or receipt_data["at"] != manifest["commandments"]["ratifiedAt"]
-            ):
-                raise ValidationError("COMMANDMENTS transition receipt is inconsistent with the manifest")
-        elif kind in {"verification-started", "verification-ready"}:
-            plan_artifact = next(
-                (item for item in artifacts if item["path"] == VERIFICATION_PLAN_PATH),
-                None,
-            )
-            plan = read_json(root / VERIFICATION_PLAN_PATH, "verification plan")
-            if (
-                receipt_data["resourceIsolation"] != manifest["resourceIsolation"]
-                or receipt_data["commandmentsSha256"] != manifest["commandments"]["sha256"]
-                or plan_artifact is None
-                or receipt_data["planSha256"] != plan_artifact["sha256"]
-                or receipt_data["protectedFeatureId"] != plan.get("protectedFeatureId")
-            ):
-                raise ValidationError("verification transition receipt is inconsistent with the manifest")
-            if kind == "verification-ready":
-                if (
-                    len(manifest["verification"]) != 1
-                    or receipt_data["runtimeReceiptPath"] != manifest["verification"][0]["receiptPath"]
-                ):
-                    raise ValidationError("verification-ready receipt differs from the runtime record")
-        elif kind == "step-selection-started":
-            record = manifest["verification"][0] if len(manifest["verification"]) == 1 else None
-            if (
-                receipt_data["resourceIsolation"] != manifest["resourceIsolation"]
-                or receipt_data["commandmentsSha256"] != manifest["commandments"]["sha256"]
-                or record is None
-                or receipt_data["runtimeReceiptPath"] != record["receiptPath"]
-                or receipt_data["runtimeReceiptSha256"] != next(
-                    (item["sha256"] for item in artifacts if item["path"] == record["receiptPath"]),
-                    None,
-                )
-            ):
-                raise ValidationError("step-selection transition differs from its verified boundary")
-        elif kind == "step-worker-activated":
-            worker_artifact = next((item for item in artifacts if item["path"] == WORKER_PATH), None)
-            worker = read_json(root / WORKER_PATH, "worker receipt")
-            fixed = {
-                "resourceIsolation": manifest["resourceIsolation"],
-                "commandmentsSha256": manifest["commandments"]["sha256"],
-                "selectionSha256": worker["selectionSha256"],
-                "proposalSha256": worker["proposalSha256"],
-                "beforeSha256": worker["beforeSha256"],
-                "workerSha256": worker_artifact["sha256"] if worker_artifact else None,
-                "inputRevision": worker["inputRevision"], "branch": worker["branch"],
-                "worktree": worker["worktree"],
-            }
-            if any(receipt_data.get(key) != value for key, value in fixed.items()):
-                raise ValidationError("worker activation transition differs from its authorization")
-        elif kind == "selected-step-finalized":
-            worker = read_json(root / WORKER_PATH, "worker receipt")
-            result = read_json(root / RESULT_PATH, "selected result")
-            result_artifact = next((item for item in artifacts if item["path"] == RESULT_PATH), None)
-            fixed = selected_transition_fields(manifest, worker, result,
-                result_artifact["sha256"] if result_artifact else None)
-            if any(receipt_data.get(key) != value for key, value in fixed.items()):
-                raise ValidationError("selected terminal transition differs from its result boundary")
-        elif kind == "no-candidate-finalized":
-            selection_artifact = next((item for item in artifacts if item["path"] == SELECTION_PATH), None)
-            result_artifact = next((item for item in artifacts if item["path"] == RESULT_PATH), None)
-            if (
-                receipt_data["resourceIsolation"] != manifest["resourceIsolation"]
-                or receipt_data["commandmentsSha256"] != manifest["commandments"]["sha256"]
-                or selection_artifact is None
-                or receipt_data["selectionSha256"] != selection_artifact["sha256"]
-                or result_artifact is None
-                or receipt_data["resultSha256"] != result_artifact["sha256"]
-            ):
-                raise ValidationError("no-candidate transition differs from its committed boundary")
-        previous = transition["to"]
-    transition_artifacts = {
-        path
-        for path in artifact_paths
-        if re.fullmatch(
-            r"\.pi/jig/receipts/transition-[0-9]{4}-(?:" + implemented_state + r")\.json",
-            path,
-        )
-    }
-    if transition_artifacts != expected_transition_artifacts:
-        raise ValidationError("transition receipt artifacts do not match transition history")
-    if previous != state:
-        raise ValidationError("manifest currentState does not match its last transition")
-    if state in {
-        "awaiting-commandments",
-        "failed-awaiting-commandments",
-        "commandments-ratified",
-        "failed-commandments-ratified",
-        "verification-building",
-        "failed-verification-building",
-        "verification-ready", "failed-verification-ready",
-        "step-selecting", "failed-step-selecting", "step-running",
-        "failed-step-running", "initialized",
-    }:
-        profile_artifact = next(
-            (item for item in artifacts if item["path"] == ".pi/jig/profile.json"),
-            None,
-        )
-        if profile_artifact is None:
-            raise ValidationError("COMMANDMENTS boundary has no committed profile artifact")
-        profile = read_json(root / ".pi" / "jig" / "profile.json", "profile")
-        validate_instance(profile, load_schema("profile"))
-        validate_profile_semantics(root, profile, manifest["source"]["revision"])
-    if state in {
-        "commandments-ratified",
-        "failed-commandments-ratified",
-        "verification-building",
-        "failed-verification-building",
-        "verification-ready", "failed-verification-ready",
-        "step-selecting", "failed-step-selecting", "step-running",
-        "failed-step-running", "initialized",
-    }:
-        root_path = safe_relative_path(root, COMMANDMENTS_ROOT_PATH, must_exist=True)
-        if not root_path.is_file() or root_path.is_symlink():
-            raise ValidationError("ratified COMMANDMENTS path is not a regular file")
-        digest = sha256_file(root_path)
-        metadata = validate_commandments_bytes(root_path.read_bytes())
-        commandment_record = manifest["commandments"]
-        if (
-            commandment_record["sha256"] != digest
-            or commandment_record["version"] != metadata["version"]
-            or commandment_record["ratifiedAt"] != metadata["ratifiedAt"]
-        ):
-            raise ValidationError(
-                "ratified COMMANDMENTS changed; preserve it and use the amendment and re-ratification flow"
-            )
-        artifact = next((item for item in artifacts if item["path"] == COMMANDMENTS_ROOT_PATH), None)
-        if artifact != {"path": COMMANDMENTS_ROOT_PATH, "owner": "human", "sha256": digest}:
-            raise ValidationError("ratified COMMANDMENTS artifact ownership is inconsistent")
-    if state in {
-        "verification-ready", "failed-verification-ready",
-        "step-selecting", "failed-step-selecting", "step-running",
-        "failed-step-running", "initialized",
-    }:
-        validate_verification_ready(root, manifest)
-    if state in {"step-running", "failed-step-running"}:
-        validate_step_worker(root, manifest)
-    if state == "initialized":
-        if manifest["firstStep"]["selectedCandidateId"] is None:
-            validate_no_candidate_result(root, manifest)
-        else:
-            validate_selected_step_result(root, manifest)
+        raise ValidationError("Jig manifest belongs to a different Git repository")
+    if manifest["source"] != source_record(root):
+        raise ValidationError("repository source revision or dirty summary changed after surveying")
+    for artifact in manifest["artifacts"]:
+        if artifact["owner"] not in {"controller", "human", "jig-skill"}:
+            continue
+        artifact_raw = read_contained_bytes(root, artifact["path"], f"manifest artifact {artifact['path']}")
+        if sha256_bytes(artifact_raw) != artifact["sha256"]:
+            raise ValidationError(f"manifest artifact changed: {artifact['path']}")
+    return manifest
 
 
-def receipt_value(kind: str, from_state: str, to_state: str, source: Mapping[str, Any], **extra: Any) -> Dict[str, Any]:
-    value: Dict[str, Any] = {
-        "schemaVersion": 1,
-        "kind": kind,
-        "from": from_state,
-        "to": to_state,
-        "at": now(),
-        "sourceRevision": source["revision"],
-        "sourceDirty": source["dirty"],
-        "sourceStatusSha256": sha256_bytes(canonical_json(source["statusSummary"])),
-    }
-    value.update(extra)
-    return value
-
-
-def append_transition(
-    root: Path,
-    manifest: Dict[str, Any],
-    from_state: str,
-    to_state: str,
-    kind: str,
-    **extra: Any,
-) -> None:
-    index = len(manifest["transitions"]) + 1
-    relative = f".pi/jig/receipts/transition-{index:04d}-{to_state}.json"
-    path = safe_relative_path(root, relative)
-    receipt = receipt_value(kind, from_state, to_state, manifest["source"], **extra)
-    if path.exists():
-        raise JigError(f"owned receipt path already exists: {relative}")
-    atomic_write_json(path, receipt)
-    digest = sha256_file(path)
-    manifest["transitions"].append(
-        {"from": from_state, "to": to_state, "at": receipt["at"], "receiptPath": relative, "receiptSha256": digest}
-    )
-    upsert_artifact(manifest, relative, "controller", digest)
-    manifest["currentState"] = to_state
-    manifest["updatedAt"] = receipt["at"]
-
-def append_recoverable_transition(root: Path, manifest: Dict[str, Any], from_state: str,
-    to_state: str, kind: str, **extra: Any) -> None:
-    index = len(manifest["transitions"]) + 1
-    relative = f".pi/jig/receipts/transition-{index:04d}-{to_state}.json"
-    path = safe_relative_path(root, relative)
-    if not path.exists() and not path.is_symlink():
-        append_transition(root, manifest, from_state, to_state, kind, **extra)
-        return
-    if path.is_symlink() or not path.is_file():
-        raise JigError("recoverable transition has an unknown identity")
-    receipt = read_json(path, "recoverable transition")
-    if (validate_transition_receipt(root, receipt, (from_state, to_state), manifest["source"]) != kind
-            or any(receipt.get(key) != value for key, value in extra.items())):
-        raise ValidationError("recoverable transition differs from the pending boundary")
-    digest = sha256_file(path)
-    manifest["transitions"].append({"from": from_state, "to": to_state, "at": receipt["at"],
-        "receiptPath": relative, "receiptSha256": digest})
-    upsert_artifact(manifest, relative, "controller", digest)
-    manifest["currentState"], manifest["updatedAt"] = to_state, receipt["at"]
-
-
-def detect_pi_version() -> str:
-    override = os.environ.get("JIG_PI_VERSION")
-    if override:
-        return override
-    executable = os.environ.get("PI", "pi")
-    try:
-        result = subprocess.run(
-            [executable, "--version"],
-            check=False,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
-            timeout=5,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return "unknown"
-    return result.stdout.strip().splitlines()[0] if result.returncode == 0 and result.stdout.strip() else "unknown"
+def write_manifest(root: Path, manifest: Dict[str, Any]) -> None:
+    manifest["updatedAt"] = now()
+    validate_manifest(manifest)
+    atomic_json(root, MANIFEST_PATH, manifest)
 
 
 def new_manifest(root: Path, isolation: str) -> Dict[str, Any]:
-    timestamp = now()
-    source = source_record(root)
-    manifest: Dict[str, Any] = {
+    created = now()
+    return {
         "schemaVersion": SCHEMA_VERSION,
         "repository": {"root": ".", "identity": repository_identity(root), "scope": "repository"},
-        "source": source,
-        "commandments": {"path": "COMMANDMENTS.md", "sha256": None, "version": None, "ratifiedAt": None},
+        "source": source_record(root),
+        "principle": {"path": PRINCIPLE_PATH, "sha256": None, "version": None, "ratifiedAt": None},
+        "verification": None,
         "currentState": "surveying",
         "resourceIsolation": isolation,
         "transitions": [],
         "artifacts": [],
-        "verification": [],
-        "firstStep": {
-            "selectionPath": SELECTION_PATH,
-            "selectedCandidateId": None,
-            "proposalPath": None,
-            "resultPath": None,
-            "outcome": "pending",
+        "tools": {
+            "jig": "2",
+            "pi": os.environ.get("JIG_PI_VERSION", "unknown"),
+            "python": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
         },
-        "evaluation": {"required": False, "status": "not-required", "verdictPath": None},
-        "tools": {"jig": JIG_VERSION, "pi": detect_pi_version(), "python": platform.python_version()},
-        "createdAt": timestamp,
-        "updatedAt": timestamp,
+        "createdAt": created,
+        "updatedAt": created,
     }
-    append_transition(root, manifest, "absent", "surveying", "init-started")
-    return manifest
 
 
-def load_existing_manifest(root: Path) -> Dict[str, Any]:
-    path = root / ".pi" / "jig" / "manifest.json"
-    value = read_json(path, "manifest")
-    if not isinstance(value, dict):
-        raise ValidationError("manifest is not an object")
-    validate_manifest_semantics(root, value, load_schema("manifest"))
-    return value
-
-
-def verification_reserved_paths(root: Path, manifest: Mapping[str, Any]) -> List[str]:
-    if manifest["currentState"] not in {
-        "verification-building",
-        "failed-verification-building",
-        "verification-ready",
-        "failed-verification-ready",
-        "step-selecting", "failed-step-selecting", "step-running",
-        "failed-step-running", "initialized",
-    }:
-        return []
-    plan = read_json(root / VERIFICATION_PLAN_PATH, "verification plan")
-    paths = plan.get("reservedPaths") if isinstance(plan, dict) else None
-    if not isinstance(paths, list) or any(not isinstance(item, str) for item in paths):
-        raise ValidationError("verification plan has invalid reserved paths")
-    return list(paths)
-
-
-def validate_current_source(root: Path, manifest: Mapping[str, Any]) -> None:
-    if source_record(root, verification_reserved_paths(root, manifest)) != manifest["source"]:
-        raise ValidationError(
-            "repository source revision or dirty summary changed after the recorded boundary"
-        )
-
-
-def attach_recovery_artifacts(manifest: Dict[str, Any], artifacts: Iterable[Tuple[str, str]]) -> bool:
-    before = canonical_json(manifest["artifacts"])
-    for path, digest in artifacts:
-        upsert_artifact(manifest, path, "controller", digest)
-    return before != canonical_json(manifest["artifacts"])
-
-
-def write_manifest(root: Path, manifest: Dict[str, Any]) -> None:
-    schema = load_schema("manifest")
-    validate_manifest_semantics(root, manifest, schema)
-    atomic_write_json(root / ".pi" / "jig" / "manifest.json", manifest, schema)
-
-
-def reconcile_commandments_root_temporaries(
-    root: Path, manifest: Mapping[str, Any]
-) -> List[Tuple[str, str]]:
-    if manifest["currentState"] != "awaiting-commandments":
-        return []
-    staging = load_staging(root, manifest)
-    if staging is None or not staging_artifacts_registered(manifest, staging):
-        return []
-    candidate = safe_relative_path(
-        root, staging["candidatePath"], must_exist=True
-    ).read_bytes()
-    candidate_digest = staging["candidateSha256"]
-    receipts = ensure_owned_directory(root, ".pi/jig/receipts")
-    recovered: List[Tuple[str, str]] = []
-    for path in sorted(root.iterdir()):
-        match = COMMANDMENTS_ROOT_TEMP_PATTERN.fullmatch(path.name)
-        if match is None:
-            continue
-        try:
-            details = path.lstat()
-        except OSError as error:
-            raise JigError("COMMANDMENTS temporary cannot be inspected") from error
-        if not stat.S_ISREG(details.st_mode) or details.st_size > len(candidate):
-            continue
-        raw = path.read_bytes()
-        token = match.group(1)
-        owned = (
-            token == candidate_digest
-            and bool(raw)
-            and candidate.startswith(raw)
-        )
-        if not owned:
-            continue
-        digest = sha256_bytes(raw)
-        destination = receipts / f"interrupted-write-{digest}.bin"
-        if destination.exists() or destination.is_symlink():
-            if (
-                destination.is_symlink()
-                or not destination.is_file()
-                or sha256_file(destination) != digest
-            ):
-                raise JigError(
-                    "interrupted-write evidence collides with an existing unknown file"
-                )
-            path.unlink()
-        else:
-            os.rename(path, destination)
-        recovered.append((relative_to_root(root, destination), digest))
-    return recovered
-
-
-def start(root: Path, isolation: str, lock: RepositoryLock) -> Dict[str, Any]:
-    manifest_path = root / ".pi" / "jig" / "manifest.json"
-    if manifest_path.exists():
-        if manifest_path.is_symlink():
-            raise ValidationError("manifest path is a symlink")
-        manifest = load_existing_manifest(root)
-        if manifest["resourceIsolation"] != isolation:
-            raise JigError("the existing manifest uses a different resourceIsolation route")
-        root_recovery = reconcile_commandments_root_temporaries(root, manifest)
-        validate_current_source(root, manifest)
-        recovered = (
-            root_recovery
-            + reconcile_temporary_files(root)
-            + reconcile_orphan_transitions(root, manifest)
-            + known_receipt_artifacts(root)
-        )
-        changed = attach_recovery_artifacts(manifest, recovered)
-        reconciled = False
-        state = manifest["currentState"]
-        if state == "failed-surveying":
-            append_transition(root, manifest, state, "surveying", "failed-state-reconciled")
-            changed = True
-            reconciled = True
-        elif state == "failed-awaiting-commandments":
-            append_transition(
-                root, manifest, state, "awaiting-commandments", "failed-state-reconciled"
-            )
-            changed = True
-            reconciled = True
-        elif state == "failed-commandments-ratified":
-            append_transition(
-                root, manifest, state, "commandments-ratified", "failed-state-reconciled"
-            )
-            changed = True
-            reconciled = True
-        elif state == "failed-verification-building":
-            append_transition(
-                root, manifest, state, "verification-building", "failed-state-reconciled"
-            )
-            changed = True
-            reconciled = True
-        elif state == "failed-verification-ready":
-            append_transition(
-                root, manifest, state, "verification-ready", "failed-state-reconciled"
-            )
-            changed = True
-            reconciled = True
-        elif state == "failed-step-selecting":
-            append_transition(
-                root, manifest, state, "step-selecting", "failed-state-reconciled"
-            )
-            changed = True
-            reconciled = True
-        elif state == "failed-step-running":
-            validate_step_worker(root, manifest)
-            append_transition(
-                root, manifest, state, "step-running", "failed-state-reconciled"
-            )
-            changed = True
-            reconciled = True
-        if changed:
-            if not reconciled:
-                manifest["updatedAt"] = now()
-            write_manifest(root, manifest)
-        return manifest
-    recovered = (
-        reconcile_temporary_files(root)
-        + reconcile_orphan_transitions(root, None)
-        + known_receipt_artifacts(root)
-    )
-    manifest = new_manifest(root, isolation)
-    attach_recovery_artifacts(manifest, recovered)
-    write_manifest(root, manifest)
-    return manifest
-
-
-def record_failure(root: Path, isolation: str, expected_state: str, reason: str) -> Dict[str, Any]:
-    manifest = load_existing_manifest(root)
-    if manifest["resourceIsolation"] != isolation:
-        raise JigError("the existing manifest uses a different resourceIsolation route")
-    validate_current_source(root, manifest)
-    if manifest["currentState"] != expected_state:
-        raise ValidationError(
-            f"failure expected {expected_state}, found {manifest['currentState']}"
-        )
-    clean_reason = reason.strip()
-    if not clean_reason or len(clean_reason) > 500 or "\n" in clean_reason or "\r" in clean_reason:
-        raise ValidationError("failure reason must be one line of 1 to 500 characters")
-    recovered = reconcile_orphan_transitions(root, manifest) + known_receipt_artifacts(root)
-    if attach_recovery_artifacts(manifest, recovered):
-        manifest["updatedAt"] = now()
-        write_manifest(root, manifest)
-    failed_state = f"failed-{expected_state}"
-    append_transition(
-        root,
-        manifest,
-        expected_state,
-        failed_state,
-        "phase-failed",
-        failureReason=clean_reason,
-    )
-    write_manifest(root, manifest)
-    return manifest
-
-
-def commit_profile(root: Path, isolation: str, lock: RepositoryLock, raw: bytes) -> Dict[str, Any]:
-    manifest = load_existing_manifest(root)
-    if manifest["resourceIsolation"] != isolation:
-        raise JigError("the existing manifest uses a different resourceIsolation route")
-    validate_current_source(root, manifest)
-    recovered = reconcile_orphan_transitions(root, manifest) + known_receipt_artifacts(root)
-    if attach_recovery_artifacts(manifest, recovered):
-        manifest["updatedAt"] = now()
-        write_manifest(root, manifest)
-    state = manifest["currentState"]
-    if state == "failed-surveying":
-        append_transition(root, manifest, state, "surveying", "failed-state-reconciled")
-        write_manifest(root, manifest)
-        state = "surveying"
-    profile = read_json_bytes(raw, "profile input")
-    if not isinstance(profile, dict):
-        raise ValidationError("profile input is not an object")
-    validate_instance(profile, load_schema("profile"))
-    current_source = source_record(root)
-    if current_source != manifest["source"]:
-        raise ValidationError("repository source or dirty summary changed after surveying")
-    validate_profile_semantics(root, profile, manifest["source"]["revision"])
-    profile_path = root / ".pi" / "jig" / "profile.json"
-    wanted = canonical_json(profile)
-    if state in {"awaiting-commandments", "failed-awaiting-commandments"}:
-        if not profile_path.is_file() or profile_path.is_symlink() or profile_path.read_bytes() != wanted:
-            raise ValidationError("the committed profile differs from the supplied profile")
-        if state == "failed-awaiting-commandments":
-            append_transition(root, manifest, state, "awaiting-commandments", "failed-state-reconciled")
-            write_manifest(root, manifest)
-        return manifest
-    if state != "surveying":
-        raise ValidationError(f"profile cannot be committed from state {state}")
-    if profile_path.exists():
-        if profile_path.is_symlink() or not profile_path.is_file():
-            raise ValidationError("existing profile path is not a regular file")
-        if profile_path.read_bytes() != wanted:
-            raise ValidationError("an uncommitted profile exists with different content")
+def upsert_artifact(manifest: Dict[str, Any], path: str, owner: str, digest: str) -> None:
+    record = {"path": path, "owner": owner, "sha256": digest}
+    matches = [item for item in manifest["artifacts"] if item["path"] == path]
+    if matches:
+        manifest["artifacts"][manifest["artifacts"].index(matches[0])] = record
     else:
-        atomic_write(profile_path, wanted)
-    profile_digest = sha256_file(profile_path)
-    upsert_artifact(manifest, ".pi/jig/profile.json", "jig-skill", profile_digest)
-    append_transition(
-        root,
-        manifest,
-        "surveying",
-        "awaiting-commandments",
-        "profile-committed",
-        profilePath=".pi/jig/profile.json",
-        profileSha256=profile_digest,
-        commandmentsGenerated=False,
+        manifest["artifacts"].append(record)
+    manifest["artifacts"].sort(key=lambda item: item["path"])
+
+
+def transition(root: Path, manifest: Dict[str, Any], target: str, kind: str, details: Mapping[str, Any]) -> None:
+    source = manifest["currentState"]
+    if not valid_state_edge(source, target):
+        raise ValidationError(f"invalid Jig transition {source} -> {target}")
+    receipt = {
+        "schemaVersion": SCHEMA_VERSION,
+        "kind": kind,
+        "from": source,
+        "to": target,
+        "at": now(),
+        "details": dict(details),
+    }
+    index = len(manifest["transitions"]) + 1
+    receipt_path = f".pi/jig/receipts/{index:04d}-{kind}.json"
+    safe_relative_path(root, receipt_path, create_parent=True)
+    digest = atomic_json(root, receipt_path, receipt)
+    manifest["transitions"].append(
+        {"from": source, "to": target, "at": receipt["at"], "receiptPath": receipt_path, "receiptSha256": digest}
     )
+    upsert_artifact(manifest, receipt_path, "controller", digest)
+    manifest["currentState"] = target
+
+
+def require_isolation(manifest: Mapping[str, Any], isolation: str) -> None:
+    if manifest["resourceIsolation"] != isolation:
+        expected = manifest["resourceIsolation"]
+        recovery = "jig init" if expected == "isolated-shell" else "/skill:jig init or /jig init"
+        raise ValidationError(f"route mismatch: campaign is {expected}; resume with {recovery}")
+
+
+def recover_failed(root: Path, manifest: Dict[str, Any]) -> Dict[str, Any]:
+    state = manifest["currentState"]
+    if not state.startswith("failed-"):
+        return manifest
+    target = state.removeprefix("failed-")
+    receipt = {
+        "schemaVersion": SCHEMA_VERSION,
+        "kind": "failed-state-retried",
+        "from": state,
+        "to": target,
+        "at": now(),
+        "details": {},
+    }
+    index = len(manifest["transitions"]) + 1
+    receipt_path = f".pi/jig/receipts/{index:04d}-failed-state-retried.json"
+    safe_relative_path(root, receipt_path, create_parent=True)
+    digest = atomic_json(root, receipt_path, receipt)
+    manifest["transitions"].append(
+        {"from": state, "to": target, "at": receipt["at"], "receiptPath": receipt_path, "receiptSha256": digest}
+    )
+    upsert_artifact(manifest, receipt_path, "controller", digest)
+    manifest["currentState"] = target
     write_manifest(root, manifest)
     return manifest
 
-def require_commandments_boundary(
-    root: Path, isolation: str, allowed_states: Sequence[str]
-) -> Dict[str, Any]:
-    manifest = load_existing_manifest(root)
-    if manifest["resourceIsolation"] != isolation:
-        raise JigError("the existing manifest uses a different resourceIsolation route")
-    validate_current_source(root, manifest)
-    if manifest["currentState"] not in allowed_states:
-        raise ValidationError(
-            f"COMMANDMENTS command cannot run from state {manifest['currentState']}"
-        )
+
+def start(root: Path, isolation: str) -> Dict[str, Any]:
+    path = root / MANIFEST_PATH
+    if path.exists() or path.is_symlink():
+        manifest = load_manifest(root)
+        require_isolation(manifest, isolation)
+        manifest = recover_failed(root, manifest)
+        if manifest["currentState"] == "configured":
+            validate_configured(root, manifest)
+        return manifest
+    manifest = new_manifest(root, isolation)
+    receipt = {
+        "schemaVersion": SCHEMA_VERSION,
+        "kind": "campaign-started",
+        "from": "absent",
+        "to": "surveying",
+        "at": now(),
+        "details": {"resourceIsolation": isolation, "sourceRevision": manifest["source"]["revision"]},
+    }
+    receipt_path = ".pi/jig/receipts/0001-campaign-started.json"
+    safe_relative_path(root, receipt_path, create_parent=True)
+    digest = atomic_json(root, receipt_path, receipt)
+    manifest["transitions"].append(
+        {"from": "absent", "to": "surveying", "at": receipt["at"], "receiptPath": receipt_path, "receiptSha256": digest}
+    )
+    upsert_artifact(manifest, receipt_path, "controller", digest)
+    write_manifest(root, manifest)
     return manifest
 
 
-def bounded_text(value: Any, label: str, maximum: int = 2000, allow_empty: bool = False) -> str:
+def evidence_paths(profile: Mapping[str, Any]) -> Iterable[str]:
+    for key in ("productType", "entryPoints", "existingPolicies"):
+        value = profile.get(key)
+        items = value if isinstance(value, list) else [value]
+        for item in items:
+            if isinstance(item, dict):
+                for evidence in item.get("evidence", []):
+                    if isinstance(evidence, dict) and isinstance(evidence.get("path"), str):
+                        yield evidence["path"]
+
+
+def validate_profile(root: Path, value: Any, revision: str) -> Dict[str, Any]:
+    required = {"schemaVersion", "repositoryRevision", "productType", "entryPoints", "existingPolicies", "unknowns"}
+    if not isinstance(value, dict) or set(value) != required or value["schemaVersion"] != SCHEMA_VERSION:
+        raise ValidationError("repository profile has the wrong v2 shape")
+    if value["repositoryRevision"] != revision:
+        raise ValidationError("repository profile revision differs from the campaign source")
+    if not isinstance(value["productType"], dict) or not isinstance(value["entryPoints"], list):
+        raise ValidationError("repository profile observations are invalid")
+    if not isinstance(value["existingPolicies"], list) or not isinstance(value["unknowns"], list):
+        raise ValidationError("repository profile policy observations are invalid")
+    observations = [value["productType"], *value["entryPoints"], *value["existingPolicies"]]
+    for observation in observations:
+        if (
+            not isinstance(observation, dict)
+            or set(observation) != {"value", "evidence"}
+            or not isinstance(observation["evidence"], list)
+            or not observation["evidence"]
+        ):
+            raise ValidationError("repository profile observation has the wrong shape")
+        bounded_text(observation["value"], "profile observation", limit=2000)
+        for evidence in observation["evidence"]:
+            if (
+                not isinstance(evidence, dict)
+                or set(evidence) != {"path", "line", "note"}
+                or not isinstance(evidence["line"], int)
+                or isinstance(evidence["line"], bool)
+                or evidence["line"] < 1
+            ):
+                raise ValidationError("repository profile evidence has the wrong shape")
+            bounded_text(evidence["path"], "profile evidence path", limit=1000)
+            bounded_text(evidence["note"], "profile evidence note", limit=2000)
+    for unknown in value["unknowns"]:
+        if not isinstance(unknown, dict) or set(unknown) != {"question", "reason"}:
+            raise ValidationError("repository profile unknown has the wrong shape")
+        bounded_text(unknown["question"], "profile unknown question", limit=2000)
+        bounded_text(unknown["reason"], "profile unknown reason", limit=2000)
+    for relative in evidence_paths(value):
+        path = safe_relative_path(root, relative, must_exist=True)
+        if not path.is_file() or path.is_symlink():
+            raise ValidationError(f"profile evidence is not a regular file: {relative}")
+    return dict(value)
+
+
+def commit_profile(root: Path, isolation: str, raw: bytes) -> Dict[str, Any]:
+    manifest = load_manifest(root)
+    require_isolation(manifest, isolation)
+    if manifest["currentState"] == "awaiting-principles":
+        return manifest
+    if manifest["currentState"] != "surveying":
+        raise ValidationError("profile can only be committed while surveying")
+    profile = validate_profile(root, read_json_bytes(raw, "repository profile"), manifest["source"]["revision"])
+    safe_relative_path(root, PROFILE_PATH, create_parent=True)
+    digest = atomic_json(root, PROFILE_PATH, profile)
+    upsert_artifact(manifest, PROFILE_PATH, "jig-skill", digest)
+    transition(root, manifest, "awaiting-principles", "profile-committed", {"profileSha256": digest})
+    write_manifest(root, manifest)
+    return manifest
+
+
+def bounded_text(value: Any, label: str, *, allow_empty: bool = False, limit: int = MAX_TEXT) -> str:
     if not isinstance(value, str):
         raise ValidationError(f"{label} must be text")
-    if value != value.strip():
-        raise ValidationError(f"{label} must not have leading or trailing whitespace")
-    if not allow_empty and not value:
-        raise ValidationError(f"{label} must not be empty")
-    if len(value.encode("utf-8")) > maximum:
-        raise ValidationError(f"{label} is too long")
-    if any(ord(character) < 32 or 127 <= ord(character) <= 159 for character in value):
-        raise ValidationError(f"{label} contains a control character")
-    if "{{" in value or "}}" in value or "TEMPLATE, NOT RATIFIED" in value:
-        raise ValidationError(f"{label} contains a template marker")
+    if not allow_empty and not value.strip():
+        raise ValidationError(f"{label} is empty")
+    if len(value) > limit or any(ord(char) < 32 and char not in "\n\t" for char in value):
+        raise ValidationError(f"{label} is too large or contains control characters")
     return value
 
 
-def string_list(value: Any, label: str) -> List[str]:
-    if not isinstance(value, list) or not value or len(value) > 20:
-        raise ValidationError(f"{label} must be a non-empty list with at most 20 items")
-    result = [bounded_text(item, f"{label} item", 500) for item in value]
+def text_list(value: Any, label: str, *, minimum: int = 1) -> List[str]:
+    if not isinstance(value, list) or len(value) < minimum:
+        raise ValidationError(f"{label} must contain at least {minimum} item")
+    result = [bounded_text(item, label, limit=1000) for item in value]
     if len(result) != len(set(result)):
-        raise ValidationError(f"{label} contains duplicate items")
+        raise ValidationError(f"{label} contains duplicates")
     return result
 
 
-def exact_text_object(
-    value: Any, label: str, fields: Sequence[str]
-) -> Dict[str, str]:
-    if not isinstance(value, dict) or set(value) != set(fields):
-        raise ValidationError(f"{label} must contain exactly {', '.join(fields)}")
-    return {field: bounded_text(value[field], f"{label}.{field}", 1000) for field in fields}
-
-
-def copy_json_value(value: Any) -> Any:
-    return json.loads(json.dumps(value, allow_nan=False))
-
-
-def validate_commandments_answers(value: Any) -> Tuple[Dict[str, Any], Dict[str, str]]:
-    expected = set(COMMANDMENTS_ANSWER_KEYS) | {"schemaVersion", "freeTextAmendments"}
-    if not isinstance(value, dict) or set(value) != expected:
-        raise ValidationError("COMMANDMENTS answers are incomplete or contain unknown keys")
-    if type(value["schemaVersion"]) is not int or value["schemaVersion"] != 1:
-        raise ValidationError("COMMANDMENTS answers use an unsupported schema version")
-    validators = {
-        "requiredInitOutcome": lambda item: bounded_text(item, "requiredInitOutcome", 2000),
-        "hardForbiddenOutcomes": lambda item: string_list(item, "hardForbiddenOutcomes"),
-        "protectedUserPath": lambda item: exact_text_object(
-            item,
-            "protectedUserPath",
-            ("action", "visibleResult", "evidence", "cleanup", "thresholds"),
-        ),
-        "proofPolicy": lambda item: exact_text_object(
-            item,
-            "proofPolicy",
-            (
-                "baselineRequirement",
-                "targetedVerification",
-                "productRegressionFloor",
-                "seededGuardProof",
-                "independentReview",
-                "behavioralEval",
-            ),
-        ),
-        "compatibilityPolicy": lambda item: bounded_text(item, "compatibilityPolicy", 2000),
-        "autonomyPolicy": lambda item: string_list(item, "autonomyPolicy"),
-        "tradeoffOrder": lambda item: string_list(item, "tradeoffOrder"),
-        "authority": lambda item: exact_text_object(
-            item,
-            "authority",
-            ("owner", "exceptions", "amendmentPolicy", "ratificationMarker"),
-        ),
-    }
-    resolved: Dict[str, Any] = {}
-    modes: Dict[str, str] = {}
-    for key in COMMANDMENTS_ANSWER_KEYS:
-        choice = value[key]
-        if not isinstance(choice, dict) or choice.get("selection") not in {"default", "custom"}:
-            raise ValidationError(f"{key} must explicitly select default or custom")
-        selection = choice["selection"]
-        if selection == "default":
-            if set(choice) != {"selection"}:
-                raise ValidationError(f"{key} default selection must not contain a value")
-            selected = copy_json_value(COMMANDMENTS_DEFAULTS[key])
-        else:
-            if set(choice) != {"selection", "value"}:
-                raise ValidationError(f"{key} custom selection must contain exactly one value")
-            selected = choice["value"]
-        resolved[key] = validators[key](selected)
-        modes[key] = selection
-    resolved["freeTextAmendments"] = bounded_text(
-        value["freeTextAmendments"],
+def validate_answers(value: Any) -> Dict[str, Any]:
+    required = {
+        "schemaVersion",
+        "protectedUserPaths",
+        "forbiddenOutcomes",
+        "compatibilityPolicy",
+        "priorityTradeoffs",
+        "authority",
         "freeTextAmendments",
-        4000,
-        allow_empty=True,
-    )
-    return resolved, modes
-
-
-def commandments_template_bytes() -> bytes:
-    path = Path(__file__).resolve().parent.parent / COMMANDMENTS_TEMPLATE
-    try:
-        return path.read_bytes()
-    except OSError as error:
-        raise ValidationError("the checked-in COMMANDMENTS template cannot be read") from error
-
-
-def render_commandments_candidate(
-    resolved: Mapping[str, Any], ratified_at: str, version: int = 1
-) -> bytes:
-    if not valid_datetime(ratified_at):
-        raise ValidationError("prospective ratification timestamp is invalid")
-    protected = resolved["protectedUserPath"]
-    proof = resolved["proofPolicy"]
-    authority = resolved["authority"]
-    replacements = {
-        "{{OWNER}}": authority["owner"],
-        "{{RATIFIED_AT}}": ratified_at,
-        "{{VERSION}}": str(version),
-        "{{REQUIRED_OUTCOME}}": resolved["requiredInitOutcome"],
-        "{{REQUIRED_OUTCOME_PROOF}}": (
-            proof["targetedVerification"] + " " + proof["productRegressionFloor"]
-        ),
-        "{{EXCEPTIONS}}": authority["exceptions"],
-        "{{FORBIDDEN_OUTCOMES}}": " ".join(resolved["hardForbiddenOutcomes"]),
-        "{{PROTECTED_ACTION}}": protected["action"],
-        "{{PROTECTED_RESULT}}": protected["visibleResult"],
-        "{{PROTECTED_EVIDENCE}}": protected["evidence"],
-        "{{PROTECTED_CLEANUP}}": protected["cleanup"],
-        "{{PROTECTED_THRESHOLDS}}": protected["thresholds"],
-        "{{PROOF_BASELINE}}": proof["baselineRequirement"],
-        "{{PROOF_TARGETED}}": proof["targetedVerification"],
-        "{{PROOF_REGRESSION}}": proof["productRegressionFloor"],
-        "{{PROOF_SEEDED}}": proof["seededGuardProof"],
-        "{{PROOF_REVIEW}}": proof["independentReview"],
-        "{{PROOF_BEHAVIORAL}}": proof["behavioralEval"],
-        "{{COMPATIBILITY}}": resolved["compatibilityPolicy"],
-        "{{AUTONOMY}}": "\n".join(
-            f"- {item}" for item in resolved["autonomyPolicy"]
-        ),
-        "{{TRADEOFF_ORDER}}": "\n".join(
-            f"{index}. {item}"
-            for index, item in enumerate(resolved["tradeoffOrder"], start=1)
-        ),
-        "{{AMENDMENT_POLICY}}": authority["amendmentPolicy"],
-        "{{FREE_TEXT_AMENDMENTS}}": resolved["freeTextAmendments"] or "None.",
-        "{{RATIFICATION_MARKER}}": authority["ratificationMarker"],
     }
-    text = commandments_template_bytes().decode("utf-8")
-    for marker, replacement in replacements.items():
-        text = text.replace(marker, replacement)
-    raw = text.encode("utf-8")
-    validate_commandments_bytes(raw)
-    return raw
+    if not isinstance(value, dict) or set(value) != required or value["schemaVersion"] != SCHEMA_VERSION:
+        raise ValidationError("repository principle answers have the wrong v2 shape")
+    protected = value["protectedUserPaths"]
+    if not isinstance(protected, list) or not protected:
+        raise ValidationError("protectedUserPaths must contain at least one path")
+    normalized_paths = []
+    for item in protected:
+        if not isinstance(item, dict) or set(item) != {"name", "action", "visibleResult", "thresholds"}:
+            raise ValidationError("a protected user path has the wrong shape")
+        normalized_paths.append({key: bounded_text(item[key], f"protectedUserPaths.{key}", limit=2000) for key in item})
+    authority = value["authority"]
+    if not isinstance(authority, dict) or set(authority) != {
+        "owner", "exceptions", "amendmentPolicy", "ratificationMarker"
+    }:
+        raise ValidationError("authority has the wrong shape")
+    normalized_authority = {
+        "owner": bounded_text(authority["owner"], "authority.owner", limit=500),
+        "exceptions": text_list(authority["exceptions"], "authority.exceptions"),
+        "amendmentPolicy": bounded_text(authority["amendmentPolicy"], "authority.amendmentPolicy", limit=2000),
+        "ratificationMarker": bounded_text(authority["ratificationMarker"], "authority.ratificationMarker", limit=300),
+    }
+    return {
+        "schemaVersion": SCHEMA_VERSION,
+        "protectedUserPaths": normalized_paths,
+        "forbiddenOutcomes": text_list(value["forbiddenOutcomes"], "forbiddenOutcomes"),
+        "compatibilityPolicy": bounded_text(value["compatibilityPolicy"], "compatibilityPolicy"),
+        "priorityTradeoffs": text_list(value["priorityTradeoffs"], "priorityTradeoffs"),
+        "authority": normalized_authority,
+        "freeTextAmendments": bounded_text(value["freeTextAmendments"], "freeTextAmendments", allow_empty=True),
+    }
 
 
-def validate_commandments_bytes(raw: bytes) -> Dict[str, Any]:
-    if not raw or len(raw) > 256 * 1024:
-        raise ValidationError("COMMANDMENTS bytes are empty or too large")
+def bullet(value: str) -> str:
+    return value.replace("\r", "").replace("\n", " ").strip()
+
+
+def render_principle(answers: Mapping[str, Any], ratified_at: str, version: int) -> bytes:
+    owner = bullet(answers["authority"]["owner"])
+    lines = [
+        "---",
+        "name: principle-repository",
+        "description: Repository-specific priorities, protected paths, and constraints. Use for every nontrivial task in this repository after poteto-mode Principles.",
+        "disable-model-invocation: false",
+        "---",
+        "",
+        "# Repository Principles",
+        "",
+        "Status: RATIFIED",
+        f"Owner: {owner}",
+        f"Ratified at: {ratified_at}",
+        f"Version: {version}",
+        "",
+        "This skill is human-owned. Agents may propose amendments under `.pi/jig/principles/proposals/`. They may not edit this file.",
+        "",
+        "## Protected user paths",
+        "",
+    ]
+    for index, item in enumerate(answers["protectedUserPaths"], 1):
+        lines.extend(
+            [
+                f"### RP-{100 + index:03d}. {bullet(item['name'])}",
+                "",
+                f"Action: {bullet(item['action'])}",
+                "",
+                f"Visible result: {bullet(item['visibleResult'])}",
+                "",
+                f"Thresholds: {bullet(item['thresholds'])}",
+                "",
+            ]
+        )
+    lines.extend(["## Forbidden outcomes", ""])
+    for item in answers["forbiddenOutcomes"]:
+        lines.append(f"- {bullet(item)}")
+    lines.extend(["", "## Compatibility policy", "", answers["compatibilityPolicy"].strip(), "", "## Priority tradeoffs", ""])
+    for index, item in enumerate(answers["priorityTradeoffs"], 1):
+        lines.append(f"{index}. {bullet(item)}")
+    lines.extend(["", "## Authority and exceptions", "", f"Owner: {owner}", "", "Exceptions:"])
+    for item in answers["authority"]["exceptions"]:
+        lines.append(f"- {bullet(item)}")
+    lines.extend(
+        [
+            "",
+            f"Amendment policy: {answers['authority']['amendmentPolicy'].strip()}",
+            "",
+            "## Interview amendments",
+            "",
+            answers["freeTextAmendments"].strip() or "None.",
+            "",
+            "## Ratification",
+            "",
+            f"Human marker: {bullet(answers['authority']['ratificationMarker'])}",
+            "",
+        ]
+    )
+    return "\n".join(lines).encode("utf-8")
+
+
+def parse_frontmatter(raw: bytes, expected_name: Optional[str] = None) -> Tuple[str, str]:
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError as error:
-        raise ValidationError("COMMANDMENTS bytes are not UTF-8") from error
-    if (
-        not text.endswith("\n")
-        or "{{" in text
-        or "}}" in text
-        or "TEMPLATE, NOT RATIFIED" in text
-    ):
-        raise ValidationError(
-            "COMMANDMENTS contains a template marker or lacks its final newline"
-        )
-    if any(
-        (ord(character) < 32 and character != "\n")
-        or 127 <= ord(character) <= 159
-        for character in text
-    ):
-        raise ValidationError("COMMANDMENTS contains a control character")
-    required_sections = (
-        "# Repository COMMANDMENTS",
-        "## Hard commandments",
-        "## Directional commandments",
-        "## Protected user path",
-        "## Proof policy",
-        "## Compatibility policy",
-        "## Autonomy policy",
-        "## Tradeoff order",
-        "## Amendment policy",
-        "## Ratification",
-    )
-    section_positions = []
-    for section in required_sections:
-        matches = list(
-            re.finditer(rf"^{re.escape(section)}$", text, flags=re.MULTILINE)
-        )
-        if len(matches) != 1:
-            raise ValidationError(
-                "COMMANDMENTS does not match the checked-in section structure"
-            )
-        section_positions.append(matches[0].start())
-    if section_positions != sorted(section_positions):
-        raise ValidationError("COMMANDMENTS sections are out of order")
-    id_matches = list(
-        re.finditer(r"^### (CMD-[0-9]{3})\. .+$", text, flags=re.MULTILINE)
-    )
-    ids = [match.group(1) for match in id_matches]
-    if ids != ["CMD-001", "CMD-002", "CMD-101", "CMD-102"]:
-        raise ValidationError(
-            "COMMANDMENTS has missing, duplicate, or unstable commandment IDs"
-        )
-    hard_start = section_positions[1]
-    directional_start = section_positions[2]
-    protected_start = section_positions[3]
-    if not (
-        hard_start < id_matches[0].start() < id_matches[1].start() < directional_start
-        < id_matches[2].start() < id_matches[3].start() < protected_start
-    ):
-        raise ValidationError(
-            "COMMANDMENTS hard and directional entries are misplaced"
-        )
-    block_ends = (
-        id_matches[1].start(),
-        directional_start,
-        id_matches[3].start(),
-        protected_start,
-    )
-    labels = ("Statement", "Scope", "Priority", "Proof", "Exceptions", "Owner")
-    for match, end in zip(id_matches, block_ends):
-        block = text[match.start():end]
-        for label in labels:
-            values = re.findall(
-                rf"^\*\*{label}\.\*\* (.+)$", block, flags=re.MULTILINE
-            )
-            if len(values) != 1:
-                raise ValidationError(
-                    f"COMMANDMENTS {match.group(1)} has an invalid {label} field"
-                )
-            bounded_text(
-                values[0], f"COMMANDMENTS {match.group(1)} {label}", 4000
-            )
-
-    def section_lines(index: int) -> List[str]:
-        start = text.index("\n", section_positions[index]) + 1
-        end = (
-            section_positions[index + 1]
-            if index + 1 < len(section_positions)
-            else len(text)
-        )
-        return [line for line in text[start:end].splitlines() if line]
-
-    def ordered_values(
-        index: int, labels: Sequence[str], pattern: str, kind: str
-    ) -> List[str]:
-        lines = section_lines(index)
-        values = []
-        positions = []
-        for label in labels:
-            matches = [
-                (line_index, match.group(1))
-                for line_index, line in enumerate(lines)
-                for match in [re.fullmatch(pattern.format(label=re.escape(label)), line)]
-                if match is not None
-            ]
-            if len(matches) != 1:
-                raise ValidationError(
-                    f"COMMANDMENTS {kind} has an invalid {label} field"
-                )
-            positions.append(matches[0][0])
-            values.append(
-                bounded_text(
-                    matches[0][1], f"COMMANDMENTS {kind} {label}", 4000
-                )
-            )
-        if positions != sorted(positions) or len(lines) != len(labels):
-            raise ValidationError(f"COMMANDMENTS {kind} fields are misplaced")
-        return values
-
-    ordered_values(
-        3,
-        ("Action", "Visible result", "Evidence", "Cleanup", "Thresholds"),
-        r"\*\*{label}\.\*\* (.+)",
-        "protected user path",
-    )
-    ordered_values(
-        4,
-        (
-            "Baseline requirement",
-            "Targeted verification",
-            "Product regression floor",
-            "Seeded guard proof",
-            "Independent review",
-            "Behavioral eval",
-        ),
-        r"- {label}: (.+)",
-        "proof policy",
-    )
-    compatibility = section_lines(5)
-    if not compatibility:
-        raise ValidationError("COMMANDMENTS compatibility policy is empty")
-    for line in compatibility:
-        bounded_text(line, "COMMANDMENTS compatibility policy", 4000)
-    autonomy_lines = section_lines(6)
-    autonomy = []
-    for line in autonomy_lines:
-        match = re.fullmatch(r"- (.+)", line)
-        if match is None:
-            raise ValidationError("COMMANDMENTS autonomy policy is malformed")
-        autonomy.append(
-            bounded_text(match.group(1), "COMMANDMENTS autonomy policy", 1000)
-        )
-    if not autonomy or len(autonomy) != len(set(autonomy)):
-        raise ValidationError("COMMANDMENTS autonomy policy is empty or duplicated")
-    tradeoff_lines = section_lines(7)
-    tradeoffs = []
-    numbers = []
-    for line in tradeoff_lines:
-        match = re.fullmatch(r"([1-9][0-9]*)\. (.+)", line)
-        if match is None:
-            raise ValidationError("COMMANDMENTS tradeoff order is malformed")
-        numbers.append(int(match.group(1)))
-        tradeoffs.append(
-            bounded_text(match.group(2), "COMMANDMENTS tradeoff entry", 1000)
-        )
-    if (
-        not tradeoffs
-        or numbers != list(range(1, len(numbers) + 1))
-        or len(tradeoffs) != len(set(tradeoffs))
-    ):
-        raise ValidationError("COMMANDMENTS tradeoff order is empty or ambiguous")
-    amendment_lines = section_lines(8)
-    amendment_prefix = "Free-text amendments from the interview: "
-    if (
-        len(amendment_lines) < 2
-        or not amendment_lines[-1].startswith(amendment_prefix)
-        or sum(line.startswith(amendment_prefix) for line in amendment_lines) != 1
-    ):
-        raise ValidationError("COMMANDMENTS amendment policy is incomplete")
-    for line in amendment_lines[:-1]:
-        bounded_text(line, "COMMANDMENTS amendment policy", 4000)
-    bounded_text(
-        amendment_lines[-1][len(amendment_prefix):],
-        "COMMANDMENTS free-text amendments",
-        4000,
-    )
-
-    def unique_line(label: str, pattern: str) -> re.Match[str]:
-        matches = list(re.finditer(pattern, text, flags=re.MULTILINE))
-        if len(matches) != 1:
-            raise ValidationError(f"COMMANDMENTS {label} metadata is invalid")
-        return matches[0]
-    status = unique_line("status", r"^Status: (.+)$")
-    owner = unique_line("owner", r"^Owner: (.+)$")
-    timestamp = unique_line("timestamp", r"^Ratified at: (.+)$")
-    version = unique_line("version", r"^Version: ([0-9]+)$")
-    scope = unique_line("scope", r"^Scope: (.+)$")
-    marker = unique_line("ratification marker", r"^Human note: (.+)$")
-    decision = unique_line("decision", r"^Human decision: (.+)$")
-    if (
-        status.group(1) != "RATIFIED"
-        or decision.group(1) != "ratified"
-        or not (
-            section_positions[0] == 0
-            and section_positions[0] < status.start() < owner.start()
-            < timestamp.start() < version.start() < scope.start() < hard_start
-            and section_positions[-1] < decision.start() < marker.start()
-        )
-    ):
-        raise ValidationError("COMMANDMENTS ratification metadata is incomplete")
-    if not valid_datetime(timestamp.group(1)):
-        raise ValidationError("COMMANDMENTS ratification timestamp is invalid")
-    parsed_version = int(version.group(1))
-    if parsed_version < 1:
-        raise ValidationError("COMMANDMENTS version is invalid")
-    bounded_text(owner.group(1), "COMMANDMENTS owner", 1000)
-    bounded_text(scope.group(1), "COMMANDMENTS scope", 2000)
-    bounded_text(marker.group(1), "COMMANDMENTS ratification marker", 200)
-    return {
-        "owner": owner.group(1),
-        "ratifiedAt": timestamp.group(1),
-        "version": parsed_version,
-        "marker": marker.group(1),
-    }
+        raise ValidationError("skill is not UTF-8") from error
+    if not text.startswith("---\n") or "\n---\n" not in text[4:]:
+        raise ValidationError("skill lacks valid frontmatter")
+    frontmatter = text.split("\n---\n", 1)[0].removeprefix("---\n")
+    values = {}
+    for line in frontmatter.splitlines():
+        key, separator, value = line.partition(":")
+        if separator:
+            values[key.strip()] = value.strip().strip('"')
+    name = values.get("name", "")
+    description = values.get("description", "")
+    if not SKILL_NAME.fullmatch(name) or not description:
+        raise ValidationError("skill frontmatter name or description is invalid")
+    if expected_name and name != expected_name:
+        raise ValidationError(f"skill name must be {expected_name}")
+    return name, description
 
 
-def fixed_artifact_path(root: Path, relative: str, create_parent: bool = True) -> Path:
-    pure = PurePosixPath(relative)
-    if create_parent and len(pure.parts) > 1:
-        ensure_owned_directory(root, "/".join(pure.parts[:-1]))
-    path = safe_relative_path(root, relative)
-    if path.exists() or path.is_symlink():
-        try:
-            mode = path.lstat().st_mode
-        except OSError as error:
-            raise ValidationError(f"artifact path cannot be inspected: {relative}") from error
-        if stat.S_ISLNK(mode) or not stat.S_ISREG(mode):
-            raise ValidationError(f"artifact path is not a regular file: {relative}")
-    return path
-
-
-def write_exact_artifact(root: Path, relative: str, raw: bytes) -> str:
-    path = fixed_artifact_path(root, relative)
-    if path.exists():
-        if path.read_bytes() != raw:
-            raise ValidationError(f"content-addressed artifact collision: {relative}")
-    else:
-        atomic_write(path, raw)
-    return sha256_bytes(raw)
-
-
-def content_addressed_artifact(
-    root: Path, directory: str, suffix: str, raw: bytes
-) -> Tuple[str, str]:
-    digest = sha256_bytes(raw)
-    relative = f".pi/jig/commandments/{directory}/{digest}.{suffix}"
-    write_exact_artifact(root, relative, raw)
-    return relative, digest
-
-
-def interview_value(
-    profile: Mapping[str, Any], profile_digest: str, isolation: str
-) -> Dict[str, Any]:
-    observed = {
-        "repositoryRevision": profile["repositoryRevision"],
-        "profilePath": ".pi/jig/profile.json",
-        "profileSha256": profile_digest,
-        "productType": profile["productType"],
-        "languages": profile["languages"],
-        "frameworks": profile["frameworks"],
-        "buildTools": profile["buildTools"],
-        "ci": profile["ci"],
-        "entryPoints": profile["entryPoints"],
-        "topology": profile["topology"],
-        "unknowns": profile["unknowns"],
-    }
-    prompts = {
-        "requiredInitOutcome": "Which result must jig init guarantee before success?",
-        "hardForbiddenOutcomes": "Which outcomes must init never permit?",
-        "protectedUserPath": "Which user path and visible result must init protect?",
-        "proofPolicy": "Which evidence is required before the first improvement is kept?",
-        "compatibilityPolicy": "Which compatibility breaks are acceptable?",
-        "autonomyPolicy": "What may the coordinator do without another question?",
-        "tradeoffOrder": "How should init rank goals when they conflict?",
-        "authority": "Who owns exceptions, amendments, and the ratification marker?",
-    }
-    questions = [
-        {
-            "answerKey": key,
-            "prompt": prompts[key],
-            "recommendedDefault": copy_json_value(COMMANDMENTS_DEFAULTS[key]),
-            "answerRule": "Select default explicitly or supply a custom value.",
-        }
-        for key in COMMANDMENTS_ANSWER_KEYS
-    ]
-    return {
-        "schemaVersion": 1,
-        "kind": "commandments-interview",
-        "round": 1,
-        "resourceIsolation": isolation,
-        "routeNotice": (
-            "This current session has inherited project resources that cannot be unloaded."
-            if isolation == "inherited-session"
-            else "The shell-started session disabled discovered project resources."
-        ),
-        "observedFacts": observed,
-        "questions": questions,
-        "freeTextAmendments": {
-            "prompt": "Name any amendment not captured above.",
-            "required": False,
-            "default": "",
-        },
-        "candidateInputPath": ".pi/jig/commandments/answers.input.json",
-        "rules": [
-            "Recommended defaults are not answers unless the operator selects them.",
-            "Missing or partial answers remain unresolved.",
-            "Do not start a second interview round.",
-        ],
-    }
-
-
-def present_commandments(root: Path, isolation: str) -> Dict[str, Any]:
-    manifest = require_commandments_boundary(
-        root,
-        isolation,
-        ("awaiting-commandments", "commandments-ratified"),
-    )
-    if manifest["currentState"] == "commandments-ratified":
-        return {
-            "state": "commandments-ratified",
-            "alreadyRatified": True,
-            "sha256": manifest["commandments"]["sha256"],
-        }
-    profile_path = root / ".pi" / "jig" / "profile.json"
-    profile = read_json(profile_path, "profile")
-    raw = canonical_json(
-        interview_value(profile, sha256_file(profile_path), isolation)
-    )
-    path = fixed_artifact_path(root, COMMANDMENTS_INTERVIEW_PATH)
-    if path.exists() and path.read_bytes() != raw:
-        raise ValidationError("the durable COMMANDMENTS interview differs from the repository profile")
-    if not path.exists():
-        atomic_write(path, raw)
-    digest = sha256_bytes(raw)
-    artifact = next(
-        (item for item in manifest["artifacts"] if item["path"] == COMMANDMENTS_INTERVIEW_PATH),
-        None,
-    )
-    if artifact != {"path": COMMANDMENTS_INTERVIEW_PATH, "owner": "controller", "sha256": digest}:
-        upsert_artifact(manifest, COMMANDMENTS_INTERVIEW_PATH, "controller", digest)
-        manifest["updatedAt"] = now()
-        write_manifest(root, manifest)
-    return read_json_bytes(raw, "COMMANDMENTS interview")
-
-
-def load_staging(
-    root: Path, manifest: Optional[Mapping[str, Any]] = None
-) -> Optional[Dict[str, Any]]:
-    path = root / COMMANDMENTS_STAGING_PATH
-    if not path.exists() and not path.is_symlink():
-        return None
-    fixed_artifact_path(root, COMMANDMENTS_STAGING_PATH)
-    value = read_json(path, "COMMANDMENTS staging record")
-    expected = {
-        "schemaVersion",
-        "kind",
-        "answersPath",
-        "answersSha256",
-        "choiceModes",
-        "candidatePath",
-        "candidateSha256",
-        "version",
-        "prospectiveRatifiedAt",
-        "intendedMarker",
-        "sourceRevision",
-        "interviewSha256",
-        "previousCandidateSha256",
-        "adoptedExisting",
-    }
-    if not isinstance(value, dict) or set(value) != expected:
-        raise ValidationError("COMMANDMENTS staging record has an invalid shape")
-    if (
-        type(value["schemaVersion"]) is not int
-        or value["schemaVersion"] != 1
-        or value["kind"] != "commandments-staged"
-        or type(value["version"]) is not int
-        or value["version"] < 1
-        or type(value["adoptedExisting"]) is not bool
-        or (
-            value["previousCandidateSha256"] is not None
-            and (
-                not isinstance(value["previousCandidateSha256"], str)
-                or re.fullmatch(
-                    r"[0-9a-f]{64}", value["previousCandidateSha256"]
-                )
-                is None
-            )
-        )
-        or not isinstance(value["sourceRevision"], str)
-        or re.fullmatch(r"[0-9a-f]{40,64}", value["sourceRevision"]) is None
-        or not isinstance(value["interviewSha256"], str)
-        or re.fullmatch(r"[0-9a-f]{64}", value["interviewSha256"]) is None
-        or not isinstance(value["choiceModes"], dict)
-        or set(value["choiceModes"]) != set(COMMANDMENTS_ANSWER_KEYS)
-        or any(
-            mode not in {"default", "custom"}
-            for mode in value["choiceModes"].values()
-        )
-    ):
-        raise ValidationError("COMMANDMENTS staging record has invalid metadata")
-    if manifest is not None:
-        interview = next(
-            (
-                item
-                for item in manifest["artifacts"]
-                if item["path"] == COMMANDMENTS_INTERVIEW_PATH
-            ),
-            None,
-        )
-        if (
-            value["sourceRevision"] != manifest["source"]["revision"]
-            or interview is None
-            or value["interviewSha256"] != interview["sha256"]
-        ):
-            raise ValidationError(
-                "COMMANDMENTS staging record differs from its manifest boundary"
-            )
-    bounded_text(value["intendedMarker"], "staged ratification marker", 200)
-    if not isinstance(value["prospectiveRatifiedAt"], str) or not valid_datetime(
-        value["prospectiveRatifiedAt"]
-    ):
-        raise ValidationError("COMMANDMENTS staging record has an invalid timestamp")
-    for directory, path_key, digest_key, suffix in (
-        ("answers", "answersPath", "answersSha256", "json"),
-        ("candidates", "candidatePath", "candidateSha256", "md"),
-    ):
-        digest = value[digest_key]
-        expected_path = f".pi/jig/commandments/{directory}/{digest}.{suffix}"
-        if (
-            not isinstance(digest, str)
-            or re.fullmatch(r"[0-9a-f]{64}", digest) is None
-            or value[path_key] != expected_path
-        ):
-            raise ValidationError(
-                "COMMANDMENTS staging record has an invalid content address"
-            )
-        artifact_path = safe_relative_path(root, expected_path, must_exist=True)
-        if (
-            artifact_path.is_symlink()
-            or not artifact_path.is_file()
-            or sha256_file(artifact_path) != digest
-        ):
-            raise ValidationError("COMMANDMENTS staging artifact hash changed")
-    answers = read_json(
-        root / value["answersPath"], "staged COMMANDMENTS answers"
-    )
-    resolved, modes = validate_commandments_answers(answers)
-    if modes != value["choiceModes"]:
-        raise ValidationError(
-            "COMMANDMENTS staging choice evidence is inconsistent"
-        )
-    candidate_raw = (root / value["candidatePath"]).read_bytes()
-    metadata = validate_commandments_bytes(candidate_raw)
-    if (
-        metadata["version"] != value["version"]
-        or metadata["ratifiedAt"] != value["prospectiveRatifiedAt"]
-    ):
-        raise ValidationError(
-            "COMMANDMENTS staging candidate metadata is inconsistent"
-        )
-    if not (
-        resolved["authority"]["ratificationMarker"]
-        == value["intendedMarker"]
-        == metadata["marker"]
-    ):
-        raise ValidationError(
-            "COMMANDMENTS staging answer and candidate markers are inconsistent"
-        )
-    if value["adoptedExisting"]:
-        root_path = fixed_artifact_path(
-            root, COMMANDMENTS_ROOT_PATH, create_parent=False
-        )
-        if not root_path.exists() or root_path.read_bytes() != candidate_raw:
-            raise ValidationError(
-                "adopted COMMANDMENTS staging no longer matches the root file"
-            )
-    else:
-        expected_candidate = render_commandments_candidate(
-            resolved,
-            value["prospectiveRatifiedAt"],
-            value["version"],
-        )
-        if (
-            expected_candidate != candidate_raw
-            or sha256_bytes(expected_candidate) != value["candidateSha256"]
-        ):
-            raise ValidationError(
-                "generated COMMANDMENTS staging differs from its exact answers"
-            )
-    return value
-
-
-def staging_artifacts_registered(
-    manifest: Mapping[str, Any], staging: Mapping[str, Any]
-) -> bool:
-    artifacts = {item["path"]: item for item in manifest["artifacts"]}
-    return (
-        artifacts.get(staging["answersPath"])
-        == {
-            "path": staging["answersPath"],
-            "owner": "human",
-            "sha256": staging["answersSha256"],
-        }
-        and artifacts.get(staging["candidatePath"])
-        == {
-            "path": staging["candidatePath"],
-            "owner": "controller",
-            "sha256": staging["candidateSha256"],
-        }
-    )
-
-
-def parse_commandments_decision(raw: bytes) -> Optional[Dict[str, Any]]:
-    expected = {
-        "schemaVersion",
-        "kind",
-        "decision",
-        "candidateSha256",
-        "operatorMarker",
-        "at",
-        "sourceRevision",
-        "resourceIsolation",
-    }
+def parse_principle_metadata(raw: bytes) -> Tuple[str, int, str]:
+    text = raw.decode("utf-8")
+    if not re.search(r"^Status: RATIFIED$", text, re.MULTILINE):
+        raise ValidationError("existing repository Principle is not ratified")
+    owner = re.search(r"^Owner: (.+)$", text, re.MULTILINE)
+    version = re.search(r"^Version: ([1-9][0-9]*)$", text, re.MULTILINE)
+    ratified = re.search(r"^Ratified at: (.+)$", text, re.MULTILINE)
+    if not owner or not version or not ratified:
+        raise ValidationError("existing repository Principle lacks ratification metadata")
     try:
-        value = read_json_bytes(raw, "COMMANDMENTS decision")
-        if not isinstance(value, dict) or set(value) != expected:
-            return None
-        bounded_text(value["operatorMarker"], "decision operator marker", 200)
-    except ValidationError:
-        return None
-    if (
-        type(value["schemaVersion"]) is not int
-        or value["schemaVersion"] != 1
-        or value["kind"] != "commandments-decision"
-        or value["decision"] not in {"amend", "defer"}
-        or (
-            value["candidateSha256"] is not None
-            and (
-                not isinstance(value["candidateSha256"], str)
-                or re.fullmatch(r"[0-9a-f]{64}", value["candidateSha256"])
-                is None
-            )
-        )
-        or (
-            value["decision"] == "amend"
-            and value["candidateSha256"] is None
-        )
-        or not isinstance(value["at"], str)
-        or not valid_datetime(value["at"])
-        or value["resourceIsolation"] not in {"isolated-shell", "inherited-session"}
-        or not isinstance(value["sourceRevision"], str)
-    ):
-        return None
-    return value
+        datetime.fromisoformat(ratified.group(1).replace("Z", "+00:00"))
+    except ValueError as error:
+        raise ValidationError("existing repository Principle has an invalid ratification time") from error
+    return owner.group(1), int(version.group(1)), ratified.group(1)
 
 
-def decision_matches(
-    value: Mapping[str, Any],
-    manifest: Mapping[str, Any],
-    decision: str,
-    candidate_sha: Optional[str],
-    operator_marker: str,
-    isolation: str,
-) -> bool:
-    return (
-        value["decision"] == decision
-        and value["candidateSha256"] == candidate_sha
-        and value["operatorMarker"] == operator_marker
-        and value["sourceRevision"] == manifest["source"]["revision"]
-        and value["resourceIsolation"] == isolation
-    )
-
-
-def amendment_decision_exists(
-    root: Path,
-    manifest: Mapping[str, Any],
-    candidate_digest: str,
-    isolation: str,
-) -> bool:
-    for artifact in manifest["artifacts"]:
-        relative = artifact["path"]
-        if "/decisions/" not in relative:
-            continue
-        path = safe_relative_path(root, relative, must_exist=True)
-        value = parse_commandments_decision(path.read_bytes())
-        if value is not None and decision_matches(
-            value,
-            manifest,
-            "amend",
-            candidate_digest,
-            value["operatorMarker"],
-            isolation,
-        ):
-            return True
-    return False
-
-
-def matching_orphan_decision(
-    root: Path,
-    manifest: Mapping[str, Any],
-    decision: str,
-    candidate_sha: Optional[str],
-    operator_marker: str,
-    isolation: str,
-) -> Optional[Tuple[Dict[str, Any], str, str]]:
-    directory = root / ".pi" / "jig" / "commandments" / "decisions"
-    if not directory.exists():
-        return None
-    if directory.is_symlink() or not directory.is_dir():
-        raise ValidationError("COMMANDMENTS decision directory is unsafe")
-    registered = {item["path"] for item in manifest["artifacts"]}
-    matches = []
-    for path in sorted(directory.iterdir()):
-        if path.is_symlink() or not path.is_file():
-            continue
-        relative = relative_to_root(root, path)
-        if relative in registered or path.stat().st_size > 4096:
-            continue
-        raw = path.read_bytes()
-        digest = sha256_bytes(raw)
-        if path.name != f"{digest}.json":
-            continue
-        value = parse_commandments_decision(raw)
-        if value is not None and decision_matches(
-            value,
-            manifest,
-            decision,
-            candidate_sha,
-            operator_marker,
-            isolation,
-        ):
-            matches.append((value, relative, digest))
-    if len(matches) > 1:
-        raise ValidationError(
-            "multiple matching orphan COMMANDMENTS decisions require inspection"
-        )
-    return matches[0] if matches else None
-
-
-def stage_commandments(
-    root: Path,
-    isolation: str,
-    raw: bytes,
-    amend_candidate_sha: Optional[str],
-    adopt_existing: bool,
-) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    manifest = require_commandments_boundary(
-        root, isolation, ("awaiting-commandments",)
-    )
-    interview_artifact = next(
-        (
-            item
-            for item in manifest["artifacts"]
-            if item["path"] == COMMANDMENTS_INTERVIEW_PATH
-        ),
-        None,
-    )
-    if interview_artifact is None:
-        raise ValidationError(
-            "present the one COMMANDMENTS interview before staging answers"
-        )
-    answers = read_json_bytes(raw, "COMMANDMENTS answers")
-    resolved, modes = validate_commandments_answers(answers)
-    answers_raw = canonical_json(answers)
-    answers_digest = sha256_bytes(answers_raw)
-    answers_path = (
-        f".pi/jig/commandments/answers/{answers_digest}.json"
-    )
-    current = load_staging(root, manifest)
-    if (
-        current is not None
-        and current["answersSha256"] == answers_digest
-        and current["adoptedExisting"] == adopt_existing
-    ):
-        if not staging_artifacts_registered(manifest, current):
-            previous = current["previousCandidateSha256"]
-            if previous is not None and (
-                amend_candidate_sha != previous
-                or not amendment_decision_exists(
-                    root, manifest, previous, isolation
-                )
-            ):
-                raise ValidationError(
-                    "staging recovery requires the recorded amend decision"
-                )
-            if previous is None and amend_candidate_sha is not None:
-                raise ValidationError("there is no staged candidate to amend")
-            upsert_artifact(
-                manifest, current["answersPath"], "human", current["answersSha256"]
-            )
-            upsert_artifact(
-                manifest,
-                current["candidatePath"],
-                "controller",
-                current["candidateSha256"],
-            )
-            manifest["updatedAt"] = max(manifest["updatedAt"], now())
-            write_manifest(root, manifest)
-        return manifest, current
-    if current is not None:
-        prior = current["candidateSha256"]
-        if (
-            amend_candidate_sha != prior
-            or not amendment_decision_exists(root, manifest, prior, isolation)
-        ):
-            raise ValidationError(
-                "changed answers require a recorded amend decision for the current candidate digest"
-            )
-    elif amend_candidate_sha is not None:
-        raise ValidationError("there is no staged candidate to amend")
-    root_path = fixed_artifact_path(
-        root, COMMANDMENTS_ROOT_PATH, create_parent=False
-    )
-    if adopt_existing:
-        if not root_path.exists():
-            raise ValidationError(
-                "there is no existing root COMMANDMENTS.md to adopt"
-            )
-        candidate_raw = root_path.read_bytes()
-        metadata = validate_commandments_bytes(candidate_raw)
-        if metadata["marker"] != resolved["authority"]["ratificationMarker"]:
-            raise ValidationError(
-                "existing COMMANDMENTS marker differs from the explicit answer"
-            )
-    else:
-        metadata = {"ratifiedAt": now(), "version": 1}
-        candidate_raw = render_commandments_candidate(
-            resolved, metadata["ratifiedAt"], metadata["version"]
-        )
-        metadata = validate_commandments_bytes(candidate_raw)
-    candidate_digest = sha256_bytes(candidate_raw)
-    candidate_path = (
-        f".pi/jig/commandments/candidates/{candidate_digest}.md"
-    )
-    for relative, expected_raw in (
-        (answers_path, answers_raw),
-        (candidate_path, candidate_raw),
-    ):
-        path = root / relative
-        parent = path.parent
-        if parent.exists() or parent.is_symlink():
-            if parent.is_symlink() or not parent.is_dir():
-                raise ValidationError(
-                    f"artifact directory is unsafe: {relative}"
-                )
-            if path.exists() or path.is_symlink():
-                fixed_artifact_path(root, relative)
-                if path.read_bytes() != expected_raw:
-                    raise ValidationError(
-                        f"content-addressed artifact collision: {relative}"
-                    )
-    staging = {
-        "schemaVersion": 1,
-        "kind": "commandments-staged",
-        "answersPath": answers_path,
-        "answersSha256": answers_digest,
-        "choiceModes": modes,
-        "candidatePath": candidate_path,
-        "candidateSha256": candidate_digest,
-        "version": metadata["version"],
-        "prospectiveRatifiedAt": metadata["ratifiedAt"],
-        "intendedMarker": resolved["authority"]["ratificationMarker"],
-        "sourceRevision": manifest["source"]["revision"],
-        "interviewSha256": interview_artifact["sha256"],
-        "previousCandidateSha256": (
-            current["candidateSha256"] if current is not None else None
-        ),
-        "adoptedExisting": adopt_existing,
+def present_principles(root: Path, isolation: str) -> Dict[str, Any]:
+    manifest = load_manifest(root)
+    require_isolation(manifest, isolation)
+    if manifest["currentState"] != "awaiting-principles":
+        raise ValidationError("principles interview is not available in the current state")
+    profile = read_contained_json(root, PROFILE_PATH, "repository profile")
+    return {
+        "schemaVersion": SCHEMA_VERSION,
+        "kind": "repository-principles-interview",
+        "observedFacts": profile,
+        "questions": [
+            {"answerKey": "protectedUserPaths", "prompt": "Which user paths, visible results, and local thresholds must agents protect?"},
+            {"answerKey": "forbiddenOutcomes", "prompt": "Which repository-specific outcomes must agents never cause?"},
+            {"answerKey": "compatibilityPolicy", "prompt": "Which compatibility breaks are acceptable in this repository?"},
+            {"answerKey": "priorityTradeoffs", "prompt": "How should this repository rank its own competing product goals?"},
+            {"answerKey": "authority", "prompt": "Who owns exceptions, amendments, and the ratification marker?"},
+        ],
+        "freeTextAmendments": {"required": False},
+        "answersPath": ANSWERS_PATH,
+        "existingPrinciple": (root / PRINCIPLE_PATH).is_file(),
     }
-    staging_raw = canonical_json(staging)
-    staging_path = fixed_artifact_path(root, COMMANDMENTS_STAGING_PATH)
-    content_addressed_artifact(root, "answers", "json", answers_raw)
-    content_addressed_artifact(root, "candidates", "md", candidate_raw)
-    atomic_write(staging_path, staging_raw)
-    upsert_artifact(manifest, answers_path, "human", answers_digest)
-    upsert_artifact(manifest, candidate_path, "controller", candidate_digest)
-    manifest["updatedAt"] = max(manifest["updatedAt"], now())
+
+
+def stage_principles(root: Path, isolation: str, raw: bytes, adopt_existing: bool) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    manifest = load_manifest(root)
+    require_isolation(manifest, isolation)
+    if manifest["currentState"] != "awaiting-principles":
+        raise ValidationError("principles can only be staged while awaiting principles")
+    answers = validate_answers(read_json_bytes(raw, "repository principle answers"))
+    answers_raw = canonical_json(answers)
+    input_digest = sha256_bytes(answers_raw)
+    staging_file = safe_relative_path(root, STAGING_PATH, create_parent=True)
+    recorded_paths = {item["path"] for item in manifest["artifacts"]}
+    if staging_file.exists() or staging_file.is_symlink():
+        if STAGING_PATH not in recorded_paths:
+            for relative in (STAGING_PATH, CANDIDATE_PATH, ANSWERS_PATH):
+                unlink_contained(root, relative, missing_ok=True)
+        else:
+            staging = read_contained_json(root, STAGING_PATH, "principle staging record")
+            if staging.get("answersSha256") != input_digest or bool(staging.get("adoptedExisting")) != adopt_existing:
+                raise ValidationError("different principle answers are already staged; record amend or defer first")
+            candidate_raw = read_contained_bytes(root, staging["candidatePath"], "staged principle candidate")
+            staged_answers_raw = read_contained_bytes(root, ANSWERS_PATH, "staged principle answers")
+            if sha256_bytes(candidate_raw) != staging["candidateSha256"]:
+                raise ValidationError("staged principle candidate changed")
+            if sha256_bytes(staged_answers_raw) != input_digest:
+                raise ValidationError("staged principle answers changed")
+            return manifest, staging
+    existing = root / PRINCIPLE_PATH
+    if adopt_existing:
+        if not existing.exists() and not existing.is_symlink():
+            raise ValidationError("there is no safe existing repository Principle to adopt")
+        candidate_raw = read_contained_bytes(root, PRINCIPLE_PATH, "existing repository Principle")
+        parse_frontmatter(candidate_raw, "principle-repository")
+        owner, version, ratified_at = parse_principle_metadata(candidate_raw)
+    else:
+        if existing.exists() or existing.is_symlink():
+            raise ValidationError("an existing repository Principle is preserved; use --adopt-existing")
+        owner = answers["authority"]["owner"]
+        version = 1
+        ratified_at = now()
+        candidate_raw = render_principle(answers, ratified_at, version)
+    safe_relative_path(root, ANSWERS_PATH, create_parent=True)
+    atomic_write(root, ANSWERS_PATH, answers_raw)
+    safe_relative_path(root, CANDIDATE_PATH, create_parent=True)
+    atomic_write(root, CANDIDATE_PATH, candidate_raw)
+    candidate_digest = sha256_bytes(candidate_raw)
+    staging = {
+        "schemaVersion": SCHEMA_VERSION,
+        "kind": "repository-principle-staging",
+        "candidatePath": CANDIDATE_PATH,
+        "candidateSha256": candidate_digest,
+        "answersSha256": input_digest,
+        "intendedMarker": answers["authority"]["ratificationMarker"],
+        "owner": owner,
+        "version": version,
+        "ratifiedAt": ratified_at,
+        "adoptedExisting": adopt_existing,
+        "stagedAt": now(),
+    }
+    staging_digest = atomic_json(root, STAGING_PATH, staging)
+    upsert_artifact(manifest, ANSWERS_PATH, "human", input_digest)
+    upsert_artifact(manifest, CANDIDATE_PATH, "controller", candidate_digest)
+    upsert_artifact(manifest, STAGING_PATH, "controller", staging_digest)
     write_manifest(root, manifest)
     return manifest, staging
 
 
-def record_commandments_decision(
+def record_principles_decision(
     root: Path,
     isolation: str,
     decision: str,
-    candidate_sha: Optional[str],
-    operator_marker: str,
+    candidate_sha: str,
+    marker: str,
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    manifest = require_commandments_boundary(
-        root, isolation, ("awaiting-commandments",)
-    )
-    marker = bounded_text(operator_marker, "operator marker", 200)
-    current = load_staging(root, manifest)
-    if current is not None and not staging_artifacts_registered(manifest, current):
-        raise ValidationError(
-            "resume staging before recording a COMMANDMENTS decision"
-        )
-    if decision == "amend":
-        if current is None or candidate_sha != current["candidateSha256"]:
-            raise ValidationError(
-                "amend must name the current exact candidate digest"
-            )
-    elif decision == "defer":
-        if candidate_sha is not None and (
-            current is None or candidate_sha != current["candidateSha256"]
-        ):
-            raise ValidationError("defer names a stale or unknown candidate digest")
-    else:
-        raise ValidationError("decision must be amend or defer")
-    orphan = matching_orphan_decision(
-        root,
-        manifest,
-        decision,
-        candidate_sha,
-        marker,
-        isolation,
-    )
-    if orphan is not None:
-        receipt, path, digest = orphan
-        upsert_artifact(manifest, path, "controller", digest)
-        manifest["updatedAt"] = max(manifest["updatedAt"], receipt["at"])
-        write_manifest(root, manifest)
-        return manifest, {**receipt, "path": path, "sha256": digest}
-    receipt = {
-        "schemaVersion": 1,
-        "kind": "commandments-decision",
+    manifest = load_manifest(root)
+    require_isolation(manifest, isolation)
+    if manifest["currentState"] != "awaiting-principles":
+        raise ValidationError("principle decision is unavailable in the current state")
+    staging = read_contained_json(root, STAGING_PATH, "principle staging record")
+    if staging["candidateSha256"] != candidate_sha:
+        raise ValidationError("principle decision digest differs from the staged candidate")
+    marker = bounded_text(marker, "operator marker", limit=300)
+    decision_record = {
+        "schemaVersion": SCHEMA_VERSION,
+        "kind": "repository-principle-decision",
         "decision": decision,
         "candidateSha256": candidate_sha,
         "operatorMarker": marker,
-        "at": now(),
-        "sourceRevision": manifest["source"]["revision"],
-        "resourceIsolation": isolation,
+        "recordedAt": now(),
     }
-    raw = canonical_json(receipt)
-    path, digest = content_addressed_artifact(
-        root, "decisions", "json", raw
-    )
-    upsert_artifact(manifest, path, "controller", digest)
-    manifest["updatedAt"] = max(manifest["updatedAt"], receipt["at"])
-    write_manifest(root, manifest)
-    return manifest, {**receipt, "path": path, "sha256": digest}
-
-
-def ratify_commandments(
-    root: Path, isolation: str, candidate_sha: str, operator_marker: str
-) -> Dict[str, Any]:
-    manifest = require_commandments_boundary(
-        root,
-        isolation,
-        ("awaiting-commandments", "commandments-ratified"),
-    )
-    marker = bounded_text(operator_marker, "operator marker", 200)
-    if re.fullmatch(r"[0-9a-f]{64}", candidate_sha) is None:
-        raise ValidationError(
-            "candidate digest must be a lowercase SHA-256 value"
-        )
-    if manifest["currentState"] == "commandments-ratified":
-        if manifest["commandments"]["sha256"] != candidate_sha:
-            raise ValidationError(
-                "ratified COMMANDMENTS digest differs from the requested digest"
-            )
-        metadata = validate_commandments_bytes(
-            (root / COMMANDMENTS_ROOT_PATH).read_bytes()
-        )
-        if metadata["marker"] != marker:
-            raise ValidationError(
-                "operator marker differs from the ratified exact bytes"
-            )
-        return manifest
-    staging = load_staging(root, manifest)
-    if staging is None or staging["candidateSha256"] != candidate_sha:
-        raise ValidationError(
-            "ratification must name the current exact candidate digest"
-        )
-    if not staging_artifacts_registered(manifest, staging):
-        raise ValidationError("resume staging before ratification")
-    candidate_path = safe_relative_path(
-        root, staging["candidatePath"], must_exist=True
-    )
-    candidate_raw = candidate_path.read_bytes()
-    if sha256_bytes(candidate_raw) != candidate_sha:
-        raise ValidationError("staged COMMANDMENTS candidate hash changed")
-    metadata = validate_commandments_bytes(candidate_raw)
-    if metadata["marker"] != marker or staging["intendedMarker"] != marker:
-        raise ValidationError(
-            "ratification marker differs from the exact staged candidate"
-        )
-    interview_artifact = next(
-        item
-        for item in manifest["artifacts"]
-        if item["path"] == COMMANDMENTS_INTERVIEW_PATH
-    )
-    approval_digest = sha256_bytes(
-        canonical_json(
-            {"candidateSha256": candidate_sha, "operatorMarker": marker}
-        )
-    )
-    index = len(manifest["transitions"]) + 1
-    receipt_relative = (
-        f".pi/jig/receipts/transition-{index:04d}-commandments-ratified.json"
-    )
-    receipt_path = fixed_artifact_path(root, receipt_relative)
-    root_path = fixed_artifact_path(
-        root, COMMANDMENTS_ROOT_PATH, create_parent=False
-    )
-    expected_receipt = {
-        "resourceIsolation": isolation,
-        "interviewPath": COMMANDMENTS_INTERVIEW_PATH,
-        "interviewSha256": interview_artifact["sha256"],
-        "answersPath": staging["answersPath"],
-        "answersSha256": staging["answersSha256"],
-        "candidatePath": staging["candidatePath"],
-        "commandmentsPath": COMMANDMENTS_ROOT_PATH,
-        "commandmentsSha256": candidate_sha,
-        "version": metadata["version"],
-        "operatorMarker": marker,
-        "approvalDigest": approval_digest,
-        "at": metadata["ratifiedAt"],
-    }
-    if receipt_path.exists():
-        if not root_path.exists():
-            raise ValidationError(
-                "ratification receipt exists before root publication"
-            )
-        if root_path.read_bytes() != candidate_raw:
-            raise ValidationError(
-                "existing ratification receipt has different root bytes"
-            )
-        receipt = read_json(
-            receipt_path, "COMMANDMENTS ratification receipt"
-        )
-        validate_transition_receipt(
-            root,
-            receipt,
-            ("awaiting-commandments", "commandments-ratified"),
-            manifest["source"],
-        )
-        if any(
-            receipt.get(key) != value
-            for key, value in expected_receipt.items()
-        ):
-            raise ValidationError(
-                "existing ratification receipt differs from this approval"
-            )
-        receipt_raw = receipt_path.read_bytes()
+    path_value = f".pi/jig/principles/decisions/{time.time_ns()}-{decision}.json"
+    safe_relative_path(root, path_value, create_parent=True)
+    decision_digest = atomic_json(root, path_value, decision_record)
+    upsert_artifact(manifest, path_value, "human", decision_digest)
+    if decision == "amend":
+        staged_paths = {STAGING_PATH, CANDIDATE_PATH, ANSWERS_PATH}
+        manifest["artifacts"] = [item for item in manifest["artifacts"] if item["path"] not in staged_paths]
+        write_manifest(root, manifest)
+        try:
+            for relative in staged_paths:
+                unlink_contained(root, relative, missing_ok=True)
+        except OSError as error:
+            raise JigError("amended principle staging files could not be removed") from error
     else:
-        if root_path.exists() and root_path.read_bytes() != candidate_raw:
-            raise ValidationError(
-                "pre-existing COMMANDMENTS.md differs from the staged digest; "
-                "preserve it and stage exact adoption"
-            )
-        if not root_path.exists():
-            atomic_write(
-                root_path, candidate_raw, ownership_token=candidate_sha
-            )
-        receipt = receipt_value(
-            "commandments-ratified",
-            "awaiting-commandments",
-            "commandments-ratified",
-            manifest["source"],
-            recordedAt=now(),
-            resourceIsolation=isolation,
-            interviewPath=COMMANDMENTS_INTERVIEW_PATH,
-            interviewSha256=interview_artifact["sha256"],
-            answersPath=staging["answersPath"],
-            answersSha256=staging["answersSha256"],
-            candidatePath=staging["candidatePath"],
-            commandmentsPath=COMMANDMENTS_ROOT_PATH,
-            commandmentsSha256=candidate_sha,
-            version=metadata["version"],
-            operatorMarker=marker,
-            approvalDigest=approval_digest,
-        )
-        receipt["at"] = metadata["ratifiedAt"]
-        receipt_raw = canonical_json(receipt)
-        atomic_write(receipt_path, receipt_raw)
-    receipt_digest = sha256_bytes(receipt_raw)
-    manifest["transitions"].append(
-        {
-            "from": "awaiting-commandments",
-            "to": "commandments-ratified",
-            "at": receipt["at"],
-            "receiptPath": receipt_relative,
-            "receiptSha256": receipt_digest,
-        }
-    )
-    upsert_artifact(
-        manifest, receipt_relative, "controller", receipt_digest
-    )
-    upsert_artifact(
-        manifest, COMMANDMENTS_ROOT_PATH, "human", candidate_sha
-    )
-    manifest["commandments"] = {
-        "path": COMMANDMENTS_ROOT_PATH,
+        write_manifest(root, manifest)
+    return manifest, decision_record
+
+
+def ratify_principles(root: Path, isolation: str, candidate_sha: str, marker: str) -> Dict[str, Any]:
+    manifest = load_manifest(root)
+    require_isolation(manifest, isolation)
+    if manifest["currentState"] in {"verification-building", "configured"}:
+        staging = read_contained_json(root, STAGING_PATH, "principle staging record")
+        if (
+            manifest["principle"]["sha256"] != candidate_sha
+            or staging["intendedMarker"] != marker
+        ):
+            raise ValidationError("repeated ratification differs from the approved digest or marker")
+        return manifest
+    if manifest["currentState"] != "awaiting-principles":
+        raise ValidationError("principles cannot be ratified in the current state")
+    staging = read_contained_json(root, STAGING_PATH, "principle staging record")
+    if staging["candidateSha256"] != candidate_sha or staging["intendedMarker"] != marker:
+        raise ValidationError("ratification does not approve the exact staged digest and marker")
+    raw = read_contained_bytes(root, CANDIDATE_PATH, "staged principle candidate")
+    if sha256_bytes(raw) != candidate_sha:
+        raise ValidationError("staged principle candidate changed")
+    parse_frontmatter(raw, "principle-repository")
+    target = safe_relative_path(root, PRINCIPLE_PATH, create_parent=True)
+    if staging["adoptedExisting"]:
+        target_raw = read_contained_bytes(root, PRINCIPLE_PATH, "existing repository Principle")
+        if sha256_bytes(target_raw) != candidate_sha:
+            raise ValidationError("existing repository Principle changed before ratification")
+    else:
+        if target.exists() or target.is_symlink():
+            target_raw = read_contained_bytes(root, PRINCIPLE_PATH, "repository Principle")
+            if sha256_bytes(target_raw) != candidate_sha:
+                raise ValidationError("repository Principle appeared or changed after staging")
+        else:
+            atomic_write(root, PRINCIPLE_PATH, raw)
+    upsert_artifact(manifest, PRINCIPLE_PATH, "human", candidate_sha)
+    manifest["principle"] = {
+        "path": PRINCIPLE_PATH,
         "sha256": candidate_sha,
-        "version": metadata["version"],
-        "ratifiedAt": metadata["ratifiedAt"],
+        "version": staging["version"],
+        "ratifiedAt": staging["ratifiedAt"],
     }
-    manifest["currentState"] = "commandments-ratified"
-    manifest["updatedAt"] = max(
-        manifest["updatedAt"], receipt["recordedAt"]
+    transition(
+        root,
+        manifest,
+        "verification-building",
+        "principle-ratified",
+        {"principlePath": PRINCIPLE_PATH, "principleSha256": candidate_sha},
     )
     write_manifest(root, manifest)
     return manifest
 
 
-def validate_commandments(root: Path, isolation: str) -> Dict[str, Any]:
-    return require_commandments_boundary(root, isolation, ("commandments-ratified",))
-
-
-def propose_commandments_amendment(
-    root: Path, isolation: str, raw: bytes
-) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    manifest = require_commandments_boundary(root, isolation, ("commandments-ratified",))
-    if not raw or len(raw) > 64 * 1024:
-        raise ValidationError("COMMANDMENTS amendment proposal is empty or too large")
-    try:
-        text = raw.decode("utf-8")
-    except UnicodeDecodeError as error:
-        raise ValidationError("COMMANDMENTS amendment proposal is not UTF-8") from error
-    if not text.strip() or "Human decision: ratified" in text:
-        raise ValidationError("COMMANDMENTS amendment proposal is empty or claims ratification")
-    proposal_raw = raw if raw.endswith(b"\n") else raw + b"\n"
-    path, digest = content_addressed_artifact(
-        root, "proposals", "md", proposal_raw
-    )
-    expected = {"path": path, "owner": "jig-skill", "sha256": digest}
-    artifact = next((item for item in manifest["artifacts"] if item["path"] == path), None)
-    if artifact != expected:
-        upsert_artifact(manifest, path, "jig-skill", digest)
-        manifest["updatedAt"] = now()
-        write_manifest(root, manifest)
-    return manifest, {"path": path, "sha256": digest}
-
-
-def protected_user_path(root: Path) -> Dict[str, str]:
-    text = (root / COMMANDMENTS_ROOT_PATH).read_text(encoding="utf-8")
-    labels = ("Action", "Visible result", "Evidence", "Cleanup", "Thresholds")
-    result = {}
-    for label in labels:
-        matches = re.findall(rf"^\*\*{re.escape(label)}\.\*\* (.+)$", text, re.MULTILINE)
-        if len(matches) != 1:
-            raise ValidationError(f"COMMANDMENTS protected path has invalid {label}")
-        key = {"Visible result": "visibleResult"}.get(label, label.lower())
-        result[key] = bounded_text(matches[0], f"protected path {label}", 4000)
-    return result
-
-
-def validate_verification_plan(
-    root: Path, manifest: Mapping[str, Any], value: Any
-) -> Dict[str, Any]:
-    fields = {
-        "schemaVersion",
-        "kind",
-        "sourceRevision",
-        "commandmentsSha256",
-        "protectedUserPath",
-        "protectedFeatureId",
-        "skillPath",
-        "featureIndexPath",
-        "featureIds",
-        "featurePaths",
-        "helperPaths",
-        "selfTestCommand",
-        "timeoutSeconds",
-        "cleanupOwner",
-        "reservedPaths",
-    }
-    if not isinstance(value, dict) or set(value) != fields:
-        raise ValidationError("verification plan has an invalid shape")
-    if (
-        type(value["schemaVersion"]) is not int
-        or value["schemaVersion"] != 1
-        or value["kind"] != "verification-plan"
-        or value["sourceRevision"] != manifest["source"]["revision"]
-        or value["commandmentsSha256"] != manifest["commandments"]["sha256"]
-        or value["skillPath"] != VERIFICATION_SKILL_PATH
-        or value["featureIndexPath"] != VERIFICATION_FEATURE_INDEX_PATH
-        or type(value["timeoutSeconds"]) is not int
-        or not 2 <= value["timeoutSeconds"] <= 120
-        or not isinstance(value["cleanupOwner"], str)
-    ):
-        raise ValidationError("verification plan metadata is inconsistent")
-    bounded_text(value["cleanupOwner"], "verification cleanup owner", 500)
-    if value["protectedUserPath"] != protected_user_path(root):
-        raise ValidationError("verification plan changes the ratified protected path")
-    protected_id = value["protectedFeatureId"]
-    if not isinstance(protected_id, str) or VERIFICATION_ID.fullmatch(protected_id) is None:
-        raise ValidationError("verification plan has an invalid protected feature ID")
-    feature_ids = value["featureIds"]
-    if (
-        not isinstance(feature_ids, list)
-        or not 3 <= len(feature_ids) <= 5
-        or len(feature_ids) != len(set(feature_ids))
-        or any(not isinstance(item, str) or VERIFICATION_ID.fullmatch(item) is None for item in feature_ids)
-        or protected_id not in feature_ids
-    ):
-        raise ValidationError("verification plan must name three to five unique features")
-    expected_features = [
-        f".pi/skills/jig-verification/references/features/{item}.md"
-        for item in feature_ids
-    ]
-    if value["featurePaths"] != expected_features:
-        raise ValidationError("verification feature paths do not match their IDs")
-    helpers = value["helperPaths"]
-    if (
-        not isinstance(helpers, list)
-        or not 1 <= len(helpers) <= 5
-        or len(helpers) != len(set(helpers))
-        or any(
-            not isinstance(item, str)
-            or re.fullmatch(r"\.pi/skills/jig-verification/helpers/[a-z0-9][a-z0-9-]{0,63}\.py", item) is None
-            for item in helpers
-        )
-    ):
-        raise ValidationError("verification plan has invalid helper paths")
-    command = value["selfTestCommand"]
-    if (
-        not isinstance(command, list)
-        or command != ["python3", helpers[0], "self-test"]
-        or any(len(item.encode("utf-8")) > 512 for item in command)
-    ):
-        raise ValidationError("verification self-test command is not the fixed argv protocol")
-    reserved = [VERIFICATION_SKILL_PATH, VERIFICATION_FEATURE_INDEX_PATH, *expected_features, *helpers]
-    if value["reservedPaths"] != reserved or len(reserved) != len(set(reserved)):
-        raise ValidationError("verification reserved paths are inconsistent")
-    return value
-
-
-def load_verification_plan(root: Path, manifest: Mapping[str, Any]) -> Dict[str, Any]:
-    path = safe_relative_path(root, VERIFICATION_PLAN_PATH, must_exist=True)
-    if path.is_symlink() or not path.is_file():
-        raise ValidationError("verification plan path is unsafe")
-    return validate_verification_plan(root, manifest, read_json(path, "verification plan"))
-
-
-def portable_verification_text(raw: bytes, label: str) -> str:
-    if not raw or len(raw) > 128 * 1024:
-        raise ValidationError(f"{label} is empty or too large")
-    try:
-        text = raw.decode("utf-8")
-    except UnicodeDecodeError as error:
-        raise ValidationError(f"{label} is not UTF-8") from error
-    banned = ("{{", "}}", ".cursor/", "/ho" + "me/", "TEMPLATE", "TODO")
-    if any(item in text for item in banned):
-        raise ValidationError(f"{label} contains a placeholder or nonportable path")
-    return text
-
-
-def validate_generated_verification(
-    root: Path, manifest: Mapping[str, Any], plan: Mapping[str, Any]
-) -> List[Tuple[str, str]]:
-    reserved = set(plan["reservedPaths"])
-    skill_root = root / ".pi/skills/jig-verification"
-    if not skill_root.is_dir() or skill_root.is_symlink():
-        raise ValidationError("verification skill directory is missing or unsafe")
-    actual = {
-        path.relative_to(root).as_posix()
-        for path in skill_root.rglob("*")
-        if not path.is_dir() or path.is_symlink()
-    }
-    if actual != reserved:
-        raise ValidationError("verification skill files differ from the reserved plan")
-    results = []
-    for relative in plan["reservedPaths"]:
-        path = safe_relative_path(root, relative, must_exist=True)
-        if path.is_symlink() or not path.is_file():
-            raise ValidationError(f"verification artifact is unsafe: {relative}")
-        raw = path.read_bytes()
-        text = portable_verification_text(raw, relative)
-        if relative in plan["helperPaths"]:
-            if not os.access(path, os.X_OK):
-                raise ValidationError(f"verification helper is not executable: {relative}")
-        elif relative == VERIFICATION_SKILL_PATH:
-            if (
-                not text.startswith("---\nname: jig-verification\n")
-                or "\ndescription:" not in text.split("---", 2)[1]
-                or any(f"\n## {heading}\n" not in text for heading in ("Launch", "Doctor", "Drive", "Evidence", "Cleanup", "Helpers"))
-                or any(helper not in text for helper in plan["helperPaths"])
-            ):
-                raise ValidationError("verification SKILL.md is incomplete")
-        elif relative == VERIFICATION_FEATURE_INDEX_PATH:
-            if (
-                f"Protected feature: `{plan['protectedFeatureId']}`" not in text
-                or any(f"./{item}.md" not in text for item in plan["featureIds"])
-                or text.count(".md)") != len(plan["featureIds"])
-            ):
-                raise ValidationError("verification feature index is incomplete")
-        else:
-            feature_id = Path(relative).stem
-            headings = re.findall(r"^## (.+)$", text, re.MULTILINE)
-            expected_headings = [
-                "Sub-features",
-                "How to get to it (user POV)",
-                "Driving it with fixture-control",
-                "Gotchas",
-            ]
-            metadata = ("Feature ID", "Owner", "Public entry point", "Allowed dependencies", "Evidence", "Last result")
-            if (
-                headings != expected_headings
-                or f"Feature ID: `{feature_id}`" not in text
-                or any(len(re.findall(rf"^{re.escape(label)}: .+$", text, re.MULTILINE)) != 1 for label in metadata)
-            ):
-                raise ValidationError(f"verification feature map is incomplete: {feature_id}")
-            if feature_id == plan["protectedFeatureId"]:
-                for value in plan["protectedUserPath"].values():
-                    if value not in text:
-                        raise ValidationError("protected feature differs from COMMANDMENTS")
-        results.append((relative, sha256_bytes(raw)))
-    return results
-
-
-def parse_runtime_result(
-    root: Path, manifest: Mapping[str, Any], plan: Mapping[str, Any], raw: bytes
-) -> Tuple[Dict[str, Any], List[Tuple[str, str]]]:
-    value = read_json_bytes(raw, "verification runtime result")
-    fields = {"schemaVersion", "kind", "sourceRevision", "protectedFeatureId", "phases", "process", "evidence"}
-    if not isinstance(value, dict) or set(value) != fields:
-        raise ValidationError("verification runtime result has an invalid shape")
-    phases = value["phases"]
-    process = value["process"]
-    if (
-        value["schemaVersion"] != 1
-        or value["kind"] != "verification-self-test"
-        or value["sourceRevision"] != manifest["source"]["revision"]
-        or value["protectedFeatureId"] != plan["protectedFeatureId"]
-        or not isinstance(phases, dict)
-        or set(phases) != {"launch", "doctor", "drive", "evidence", "cleanup"}
-        or any(item is not True for item in phases.values())
-        or not isinstance(process, dict)
-        or set(process) != {"pid", "processStart", "cleaned"}
-        or type(process["pid"]) is not int
-        or process["pid"] < 1
-        or not isinstance(process["processStart"], str)
-        or not process["processStart"]
-        or process["cleaned"] is not True
-        or process_start(process["pid"]) == process["processStart"]
-    ):
-        raise ValidationError("verification runtime phases or cleanup are unproved")
-    evidence = value["evidence"]
-    if not isinstance(evidence, list) or len(evidence) < 2:
-        raise ValidationError("verification runtime evidence is incomplete")
-    artifacts = []
-    seen = set()
-    documents = {}
-    for item in evidence:
-        if not isinstance(item, dict) or set(item) != {"path", "sha256"}:
-            raise ValidationError("verification evidence record has an invalid shape")
-        relative = item["path"]
-        if (
-            not isinstance(relative, str)
-            or re.fullmatch(r"\.pi/jig/verification/evidence/[a-z0-9][a-z0-9._-]{0,127}\.json", relative) is None
-            or relative in seen
-            or re.fullmatch(r"[0-9a-f]{64}", item["sha256"]) is None
-        ):
-            raise ValidationError("verification evidence path or digest is invalid")
-        path = safe_relative_path(root, relative, must_exist=True)
-        if path.is_symlink() or not path.is_file() or path.stat().st_size > 128 * 1024 or sha256_file(path) != item["sha256"]:
-            raise ValidationError("verification evidence bytes are inconsistent")
-        documents[Path(relative).name] = read_json(path, "verification evidence")
-        seen.add(relative)
-        artifacts.append((relative, item["sha256"]))
-    if set(documents) != {"protected-action.json", "protected-result.json"}:
-        raise ValidationError("verification evidence must contain the protected action and result")
-    action = documents["protected-action.json"]
-    result = documents["protected-result.json"]
-    protected = plan["protectedUserPath"]
-    if (
-        not isinstance(action, dict)
-        or set(action) != {"kind", "action", "command"}
-        or action["kind"] != "protected-action"
-        or action["action"] != protected["action"]
-        or not isinstance(action["command"], list)
-        or not action["command"]
-        or not isinstance(result, dict)
-        or set(result) != {"kind", "visibleResult", "evidence", "thresholds", "observed", "persisted"}
-        or result["kind"] != "protected-result"
-        or result["visibleResult"] != protected["visibleResult"]
-        or result["evidence"] != protected["evidence"]
-        or result["thresholds"] != protected["thresholds"]
-        or not result["observed"]
-        or result["observed"] != result["persisted"]
-    ):
-        raise ValidationError("verification evidence does not prove the ratified protected path")
-    evidence_directory = root / ".pi/jig/verification/evidence"
-    actual_evidence = {
-        path.relative_to(root).as_posix()
-        for path in evidence_directory.iterdir()
-    }
-    if actual_evidence != seen:
-        raise ValidationError("verification evidence directory contains unknown or missing files")
-    return value, artifacts
-
-
-def run_verification_command(
-    root: Path, plan: Mapping[str, Any]
-) -> Tuple[bytes, bytes, str]:
-    ensure_owned_directory(root, ".pi/jig/verification")
-    stdout_file = tempfile.TemporaryFile()
-    stderr_file = tempfile.TemporaryFile()
-    started = now()
-
-    def child_limits() -> None:
-        resource.setrlimit(
-            resource.RLIMIT_FSIZE,
-            (VERIFICATION_OUTPUT_LIMIT, VERIFICATION_OUTPUT_LIMIT),
-        )
-
-    def stop_group(pid: int) -> None:
-        try:
-            os.killpg(pid, signal.SIGTERM)
-        except ProcessLookupError:
-            return
-        try:
-            process.wait(timeout=2)
-        except subprocess.TimeoutExpired:
-            try:
-                os.killpg(pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            process.wait()
-
-    process = subprocess.Popen(
-        plan["selfTestCommand"],
-        cwd=root,
-        stdin=subprocess.DEVNULL,
-        stdout=stdout_file,
-        stderr=stderr_file,
-        start_new_session=True,
-        preexec_fn=child_limits,
-    )
-    try:
-        process.wait(timeout=plan["timeoutSeconds"])
-    except subprocess.TimeoutExpired as error:
-        stop_group(process.pid)
-        stdout_file.close()
-        stderr_file.close()
-        raise ValidationError(
-            "verification self-test timed out and its process group was stopped"
-        ) from error
-    stdout_file.seek(0)
-    stderr_file.seek(0)
-    stdout = stdout_file.read(VERIFICATION_OUTPUT_LIMIT + 1)
-    stderr = stderr_file.read(VERIFICATION_OUTPUT_LIMIT + 1)
-    stdout_file.close()
-    stderr_file.close()
-    if len(stdout) > VERIFICATION_OUTPUT_LIMIT or len(stderr) > VERIFICATION_OUTPUT_LIMIT:
-        stop_group(process.pid)
-        raise ValidationError("verification self-test output is too large")
-    if process.returncode != 0:
-        stop_group(process.pid)
-        detail = stderr.decode("utf-8", errors="replace")[:500]
-        raise ValidationError(
-            f"verification self-test failed with {process.returncode}: {detail}"
-        )
-    try:
-        os.killpg(process.pid, 0)
-    except ProcessLookupError:
-        pass
+def merge_pi_settings(root: Path) -> Tuple[str, str]:
+    path = safe_relative_path(root, PI_SETTINGS_PATH, create_parent=True)
+    if path.exists() or path.is_symlink():
+        before_raw = read_contained_bytes(root, PI_SETTINGS_PATH, "Pi project settings")
+        value = read_json_bytes(before_raw, "Pi project settings")
+        if not isinstance(value, dict):
+            raise ValidationError("Pi project settings must be an object")
     else:
-        stop_group(process.pid)
-        raise ValidationError("verification self-test left a process alive")
-    return stdout, stderr, started
+        before_raw = b""
+        value = {}
+    skills = value.get("skills")
+    if skills is None:
+        skills = []
+    if not isinstance(skills, list) or any(not isinstance(item, str) for item in skills):
+        raise ValidationError("Pi project settings skills must be a list of paths")
+    if PI_CURSOR_SKILLS_PATH not in skills:
+        skills.append(PI_CURSOR_SKILLS_PATH)
+    value["skills"] = skills
+    before = sha256_bytes(before_raw) if before_raw else ""
+    raw = (json.dumps(value, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+    if before_raw != raw:
+        atomic_write(root, PI_SETTINGS_PATH, raw)
+    return before, sha256_bytes(raw)
 
 
-def begin_verification(
-    root: Path, isolation: str, raw: bytes
-) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    manifest = require_commandments_boundary(root, isolation, ("commandments-ratified", "verification-building"))
-    value = read_json_bytes(raw, "verification plan input")
-    plan = validate_verification_plan(root, manifest, value)
-    wanted = canonical_json(plan)
-    skill_root = root / ".pi/skills/jig-verification"
+def verification_skill_paths(root: Path) -> List[str]:
+    skills_root = safe_relative_path(root, ".cursor/skills", must_exist=True)
+    if skills_root.is_symlink() or not skills_root.is_dir():
+        raise ValidationError(".cursor/skills must be a contained directory")
+    paths = []
+    for child in skills_root.iterdir():
+        relative = f".cursor/skills/{child.name}/SKILL.md"
+        if VERIFICATION_PATH.fullmatch(relative):
+            skill_file = child / "SKILL.md"
+            if skill_file.exists() or skill_file.is_symlink():
+                paths.append(relative)
+    return sorted(paths)
+
+
+def validate_verification_skill(root: Path, relative: str) -> Tuple[Path, str]:
+    if not isinstance(relative, str) or not VERIFICATION_PATH.fullmatch(relative):
+        raise ValidationError("verification skill must be .cursor/skills/verify-*/SKILL.md")
+    if verification_skill_paths(root) != [relative]:
+        raise ValidationError("configuration requires exactly one .cursor/skills/verify-*/SKILL.md")
+    path = root / relative
+    raw = read_contained_bytes(root, relative, "verification skill")
+    name, _ = parse_frontmatter(raw)
+    if not name.startswith("verify-"):
+        raise ValidationError("verification skill name must start with verify-")
+    return path, sha256_bytes(raw)
+
+
+def complete_configuration(root: Path, isolation: str, raw: bytes) -> Dict[str, Any]:
+    manifest = load_manifest(root)
+    require_isolation(manifest, isolation)
+    value = read_json_bytes(raw, "configuration completion")
     if (
-        manifest["currentState"] != "verification-building"
-        and (skill_root.exists() or skill_root.is_symlink())
+        not isinstance(value, dict)
+        or set(value) != {"schemaVersion", "verificationSkillPath"}
+        or value["schemaVersion"] != SCHEMA_VERSION
     ):
-        raise ValidationError(
-            "pre-existing verification skill is preserved and blocks generation"
-        )
-    plan_path = fixed_artifact_path(root, VERIFICATION_PLAN_PATH)
-    if manifest["currentState"] == "verification-building":
-        if not plan_path.exists() or plan_path.read_bytes() != wanted:
-            raise ValidationError("verification-building uses a different plan")
-        return manifest, plan
-    if plan_path.exists() and plan_path.read_bytes() != wanted:
-        raise ValidationError("uncommitted verification plan differs from the supplied plan")
-    if not plan_path.exists():
-        atomic_write(plan_path, wanted)
-    plan_digest = sha256_bytes(wanted)
-    upsert_artifact(manifest, VERIFICATION_PLAN_PATH, "jig-skill", plan_digest)
-    append_transition(
-        root,
-        manifest,
-        "commandments-ratified",
-        "verification-building",
-        "verification-started",
-        resourceIsolation=isolation,
-        planPath=VERIFICATION_PLAN_PATH,
-        planSha256=plan_digest,
-        commandmentsSha256=manifest["commandments"]["sha256"],
-        protectedFeatureId=plan["protectedFeatureId"],
-    )
-    write_manifest(root, manifest)
-    return manifest, plan
-
-
-def known_runtime_receipts(
-    root: Path, manifest: Mapping[str, Any], plan: Mapping[str, Any]
-) -> List[Tuple[str, str]]:
-    directory = root / ".pi/jig/verification/receipts"
-    if not directory.exists():
-        return []
-    if directory.is_symlink() or not directory.is_dir():
-        raise ValidationError("verification receipt directory is unsafe")
-    expected = {
-        "schemaVersion",
-        "kind",
-        "command",
-        "sourceRevision",
-        "commandmentsSha256",
-        "protectedFeatureId",
-        "startedAt",
-        "finishedAt",
-        "exitCode",
-        "stdoutSha256",
-        "stderrSha256",
-        "result",
-    }
-    receipts = []
-    for path in sorted(directory.iterdir()):
-        if path.is_symlink() or not path.is_file():
-            raise ValidationError("verification receipt directory contains an unknown path")
-        raw = path.read_bytes()
-        digest = sha256_bytes(raw)
-        if path.name != f"runtime-{digest}.json":
-            raise ValidationError("verification receipt name does not prove ownership")
-        value = read_json_bytes(raw, "verification runtime receipt")
-        if (
-            not isinstance(value, dict)
-            or set(value) != expected
-            or value["schemaVersion"] != 1
-            or value["kind"] != "verification-runtime-receipt"
-            or value["command"] != plan["selfTestCommand"]
-            or value["sourceRevision"] != manifest["source"]["revision"]
-            or value["commandmentsSha256"] != manifest["commandments"]["sha256"]
-            or value["protectedFeatureId"] != plan["protectedFeatureId"]
-            or value["exitCode"] != 0
-            or not valid_datetime(value["startedAt"])
-            or not valid_datetime(value["finishedAt"])
-            or re.fullmatch(r"[0-9a-f]{64}", value["stdoutSha256"]) is None
-            or re.fullmatch(r"[0-9a-f]{64}", value["stderrSha256"]) is None
-        ):
-            raise ValidationError("verification runtime receipt is inconsistent")
-        receipts.append((relative_to_root(root, path), digest))
-    return receipts
-
-
-def complete_verification(root: Path, isolation: str) -> Dict[str, Any]:
-    manifest = load_existing_manifest(root)
-    if manifest["resourceIsolation"] != isolation:
-        raise JigError("the existing manifest uses a different resourceIsolation route")
-    validate_current_source(root, manifest)
-    if manifest["currentState"] == "verification-ready":
-        validate_verification_ready(root, manifest)
+        raise ValidationError("configuration completion has the wrong v2 shape")
+    if manifest["currentState"] == "configured":
+        if value["verificationSkillPath"] != manifest["verification"]["skillPath"]:
+            raise ValidationError("repeated configuration names a different verification skill")
+        _, digest = validate_verification_skill(root, value["verificationSkillPath"])
+        merge_pi_settings(root)
+        if digest != manifest["verification"]["sha256"]:
+            manifest["verification"]["sha256"] = digest
+            manifest["verification"]["completedAt"] = now()
+            upsert_artifact(manifest, value["verificationSkillPath"], "repository", digest)
+            write_manifest(root, manifest)
+        validate_configured(root, manifest)
         return manifest
     if manifest["currentState"] != "verification-building":
-        raise ValidationError("verification cannot complete from the current state")
-    plan = load_verification_plan(root, manifest)
-    generated = validate_generated_verification(root, manifest, plan)
-    stdout, stderr, started = run_verification_command(root, plan)
-    result, evidence = parse_runtime_result(root, manifest, plan, stdout)
-    finished = now()
-    runtime = {
-        "schemaVersion": 1,
-        "kind": "verification-runtime-receipt",
-        "command": plan["selfTestCommand"],
-        "sourceRevision": manifest["source"]["revision"],
-        "commandmentsSha256": manifest["commandments"]["sha256"],
-        "protectedFeatureId": plan["protectedFeatureId"],
-        "startedAt": started,
-        "finishedAt": finished,
-        "exitCode": 0,
-        "stdoutSha256": sha256_bytes(stdout),
-        "stderrSha256": sha256_bytes(stderr),
-        "result": result,
+        raise ValidationError("configuration can only complete after principle ratification")
+    _, digest = validate_verification_skill(root, value["verificationSkillPath"])
+    merge_pi_settings(root)
+    upsert_artifact(manifest, value["verificationSkillPath"], "repository", digest)
+    manifest["verification"] = {
+        "skillPath": value["verificationSkillPath"],
+        "sha256": digest,
+        "createdBy": PSTACK_CREATE_SKILL,
+        "maintainedBy": PSTACK_MAINTAIN_SKILL,
+        "completedAt": now(),
     }
-    runtime_raw = canonical_json(runtime)
-    runtime_digest = sha256_bytes(runtime_raw)
-    runtime_relative = f".pi/jig/verification/receipts/runtime-{runtime_digest}.json"
-    write_exact_artifact(root, runtime_relative, runtime_raw)
-    for relative, digest in generated:
-        upsert_artifact(manifest, relative, "jig-skill", digest)
-    for relative, digest in evidence:
-        upsert_artifact(manifest, relative, "repository", digest)
-    for relative, digest in known_runtime_receipts(root, manifest, plan):
-        upsert_artifact(manifest, relative, "controller", digest)
-    manifest["verification"].append(
+    transition(
+        root,
+        manifest,
+        "configured",
+        "repository-configured",
         {
-            "kind": "runtime",
-            "command": " ".join(plan["selfTestCommand"]),
-            "exitCode": 0,
-            "receiptPath": runtime_relative,
-            "outputSha256": sha256_bytes(stdout),
-            "revision": manifest["source"]["revision"],
-            "finishedAt": finished,
-        }
-    )
-    hashes = dict(generated)
-    append_transition(
-        root,
-        manifest,
-        "verification-building",
-        "verification-ready",
-        "verification-ready",
-        resourceIsolation=isolation,
-        planPath=VERIFICATION_PLAN_PATH,
-        planSha256=sha256_file(root / VERIFICATION_PLAN_PATH),
-        commandmentsSha256=manifest["commandments"]["sha256"],
-        protectedFeatureId=plan["protectedFeatureId"],
-        skillPath=VERIFICATION_SKILL_PATH,
-        skillSha256=hashes[VERIFICATION_SKILL_PATH],
-        featureIndexPath=VERIFICATION_FEATURE_INDEX_PATH,
-        featureIndexSha256=hashes[VERIFICATION_FEATURE_INDEX_PATH],
-        runtimeReceiptPath=runtime_relative,
-        runtimeReceiptSha256=runtime_digest,
-    )
-    manifest["updatedAt"] = max(manifest["updatedAt"], finished)
-    write_manifest(root, manifest)
-    return manifest
-
-
-def validate_verification_ready(root: Path, manifest: Mapping[str, Any]) -> Dict[str, Any]:
-    plan = load_verification_plan(root, manifest)
-    generated = dict(validate_generated_verification(root, manifest, plan))
-    artifacts = {item["path"]: item for item in manifest["artifacts"]}
-    for relative, digest in known_runtime_receipts(root, manifest, plan):
-        if artifacts.get(relative) != {"path": relative, "owner": "controller", "sha256": digest}:
-            raise ValidationError("runtime receipt ownership is inconsistent")
-    for relative, digest in generated.items():
-        if artifacts.get(relative) != {"path": relative, "owner": "jig-skill", "sha256": digest}:
-            raise ValidationError("ready verification artifact registration is inconsistent")
-    if len(manifest["verification"]) != 1:
-        raise ValidationError("verification-ready requires one runtime verification")
-    record = manifest["verification"][0]
-    path = safe_relative_path(root, record["receiptPath"], must_exist=True)
-    if (
-        artifacts.get(record["receiptPath"]) != {
-            "path": record["receiptPath"],
-            "owner": "controller",
-            "sha256": sha256_file(path),
-        }
-        or record["exitCode"] != 0
-        or record["kind"] != "runtime"
-    ):
-        raise ValidationError("runtime verification receipt registration is inconsistent")
-    runtime = read_json(path, "runtime verification receipt")
-    if (
-        runtime["command"] != plan["selfTestCommand"]
-        or runtime["sourceRevision"] != record["revision"]
-        or runtime["finishedAt"] != record["finishedAt"]
-        or runtime["stdoutSha256"] != record["outputSha256"]
-        or record["command"] != " ".join(plan["selfTestCommand"])
-    ):
-        raise ValidationError("runtime verification record differs from its receipt")
-    result_raw = canonical_json(runtime["result"])
-    _result, evidence = parse_runtime_result(root, manifest, plan, result_raw)
-    for relative, digest in evidence:
-        if artifacts.get(relative) != {"path": relative, "owner": "repository", "sha256": digest}:
-            raise ValidationError("verification evidence registration is inconsistent")
-    return plan
-
-
-def validate_verification(root: Path, isolation: str) -> Dict[str, Any]:
-    manifest = load_existing_manifest(root)
-    if manifest["resourceIsolation"] != isolation:
-        raise JigError("the existing manifest uses a different resourceIsolation route")
-    validate_current_source(root, manifest)
-    if manifest["currentState"] != "verification-ready":
-        raise ValidationError("verification is not ready")
-    validate_verification_ready(root, manifest)
-    return manifest
-
-
-def begin_step_selection(root: Path, isolation: str) -> Dict[str, Any]:
-    manifest = load_existing_manifest(root)
-    if manifest["resourceIsolation"] != isolation:
-        raise JigError("the existing manifest uses a different resourceIsolation route")
-    validate_current_source(root, manifest)
-    if manifest["currentState"] == "step-selecting":
-        validate_verification_ready(root, manifest)
-        return manifest
-    if manifest["currentState"] != "verification-ready":
-        raise ValidationError("step selection requires verification-ready")
-    validate_verification_ready(root, manifest)
-    record = manifest["verification"][0]
-    runtime_path = safe_relative_path(root, record["receiptPath"], must_exist=True)
-    append_transition(
-        root,
-        manifest,
-        "verification-ready",
-        "step-selecting",
-        "step-selection-started",
-        resourceIsolation=isolation,
-        commandmentsSha256=manifest["commandments"]["sha256"],
-        runtimeReceiptPath=record["receiptPath"],
-        runtimeReceiptSha256=sha256_file(runtime_path),
+            "principlePath": PRINCIPLE_PATH,
+            "verificationSkillPath": value["verificationSkillPath"],
+            "piSettingsPath": PI_SETTINGS_PATH,
+        },
     )
     write_manifest(root, manifest)
     return manifest
 
 
-def validate_committed_selection(
-    root: Path, manifest: Mapping[str, Any], selection: Any, draft: Optional[Mapping[str, Any]] = None
-) -> None:
-    validate_instance(selection, load_schema("selection"))
-    if not isinstance(selection, dict):
-        raise ValidationError("selection is not an object")
-    semantic = {key: selection[key] for key in SELECTION_DRAFT_FIELDS}
-    if draft is not None and not json_equal(semantic, draft):
-        raise ValidationError("existing selection differs from the submitted draft")
+def validate_configured(root: Path, manifest: Dict[str, Any]) -> None:
+    principle_raw = read_contained_bytes(root, PRINCIPLE_PATH, "ratified repository Principle")
+    if sha256_bytes(principle_raw) != manifest["principle"]["sha256"]:
+        raise ValidationError("ratified repository Principle changed")
+    parse_frontmatter(principle_raw, "principle-repository")
+    verification = manifest["verification"]
+    _, digest = validate_verification_skill(root, verification["skillPath"])
+    if digest != verification["sha256"]:
+        raise ValidationError("configured verification skill changed; run the pstack maintenance skill and reconfigure")
+    settings = read_contained_json(root, PI_SETTINGS_PATH, "Pi project settings")
+    skills = settings.get("skills") if isinstance(settings, dict) else None
     if (
-        selection["repositoryRevision"] != manifest["source"]["revision"]
-        or selection["commandmentsSha256"] != manifest["commandments"]["sha256"]
+        not isinstance(skills, list)
+        or any(not isinstance(item, str) for item in skills)
+        or PI_CURSOR_SKILLS_PATH not in skills
     ):
-        raise ValidationError("selection differs from the current source or COMMANDMENTS boundary")
-    registered = any(item["path"] == SELECTION_PATH for item in manifest["artifacts"])
-    if registered and manifest["firstStep"]["selectedCandidateId"] != selection["selectedCandidateId"]:
-        raise ValidationError("manifest selected candidate differs from the committed selection")
-    candidates = selection["candidates"]
-    if len(candidates) > 20:
-        raise ValidationError("selection has more than 20 candidates")
-    ids = [candidate["id"] for candidate in candidates]
-    if len(ids) != len(set(ids)):
-        raise ValidationError("selection has duplicate candidate IDs")
-    selected_id = selection["selectedCandidateId"]
-    commandments = (root / COMMANDMENTS_ROOT_PATH).read_text(encoding="utf-8")
-    known_ids = set(re.findall(r"^### (CMD-[0-9]{3})\. ", commandments, re.MULTILINE))
-    for candidate in candidates:
-        eligibility = candidate["eligibility"]
-        if selected_id is None and (eligibility["eligible"] or not eligibility["rejectionReasons"]):
-            raise ValidationError("no-selection candidates must be ineligible with rejection reasons")
-        if candidate["responseLayer"] == "behavioral-eval" and candidate["behavioralEval"] != "required":
-            raise ValidationError("behavioral-eval candidates must require behavioral evaluation")
-        if not set(candidate["commandmentIds"]).issubset(known_ids):
-            raise ValidationError("selection cites an unknown COMMANDMENT ID")
-        for evidence in candidate["evidence"]:
-            relative = evidence["path"]
-            if relative == COMMANDMENTS_ROOT_PATH or relative.startswith(".pi/"):
-                raise ValidationError("selection evidence is not a source file")
-            path = safe_relative_path(root, relative, must_exist=True)
-            flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-            try:
-                descriptor = os.open(path, flags)
-                with os.fdopen(descriptor, encoding="utf-8") as source:
-                    if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
-                        raise ValidationError("selection evidence is not a regular source file")
-                    if not any(number == evidence["line"] for number, _line in enumerate(source, 1)):
-                        raise ValidationError("selection evidence line does not exist")
-            except (OSError, UnicodeError) as error:
-                raise ValidationError("selection evidence is not a readable source file") from error
-    if selected_id is not None:
-        matches = [candidate for candidate in candidates if candidate["id"] == selected_id]
-        if len(matches) != 1:
-            raise ValidationError("selected candidate ID must match exactly one candidate")
-        eligibility = matches[0]["eligibility"]
-        if not eligibility["eligible"] or eligibility["rejectionReasons"]:
-            raise ValidationError("selected candidate must be eligible with no rejection reasons")
+        raise ValidationError("Pi project settings no longer load .cursor/skills")
 
 
-def validate_command_set(command_set: Mapping[str, Any], label: str) -> None:
-    commands = command_set["commands"]
-    if len(commands) > 4:
-        raise ValidationError(f"{label} has more than four commands")
-    for command in commands:
-        if not command.strip() or "\n" in command or "\r" in command or len(command) > 1000:
-            raise ValidationError(f"{label} commands must be nonempty single lines of at most 1000 characters")
-
-
-def validate_committed_proposal(
-    root: Path, manifest: Mapping[str, Any], proposal: Any, draft: Optional[Mapping[str, Any]] = None
-) -> None:
-    validate_instance(proposal, load_schema("proposal"))
-    if not isinstance(proposal, dict):
-        raise ValidationError("proposal is not an object")
-    if draft is not None and not json_equal(proposal, draft):
-        raise ValidationError("existing proposal differs from the submitted draft")
-    selection_artifact = next((item for item in manifest["artifacts"] if item["path"] == SELECTION_PATH), None)
-    if selection_artifact is None or selection_artifact["owner"] != "controller":
-        raise ValidationError("proposal requires a registered controller selection")
-    selection_path = safe_relative_path(root, SELECTION_PATH, must_exist=True)
-    selection_digest = sha256_file(selection_path)
-    if selection_artifact["sha256"] != selection_digest:
-        raise ValidationError("registered selection differs from the committed file")
-    selection = read_json(selection_path, "selection")
-    validate_committed_selection(root, manifest, selection)
-    selected_id = selection["selectedCandidateId"]
-    candidates = [item for item in selection["candidates"] if item["id"] == selected_id]
-    if selected_id is None or len(candidates) != 1:
-        raise ValidationError("proposal requires one selected candidate")
-    candidate = candidates[0]
-    expected = {
-        "candidateId": selected_id,
-        "repositoryRevision": manifest["source"]["revision"],
-        "commandmentsSha256": manifest["commandments"]["sha256"],
-        "selectionSha256": selection_digest,
-        "commandmentIds": candidate["commandmentIds"],
-        "evidence": candidate["evidence"],
-        "responseLayer": candidate["responseLayer"],
-        "blastRadius": candidate["riskCost"]["blastRadius"],
-        "uncertainty": candidate["riskCost"]["uncertainty"],
-        "potetoPlaybook": candidate["potetoPlaybook"],
-    }
-    if any(not json_equal(proposal[key], value) for key, value in expected.items()):
-        raise ValidationError("proposal differs from its selected candidate boundary")
-    if proposal["evalDecision"]["status"] != candidate["behavioralEval"]:
-        raise ValidationError("proposal eval decision differs from its selected candidate")
-    if candidate["behavioralEval"] == "required" and not proposal["proof"]["independentReview"]:
-        raise ValidationError("behavioral evaluation requires independent review")
-    command_sets = [("baseline", proposal["baseline"])]
-    command_sets.extend((f"proof.{key}", value) for key, value in proposal["proof"].items() if isinstance(value, dict))
-    command_sets.append(("rollback", {"commands": proposal["rollback"]["commands"]}))
-    for label, command_set in command_sets:
-        validate_command_set(command_set, label)
-    first_step = manifest["firstStep"]
-    registered = any(item["path"] == PROPOSAL_PATH for item in manifest["artifacts"])
-    terminal = manifest["currentState"] == "initialized"
-    if (
-        manifest["currentState"] not in {"step-selecting", "step-running", "failed-step-running", "initialized"}
-        or first_step["selectionPath"] != SELECTION_PATH
-        or first_step["selectedCandidateId"] != selected_id
-        or first_step["proposalPath"] != (PROPOSAL_PATH if registered else None)
-        or first_step["resultPath"] != (RESULT_PATH if terminal else None)
-        or first_step["outcome"] not in ({"kept", "reverted"} if terminal else {"pending"})
-    ):
-        raise ValidationError("proposal links do not match the first step")
-
-
-def validate_no_candidate_result(root: Path, manifest: Mapping[str, Any]) -> None:
-    first_step = manifest["firstStep"]
-    if first_step != {
-        "selectionPath": SELECTION_PATH,
-        "selectedCandidateId": None,
-        "proposalPath": None,
-        "resultPath": RESULT_PATH,
-        "outcome": "no-eligible-candidate",
-    }:
-        raise ValidationError("initialized no-candidate manifest has an invalid first-step shape")
-    artifacts = {item["path"]: item for item in manifest["artifacts"]}
-    selection_path = safe_relative_path(root, SELECTION_PATH, must_exist=True)
-    result_path = safe_relative_path(root, RESULT_PATH, must_exist=True)
-    selection_digest = sha256_file(selection_path)
-    result_digest = sha256_file(result_path)
-    if artifacts.get(SELECTION_PATH) != {"path": SELECTION_PATH, "owner": "controller", "sha256": selection_digest}:
-        raise ValidationError("initialized selection ownership is inconsistent")
-    if artifacts.get(RESULT_PATH) != {"path": RESULT_PATH, "owner": "controller", "sha256": result_digest}:
-        raise ValidationError("initialized result ownership is inconsistent")
-    selection = read_json(selection_path, "selection")
-    validate_committed_selection(root, manifest, selection)
-    if selection["selectedCandidateId"] is not None:
-        raise ValidationError("no-candidate result requires a null selection")
-    result = read_json(result_path, "result")
-    validate_instance(result, load_schema("result"))
-    expected = {
-        "schemaVersion": 1, "stepId": "0001", "outcome": "no-eligible-candidate",
-        "selectionPath": SELECTION_PATH, "selectionSha256": selection_digest,
-        "proposalPath": None, "proposalSha256": None, "inputRevision": None,
-        "outputRevision": None, "branch": None, "worktree": None, "commands": [],
-        "diffSha256": None, "independentVerdict": None,
-    }
-    if not isinstance(result, dict) or any(result.get(key) != value for key, value in expected.items()):
-        raise ValidationError("no-candidate result differs from its selection boundary")
-    step_dir = result_path.parent
-    if {item.name for item in step_dir.iterdir()} != {"selection.json", "result.json"}:
-        raise ValidationError("initialized step directory contains an unknown artifact")
-
-def selected_transition_fields(manifest: Mapping[str, Any], worker: Mapping[str, Any],
-    result: Mapping[str, Any], result_digest: Optional[str]) -> Dict[str, Any]:
-    return {
-        "resourceIsolation": manifest["resourceIsolation"],
-        "commandmentsSha256": manifest["commandments"]["sha256"],
-        "selectionPath": SELECTION_PATH, "selectionSha256": worker["selectionSha256"],
-        "proposalPath": PROPOSAL_PATH, "proposalSha256": worker["proposalSha256"],
-        "resultPath": RESULT_PATH, "resultSha256": result_digest,
-        "inputRevision": result["inputRevision"], "outputRevision": result["outputRevision"],
-        "branch": result["branch"], "worktree": result["worktree"],
-        "diffSha256": result["diffSha256"], "outcome": result["outcome"],
-    }
-
-
-def validate_selected_step_result(root: Path, manifest: Mapping[str, Any]) -> None:
-    validate_current_source(root, manifest)
-    worker = validate_step_worker(root, manifest)
-    result = validate_staged_step_result(root, manifest, worker)
-    expected = {
-        "selectionPath": SELECTION_PATH, "selectedCandidateId": worker["selectedCandidateId"],
-        "proposalPath": PROPOSAL_PATH, "resultPath": RESULT_PATH, "outcome": result["outcome"],
-    }
-    if manifest["firstStep"] != expected or result["outcome"] not in {"kept", "reverted"}:
-        raise ValidationError("initialized selected manifest differs from its terminal result")
-    transition = manifest["transitions"][-1]
-    if (transition["from"], transition["to"]) != ("step-running", "initialized"):
-        raise ValidationError("initialized selected result lacks its terminal transition")
-
-
-def atomic_create(path: Path, data: bytes) -> None:
-    temporary = path.parent / f".jigctl-{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
-    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    try:
-        offset = 0
-        while offset < len(data):
-            offset += os.write(descriptor, data[offset:])
-        os.fsync(descriptor)
-        os.link(temporary, path, follow_symlinks=False)
-        fsync_directory(path.parent)
-    except FileExistsError as error:
-        raise JigError(f"owned artifact path already exists: {relative_to_root(path.parents[4], path)}") from error
-    finally:
-        os.close(descriptor)
-        temporary.unlink(missing_ok=True)
-
-
-def commit_step_selection(root: Path, isolation: str, raw: bytes) -> Dict[str, Any]:
-    manifest = load_existing_manifest(root)
-    if manifest["resourceIsolation"] != isolation:
-        raise JigError("the existing manifest uses a different resourceIsolation route")
-    validate_current_source(root, manifest)
-    if manifest["currentState"] != "step-selecting":
-        raise ValidationError("selection commitment requires step-selecting")
-    validate_verification_ready(root, manifest)
-    draft = read_json_bytes(raw, "selection draft")
-    if not isinstance(draft, dict) or set(draft) != SELECTION_DRAFT_FIELDS:
-        raise ValidationError("selection draft must contain every semantic selection field exactly")
-    input_digest = sha256_bytes(canonical_json(draft))
-    path = fixed_artifact_path(root, SELECTION_PATH)
-    existing = path.exists() or path.is_symlink()
-    if existing:
-        if path.is_symlink() or not path.is_file():
-            raise JigError("existing selection collision is not a regular file")
-        selection = read_json(path, "selection")
-        validate_committed_selection(root, manifest, selection, draft)
-        if selection["controllerReceipt"]["inputSha256"] != input_digest:
-            raise ValidationError("existing selection input digest differs from the submitted draft")
-    else:
-        selection = dict(draft)
-        selection["controllerReceipt"] = {"recordedAt": now(), "inputSha256": input_digest}
-        validate_committed_selection(root, manifest, selection, draft)
-        atomic_create(path, canonical_json(selection))
-    digest = sha256_file(path)
-    registered = next((item for item in manifest["artifacts"] if item["path"] == SELECTION_PATH), None)
-    expected = {"path": SELECTION_PATH, "owner": "controller", "sha256": digest}
-    if registered is not None:
-        if registered != expected:
-            raise ValidationError("registered selection differs from the committed file")
-        return manifest
-    upsert_artifact(manifest, SELECTION_PATH, "controller", digest)
-    manifest["firstStep"]["selectedCandidateId"] = selection["selectedCandidateId"]
-    manifest["updatedAt"] = selection["controllerReceipt"]["recordedAt"]
-    write_manifest(root, manifest)
+def validate_configuration(root: Path, isolation: str) -> Dict[str, Any]:
+    manifest = load_manifest(root)
+    require_isolation(manifest, isolation)
+    if manifest["currentState"] != "configured":
+        raise ValidationError("repository is not configured")
+    validate_configured(root, manifest)
     return manifest
 
 
-def commit_step_proposal(root: Path, isolation: str, raw: bytes) -> Dict[str, Any]:
-    manifest = load_existing_manifest(root)
-    if manifest["resourceIsolation"] != isolation:
-        raise JigError("the existing manifest uses a different resourceIsolation route")
-    validate_current_source(root, manifest)
-    if manifest["currentState"] != "step-selecting":
-        raise ValidationError("proposal commitment requires step-selecting")
-    validate_verification_ready(root, manifest)
-    draft = read_json_bytes(raw, "proposal draft")
-    validate_committed_proposal(root, manifest, draft, draft)
-    path = fixed_artifact_path(root, PROPOSAL_PATH)
-    names = {item.name for item in path.parent.iterdir()}
-    if names - {"selection.json", "proposal.json"}:
-        raise JigError("step directory contains an unknown artifact")
-    if path.exists() or path.is_symlink():
-        if path.is_symlink() or not path.is_file():
-            raise JigError("existing proposal collision is not a regular file")
-        proposal = read_json(path, "proposal")
-        if canonical_json(proposal) != path.read_bytes():
-            raise ValidationError("existing proposal is not the exact recoverable proposal")
-        validate_committed_proposal(root, manifest, proposal, draft)
-    else:
-        atomic_create(path, canonical_json(draft))
-    digest = sha256_file(path)
-    registered = next((item for item in manifest["artifacts"] if item["path"] == PROPOSAL_PATH), None)
-    expected = {"path": PROPOSAL_PATH, "owner": "controller", "sha256": digest}
-    if registered is not None:
-        if registered != expected:
-            raise ValidationError("registered proposal differs from the committed file")
-        return manifest
-    upsert_artifact(manifest, PROPOSAL_PATH, "controller", digest)
-    manifest["firstStep"]["proposalPath"] = PROPOSAL_PATH
-    manifest["updatedAt"] = now()
-    write_manifest(root, manifest)
-    return manifest
-
-
-def worktree_entries(root: Path) -> List[Dict[str, str]]:
-    entries: List[Dict[str, str]] = []
-    for block in run_git(root, ["worktree", "list", "--porcelain"]).split("\n\n"):
-        entry: Dict[str, str] = {}
-        for line in block.splitlines():
-            key, _, value = line.partition(" ")
-            entry[key] = value
-        if entry:
-            entries.append(entry)
-    return entries
-
-
-def branch_revision(root: Path, branch: str) -> Optional[str]:
-    result = subprocess.run(
-        ["git", "-C", str(root), "show-ref", "--verify", "--quiet", f"refs/heads/{branch}"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
+def record_failure(root: Path, isolation: str, state: str, reason: str) -> Dict[str, Any]:
+    manifest = load_manifest(root)
+    require_isolation(manifest, isolation)
+    if manifest["currentState"] != state or state not in ACTIVE_STATES:
+        raise ValidationError("failure state differs from the current active state")
+    reason = bounded_text(reason, "failure reason", limit=2000)
+    target = f"failed-{state}"
+    receipt = {
+        "schemaVersion": SCHEMA_VERSION,
+        "kind": "phase-failed",
+        "from": state,
+        "to": target,
+        "at": now(),
+        "details": {"reason": reason},
+    }
+    path_value = f".pi/jig/receipts/{len(manifest['transitions']) + 1:04d}-phase-failed.json"
+    safe_relative_path(root, path_value, create_parent=True)
+    digest = atomic_json(root, path_value, receipt)
+    manifest["transitions"].append(
+        {"from": state, "to": target, "at": receipt["at"], "receiptPath": path_value, "receiptSha256": digest}
     )
-    if result.returncode == 1:
-        return None
-    if result.returncode != 0:
-        raise JigError("Git could not inspect the reserved step branch")
-    return run_git(root, ["rev-parse", f"refs/heads/{branch}"])
-
-
-def ensure_step_worktree(root: Path, branch: str, revision: str) -> Path:
-    parent = ensure_owned_directory(root, ".pi/jig/worktrees")
-    path = parent / "0001"
-    entries = worktree_entries(root)
-    branch_ref = f"refs/heads/{branch}"
-    branch_head = branch_revision(root, branch)
-    matches = [item for item in entries if item.get("worktree") == str(path)]
-    users = [item for item in entries if item.get("branch") == branch_ref]
-    if path.exists() or path.is_symlink():
-        if path.is_symlink() or not path.is_dir() or len(matches) != 1:
-            raise JigError("reserved step worktree path has an unknown identity")
-    elif matches:
-        raise JigError("reserved step worktree has a stale Git administrative entry")
-    if users and users != matches:
-        raise JigError("reserved step branch is registered to a different worktree")
-    if branch_head is not None and branch_head != revision:
-        raise JigError("reserved step branch has the wrong revision")
-    if not matches:
-        arguments = ["worktree", "add", "--quiet"]
-        if branch_head is None:
-            arguments.extend(["-b", branch, str(path), revision])
-        else:
-            arguments.extend([str(path), branch])
-        result = subprocess.run(
-            ["git", "-C", str(root), *arguments], check=False,
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
-        if result.returncode != 0:
-            raise JigError("Git could not create the reserved step worktree")
-        matches = [item for item in worktree_entries(root) if item.get("worktree") == str(path)]
-    if (len(matches) != 1 or matches[0].get("branch") != branch_ref
-            or matches[0].get("HEAD") != revision or branch_revision(root, branch) != revision):
-        raise JigError("reserved step worktree identity does not match the proposal")
-    return path
-
-
-def clean_step_worktree(path: Path, revision: str) -> None:
-    if run_git(path, ["rev-parse", "HEAD"]) != revision:
-        raise ValidationError("baseline changed the isolated worktree revision")
-    if run_git(path, ["status", "--porcelain=v1", "--untracked-files=all"]):
-        raise ValidationError("baseline changed the isolated worktree source")
-
-
-def validate_baseline_receipt(value: Any, expected: Mapping[str, Any]) -> None:
-    fields = set(expected) | {
-        "exitCode", "timedOut", "finishedAt", "stdout", "stdoutSha256",
-        "stdoutTruncated", "stderr", "stderrSha256", "stderrTruncated", "outputSha256",
-    }
-    if not isinstance(value, dict) or set(value) != fields:
-        raise ValidationError("baseline command receipt has an invalid shape")
-    if any(value.get(key) != item for key, item in expected.items()):
-        raise ValidationError("baseline command receipt differs from the proposal boundary")
-    if (type(value["exitCode"]) is not int or type(value["timedOut"]) is not bool
-            or not isinstance(value["finishedAt"], str) or not valid_datetime(value["finishedAt"])):
-        raise ValidationError("baseline command receipt has invalid completion evidence")
-    for stream in ("stdout", "stderr"):
-        output = value[stream]
-        if (not isinstance(output, str) or len(output.encode("utf-8")) > BASELINE_OUTPUT_LIMIT
-                or value[f"{stream}Sha256"] != sha256_bytes(output.encode("utf-8"))
-                or type(value[f"{stream}Truncated"]) is not bool):
-            raise ValidationError("baseline command receipt has invalid bounded output")
-    if value["outputSha256"] != sha256_bytes(canonical_json({
-            "stdout": value["stdout"], "stderr": value["stderr"]})):
-        raise ValidationError("command receipt has an invalid canonical output hash")
-
-
-def run_baseline_command(path: Path, command: str) -> Dict[str, Any]:
-    environment = dict(os.environ)
-    environment["PYTHONDONTWRITEBYTECODE"] = "1"
-    with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
-        process = subprocess.Popen(
-            ["sh", "-c", command], cwd=path, env=environment,
-            stdout=stdout_file, stderr=stderr_file, start_new_session=True,
-        )
-        timed_out = False
-        try:
-            process.wait(timeout=BASELINE_TIMEOUT_SECONDS)
-        except subprocess.TimeoutExpired:
-            timed_out = True
-            os.killpg(process.pid, signal.SIGKILL)
-            process.wait()
-        outputs = []
-        truncated = []
-        for stream in (stdout_file, stderr_file):
-            stream.seek(0, os.SEEK_END)
-            truncated.append(stream.tell() > BASELINE_OUTPUT_LIMIT)
-            stream.seek(0)
-            outputs.append(stream.read(BASELINE_OUTPUT_LIMIT).decode("utf-8", errors="replace"))
-    code = 124 if timed_out else (process.returncode if process.returncode >= 0 else 128 - process.returncode)
-    result = {
-        "exitCode": code, "timedOut": timed_out, "finishedAt": now(),
-        "stdout": outputs[0], "stdoutSha256": sha256_bytes(outputs[0].encode()),
-        "stdoutTruncated": truncated[0], "stderr": outputs[1],
-        "stderrSha256": sha256_bytes(outputs[1].encode()), "stderrTruncated": truncated[1],
-    }
-    result["outputSha256"] = sha256_bytes(canonical_json({
-        "stdout": result["stdout"], "stderr": result["stderr"]}))
-    return result
-
-
-def prepare_step_worktree(root: Path, isolation: str) -> Dict[str, Any]:
-    manifest = load_existing_manifest(root)
-    if manifest["resourceIsolation"] != isolation:
-        raise JigError("the existing manifest uses a different resourceIsolation route")
-    validate_current_source(root, manifest)
-    if manifest["currentState"] != "step-selecting" or manifest["firstStep"]["resultPath"] is not None:
-        raise ValidationError("baseline preparation requires a pending step-selecting proposal")
-    validate_verification_ready(root, manifest)
-    proposal_path = safe_relative_path(root, PROPOSAL_PATH, must_exist=True)
-    proposal = read_json(proposal_path, "proposal")
-    validate_committed_proposal(root, manifest, proposal)
-    proposal_digest = sha256_file(proposal_path)
-    proposal_artifact = next((item for item in manifest["artifacts"] if item["path"] == PROPOSAL_PATH), None)
-    if proposal_artifact != {"path": PROPOSAL_PATH, "owner": "controller", "sha256": proposal_digest}:
-        raise ValidationError("registered proposal differs from the committed file")
-    selection_digest = sha256_file(root / SELECTION_PATH)
-    branch = f"jig/init-step-0001-{selection_digest[:12]}"
-    revision = proposal["repositoryRevision"]
-    worktree = ensure_step_worktree(root, branch, revision)
-    clean_step_worktree(worktree, revision)
-    commands = proposal["baseline"]["commands"]
-    command_dir = ensure_owned_directory(root, ".pi/jig/steps/0001/commands")
-    allowed = {f"baseline-{index:02d}.json" for index in range(1, len(commands) + 1)}
-    if {item.name for item in command_dir.iterdir()} - allowed:
-        raise JigError("baseline command directory contains an unknown artifact")
-    summaries = []
-    artifacts = []
-    for index, command in enumerate(commands, 1):
-        relative = f".pi/jig/steps/0001/commands/baseline-{index:02d}.json"
-        receipt_path = root / relative
-        expected = {
-            "schemaVersion": 1, "kind": "step-command", "phase": "baseline",
-            "index": index, "command": command, "worktree": STEP_WORKTREE,
-            "branch": branch, "revision": revision,
-        }
-        if receipt_path.exists() or receipt_path.is_symlink():
-            if receipt_path.is_symlink() or not receipt_path.is_file():
-                raise JigError("baseline command receipt has an unknown identity")
-            receipt = read_json(receipt_path, "baseline command receipt")
-            validate_baseline_receipt(receipt, expected)
-            if canonical_json(receipt) != receipt_path.read_bytes():
-                raise ValidationError("baseline command receipt has unknown bytes")
-        else:
-            receipt = {**expected, **run_baseline_command(worktree, command)}
-            validate_baseline_receipt(receipt, expected)
-            atomic_create(receipt_path, canonical_json(receipt))
-        clean_step_worktree(worktree, revision)
-        if receipt["exitCode"] != 0 or receipt["timedOut"]:
-            raise ValidationError("baseline command did not pass")
-        digest = sha256_file(receipt_path)
-        artifacts.append((relative, digest))
-        summaries.append({
-            "phase": "baseline", "index": index, "command": command,
-            "receiptPath": relative, "receiptSha256": digest,
-            "exitCode": receipt["exitCode"], "finishedAt": receipt["finishedAt"],
-        })
-    before_static = {
-        "schemaVersion": 1, "kind": "step-before", "stepId": "0001",
-        "proposalPath": PROPOSAL_PATH, "proposalSha256": proposal_digest,
-        "inputRevision": revision, "branch": branch, "worktree": STEP_WORKTREE,
-        "commands": summaries,
-    }
-    before_path = root / BEFORE_PATH
-    if before_path.exists() or before_path.is_symlink():
-        if before_path.is_symlink() or not before_path.is_file():
-            raise JigError("before receipt has an unknown identity")
-        before = read_json(before_path, "before receipt")
-        if (not isinstance(before, dict) or set(before) != set(before_static) | {"recordedAt"}
-                or any(before.get(key) != value for key, value in before_static.items())
-                or not isinstance(before["recordedAt"], str) or not valid_datetime(before["recordedAt"])
-                or canonical_json(before) != before_path.read_bytes()):
-            raise ValidationError("before receipt is not the exact recoverable baseline pin")
-    else:
-        before = {**before_static, "recordedAt": now()}
-        atomic_create(before_path, canonical_json(before))
-    artifacts.append((BEFORE_PATH, sha256_file(before_path)))
-    validate_current_source(root, manifest)
-    registered = {item["path"]: item for item in manifest["artifacts"]}
-    expected_artifacts = {path: {"path": path, "owner": "controller", "sha256": digest} for path, digest in artifacts}
-    if all(registered.get(path) == value for path, value in expected_artifacts.items()):
-        return manifest
-    if any(path in registered and registered[path] != value for path, value in expected_artifacts.items()):
-        raise ValidationError("registered baseline evidence differs from the exact receipts")
-    for path, digest in artifacts:
-        upsert_artifact(manifest, path, "controller", digest)
-    manifest["updatedAt"] = before["recordedAt"]
+    upsert_artifact(manifest, path_value, "controller", digest)
+    manifest["currentState"] = target
     write_manifest(root, manifest)
     return manifest
 
 
-def validate_step_worker(root: Path, manifest: Mapping[str, Any]) -> Dict[str, Any]:
-    artifacts = {item["path"]: item for item in manifest["artifacts"]}
-    required = (SELECTION_PATH, PROPOSAL_PATH, BEFORE_PATH, WORKER_PATH)
-    paths = {name: safe_relative_path(root, name, must_exist=True) for name in required}
-    if any(artifacts.get(name) != {"path": name, "owner": "controller", "sha256": sha256_file(paths[name])} for name in required):
-        raise ValidationError("worker authorization artifacts do not match the manifest")
-    proposal = read_json(paths[PROPOSAL_PATH], "proposal")
-    validate_committed_proposal(root, manifest, proposal)
-    before = read_json(paths[BEFORE_PATH], "before receipt")
-    commands = proposal["baseline"]["commands"]
-    if (not isinstance(before, dict) or set(before) != {
-            "schemaVersion", "kind", "stepId", "proposalPath", "proposalSha256",
-            "inputRevision", "branch", "worktree", "commands", "recordedAt"}
-            or before["schemaVersion"] != 1 or before["kind"] != "step-before"
-            or before["stepId"] != "0001" or before["proposalPath"] != PROPOSAL_PATH
-            or before["proposalSha256"] != sha256_file(paths[PROPOSAL_PATH])
-            or before["inputRevision"] != proposal["repositoryRevision"]
-            or before["worktree"] != STEP_WORKTREE or len(before["commands"]) != len(commands)
-            or not valid_datetime(before["recordedAt"]) or canonical_json(before) != paths[BEFORE_PATH].read_bytes()):
-        raise ValidationError("worker authorization has an invalid before receipt")
-    for index, command in enumerate(commands, 1):
-        relative = f".pi/jig/steps/0001/commands/baseline-{index:02d}.json"
-        receipt_path = safe_relative_path(root, relative, must_exist=True)
-        expected = {"schemaVersion": 1, "kind": "step-command", "phase": "baseline",
-            "index": index, "command": command, "worktree": STEP_WORKTREE,
-            "branch": before["branch"], "revision": before["inputRevision"]}
-        receipt = read_json(receipt_path, "baseline command receipt")
-        validate_baseline_receipt(receipt, expected)
-        summary = before["commands"][index - 1]
-        if (canonical_json(receipt) != receipt_path.read_bytes() or receipt["exitCode"] != 0
-                or receipt["timedOut"] or summary != {
-                    "phase": "baseline", "index": index, "command": command,
-                    "receiptPath": relative, "receiptSha256": sha256_file(receipt_path),
-                    "exitCode": 0, "finishedAt": receipt["finishedAt"]}):
-            raise ValidationError("worker authorization baseline did not pass exactly")
-    worker_path = paths[WORKER_PATH]
-    worker = read_json(worker_path, "worker receipt")
-    expected = {
-        "schemaVersion": 1, "kind": "step-worker", "stepId": "0001",
-        "selectedCandidateId": proposal["candidateId"],
-        "selectionSha256": sha256_file(paths[SELECTION_PATH]),
-        "proposalSha256": sha256_file(paths[PROPOSAL_PATH]),
-        "beforeSha256": sha256_file(paths[BEFORE_PATH]),
-        "inputRevision": before["inputRevision"], "branch": before["branch"],
-        "worktree": STEP_WORKTREE, "protectedPaths": WORKER_PROTECTED_PATHS,
-    }
-    if (not isinstance(worker, dict) or set(worker) != set(expected) | {
-            "workerSessionId", "allowedPaths", "worktreeGitIdentity", "recordedAt"}
-            or any(worker.get(key) != value for key, value in expected.items())
-            or canonical_json(worker) != worker_path.read_bytes()):
-        raise ValidationError("worker receipt differs from its activation boundary")
-    session, allowed = worker["workerSessionId"], worker["allowedPaths"]
-    protected = WORKER_PROTECTED_PATHS + verification_reserved_paths(root, manifest)
-    if (not isinstance(session, str) or not session.strip() or len(session) > 200
-            or any(ord(char) < 32 for char in session)
-            or not isinstance(allowed, list) or not 1 <= len(allowed) <= 5
-            or len(allowed) != len(set(allowed)) or any(not isinstance(item, str) for item in allowed)
-            or not isinstance(worker["recordedAt"], str) or not valid_datetime(worker["recordedAt"])):
-        raise ValidationError("worker receipt has an invalid session or scope")
-    for relative in allowed:
-        path = safe_relative_path(root / STEP_WORKTREE, relative)
-        if (any(part in WORKER_PROTECTED_PATHS for part in PurePosixPath(relative).parts)
-                or any(relative == item or relative.startswith(item + "/") for item in protected)
-                or path.exists() and (path.is_symlink() or not path.is_file())):
-            raise ValidationError("worker receipt contains a protected or invalid path")
-    worktree = safe_relative_path(root, STEP_WORKTREE, must_exist=True)
-    entries = [item for item in worktree_entries(root) if item.get("worktree") == str(worktree)]
-    head = run_git(worktree, ["rev-parse", "HEAD"])
-    if (len(entries) != 1 or entries[0].get("branch") != f"refs/heads/{before['branch']}"
-            or entries[0].get("HEAD") != head or branch_revision(root, before["branch"]) != head
-            or worker["worktreeGitIdentity"] != repository_identity(worktree)
-            or subprocess.run(["git", "-C", str(worktree), "merge-base", "--is-ancestor",
-                before["inputRevision"], head]).returncode != 0):
-        raise ValidationError("worker worktree identity or ancestry changed")
-    changed = set(filter(None, run_git(worktree, ["diff", "--name-only", "-z", before["inputRevision"], head]).split("\0")))
-    status = run_git(worktree, ["status", "--porcelain=v1", "--untracked-files=all", "--", ".", ":(exclude).pi"])
-    changed.update(line[3:].split(" -> ")[-1] for line in status.splitlines() if len(line) > 3)
-    if changed - set(worker["allowedPaths"]):
-        raise ValidationError("worker changed source outside its authorized paths")
-    if any(path in artifacts for path in (CANDIDATE_DIFF_PATH, OUTPUT_PATH)):
-        validate_step_output(root, manifest, worker)
-    if AFTER_PATH in artifacts:
-        validate_after_receipt(root, manifest, worker)
-    if VERDICT_PATH in artifacts:
-        validate_step_verdict(root, manifest, worker)
-    if RESULT_PATH in artifacts:
-        validate_staged_step_result(root, manifest, worker)
-    return worker
-
-
-def candidate_snapshot(root: Path, manifest: Mapping[str, Any], worker: Mapping[str, Any]) -> Tuple[str, int, List[str], bytes]:
-    worktree = root / worker["worktree"]
-    head = run_git(worktree, ["rev-parse", "HEAD"])
-    status = run_git(worktree, ["status", "--porcelain=v1", "--untracked-files=all",
-        "--", ".", ":(exclude).pi"])
-    entries = [item for item in worktree_entries(root) if item.get("worktree") == str(worktree)]
-    if (status or len(entries) != 1 or entries[0].get("branch") != f"refs/heads/{worker['branch']}"
-            or entries[0].get("HEAD") != head or branch_revision(root, worker["branch"]) != head):
-        raise ValidationError("candidate output worktree is dirty or left its reserved branch")
-    ancestry = subprocess.run(["git", "-C", str(worktree), "merge-base", "--is-ancestor",
-        worker["inputRevision"], head], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    count_text = run_git(worktree, ["rev-list", "--count", f"{worker['inputRevision']}..{head}"])
-    if ancestry.returncode != 0 or not count_text.isdigit() or not 1 <= int(count_text) <= 5:
-        raise ValidationError("candidate output must be one to five descendant commits")
-    changed_raw = run_git(worktree, ["diff", "--name-only", "-z", worker["inputRevision"], head])
-    changed = sorted(set(filter(None, changed_raw.split("\0"))))
-    if not changed or any(path not in worker["allowedPaths"] for path in changed):
-        raise ValidationError("candidate output tracked paths escape or empty the authorized scope")
-    for path in changed:
-        parts = [part.lower() for part in PurePosixPath(path).parts]
-        if (any(part in {".git", ".pi", "eval", "evals", "proposal", "proposals"} for part in parts)
-                or path.lower() == "commandments.md"):
-            raise ValidationError("candidate output changes a protected path")
-        for revision in (worker["inputRevision"], head):
-            tree = subprocess.run(["git", "-C", str(worktree), "ls-tree", "-z", revision, "--", path],
-                check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE).stdout
-            if tree.startswith((b"120000 ", b"160000 ")):
-                raise ValidationError("candidate output changes a symlink or submodule")
-    result = subprocess.run(["git", "-C", str(worktree), "diff", "--binary", "--full-index",
-        "--no-ext-diff", f"{worker['inputRevision']}..{head}", "--"], check=False,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if result.returncode != 0 or not result.stdout or len(result.stdout) > MAX_INPUT_BYTES:
-        raise ValidationError("candidate output diff is empty, oversized, or unavailable")
-    entries = [item for item in worktree_entries(root) if item.get("worktree") == str(worktree)]
-    ancestry = subprocess.run(["git", "-C", str(worktree), "merge-base", "--is-ancestor",
-        worker["inputRevision"], head], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    if (run_git(worktree, ["rev-parse", "HEAD"]) != head
-            or run_git(worktree, ["status", "--porcelain=v1", "--untracked-files=all",
-                "--", ".", ":(exclude).pi"])
-            or len(entries) != 1 or entries[0].get("branch") != f"refs/heads/{worker['branch']}"
-            or entries[0].get("HEAD") != head or branch_revision(root, worker["branch"]) != head
-            or ancestry.returncode != 0):
-        raise ValidationError("candidate output changed while its diff was captured")
-    validate_current_source(root, manifest)
-    return head, int(count_text), changed, result.stdout
-
-
-def validate_step_output(root: Path, manifest: Mapping[str, Any], worker: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
-    artifacts = {item["path"]: item for item in manifest["artifacts"]}
-    registered = [path in artifacts for path in (CANDIDATE_DIFF_PATH, OUTPUT_PATH)]
-    if not any(registered):
-        return None
-    if not all(registered):
-        raise ValidationError("candidate output artifacts are only partly registered")
-    output_path = safe_relative_path(root, OUTPUT_PATH, must_exist=True)
-    diff_path = safe_relative_path(root, CANDIDATE_DIFF_PATH, must_exist=True)
-    output = read_json(output_path, "step output receipt")
-    head, count, changed, diff = candidate_snapshot(root, manifest, worker)
-    expected = {
-        "schemaVersion": 1, "kind": "step-output", "stepId": "0001",
-        "selectionSha256": worker["selectionSha256"], "proposalSha256": worker["proposalSha256"],
-        "beforeSha256": worker["beforeSha256"], "workerSha256": sha256_file(root / WORKER_PATH),
-        "workerSessionId": worker["workerSessionId"], "inputRevision": worker["inputRevision"],
-        "outputRevision": head, "branch": worker["branch"], "worktree": worker["worktree"],
-        "commitCount": count, "changedPaths": changed, "diffPath": CANDIDATE_DIFF_PATH,
-        "diffSha256": sha256_bytes(diff),
-    }
-    if (not isinstance(output, dict) or set(output) != set(expected) | {"recordedAt"}
-            or any(output.get(key) != value for key, value in expected.items())
-            or not isinstance(output.get("recordedAt"), str) or not valid_datetime(output["recordedAt"])
-            or canonical_json(output) != output_path.read_bytes() or diff_path.read_bytes() != diff):
-        raise ValidationError("recorded candidate output differs from its frozen revision or diff")
-    return output
-
-
-def record_step_output(root: Path, isolation: str) -> Dict[str, Any]:
-    manifest = load_existing_manifest(root)
-    if manifest["resourceIsolation"] != isolation or manifest["currentState"] != "step-running":
-        raise ValidationError("output recording requires the current step-running route")
-    validate_current_source(root, manifest)
-    worker = validate_step_worker(root, manifest)
-    if all(any(item["path"] == path for item in manifest["artifacts"])
-            for path in (CANDIDATE_DIFF_PATH, OUTPUT_PATH)):
-        return manifest
-    step_dir = root / ".pi/jig/steps/0001"
-    if {item.name for item in step_dir.iterdir()} - {"selection.json", "proposal.json", "before.json",
-            "worker.json", "commands", "candidate.diff", "output.json"}:
-        raise ValidationError("step directory contains unknown output bytes")
-    head, count, changed, diff = candidate_snapshot(root, manifest, worker)
-    fixed = {
-        "schemaVersion": 1, "kind": "step-output", "stepId": "0001",
-        "selectionSha256": worker["selectionSha256"], "proposalSha256": worker["proposalSha256"],
-        "beforeSha256": worker["beforeSha256"], "workerSha256": sha256_file(root / WORKER_PATH),
-        "workerSessionId": worker["workerSessionId"], "inputRevision": worker["inputRevision"],
-        "outputRevision": head, "branch": worker["branch"], "worktree": worker["worktree"],
-        "commitCount": count, "changedPaths": changed, "diffPath": CANDIDATE_DIFF_PATH,
-        "diffSha256": sha256_bytes(diff),
-    }
-    output_path, diff_path = fixed_artifact_path(root, OUTPUT_PATH), fixed_artifact_path(root, CANDIDATE_DIFF_PATH)
-    if output_path.exists():
-        output = read_json(output_path, "step output receipt")
-        if (not isinstance(output, dict) or set(output) != set(fixed) | {"recordedAt"}
-                or any(output.get(key) != value for key, value in fixed.items())
-                or canonical_json(output) != output_path.read_bytes()):
-            raise ValidationError("existing step output receipt collides with this output")
-    else:
-        output = {**fixed, "recordedAt": now()}
-    for path, raw in ((diff_path, diff), (output_path, canonical_json(output))):
-        if path.exists():
-            if path.read_bytes() != raw:
-                raise ValidationError("candidate output artifact collision")
-        else:
-            atomic_create(path, raw)
-    upsert_artifact(manifest, CANDIDATE_DIFF_PATH, "controller", sha256_bytes(diff))
-    upsert_artifact(manifest, OUTPUT_PATH, "controller", sha256_file(output_path))
-    manifest["updatedAt"] = output["recordedAt"]
-    write_manifest(root, manifest)
-    return manifest
-
-
-def proof_commands(proposal: Mapping[str, Any]) -> List[Tuple[str, int, str]]:
-    commands = []
-    for key, phase in PROOF_PHASES:
-        command_set = proposal["proof"][key]
-        if command_set is not None:
-            commands.extend((phase, index, command)
-                for index, command in enumerate(command_set["commands"], 1))
-    return commands
-
-
-def proof_boundary(root: Path, worker: Mapping[str, Any], output: Mapping[str, Any]) -> Dict[str, Any]:
-    return {
-        "schemaVersion": 1, "kind": "step-after", "stepId": "0001",
-        "selectionSha256": worker["selectionSha256"], "proposalSha256": worker["proposalSha256"],
-        "beforeSha256": worker["beforeSha256"], "workerSha256": sha256_file(root / WORKER_PATH),
-        "outputSha256": sha256_file(root / OUTPUT_PATH), "diffSha256": output["diffSha256"],
-        "inputRevision": worker["inputRevision"], "outputRevision": output["outputRevision"],
-        "branch": worker["branch"], "worktree": worker["worktree"],
-    }
-
-
-def validate_after_receipt(root: Path, manifest: Mapping[str, Any], worker: Mapping[str, Any]) -> Dict[str, Any]:
-    proposal = read_json(root / PROPOSAL_PATH, "proposal")
-    output = read_json(root / OUTPUT_PATH, "step output receipt")
-    path = safe_relative_path(root, AFTER_PATH, must_exist=True)
-    after = read_json(path, "after receipt")
-    fixed = proof_boundary(root, worker, output)
-    if (not isinstance(after, dict) or set(after) != set(fixed) | {"status", "commands", "firstFailure", "recordedAt"}
-            or any(after.get(key) != value for key, value in fixed.items())
-            or after.get("status") not in {"passed", "failed"}
-            or not isinstance(after.get("recordedAt"), str) or not valid_datetime(after["recordedAt"])
-            or canonical_json(after) != path.read_bytes()):
-        raise ValidationError("after receipt has an invalid pinned boundary")
-    declared, summaries, receipt_failures = proof_commands(proposal), after.get("commands"), []
-    if not isinstance(summaries, list) or len(summaries) > len(declared):
-        raise ValidationError("after receipt has an invalid command sequence")
-    for summary, (phase, index, command) in zip(summaries, declared):
-        relative = f".pi/jig/steps/0001/commands/{phase}-{index:02d}.json"
-        receipt_path = safe_relative_path(root, relative, must_exist=True)
-        expected = {"schemaVersion": 1, "kind": "step-command", "phase": phase, "index": index,
-            "command": command, "worktree": worker["worktree"], "branch": worker["branch"],
-            "revision": output["outputRevision"]}
-        receipt = read_json(receipt_path, "proof command receipt")
-        reason = receipt.get("failureReason")
-        if reason not in {None, "nonzero-exit", "timed-out", "candidate-drift", "source-mutation"}:
-            raise ValidationError("proof command receipt has an invalid boundary result")
-        validate_baseline_receipt(receipt, {**expected, "failureReason": reason})
-        receipt_failures.append(reason)
-        wanted = {"phase": phase, "index": index, "command": command, "receiptPath": relative,
-            "receiptSha256": sha256_file(receipt_path), "exitCode": receipt["exitCode"],
-            "timedOut": receipt["timedOut"], "outputSha256": receipt["outputSha256"],
-            "finishedAt": receipt["finishedAt"]}
-        if summary != wanted or canonical_json(receipt) != receipt_path.read_bytes():
-            raise ValidationError("after receipt command summary is inconsistent")
-    failure = after["firstFailure"]
-    if ((after["status"] == "passed" and (len(summaries) != len(declared) or failure is not None
-                or any(receipt_failures)))
-            or (after["status"] == "failed" and (not summaries or not isinstance(failure, dict)
-                or set(failure) != {"phase", "index", "command", "reason"}
-                or {key: failure[key] for key in ("phase", "index", "command")}
-                    != {key: summaries[-1][key] for key in ("phase", "index", "command")}
-                or receipt_failures != [None] * (len(summaries) - 1) + [failure["reason"]]))):
-        raise ValidationError("after receipt result is inconsistent")
-    return after
-
-
-def bounded_reviewer_identity(value: Any) -> bool:
-    return (isinstance(value, str) and bool(value.strip()) and len(value) <= 200
-        and not any(ord(character) < 32 for character in value))
-
-
-def validate_step_verdict(root: Path, manifest: Mapping[str, Any],
-    worker: Mapping[str, Any]) -> Dict[str, Any]:
-    artifacts = {item["path"]: item for item in manifest["artifacts"]}
-    proposal = read_json(root / PROPOSAL_PATH, "proposal")
-    output = validate_step_output(root, manifest, worker)
-    after = validate_after_receipt(root, manifest, worker)
-    if (output is None or not proposal["proof"]["independentReview"]
-            or after["status"] != "passed"):
-        raise ValidationError("verdict requires independent review of passed mechanical proof")
-    verdict_path = safe_relative_path(root, VERDICT_PATH, must_exist=True)
-    verdict = read_json(verdict_path, "verdict receipt")
-    fields = {"schemaVersion", "kind", "stepId", "status", "outputRevision",
-        "reviewerSessionId", "reviewerModel", "reportPath", "reportSha256",
-        "afterPath", "afterSha256", "recordedAt"}
-    if (not isinstance(verdict, dict) or set(verdict) != fields
-            or verdict.get("schemaVersion") != 1 or verdict.get("kind") != "step-verdict"
-            or verdict.get("stepId") != "0001" or verdict.get("status") not in {"passed", "failed", "inconclusive"}
-            or verdict.get("outputRevision") != output["outputRevision"]
-            or not bounded_reviewer_identity(verdict.get("reviewerSessionId"))
-            or verdict.get("reviewerSessionId") == worker["workerSessionId"]
-            or not bounded_reviewer_identity(verdict.get("reviewerModel"))
-            or verdict.get("afterPath") != AFTER_PATH
-            or verdict.get("afterSha256") != sha256_file(root / AFTER_PATH)
-            or not isinstance(verdict.get("recordedAt"), str) or not valid_datetime(verdict["recordedAt"])
-            or canonical_json(verdict) != verdict_path.read_bytes()):
-        raise ValidationError("verdict receipt has an invalid pinned boundary")
-    report_digest = verdict.get("reportSha256")
-    expected_report = f".pi/jig/steps/0001/reviews/{report_digest}.md"
-    if not isinstance(report_digest, str) or re.fullmatch(r"[0-9a-f]{64}", report_digest) is None:
-        raise ValidationError("verdict report digest is invalid")
-    if verdict.get("reportPath") != expected_report:
-        raise ValidationError("verdict report path does not match its digest")
-    report_path = safe_relative_path(root, expected_report, must_exist=True)
-    report = report_path.read_bytes()
-    try:
-        report.decode("utf-8")
-    except UnicodeDecodeError as error:
-        raise ValidationError("review report is not UTF-8 text") from error
-    if not report or len(report) > REVIEW_LIMIT or b"\0" in report or sha256_bytes(report) != report_digest:
-        raise ValidationError("review report is empty, unsafe, oversized, or changed")
-    for relative in (expected_report, VERDICT_PATH, AFTER_PATH):
-        path = root / relative
-        if artifacts.get(relative) != {"path": relative, "owner": "controller", "sha256": sha256_file(path)}:
-            raise ValidationError("verdict evidence is not registered exactly")
-    reviews = report_path.parent
-    if {item.name for item in reviews.iterdir()} != {report_path.name}:
-        raise ValidationError("review directory contains unknown evidence")
-    return verdict
-
-
-def restore_proof_worktree(path: Path, branch: str, revision: str) -> None:
-    subprocess.run(["git", "-C", str(path), "checkout", "-q", "-B", branch, revision], check=True)
-    subprocess.run(["git", "-C", str(path), "reset", "--hard", "-q", revision], check=True)
-    subprocess.run(["git", "-C", str(path), "clean", "-ffd", "-e", ".pi/"], check=True,
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-
-def verify_step_output(root: Path, isolation: str) -> Dict[str, Any]:
-    manifest = load_existing_manifest(root)
-    if manifest["resourceIsolation"] != isolation or manifest["currentState"] != "step-running":
-        raise ValidationError("proof execution requires the current step-running route")
-    validate_current_source(root, manifest)
-    worker = validate_step_worker(root, manifest)
-    output = validate_step_output(root, manifest, worker)
-    if output is None:
-        raise ValidationError("proof execution requires a pinned candidate output")
-    registered = {item["path"]: item for item in manifest["artifacts"]}
-    if AFTER_PATH in registered:
-        validate_after_receipt(root, manifest, worker)
-        return manifest
-    proposal = read_json(root / PROPOSAL_PATH, "proposal")
-    declared = proof_commands(proposal)
-    allowed = {f"baseline-{index:02d}.json" for index in range(1, len(proposal["baseline"]["commands"]) + 1)}
-    allowed.update(f"{phase}-{index:02d}.json" for phase, index, _command in declared)
-    command_dir = root / ".pi/jig/steps/0001/commands"
-    if {item.name for item in command_dir.iterdir()} - allowed:
-        raise ValidationError("proof command directory contains unknown bytes")
-    if {item.name for item in (root / ".pi/jig/steps/0001").iterdir()} - {
-            "selection.json", "proposal.json", "before.json", "worker.json", "commands",
-            "candidate.diff", "output.json", "after.json"}:
-        raise ValidationError("step directory contains unknown proof bytes")
-    after_path = root / AFTER_PATH
-    if after_path.exists() or after_path.is_symlink():
-        after = validate_after_receipt(root, manifest, worker)
-        for summary in after["commands"]:
-            upsert_artifact(manifest, summary["receiptPath"], "controller", summary["receiptSha256"])
-        upsert_artifact(manifest, AFTER_PATH, "controller", sha256_file(after_path))
-        manifest["updatedAt"] = after["recordedAt"]
-        write_manifest(root, manifest)
-        return manifest
-    summaries, failure = [], None
-    worktree = root / worker["worktree"]
-    for phase, index, command in declared:
-        validate_step_output(root, manifest, worker)
-        relative = f".pi/jig/steps/0001/commands/{phase}-{index:02d}.json"
-        path = root / relative
-        expected = {"schemaVersion": 1, "kind": "step-command", "phase": phase, "index": index,
-            "command": command, "worktree": worker["worktree"], "branch": worker["branch"],
-            "revision": output["outputRevision"]}
-        if path.exists() or path.is_symlink():
-            if path.is_symlink() or not path.is_file():
-                raise JigError("proof command receipt has an unknown identity")
-            receipt = read_json(path, "proof command receipt")
-            reason = receipt.get("failureReason")
-            if reason not in {None, "nonzero-exit", "timed-out", "candidate-drift", "source-mutation"}:
-                raise ValidationError("proof command receipt has an invalid boundary result")
-            validate_baseline_receipt(receipt, {**expected, "failureReason": reason})
-            if canonical_json(receipt) != path.read_bytes():
-                raise ValidationError("proof command receipt has unknown bytes")
-        else:
-            receipt = {**expected, **run_baseline_command(worktree, command)}
-            head = run_git(worktree, ["rev-parse", "HEAD"])
-            branch = run_git(worktree, ["branch", "--show-current"])
-            dirty = bool(run_git(worktree, ["status", "--porcelain=v1", "--untracked-files=all",
-                "--", ".", ":(exclude).pi"]))
-            drifted = head != output["outputRevision"] or branch != worker["branch"]
-            reason = ("timed-out" if receipt["timedOut"] else "nonzero-exit" if receipt["exitCode"]
-                else "candidate-drift" if drifted else "source-mutation" if dirty else None)
-            if drifted or dirty:
-                restore_proof_worktree(worktree, worker["branch"], output["outputRevision"])
-            receipt["failureReason"] = reason
-            validate_baseline_receipt(receipt, {**expected, "failureReason": reason})
-            validate_current_source(root, manifest)
-            validate_step_output(root, manifest, worker)
-            atomic_create(path, canonical_json(receipt))
-            if reason is not None:
-                failure = {"phase": phase, "index": index, "command": command, "reason": reason}
-        digest = sha256_file(path)
-        summaries.append({"phase": phase, "index": index, "command": command, "receiptPath": relative,
-            "receiptSha256": digest, "exitCode": receipt["exitCode"], "timedOut": receipt["timedOut"],
-            "outputSha256": receipt["outputSha256"], "finishedAt": receipt["finishedAt"]})
-        if failure is None and receipt["failureReason"] is not None:
-            failure = {"phase": phase, "index": index, "command": command,
-                "reason": receipt["failureReason"]}
-        if failure is not None:
-            break
-    after = {**proof_boundary(root, worker, output), "status": "failed" if failure else "passed",
-        "commands": summaries, "firstFailure": failure, "recordedAt": now()}
-    after_path = root / AFTER_PATH
-    atomic_create(after_path, canonical_json(after))
-    validate_after_receipt(root, manifest, worker)
-    for summary in after["commands"]:
-        upsert_artifact(manifest, summary["receiptPath"], "controller", summary["receiptSha256"])
-    upsert_artifact(manifest, AFTER_PATH, "controller", sha256_file(after_path))
-    manifest["updatedAt"] = after["recordedAt"]
-    write_manifest(root, manifest)
-    return manifest
-
-
-def commit_step_verdict(root: Path, isolation: str, raw: bytes) -> Dict[str, Any]:
-    manifest = load_existing_manifest(root)
-    if manifest["resourceIsolation"] != isolation or manifest["currentState"] != "step-running":
-        raise ValidationError("verdict commitment requires the current step-running route")
-    validate_current_source(root, manifest)
-    worker = validate_step_worker(root, manifest)
-    output = validate_step_output(root, manifest, worker)
-    after_artifact = next((item for item in manifest["artifacts"] if item["path"] == AFTER_PATH), None)
-    if output is None or after_artifact is None:
-        raise ValidationError("verdict commitment requires registered output and after evidence")
-    after = validate_after_receipt(root, manifest, worker)
-    proposal = read_json(root / PROPOSAL_PATH, "proposal")
-    if not proposal["proof"]["independentReview"] or after["status"] != "passed":
-        raise ValidationError("verdict commitment requires independent review and passed mechanical proof")
-    draft = read_json_bytes(raw, "verdict draft")
-    if not isinstance(draft, dict) or set(draft) != VERDICT_DRAFT_FIELDS:
-        raise ValidationError("verdict draft has an invalid shape")
-    report_text = draft.get("report")
-    if (draft.get("schemaVersion") != 1 or draft.get("stepId") != "0001"
-            or draft.get("status") not in {"passed", "failed", "inconclusive"}
-            or draft.get("revision") != output["outputRevision"]
-            or not bounded_reviewer_identity(draft.get("reviewerSessionId"))
-            or draft.get("reviewerSessionId") == worker["workerSessionId"]
-            or not bounded_reviewer_identity(draft.get("reviewerModel"))
-            or not isinstance(report_text, str)):
-        raise ValidationError("verdict draft does not match one bounded external review")
-    report = report_text.encode("utf-8")
-    if not report or len(report) > REVIEW_LIMIT or b"\0" in report:
-        raise ValidationError("verdict report is empty, unsafe, or oversized")
-    report_digest = sha256_bytes(report)
-    report_relative = f".pi/jig/steps/0001/reviews/{report_digest}.md"
-    fixed = {
-        "schemaVersion": 1, "kind": "step-verdict", "stepId": "0001",
-        "status": draft["status"], "outputRevision": output["outputRevision"],
-        "reviewerSessionId": draft["reviewerSessionId"], "reviewerModel": draft["reviewerModel"],
-        "reportPath": report_relative, "reportSha256": report_digest,
-        "afterPath": AFTER_PATH, "afterSha256": sha256_file(root / AFTER_PATH),
-    }
-    verdict_path = fixed_artifact_path(root, VERDICT_PATH)
-    if verdict_path.exists() or verdict_path.is_symlink():
-        if verdict_path.is_symlink() or not verdict_path.is_file():
-            raise JigError("verdict receipt has an unknown identity")
-        verdict = read_json(verdict_path, "verdict receipt")
-        if (not isinstance(verdict, dict) or set(verdict) != set(fixed) | {"recordedAt"}
-                or any(verdict.get(key) != value for key, value in fixed.items())
-                or not isinstance(verdict.get("recordedAt"), str) or not valid_datetime(verdict["recordedAt"])
-                or canonical_json(verdict) != verdict_path.read_bytes()):
-            raise ValidationError("existing verdict receipt collides with this review")
-    else:
-        verdict = {**fixed, "recordedAt": now()}
-    report_path = fixed_artifact_path(root, report_relative)
-    for path, data in ((report_path, report), (verdict_path, canonical_json(verdict))):
-        if path.exists() or path.is_symlink():
-            if path.is_symlink() or not path.is_file() or path.read_bytes() != data:
-                raise ValidationError("verdict evidence collision")
-        else:
-            atomic_create(path, data)
-    if any(item["path"] == VERDICT_PATH for item in manifest["artifacts"]):
-        return manifest
-    upsert_artifact(manifest, report_relative, "controller", report_digest)
-    upsert_artifact(manifest, VERDICT_PATH, "controller", sha256_file(verdict_path))
-    manifest["updatedAt"] = verdict["recordedAt"]
-    validate_step_verdict(root, manifest, worker)
-    write_manifest(root, manifest)
-    return manifest
-
-
-def baseline_result_commands(root: Path) -> List[Dict[str, Any]]:
-    before = read_json(root / BEFORE_PATH, "before receipt")
-    commands = []
-    for summary in before["commands"]:
-        receipt = read_json(root / summary["receiptPath"], "baseline command receipt")
-        commands.append({key: value for key, value in (
-            ("command", summary["command"]), ("exitCode", summary["exitCode"]),
-            ("receiptPath", summary["receiptPath"]), ("outputSha256", receipt["outputSha256"]),
-            ("finishedAt", summary["finishedAt"]),
-        )})
-    return commands
-
-
-def step_result_static(root: Path, worker: Mapping[str, Any], output: Mapping[str, Any],
-    after: Mapping[str, Any], verdict: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
-    commands = baseline_result_commands(root)
-    commands.extend({key: summary[key] for key in
-        ("command", "exitCode", "receiptPath", "outputSha256", "finishedAt")}
-        for summary in after["commands"])
-    independent = None if verdict is None else {
-        "status": verdict["status"], "evidencePath": verdict["reportPath"],
-        "evidenceSha256": verdict["reportSha256"], "revision": verdict["outputRevision"],
-    }
-    outcome = ("reverted" if after["status"] == "failed" or
-        verdict is not None and verdict["status"] != "passed" else "kept")
-    return {
-        "schemaVersion": 1, "stepId": "0001", "outcome": outcome,
-        "selectionPath": SELECTION_PATH, "selectionSha256": worker["selectionSha256"],
-        "proposalPath": PROPOSAL_PATH, "proposalSha256": worker["proposalSha256"],
-        "inputRevision": worker["inputRevision"], "outputRevision": output["outputRevision"],
-        "branch": worker["branch"], "worktree": worker["worktree"], "commands": commands,
-        "diffSha256": output["diffSha256"], "independentVerdict": independent,
-    }
-
-
-def failed_worker_result_static(root: Path, manifest: Mapping[str, Any],
-    worker: Mapping[str, Any]) -> Dict[str, Any]:
-    artifacts = {item["path"]: item for item in manifest["artifacts"]}
-    forbidden = (CANDIDATE_DIFF_PATH, OUTPUT_PATH, AFTER_PATH, VERDICT_PATH)
-    if any(name in artifacts or (root / name).exists() or (root / name).is_symlink() for name in forbidden):
-        raise ValidationError("pre-edit failure cannot have output or proof evidence")
-    failures = [item for item in manifest["transitions"]
-        if (item["from"], item["to"]) == ("step-running", "failed-step-running")]
-    if len(failures) != 1:
-        raise ValidationError("pre-edit failure requires one controller worker-failure edge")
-    transition = failures[0]
-    receipt_path = safe_relative_path(root, transition["receiptPath"], must_exist=True)
-    if (artifacts.get(transition["receiptPath"]) != {"path": transition["receiptPath"],
-            "owner": "controller", "sha256": sha256_file(receipt_path)}
-            or validate_transition_receipt(root, read_json(receipt_path, "worker failure receipt"),
-                ("step-running", "failed-step-running"), manifest["source"],
-                expected_at=transition["at"]) != "phase-failed"):
-        raise ValidationError("pre-edit failure receipt is not exact")
-    worktree = root / worker["worktree"]
-    head = run_git(worktree, ["rev-parse", "HEAD"])
-    status = run_git(worktree, ["status", "--porcelain=v1", "--untracked-files=all",
-        "--", ".", ":(exclude).pi"])
-    diff = subprocess.run(["git", "-C", str(worktree), "diff", "--binary", "--full-index",
-        "--no-ext-diff", f"{worker['inputRevision']}..{head}", "--"], check=False,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if head != worker["inputRevision"] or status or diff.returncode != 0 or diff.stdout:
-        raise ValidationError("pre-edit failure worktree is not clean at its input revision")
-    baseline_names = {Path(summary["receiptPath"]).name
-        for summary in read_json(root / BEFORE_PATH, "before receipt")["commands"]}
-    command_dir = root / ".pi/jig/steps/0001/commands"
-    if {item.name for item in command_dir.iterdir()} != baseline_names:
-        raise ValidationError("pre-edit failure has non-baseline command evidence")
-    allowed = {"selection.json", "proposal.json", "before.json", "worker.json", "commands"}
-    if (root / RESULT_PATH).exists() or (root / RESULT_PATH).is_symlink():
-        allowed.add("result.json")
-    if {item.name for item in (root / ".pi/jig/steps/0001").iterdir()} != allowed:
-        raise ValidationError("pre-edit failure has unknown step evidence")
-    return {
-        "schemaVersion": 1, "stepId": "0001", "outcome": "reverted",
-        "selectionPath": SELECTION_PATH, "selectionSha256": worker["selectionSha256"],
-        "proposalPath": PROPOSAL_PATH, "proposalSha256": worker["proposalSha256"],
-        "inputRevision": worker["inputRevision"], "outputRevision": worker["inputRevision"],
-        "branch": worker["branch"], "worktree": worker["worktree"],
-        "commands": baseline_result_commands(root), "diffSha256": sha256_bytes(diff.stdout),
-        "independentVerdict": None,
-    }
-
-
-def result_evidence(root: Path, manifest: Mapping[str, Any],
-    worker: Mapping[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any], Optional[Dict[str, Any]]]:
-    artifacts = {item["path"]: item for item in manifest["artifacts"]}
-    output = validate_step_output(root, manifest, worker)
-    if output is None or AFTER_PATH not in artifacts:
-        raise ValidationError("result preparation requires registered output and proof evidence")
-    after = validate_after_receipt(root, manifest, worker)
-    proposal = read_json(root / PROPOSAL_PATH, "proposal")
-    verdict = validate_step_verdict(root, manifest, worker) if VERDICT_PATH in artifacts else None
-    if after["status"] == "passed" and proposal["proof"]["independentReview"] and verdict is None:
-        raise ValidationError("passed mechanical proof requires its independent verdict")
-    return output, after, verdict
-
-
-def validate_staged_step_result(root: Path, manifest: Mapping[str, Any],
-    worker: Mapping[str, Any]) -> Dict[str, Any]:
-    artifacts = {item["path"]: item for item in manifest["artifacts"]}
-    path = safe_relative_path(root, RESULT_PATH, must_exist=True)
-    result = read_json(path, "staged result")
-    if OUTPUT_PATH not in artifacts:
-        fixed = failed_worker_result_static(root, manifest, worker)
-    else:
-        output, after, verdict = result_evidence(root, manifest, worker)
-        fixed = step_result_static(root, worker, output, after, verdict)
-    validate_instance(result, load_schema("result"))
-    if (not isinstance(result, dict) or set(result) != set(fixed) | {"recordedAt"}
-            or any(result.get(key) != value for key, value in fixed.items())
-            or not isinstance(result.get("recordedAt"), str) or not valid_datetime(result["recordedAt"])
-            or canonical_json(result) != path.read_bytes()
-            or artifacts.get(RESULT_PATH) != {"path": RESULT_PATH, "owner": "controller",
-                "sha256": sha256_file(path)}):
-        raise ValidationError("staged result differs from its immutable evidence")
-    return result
-
-
-def prepare_step_result(root: Path, isolation: str) -> Dict[str, Any]:
-    manifest = load_existing_manifest(root)
-    if (manifest["resourceIsolation"] != isolation
-            or manifest["currentState"] not in {"step-running", "failed-step-running"}):
-        raise ValidationError("result preparation requires a current running or failed pre-edit route")
-    validate_current_source(root, manifest)
-    worker = validate_step_worker(root, manifest)
-    if manifest["currentState"] == "failed-step-running":
-        fixed = failed_worker_result_static(root, manifest, worker)
-    else:
-        output, after, verdict = result_evidence(root, manifest, worker)
-        fixed = step_result_static(root, worker, output, after, verdict)
-    path = fixed_artifact_path(root, RESULT_PATH)
-    if path.exists() or path.is_symlink():
-        if path.is_symlink() or not path.is_file():
-            raise JigError("result has an unknown identity")
-        result = read_json(path, "staged result")
-        if (not isinstance(result, dict) or set(result) != set(fixed) | {"recordedAt"}
-                or any(result.get(key) != value for key, value in fixed.items())
-                or not isinstance(result.get("recordedAt"), str) or not valid_datetime(result["recordedAt"])
-                or canonical_json(result) != path.read_bytes()):
-            raise ValidationError("existing result collides with the selected evidence")
-    else:
-        result = {**fixed, "recordedAt": now()}
-        validate_instance(result, load_schema("result"))
-        atomic_create(path, canonical_json(result))
-    if any(item["path"] == RESULT_PATH for item in manifest["artifacts"]):
-        validate_staged_step_result(root, manifest, worker)
-        return manifest
-    upsert_artifact(manifest, RESULT_PATH, "controller", sha256_file(path))
-    manifest["updatedAt"] = result["recordedAt"]
-    validate_staged_step_result(root, manifest, worker)
-    write_manifest(root, manifest)
-    return manifest
-def complete_step_result(root: Path, isolation: str) -> Dict[str, Any]:
-    manifest = load_existing_manifest(root)
-    if manifest["resourceIsolation"] != isolation:
-        raise JigError("the existing manifest uses a different resourceIsolation route")
-    validate_current_source(root, manifest)
-    if manifest["currentState"] == "initialized":
-        if manifest["firstStep"]["selectedCandidateId"] is None:
-            raise ValidationError("selected completion does not match a no-candidate terminal")
-        validate_selected_step_result(root, manifest)
-        return manifest
-    if manifest["currentState"] not in {"step-running", "failed-step-running"}:
-        raise ValidationError("selected completion requires a running or failed pre-edit result")
-    validate_verification_ready(root, manifest)
-    worker = validate_step_worker(root, manifest)
-    result = validate_staged_step_result(root, manifest, worker)
-    if manifest["currentState"] == "failed-step-running":
-        append_recoverable_transition(root, manifest, "failed-step-running", "step-running",
-            "failed-state-reconciled")
-    result_digest = sha256_file(root / RESULT_PATH)
-    extra = selected_transition_fields(manifest, worker, result, result_digest)
-    append_recoverable_transition(root, manifest, "step-running", "initialized",
-        "selected-step-finalized", **extra)
-    manifest["firstStep"] = {
-        "selectionPath": SELECTION_PATH, "selectedCandidateId": worker["selectedCandidateId"],
-        "proposalPath": PROPOSAL_PATH, "resultPath": RESULT_PATH, "outcome": result["outcome"],
-    }
-    write_manifest(root, manifest)
-    return manifest
-
-
-
-def activate_step_worker(root: Path, isolation: str, raw: bytes) -> Dict[str, Any]:
-    manifest = load_existing_manifest(root)
-    if manifest["resourceIsolation"] != isolation:
-        raise JigError("the existing manifest uses a different resourceIsolation route")
-    validate_current_source(root, manifest)
-    if manifest["currentState"] == "step-running":
-        worker = validate_step_worker(root, manifest)
-        draft = read_json_bytes(raw, "worker draft")
-        if {key: worker[key] for key in WORKER_DRAFT_FIELDS} != draft:
-            raise ValidationError("worker activation retry differs from its authorization")
-        return manifest
-    if manifest["currentState"] != "step-selecting":
-        raise ValidationError("worker activation requires step-selecting")
-    manifest = prepare_step_worktree(root, isolation)
-    draft = read_json_bytes(raw, "worker draft")
-    if not isinstance(draft, dict) or set(draft) != WORKER_DRAFT_FIELDS:
-        raise ValidationError("worker draft has an invalid shape")
-    session = draft.get("workerSessionId")
-    allowed = draft.get("allowedPaths")
-    if (draft.get("schemaVersion") != 1 or draft.get("stepId") != "0001"
-            or not isinstance(session, str) or not session.strip() or len(session) > 200
-            or any(ord(char) < 32 for char in session)
-            or not isinstance(allowed, list) or not 1 <= len(allowed) <= 5
-            or len(allowed) != len(set(allowed)) or any(not isinstance(item, str) for item in allowed)):
-        raise ValidationError("worker draft is not one bounded authorization")
-    protected = WORKER_PROTECTED_PATHS + verification_reserved_paths(root, manifest)
-    for relative in allowed:
-        path = safe_relative_path(root / STEP_WORKTREE, relative)
-        if (any(part in WORKER_PROTECTED_PATHS for part in PurePosixPath(relative).parts)
-                or any(relative == item or relative.startswith(item + "/") for item in protected)):
-            raise ValidationError("worker allowed path targets protected state")
-        if path.exists() and (path.is_symlink() or not path.is_file()):
-            raise ValidationError("worker allowed path is not a regular file target")
-    artifacts = {item["path"]: item for item in manifest["artifacts"]}
-    for name in (SELECTION_PATH, PROPOSAL_PATH, BEFORE_PATH):
-        path = safe_relative_path(root, name, must_exist=True)
-        if artifacts.get(name) != {"path": name, "owner": "controller", "sha256": sha256_file(path)}:
-            raise ValidationError("worker activation requires exact registered step inputs")
-    before = read_json(root / BEFORE_PATH, "before receipt")
-    worktree = safe_relative_path(root, STEP_WORKTREE, must_exist=True)
-    worker_static = {
-        "schemaVersion": 1, "kind": "step-worker", "stepId": "0001",
-        "workerSessionId": session, "selectedCandidateId": manifest["firstStep"]["selectedCandidateId"],
-        "selectionSha256": sha256_file(root / SELECTION_PATH),
-        "proposalSha256": sha256_file(root / PROPOSAL_PATH),
-        "beforeSha256": sha256_file(root / BEFORE_PATH), "inputRevision": before["inputRevision"],
-        "branch": before["branch"], "worktree": STEP_WORKTREE, "allowedPaths": allowed,
-        "protectedPaths": WORKER_PROTECTED_PATHS, "worktreeGitIdentity": repository_identity(worktree),
-    }
-    worker_path = fixed_artifact_path(root, WORKER_PATH)
-    if worker_path.exists() or worker_path.is_symlink():
-        if worker_path.is_symlink() or not worker_path.is_file():
-            raise JigError("worker receipt has an unknown identity")
-        worker = read_json(worker_path, "worker receipt")
-        if (not isinstance(worker, dict) or set(worker) != set(worker_static) | {"recordedAt"}
-                or any(worker.get(key) != value for key, value in worker_static.items())
-                or canonical_json(worker) != worker_path.read_bytes()):
-            raise ValidationError("existing worker receipt differs from this authorization")
-    else:
-        worker = {**worker_static, "recordedAt": now()}
-        atomic_create(worker_path, canonical_json(worker))
-    worker_digest = sha256_file(worker_path)
-    upsert_artifact(manifest, WORKER_PATH, "controller", worker_digest)
-    extra = {
-        "resourceIsolation": isolation, "commandmentsSha256": manifest["commandments"]["sha256"],
-        "selectionSha256": worker["selectionSha256"], "proposalSha256": worker["proposalSha256"],
-        "beforeSha256": worker["beforeSha256"], "workerSha256": worker_digest,
-        "inputRevision": worker["inputRevision"], "branch": worker["branch"], "worktree": STEP_WORKTREE,
-    }
-    index = len(manifest["transitions"]) + 1
-    receipt_path = root / f".pi/jig/receipts/transition-{index:04d}-step-running.json"
-    if receipt_path.exists() or receipt_path.is_symlink():
-        receipt = read_json(receipt_path, "worker activation transition")
-        validate_transition_receipt(root, receipt, ("step-selecting", "step-running"), manifest["source"])
-        if any(receipt.get(key) != value for key, value in extra.items()):
-            raise ValidationError("worker activation transition differs from this authorization")
-        digest = sha256_file(receipt_path)
-        manifest["transitions"].append({"from": "step-selecting", "to": "step-running",
-            "at": receipt["at"], "receiptPath": relative_to_root(root, receipt_path), "receiptSha256": digest})
-        upsert_artifact(manifest, relative_to_root(root, receipt_path), "controller", digest)
-        manifest["currentState"], manifest["updatedAt"] = "step-running", receipt["at"]
-    else:
-        append_transition(root, manifest, "step-selecting", "step-running", "step-worker-activated", **extra)
-    validate_step_worker(root, manifest)
-    write_manifest(root, manifest)
-    return manifest
-
-
-def finalize_no_candidate(root: Path, isolation: str) -> Dict[str, Any]:
-    manifest = load_existing_manifest(root)
-    if manifest["resourceIsolation"] != isolation:
-        raise JigError("the existing manifest uses a different resourceIsolation route")
-    validate_current_source(root, manifest)
-    if manifest["currentState"] == "initialized":
-        return manifest
-    if manifest["currentState"] != "step-selecting":
-        raise ValidationError("no-candidate finalization requires step-selecting")
-    validate_verification_ready(root, manifest)
-    selection_artifact = next((item for item in manifest["artifacts"] if item["path"] == SELECTION_PATH), None)
-    if selection_artifact is None or selection_artifact["owner"] != "controller":
-        raise ValidationError("no-candidate finalization requires a registered controller selection")
-    selection_path = safe_relative_path(root, SELECTION_PATH, must_exist=True)
-    selection = read_json(selection_path, "selection")
-    validate_committed_selection(root, manifest, selection)
-    if selection["selectedCandidateId"] is not None:
-        raise ValidationError("no-candidate finalization requires a null selection")
-    selection_digest = sha256_file(selection_path)
-    if selection_artifact["sha256"] != selection_digest:
-        raise ValidationError("registered selection differs from the committed file")
-    result_path = fixed_artifact_path(root, RESULT_PATH)
-    names = {item.name for item in result_path.parent.iterdir()}
-    if names - {"selection.json", "result.json"}:
-        raise JigError("step directory contains an unknown artifact")
-    result_static = {
-        "schemaVersion": 1, "stepId": "0001", "outcome": "no-eligible-candidate",
-        "selectionPath": SELECTION_PATH, "selectionSha256": selection_digest,
-        "proposalPath": None, "proposalSha256": None, "inputRevision": None,
-        "outputRevision": None, "branch": None, "worktree": None, "commands": [],
-        "diffSha256": None, "independentVerdict": None,
-    }
-    if result_path.exists() or result_path.is_symlink():
-        if result_path.is_symlink() or not result_path.is_file():
-            raise JigError("existing result collision is not a regular file")
-        result = read_json(result_path, "result")
-        validate_instance(result, load_schema("result"))
-        if (not isinstance(result, dict) or canonical_json(result) != result_path.read_bytes()
-                or any(result.get(key) != value for key, value in result_static.items())):
-            raise ValidationError("existing result is not the exact recoverable no-candidate result")
-    else:
-        result = {**result_static, "recordedAt": now()}
-        atomic_create(result_path, canonical_json(result))
-    result_digest = sha256_file(result_path)
-    upsert_artifact(manifest, RESULT_PATH, "controller", result_digest)
-    extra = {
-        "resourceIsolation": isolation,
-        "commandmentsSha256": manifest["commandments"]["sha256"],
-        "selectionPath": SELECTION_PATH, "selectionSha256": selection_digest,
-        "resultPath": RESULT_PATH, "resultSha256": result_digest,
-    }
-    index = len(manifest["transitions"]) + 1
-    receipt_relative = f".pi/jig/receipts/transition-{index:04d}-initialized.json"
-    receipt_path = safe_relative_path(root, receipt_relative)
-    if receipt_path.exists() or receipt_path.is_symlink():
-        if receipt_path.is_symlink() or not receipt_path.is_file():
-            raise JigError("initialized transition collision is not a regular file")
-        receipt = read_json(receipt_path, "initialized transition receipt")
-        validate_transition_receipt(root, receipt, ("step-selecting", "initialized"), manifest["source"])
-        if any(receipt.get(key) != value for key, value in extra.items()):
-            raise ValidationError("initialized transition differs from the recoverable result")
-        receipt_digest = sha256_file(receipt_path)
-        manifest["transitions"].append({
-            "from": "step-selecting", "to": "initialized", "at": receipt["at"],
-            "receiptPath": receipt_relative, "receiptSha256": receipt_digest,
-        })
-        upsert_artifact(manifest, receipt_relative, "controller", receipt_digest)
-        manifest["currentState"] = "initialized"
-        manifest["updatedAt"] = receipt["at"]
-    else:
-        append_transition(root, manifest, "step-selecting", "initialized", "no-candidate-finalized", **extra)
-    manifest["firstStep"] = {
-        "selectionPath": SELECTION_PATH, "selectedCandidateId": None,
-        "proposalPath": None, "resultPath": RESULT_PATH, "outcome": "no-eligible-candidate",
-    }
-    write_manifest(root, manifest)
-    return manifest
-
-
-def render_result(root: Path, manifest: Mapping[str, Any]) -> None:
+def render_result(manifest: Mapping[str, Any]) -> None:
     result: Dict[str, Any] = {
-        "root": ".",
+        "schemaVersion": SCHEMA_VERSION,
         "state": manifest["currentState"],
         "resourceIsolation": manifest["resourceIsolation"],
+        "principlePath": PRINCIPLE_PATH,
     }
-    if manifest["currentState"] == "awaiting-commandments":
-        isolation = manifest["resourceIsolation"]
-        operations = []
-        interview = next(
-            (
-                item
-                for item in manifest["artifacts"]
-                if item["path"] == COMMANDMENTS_INTERVIEW_PATH
-            ),
-            None,
-        )
-        if interview is None:
-            operations.append(
-                {
-                    "name": "present",
-                    "command": [
-                        "present-commandments",
-                        "--resource-isolation",
-                        isolation,
-                    ],
-                }
-            )
-        staging = load_staging(root, manifest)
-        if staging is None or not staging_artifacts_registered(manifest, staging):
-            stage_command = [
-                "stage-commandments",
-                "--resource-isolation",
-                isolation,
-            ]
-            if (
-                staging is not None
-                and staging["previousCandidateSha256"] is not None
-            ):
-                stage_command.extend(
-                    [
-                        "--amend-candidate-sha",
-                        staging["previousCandidateSha256"],
-                    ]
-                )
-            if staging is not None and staging["adoptedExisting"]:
-                stage_command.append("--adopt-existing")
-            operations.append(
-                {
-                    "name": "stage",
-                    "command": stage_command,
-                    "stdin": ".pi/jig/commandments/answers.input.json",
-                }
-            )
-        else:
-            digest = staging["candidateSha256"]
-            marker = staging["intendedMarker"]
-            result["candidate"] = {
-                "path": staging["candidatePath"],
-                "sha256": digest,
-                "intendedMarker": marker,
-            }
-            operations.extend(
-                [
-                    {
-                        "name": "ratify",
-                        "command": [
-                            "ratify-commandments",
-                            "--candidate-sha",
-                            digest,
-                            "--operator-marker",
-                            marker,
-                            "--resource-isolation",
-                            isolation,
-                        ],
-                    },
-                    {
-                        "name": "amend",
-                        "command": [
-                            "record-commandments-decision",
-                            "--decision",
-                            "amend",
-                            "--candidate-sha",
-                            digest,
-                            "--operator-marker",
-                            "<operator-written marker>",
-                            "--resource-isolation",
-                            isolation,
-                        ],
-                        "followUp": {
-                            "command": [
-                                "stage-commandments",
-                                "--amend-candidate-sha",
-                                digest,
-                                "--resource-isolation",
-                                isolation,
-                            ],
-                            "stdin": ".pi/jig/commandments/answers.input.json",
-                        },
-                    },
-                    {
-                        "name": "defer",
-                        "command": [
-                            "record-commandments-decision",
-                            "--decision",
-                            "defer",
-                            "--candidate-sha",
-                            digest,
-                            "--operator-marker",
-                            "<operator-written marker>",
-                            "--resource-isolation",
-                            isolation,
-                        ],
-                    },
-                ]
-            )
-        result["resume"] = {
-            "controller": "jigctl.py",
-            "operations": operations,
-            "note": (
-                "Run the named trusted-controller operation directly. "
-                "This launcher version does not consume response files on rerun."
-            ),
-        }
-    elif manifest["currentState"] == "commandments-ratified":
-        result["resume"] = {
-            "controller": "jigctl.py",
-            "operations": [
-                {
-                    "name": "begin-verification",
-                    "command": ["begin-verification", "--resource-isolation", manifest["resourceIsolation"]],
-                    "stdin": ".pi/jig/verification/plan.input.json",
-                }
-            ],
-        }
+    if manifest["currentState"] == "awaiting-principles":
+        result["next"] = "present-principles"
+        result["answersPath"] = ANSWERS_PATH
     elif manifest["currentState"] == "verification-building":
-        plan = load_verification_plan(root, manifest)
-        result["verification"] = {
-            "planPath": VERIFICATION_PLAN_PATH,
-            "reservedPaths": plan["reservedPaths"],
-            "protectedFeatureId": plan["protectedFeatureId"],
-        }
-        result["resume"] = {
-            "controller": "jigctl.py",
-            "operations": [
-                {
-                    "name": "complete-verification",
-                    "command": ["complete-verification", "--resource-isolation", manifest["resourceIsolation"]],
-                }
-            ],
-        }
-    elif manifest["currentState"] == "verification-ready":
-        plan = load_verification_plan(root, manifest)
-        result["verification"] = {
-            "skillPath": VERIFICATION_SKILL_PATH,
-            "featureIndexPath": VERIFICATION_FEATURE_INDEX_PATH,
-            "protectedFeatureId": plan["protectedFeatureId"],
-        }
-    elif (manifest["currentState"] == "initialized"
-            and manifest["firstStep"]["selectedCandidateId"] is not None):
-        validate_selected_step_result(root, manifest)
-        receipt = read_json(root / RESULT_PATH, "terminal result")
-        result["terminalResult"] = {
-            "outcome": receipt["outcome"], "path": RESULT_PATH,
-            "branch": receipt["branch"], "worktree": receipt["worktree"],
-        }
-    elif manifest["currentState"] in {"step-running", "failed-step-running"}:
-        worker = validate_step_worker(root, manifest)
-        output = validate_step_output(root, manifest, worker)
-        if output is not None:
-            result["stepOutput"] = {"path": OUTPUT_PATH, "outputRevision": output["outputRevision"],
-                "diffPath": CANDIDATE_DIFF_PATH, "diffSha256": output["diffSha256"]}
-            verdict = next((item for item in manifest["artifacts"] if item["path"] == VERDICT_PATH), None)
-            if verdict is not None:
-                receipt = read_json(root / VERDICT_PATH, "verdict receipt")
-                result["verdict"] = {"status": receipt["status"], "path": VERDICT_PATH}
-            staged = next((item for item in manifest["artifacts"] if item["path"] == RESULT_PATH), None)
-            if staged is not None:
-                receipt = read_json(root / RESULT_PATH, "staged result")
-                result["stagedResult"] = {"outcome": receipt["outcome"], "path": RESULT_PATH}
-        else:
-            proposal = read_json(root / PROPOSAL_PATH, "proposal")
-            result["workerHandoff"] = {
-                "worktree": worker["worktree"], "workerSessionId": worker["workerSessionId"],
-                "selectedCandidateId": worker["selectedCandidateId"], "proposalPath": PROPOSAL_PATH,
-                "potetoPlaybook": proposal["potetoPlaybook"],
-                "allowedPaths": worker["allowedPaths"], "protectedPaths": worker["protectedPaths"],
-            }
-    elif manifest["currentState"] == "step-selecting":
-        selection = next(
-            (item for item in manifest["artifacts"] if item["path"] == SELECTION_PATH), None
-        )
-        if selection is not None:
-            result["selection"] = {"path": SELECTION_PATH, "sha256": selection["sha256"]}
+        result["next"] = "run-create-verification-skill"
+        result["pstackSkill"] = PSTACK_CREATE_SKILL
+    elif manifest["currentState"] == "configured":
+        result["outcome"] = "configured"
+        result["verification"] = manifest["verification"]
+        result["maintenance"] = f"/skill:maintain-verification-skill {manifest['verification']['skillPath']}"
     print(json.dumps(result, sort_keys=True))
-
-
-def command_validate_schema(arguments: argparse.Namespace) -> int:
-    schema = load_schema(arguments.schema)
-    document = read_json(Path(arguments.document), "document")
-    validate_instance(document, schema)
-    print(f"valid {arguments.schema}")
-    return 0
 
 
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(prog="jigctl.py")
     subparsers = result.add_subparsers(dest="command", required=True)
-    mutating = (
+    commands = {}
+    for name in (
         "start",
         "commit-profile",
+        "present-principles",
+        "stage-principles",
+        "record-principles-decision",
+        "ratify-principles",
+        "complete-configuration",
+        "validate-configuration",
         "record-failure",
-        "present-commandments",
-        "stage-commandments",
-        "record-commandments-decision",
-        "ratify-commandments",
-        "validate-commandments",
-        "propose-commandments-amendment",
-        "begin-verification",
-        "complete-verification",
-        "validate-verification",
-        "begin-step-selection",
-        "commit-step-selection",
-        "commit-step-proposal",
-        "prepare-step-worktree",
-        "finalize-no-candidate",
-        "activate-step-worker",
-        "record-step-output",
-        "verify-step-output",
-        "commit-step-verdict",
-        "prepare-step-result",
-        "complete-step-result",
-    )
-    commands = {}
-    for name in mutating:
+    ):
         command = subparsers.add_parser(name)
-        command.add_argument(
-            "--resource-isolation",
-            required=True,
-            choices=("isolated-shell", "inherited-session"),
-        )
+        command.add_argument("--resource-isolation", required=True, choices=("isolated-shell", "inherited-session"))
         commands[name] = command
-    commands["record-failure"].add_argument(
-        "--state",
-        required=True,
-        choices=(
-            "surveying",
-            "awaiting-commandments",
-            "commandments-ratified",
-            "verification-building",
-            "verification-ready",
-            "step-selecting",
-            "step-running",
-        ),
-    )
+    commands["stage-principles"].add_argument("--adopt-existing", action="store_true")
+    commands["record-principles-decision"].add_argument("--decision", required=True, choices=("amend", "defer"))
+    commands["record-principles-decision"].add_argument("--candidate-sha", required=True)
+    commands["record-principles-decision"].add_argument("--operator-marker", required=True)
+    commands["ratify-principles"].add_argument("--candidate-sha", required=True)
+    commands["ratify-principles"].add_argument("--operator-marker", required=True)
+    commands["record-failure"].add_argument("--state", required=True, choices=tuple(sorted(ACTIVE_STATES)))
     commands["record-failure"].add_argument("--reason", required=True)
-    commands["stage-commandments"].add_argument("--amend-candidate-sha")
-    commands["stage-commandments"].add_argument("--adopt-existing", action="store_true")
-    commands["record-commandments-decision"].add_argument(
-        "--decision", required=True, choices=("amend", "defer")
-    )
-    commands["record-commandments-decision"].add_argument("--candidate-sha")
-    commands["record-commandments-decision"].add_argument(
-        "--operator-marker", required=True
-    )
-    commands["ratify-commandments"].add_argument("--candidate-sha", required=True)
-    commands["ratify-commandments"].add_argument("--operator-marker", required=True)
-    validate = subparsers.add_parser("validate-schema")
-    validate.add_argument("--schema", required=True)
-    validate.add_argument("--document", required=True)
     return result
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     arguments = parser().parse_args(argv)
-    if arguments.command == "validate-schema":
-        return command_validate_schema(arguments)
     root = resolve_git_root()
     output: Optional[Mapping[str, Any]] = None
-    with RepositoryLock(root) as lock:
+    with RepositoryLock(root):
         if arguments.command == "start":
-            manifest = start(root, arguments.resource_isolation, lock)
-        elif arguments.command == "record-failure":
-            manifest = record_failure(
-                root,
-                arguments.resource_isolation,
-                arguments.state,
-                arguments.reason,
-            )
+            manifest = start(root, arguments.resource_isolation)
         elif arguments.command == "commit-profile":
-            raw = sys.stdin.buffer.read(MAX_INPUT_BYTES + 1)
-            manifest = commit_profile(root, arguments.resource_isolation, lock, raw)
-        elif arguments.command == "present-commandments":
-            output = present_commandments(root, arguments.resource_isolation)
-            manifest = load_existing_manifest(root)
-        elif arguments.command == "stage-commandments":
-            raw = sys.stdin.buffer.read(MAX_INPUT_BYTES + 1)
-            manifest, staging = stage_commandments(
+            manifest = commit_profile(root, arguments.resource_isolation, sys.stdin.buffer.read(MAX_INPUT_BYTES + 1))
+        elif arguments.command == "present-principles":
+            output = present_principles(root, arguments.resource_isolation)
+            manifest = load_manifest(root)
+        elif arguments.command == "stage-principles":
+            manifest, staging = stage_principles(
                 root,
                 arguments.resource_isolation,
-                raw,
-                arguments.amend_candidate_sha,
+                sys.stdin.buffer.read(MAX_INPUT_BYTES + 1),
                 arguments.adopt_existing,
             )
             output = {"state": manifest["currentState"], **staging}
-        elif arguments.command == "record-commandments-decision":
-            manifest, output = record_commandments_decision(
+        elif arguments.command == "record-principles-decision":
+            manifest, output = record_principles_decision(
                 root,
                 arguments.resource_isolation,
                 arguments.decision,
                 arguments.candidate_sha,
                 arguments.operator_marker,
             )
-        elif arguments.command == "ratify-commandments":
-            manifest = ratify_commandments(
+        elif arguments.command == "ratify-principles":
+            manifest = ratify_principles(
                 root,
                 arguments.resource_isolation,
                 arguments.candidate_sha,
                 arguments.operator_marker,
             )
-        elif arguments.command == "validate-commandments":
-            manifest = validate_commandments(root, arguments.resource_isolation)
-        elif arguments.command == "begin-verification":
-            raw = sys.stdin.buffer.read(MAX_INPUT_BYTES + 1)
-            manifest, output = begin_verification(
-                root, arguments.resource_isolation, raw
+        elif arguments.command == "complete-configuration":
+            manifest = complete_configuration(
+                root,
+                arguments.resource_isolation,
+                sys.stdin.buffer.read(MAX_INPUT_BYTES + 1),
             )
-            output = {"state": manifest["currentState"], **output}
-        elif arguments.command == "complete-verification":
-            manifest = complete_verification(root, arguments.resource_isolation)
-        elif arguments.command == "validate-verification":
-            manifest = validate_verification(root, arguments.resource_isolation)
-        elif arguments.command == "begin-step-selection":
-            manifest = begin_step_selection(root, arguments.resource_isolation)
-        elif arguments.command == "commit-step-selection":
-            raw = sys.stdin.buffer.read(MAX_INPUT_BYTES + 1)
-            manifest = commit_step_selection(root, arguments.resource_isolation, raw)
-        elif arguments.command == "commit-step-proposal":
-            raw = sys.stdin.buffer.read(MAX_INPUT_BYTES + 1)
-            manifest = commit_step_proposal(root, arguments.resource_isolation, raw)
-        elif arguments.command == "prepare-step-worktree":
-            manifest = prepare_step_worktree(root, arguments.resource_isolation)
-        elif arguments.command == "activate-step-worker":
-            raw = sys.stdin.buffer.read(MAX_INPUT_BYTES + 1)
-            manifest = activate_step_worker(root, arguments.resource_isolation, raw)
-        elif arguments.command == "record-step-output":
-            manifest = record_step_output(root, arguments.resource_isolation)
-        elif arguments.command == "verify-step-output":
-            manifest = verify_step_output(root, arguments.resource_isolation)
-        elif arguments.command == "commit-step-verdict":
-            raw = sys.stdin.buffer.read(MAX_INPUT_BYTES + 1)
-            manifest = commit_step_verdict(root, arguments.resource_isolation, raw)
-        elif arguments.command == "prepare-step-result":
-            manifest = prepare_step_result(root, arguments.resource_isolation)
-        elif arguments.command == "complete-step-result":
-            manifest = complete_step_result(root, arguments.resource_isolation)
-        elif arguments.command == "finalize-no-candidate":
-            manifest = finalize_no_candidate(root, arguments.resource_isolation)
+        elif arguments.command == "validate-configuration":
+            manifest = validate_configuration(root, arguments.resource_isolation)
         else:
-            raw = sys.stdin.buffer.read(MAX_INPUT_BYTES + 1)
-            manifest, output = propose_commandments_amendment(
-                root, arguments.resource_isolation, raw
+            manifest = record_failure(
+                root,
+                arguments.resource_isolation,
+                arguments.state,
+                arguments.reason,
             )
     if output is None:
-        render_result(root, manifest)
+        render_result(manifest)
     else:
         print(json.dumps(output, sort_keys=True))
     return 0
@@ -5359,7 +1525,7 @@ if __name__ == "__main__":
     except JigError as error:
         print(f"jigctl: {error}", file=sys.stderr)
         print(
-            "Recovery: preserve .pi/jig, inspect the named state or lock, correct only that problem, and rerun jig init.",
+            "Recovery: preserve .pi/jig and .cursor/skills, correct the named boundary, and rerun the owning Jig route.",
             file=sys.stderr,
         )
         raise SystemExit(1)

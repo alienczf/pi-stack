@@ -1,29 +1,29 @@
 ---
 name: jig
-description: Initialize one whole Git repository through target COMMANDMENTS, runtime verification, and one controller-owned first improvement result. Use only for explicit /skill:jig init or /jig init.
+description: Configure one Git repository with human-ratified repository Principles and a pstack-generated verification skill. Use only for explicit /skill:jig init or /jig init.
 disable-model-invocation: true
 ---
 
 # Jig
 
-Accept only the exact argument `init`. Reject a missing argument, a flag, a package name, a path, or an extra argument before you run the controller. Version 1 initializes the whole Git root.
+Accept only the exact argument `init`. Reject a missing argument, flag, path, package name, or extra argument before the controller writes state.
 
-Read the canonical [public-route matrix](references/public-routes.json), [init contract](references/init-contract.md), and [init playbook](playbooks/init.md). Follow the playbook through at most one terminal result.
+Read the canonical [public-route matrix](references/public-routes.json), [v2 contract](references/init-contract.md), and [init playbook](playbooks/init.md). Follow the playbook through at most one `configured` result.
 
-## Resolve the controller and route
+## Resolve the controller
 
-If `JIG_RESOURCE_ISOLATION` is `isolated-shell`, require `JIG_CONTROLLER` to name a regular installed `jigctl.py` file. This route exists only inside the fresh Pi process started by the human `jig init` launcher.
+If `JIG_RESOURCE_ISOLATION` is `isolated-shell`, require `JIG_CONTROLLER` and `JIG_CREATE_VERIFICATION_SKILL` to name regular installed files. This route exists only inside the fresh Pi process started by the human `jig init` launcher.
 
-Otherwise use `inherited-session`. Resolve the controller as `${PI_CODING_AGENT_DIR:-${PI_AGENT_DIR:-$HOME/.pi/agent}}/jig/bin/jigctl.py`. A current Pi session never starts `pi -p` or another Pi process from Bash.
+Otherwise use `inherited-session`. Resolve the controller as `${PI_CODING_AGENT_DIR:-${PI_AGENT_DIR:-$HOME/.pi/agent}}/jig/bin/jigctl.py`. Resolve pstack's generator as `${PI_CODING_AGENT_DIR:-${PI_AGENT_DIR:-$HOME/.pi/agent}}/skills-pstack/create-verification-skill/SKILL.md`. A current Pi session never starts another Pi process from Bash.
 
-Run `start` with the selected `resourceIsolation` before semantic work. If the manifest owns the other route, stop without changing it. An `isolated-shell` manifest resumes with `jig init`. An `inherited-session` manifest resumes with `/skill:jig init` or `/jig init`.
+Run `start` with the selected `resourceIsolation` before semantic work. If the manifest owns the other route, stop and print the recovery command from the route matrix.
 
 ## Ownership
 
-The controller owns locks, transitions, hashes, path containment, worktrees, proof execution, and terminal outcomes. Use only its documented operations and exact JSON input files or standard input contracts.
+The controller owns locks, state transitions, contained paths, exact hashes, atomic publication, project skill-path registration, and the terminal configuration record.
 
-The target operator owns `COMMANDMENTS.md`. Never infer an answer, publish the file directly, weaken a value, or ratify without approval of the displayed candidate digest.
+The target operator owns `.cursor/skills/principle-repository/SKILL.md`. Never infer an answer, weaken a value, publish the file directly, or ratify without approval of the displayed candidate digest.
 
-The selected worker writes only in the controller-owned worktree. The worker cannot write `COMMANDMENTS.md`, `.pi/jig`, active proof definitions, or its own verdict. Never merge.
+Pstack's `create-verification-skill` owns surface discovery, the generated verification skill and feature map, live proof, and cleanup. Do not copy or narrow its procedure. Pstack's `maintain-verification-skill` owns later audits.
 
-Report `initialized` only when the controller returns `kept`, `reverted`, or `no-eligible-candidate`. Do not offer or run a second step.
+Jig never selects, edits, verifies, or merges a product-code improvement. Report `configured` only when the controller returns it.

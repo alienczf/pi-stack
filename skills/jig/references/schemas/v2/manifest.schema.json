@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:pi-stack:jig:schema:v2:manifest",
+  "title": "Jig configured-repository manifest version 2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "repository", "source", "principle", "verification", "currentState", "resourceIsolation", "transitions", "artifacts", "tools", "createdAt", "updatedAt"],
+  "properties": {
+    "schemaVersion": {"const": 2},
+    "repository": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["root", "identity", "scope"],
+      "properties": {
+        "root": {"const": "."},
+        "identity": {"$ref": "#/$defs/sha256"},
+        "scope": {"const": "repository"}
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["revision", "dirty", "statusSummary"],
+      "properties": {
+        "revision": {"$ref": "#/$defs/revision"},
+        "dirty": {"type": "boolean"},
+        "statusSummary": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}}
+      }
+    },
+    "principle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "version", "ratifiedAt"],
+      "properties": {
+        "path": {"const": ".cursor/skills/principle-repository/SKILL.md"},
+        "sha256": {"anyOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]},
+        "version": {"anyOf": [{"type": "integer", "minimum": 1}, {"type": "null"}]},
+        "ratifiedAt": {"anyOf": [{"$ref": "#/$defs/timestamp"}, {"type": "null"}]}
+      }
+    },
+    "verification": {
+      "anyOf": [
+        {"type": "null"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["skillPath", "sha256", "createdBy", "maintainedBy", "completedAt"],
+          "properties": {
+            "skillPath": {"type": "string", "pattern": "^\\.cursor/skills/verify-[a-z0-9][a-z0-9-]{0,55}/SKILL\\.md$"},
+            "sha256": {"$ref": "#/$defs/sha256"},
+            "createdBy": {"const": "pstack/skills/create-verification-skill/SKILL.md"},
+            "maintainedBy": {"const": "pstack/skills/maintain-verification-skill/SKILL.md"},
+            "completedAt": {"$ref": "#/$defs/timestamp"}
+          }
+        }
+      ]
+    },
+    "currentState": {"$ref": "#/$defs/state"},
+    "resourceIsolation": {"enum": ["isolated-shell", "inherited-session"]},
+    "transitions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["from", "to", "at", "receiptPath", "receiptSha256"],
+        "properties": {
+          "from": {"anyOf": [{"$ref": "#/$defs/state"}, {"const": "absent"}]},
+          "to": {"$ref": "#/$defs/state"},
+          "at": {"$ref": "#/$defs/timestamp"},
+          "receiptPath": {"$ref": "#/$defs/path"},
+          "receiptSha256": {"$ref": "#/$defs/sha256"}
+        }
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "owner", "sha256"],
+        "properties": {
+          "path": {"$ref": "#/$defs/path"},
+          "owner": {"enum": ["human", "controller", "jig-skill", "repository"]},
+          "sha256": {"$ref": "#/$defs/sha256"}
+        }
+      }
+    },
+    "tools": {"type": "object"},
+    "createdAt": {"$ref": "#/$defs/timestamp"},
+    "updatedAt": {"$ref": "#/$defs/timestamp"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"currentState": {"const": "configured"}}, "required": ["currentState"]},
+      "then": {"properties": {"verification": {"type": "object"}}}
+    }
+  ],
+  "$defs": {
+    "state": {"enum": ["surveying", "awaiting-principles", "verification-building", "configured", "failed-surveying", "failed-awaiting-principles", "failed-verification-building"]},
+    "revision": {"type": "string", "pattern": "^[0-9a-f]{40,64}$"},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "timestamp": {"type": "string", "format": "date-time"},
+    "path": {"type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*//).+$"}
+  }
+}
