@@ -34,6 +34,7 @@ pi-stack is installed for this user.
   skills    <count>
   packages  pi-web-access, pi-hashline-edit, pi-subagents, @narumitw/pi-goal
   jig       $HOME/.local/bin/jig
+  pstack    $HOME/.local/bin/update-pstack
   controller $HOME/.pi/agent/jig/bin/jigctl.py
 Configure one Git repository:
   cd /path/to/repo && jig init
@@ -42,13 +43,15 @@ Or use the current trusted Pi session:
   /jig init
 ```
 
-The installer keeps the Jig launcher, controller, skill, and references under `$HOME/.pi/agent/jig/`. The command at `$HOME/.local/bin/jig` resolves that installed copy. It does not depend on the checkout that ran `install.sh`.
+The installer keeps the Jig launcher, controller, skill, and references under `$HOME/.pi/agent/jig/`. The command at `$HOME/.local/bin/jig` resolves that installed copy. It does not depend on the source checkout. The pstack updater lives under `$HOME/.pi/agent/update-pstack/`. Its wrapper records the pi-stack checkout that installed it.
 
 The installer preserves unrelated settings and package rows. It preserves an existing `defaultProjectTrust` value and does not add one to a fresh settings file. The shell command denies project trust for its own Pi process with explicit flags. It does not make every project trusted.
 
-The prompt and `-y` update only when a bootstrap invocation selects the default `$HOME/.pi-stack` checkout. Running that checkout's `install.sh` directly or setting `PI_STACK` uses the selected source as-is. The installer does not update the nested pstack clone or installed package versions. After a source update, it installs each newly required package that is absent.
+The prompt and `-y` update only when a bootstrap invocation selects the default `$HOME/.pi-stack` checkout. Running that checkout's `install.sh` directly or setting `PI_STACK` uses the selected source as-is.
 
-A second run with the same inputs leaves all owned file bytes unchanged and removes stale files only from the installed Jig resource directory. It never writes `auth.json`, `models-store.json`, `private/`, or `sessions/`.
+The installer does not update the nested pstack clone or installed package versions. Use `update-pstack` for that independent update. After a source update, the installer installs each newly required package that is absent.
+
+A second run with the same inputs leaves all owned file bytes unchanged. It removes stale files only from the installed Jig and pstack updater resource directories. It never writes `auth.json`, `models-store.json`, `private/`, or `sessions/`.
 
 To use existing source trees, run:
 
@@ -57,6 +60,29 @@ PI_STACK=/path/to/pi-stack PSTACK=/path/to/pstack ./install.sh
 ```
 
 Set `PI_STACK_SKIP_PACKAGES=1` only for an offline or fixture install. That option records the package settings but does not install the packages.
+
+## Update pstack without updating pi-stack
+
+Run `/update-pstack` inside Pi after pstack publishes an update. The procedure reviews the exact upstream diff before it changes the checkout. It stops if pstack removes a selected skill or adds a Cursor action that the Pi adapter cannot map.
+
+Use the shell command to inspect the update plan:
+
+```bash
+update-pstack status
+```
+
+Status refuses tracked or staged pi-stack changes, then records its revision and clean status. The JSON also records both pstack revisions and versions, changed paths, and readiness. After you review one plan, apply only those revisions:
+
+```bash
+update-pstack apply \
+	--expected-pi-stack <pi-stack-revision> \
+	--expected-current <current-pstack-revision> \
+	--expected-upstream <upstream-pstack-revision>
+```
+
+The command fast-forwards only the independent pstack Git checkout. It then reruns the selected pi-stack `install.sh`. If installation changes pi-stack `HEAD` or tracked state, the command restores the reviewed revision and fails. The same apply command can repair an interrupted installation even when the remote publishes a later revision. Set `PI_STACK` and `PSTACK` to use non-default checkouts.
+
+`/skill:update-pstack` runs the same procedure without the `/update-pstack` prompt alias.
 
 ## Required packages
 
@@ -76,6 +102,7 @@ The overlay does not install an MCP adapter, a todo tool, plan mode, pi-lens, an
 - `/poteto` loads poteto-mode.
 - `/goal <objective>` starts a session-scoped objective. Give it a checkable exit predicate. Arrange a wake message before you call `goal_wait` for an external wait.
 - `/skill:cross-repo` reads the current repository's registry and starts one subagent for each listed path. It stops when no registry exists.
+- `/update-pstack` reviews and installs a pstack update while keeping the pi-stack revision unchanged.
 
 ## Configure one repository
 
@@ -138,6 +165,7 @@ bash -n bin/jig.sh install.sh scripts/check-jig.sh
 python3 -m unittest discover -s scripts/jig_tests -p 'test_*.py'
 bash scripts/check-overlay.sh
 bash scripts/check-conform-skills.sh
+bash scripts/check-update-pstack.sh
 bash scripts/check-subagents.sh
 bash scripts/check-jig.sh
 bash scripts/check-cross-repo.sh

@@ -11,6 +11,11 @@ test -f overlay/settings.json || fail "missing overlay/settings.json"
 test -d prompts || fail "missing prompts/"
 test -f prompts/poteto.md || fail "missing prompts/poteto.md"
 test -f install.sh || fail "missing install.sh"
+test -x bin/update-pstack || fail "missing executable bin/update-pstack"
+test -x bin/pstackctl.py || fail "missing executable bin/pstackctl.py"
+test -x scripts/check-update-pstack.sh || fail "missing executable scripts/check-update-pstack.sh"
+test -f skills/update-pstack/SKILL.md || fail "missing update-pstack skill"
+test -f prompts/update-pstack.md || fail "missing update-pstack prompt"
 test ! -e prompts/goal.md || fail "prompts/goal.md must be replaced by the pi-goal extension"
 
 grep -q '"grep"' overlay/settings.json || fail "overlay/settings.json defaultTools lacks grep"
@@ -33,8 +38,10 @@ grep -q 'skills-pstack' install.sh || fail "install.sh must write skills-pstack"
 grep -q 'pi-node' install.sh || fail "install.sh must find pi under pi-node"
 grep -q 'inherit' install.sh || fail "install.sh must rewrite cursor subagent models to inherit"
 grep -F -q '.local/bin/jig' install.sh || fail "install.sh must link jig into .local/bin"
+grep -F -q '.local/bin/update-pstack' install.sh || fail "install.sh must link update-pstack into ~/.local/bin"
 grep -q 'without changing project trust' install.sh || fail "install.sh must document project trust preservation"
 grep -q 'maintain-verification-skill' install.sh || fail "install.sh must register maintain-verification-skill"
+grep -q 'update-pstack' install.sh || fail "install.sh must install update-pstack"
 grep -q 'principle-\*/SKILL.md' overlay/APPEND_SYSTEM.md || fail "APPEND_SYSTEM.md must load project Principles"
 grep -q 'poteto-mode/SKILL.md' overlay/APPEND_SYSTEM.md || fail "APPEND_SYSTEM.md must name poteto-mode/SKILL.md"
 grep -q 'Do not run `pi -p`' overlay/AGENTS.md || fail "AGENTS.md must forbid bash pi -p"
@@ -56,6 +63,10 @@ fi
 
 help="$(bash install.sh --help)"
 printf '%s\n' "$help" | grep -q -- '  -y ' || fail "install.sh --help must document -y"
+printf '%s\n' "$help" | grep -q -- '--print-pstack-skills' || fail "install.sh --help must document its pstack skill query"
+selected_skills="$(bash install.sh --print-pstack-skills)"
+printf '%s\n' "$selected_skills" | grep -qx poteto-mode || fail "selected pstack skills omit poteto-mode"
+printf '%s\n' "$selected_skills" | grep -qx maintain-verification-skill || fail "selected pstack skills omit maintain-verification-skill"
 if bash install.sh -y extra >/dev/null 2>&1; then
 	fail "install.sh accepted an extra argument after -y"
 fi
@@ -88,16 +99,7 @@ printf '%s\n' "$help" | grep -F -q '.plugins' || fail "install.sh --help must na
 tmp=$(mktemp -d)
 cleanup() { rm -rf "$tmp"; }
 trap cleanup EXIT
-mkdir -p "$tmp/pstack/skills/poteto-mode/playbooks"
-cat >"$tmp/pstack/skills/poteto-mode/SKILL.md" <<'EOF'
----
-name: Poteto Mode
-description: stub for install test
----
-# stub
-EOF
-printf 'playbook\n' >"$tmp/pstack/skills/poteto-mode/playbooks/investigation.md"
-for name in create-verification-skill maintain-verification-skill; do
+while IFS= read -r name; do
 	mkdir -p "$tmp/pstack/skills/$name"
 	cat >"$tmp/pstack/skills/$name/SKILL.md" <<EOF
 ---
@@ -106,8 +108,19 @@ description: stub for $name install test
 ---
 # stub
 EOF
-done
+done < <(bash "$root/install.sh" --print-pstack-skills)
+sed -i 's/^name: poteto-mode$/name: Poteto Mode/' "$tmp/pstack/skills/poteto-mode/SKILL.md"
+mkdir -p "$tmp/pstack/skills/poteto-mode/playbooks"
+printf 'playbook\n' >"$tmp/pstack/skills/poteto-mode/playbooks/investigation.md"
 stub="$tmp/pstack"
+missing_stub="$tmp/missing-pstack"
+cp -a "$stub" "$missing_stub"
+rm "$missing_stub/skills/how/SKILL.md"
+if missing_stub_out="$(HOME="$tmp/missing-home" PI_STACK="$root" PSTACK="$missing_stub" PI_STACK_SKIP_PACKAGES=1 bash "$root/install.sh" 2>&1)"; then
+	fail "install accepted a missing selected pstack skill"
+fi
+printf '%s\n' "$missing_stub_out" | grep -q 'missing selected skill root: how' || fail "missing selected skill error was not useful"
+test ! -e "$tmp/missing-home/.pi/agent" || fail "missing selected skill was detected after installation began"
 home="$tmp/home"
 mkdir -p "$home/.pi/agent/prompts"
 cat >"$home/.pi/agent/prompts/goal.md" <<'EOF'
@@ -197,6 +210,8 @@ if not any("skills-pstack/create-verification-skill" in s for s in skills):
 	raise SystemExit("create-verification-skill is not installed")
 if not any("skills-pstack/maintain-verification-skill" in s for s in skills):
 	raise SystemExit("maintain-verification-skill is not installed")
+if not any("skills-pstack/update-pstack" in s for s in skills):
+	raise SystemExit("update-pstack is not installed")
 if data.get("defaultModel") != "cursor/auto":
 	raise SystemExit("top-level defaultModel was rewritten")
 if data.get("enabledModels") != ["cursor/auto", "cursor/composer-2.5"]:
@@ -223,6 +238,14 @@ test -f "$home/.pi/agent/jig/skills/jig/references/public-routes.json" || fail "
 test -f "$home/.pi/agent/skills-pstack/jig/SKILL.md" || fail "install did not register the copied Jig skill"
 test -f "$home/.pi/agent/skills-pstack/create-verification-skill/SKILL.md" || fail "install did not register create-verification-skill"
 test -f "$home/.pi/agent/skills-pstack/maintain-verification-skill/SKILL.md" || fail "install did not register maintain-verification-skill"
+test -f "$home/.pi/agent/skills-pstack/update-pstack/SKILL.md" || fail "install did not register update-pstack"
+test -f "$home/.pi/agent/prompts/update-pstack.md" || fail "install did not copy the update-pstack prompt"
+test -x "$home/.pi/agent/update-pstack/bin/update-pstack" || fail "install did not copy the update-pstack command"
+test -x "$home/.pi/agent/update-pstack/bin/pstackctl.py" || fail "install did not copy the update-pstack controller"
+test -L "$home/.local/bin/update-pstack" || fail "install did not link ~/.local/bin/update-pstack"
+test -x "$home/.local/bin/update-pstack" || fail "linked update-pstack is not executable"
+grep -F -q "$root" "$home/.pi/agent/bin/update-pstack" || fail "installed update-pstack wrapper forgot its pi-stack source"
+"$home/.local/bin/update-pstack" --help | grep -q '^usage: update-pstack' || fail "installed update-pstack command does not run"
 if grep -F -q "$root" "$home/.pi/agent/bin/jig" "$home/.pi/agent/skills-pstack/jig/SKILL.md"; then
 	fail "installed Jig entry points depend on the source checkout"
 fi
@@ -318,14 +341,17 @@ fi
 printf '%s\n' "$nopi_out" | grep -q 'pi is not installed' || fail "install without pi did not say to install Pi"
 
 fake="$tmp/plugins-src"
-mkdir -p "$fake/pstack/skills/poteto-mode"
-cat >"$fake/pstack/skills/poteto-mode/SKILL.md" <<'EOF'
+while IFS= read -r name; do
+	mkdir -p "$fake/pstack/skills/$name"
+	cat >"$fake/pstack/skills/$name/SKILL.md" <<EOF
 ---
-name: Poteto Mode
-description: stub for clone test
+name: $name
+description: stub for $name clone test
 ---
 # stub
 EOF
+done < <(bash "$root/install.sh" --print-pstack-skills)
+sed -i 's/^name: poteto-mode$/name: Poteto Mode/' "$fake/pstack/skills/poteto-mode/SKILL.md"
 git init -q "$fake"
 git -C "$fake" add pstack
 git -C "$fake" -c user.email=t@t -c user.name=t commit -qm stub
@@ -566,7 +592,7 @@ printf '%s\n' "$missing_upstream_out" | grep -q 'has no upstream' || fail "missi
 test "$(git -C "$home2/.pi-stack" rev-parse HEAD)" = "$missing_upstream_head" || fail "checkout without upstream changed while update was refused"
 git -C "$home2/.pi-stack" branch --set-upstream-to="origin/$managed_branch" >/dev/null
 
-if grep -R -E '/home/[^$]|workspace root' -- install.sh overlay skills/jig skills/cross-repo | grep -v '^Binary'; then
+if grep -R -E '/home/[^$]|workspace root' -- install.sh overlay skills/jig skills/cross-repo skills/update-pstack | grep -v '^Binary'; then
 	fail "hardcoded home path or workspace root in overlay files"
 fi
 

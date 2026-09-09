@@ -18,11 +18,12 @@ class IntegrationTest(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.base = Path(self.temporary.name)
         self.pstack = self.base / "pstack"
-        for name, title in (
-            ("poteto-mode", "Poteto Mode"),
-            ("create-verification-skill", "create-verification-skill"),
-            ("maintain-verification-skill", "maintain-verification-skill"),
-        ):
+        selected = subprocess.check_output(
+            ["bash", str(INSTALLER), "--print-pstack-skills"],
+            text=True,
+        ).splitlines()
+        for name in selected:
+            title = "Poteto Mode" if name == "poteto-mode" else name
             skill = self.pstack / "skills" / name
             skill.mkdir(parents=True)
             (skill / "SKILL.md").write_text(

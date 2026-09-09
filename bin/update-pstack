@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+	cat <<'EOF'
+usage: update-pstack [status | apply --expected-pi-stack REVISION --expected-current REVISION --expected-upstream REVISION]
+
+status fetches pstack's upstream and prints an immutable JSON update plan.
+apply fast-forwards to the exact reviewed revision and reapplies install.sh.
+Both require a clean tracked pi-stack state. Neither command updates pi-stack.
+
+Environment
+  PI_STACK              pi-stack checkout to keep unchanged
+  PSTACK                pstack tree to update
+  PI_STACK_SKIP_PACKAGES passed through to install.sh when set
+EOF
+}
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+controller="$script_dir/pstackctl.py"
+if [[ ! -f "$controller" ]]; then
+	printf 'update-pstack controller is missing: %s\n' "$controller" >&2
+	exit 1
+fi
+if [[ -n "${PI_STACK:-}" ]]; then
+	pi_stack="$PI_STACK"
+elif [[ -f "$script_dir/../install.sh" && -f "$script_dir/../overlay/APPEND_SYSTEM.md" ]]; then
+	pi_stack="$(cd "$script_dir/.." && pwd)"
+else
+	pi_stack="${HOME}/.pi-stack"
+fi
+pstack="${PSTACK:-$pi_stack/.plugins/pstack}"
+
+command="${1:-status}"
+case "$command" in
+	-h | --help | help)
+		usage
+		exit 0
+		;;
+	status)
+		if [[ $# -ne 1 && $# -ne 0 ]]; then
+			usage >&2
+			exit 2
+		fi
+		exec python3 "$controller" --pi-stack "$pi_stack" --pstack "$pstack" plan
+		;;
+	apply)
+		if [[ $# -ne 7 || "${2:-}" != "--expected-pi-stack" || "${4:-}" != "--expected-current" || "${6:-}" != "--expected-upstream" ]]; then
+			usage >&2
+			exit 2
+		fi
+		expected_pi_stack="$3"
+		expected_current="$5"
+		expected_upstream="$7"
+		;;
+	*)
+		usage >&2
+		exit 2
+		;;
+esac
+
+before_pi_stack="$(git -C "$pi_stack" rev-parse HEAD)"
+before_pi_stack_status="$(git -C "$pi_stack" status --short --untracked-files=no)"
+result="$(python3 "$controller" --pi-stack "$pi_stack" --pstack "$pstack" apply \
+	--expected-pi-stack "$expected_pi_stack" \
+	--expected-current "$expected_current" \
+	--expected-upstream "$expected_upstream")"
+install_result=0
+PI_STACK="$pi_stack" PSTACK="$pstack" bash "$pi_stack/install.sh" || install_result=$?
+after_pi_stack="$(git -C "$pi_stack" rev-parse HEAD 2>/dev/null || true)"
+after_pi_stack_status="$(git -C "$pi_stack" status --short --untracked-files=no 2>/dev/null || true)"
+change_message=""
+if [[ "$after_pi_stack" != "$before_pi_stack" ]]; then
+	change_message="pi-stack HEAD changed while pstack was installed: $before_pi_stack -> $after_pi_stack"
+elif [[ "$after_pi_stack_status" != "$before_pi_stack_status" ]]; then
+	change_message="pi-stack tracked or staged status changed while pstack was installed."
+fi
+if [[ -n "$change_message" ]]; then
+	restore_result=0
+	git -C "$pi_stack" reset --hard "$before_pi_stack" >/dev/null 2>&1 || restore_result=$?
+	restored_pi_stack="$(git -C "$pi_stack" rev-parse HEAD 2>/dev/null || true)"
+	restored_pi_stack_status="$(git -C "$pi_stack" status --short --untracked-files=no 2>/dev/null || true)"
+	if [[ "$restore_result" -eq 0 && "$restored_pi_stack" == "$before_pi_stack" && "$restored_pi_stack_status" == "$before_pi_stack_status" ]]; then
+		printf '%s Restored the reviewed pi-stack revision.\n' "$change_message" >&2
+	else
+		printf '%s Automatic restore failed; inspect %s before retrying.\n' "$change_message" "$pi_stack" >&2
+	fi
+	exit 1
+fi
+if [[ "$install_result" -ne 0 ]]; then
+	exit "$install_result"
+fi
+printf '%s\n' "$result"

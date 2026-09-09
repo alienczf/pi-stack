@@ -1,21 +1,38 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+pstack_skill_names=(
+	poteto-mode
+	how
+	why
+	architect
+	interrogate
+	tdd
+	unslop
+	technical-writing
+	figure-it-out
+	show-me-your-work
+	reflect
+	create-verification-skill
+	maintain-verification-skill
+)
+
 usage() {
 	cat <<'EOF'
-usage: install.sh [-y]
+usage: install.sh [-y | --print-pstack-skills]
 
 Copies the pi-stack overlay into $HOME/.pi/agent.
 Writes pstack-aligned user agents into $HOME/.pi/agent/agents/.
 Dated backups go to $HOME/.pi/agent/backups/subagents/.
 Rewrites Cursor skill names into $HOME/.pi/agent/skills-pstack. Does not edit pstack.
 Copies the Jig launcher, controller, skill, and references into $HOME/.pi/agent/jig/.
+Copies the pstack updater command and controller into $HOME/.pi/agent/update-pstack/.
 Merges defaultTools, skills, and packages into settings.json without changing project trust.
 Finds pi on PATH or under ~/.local/share/pi-node and installs
 npm:pi-web-access, npm:pi-hashline-edit, npm:pi-subagents, and
 npm:@narumitw/pi-goal.
 Creates pi-goal.json with unlimited automatic turns when that file is absent.
-Rewrites cursor/* subagent models to inherit. Links jig into ~/.local/bin.
+Rewrites cursor/* subagent models to inherit. Links jig and update-pstack into ~/.local/bin.
 Never writes auth.json, models-store.json, private/, or sessions/.
 Does not search for git repositories. Initialize one Git root later with jig init.
 
@@ -24,10 +41,11 @@ $HOME/.pi-stack. Clones alienczf/pi-stack there when overlay/ is missing.
 A bootstrap invocation prompts before fast-forwarding that existing checkout.
 If PSTACK is unset, uses $PI_STACK/.plugins/pstack. Clones cursor/plugins
 (sparse, pstack only) into $PI_STACK/.plugins when that tree is missing.
-The pstack clone is not refreshed on a later run.
+A later install does not refresh pstack. Use update-pstack after reviewing upstream changes.
 
 Options
   -y            update the bootstrap-selected default checkout without prompting
+  --print-pstack-skills  print the pstack skill roots selected by pi-stack
 
 Environment
   HOME          install target (default is your home)
@@ -92,6 +110,14 @@ case "${1:-}" in
 		;;
 	-y)
 		update_decision="yes"
+		;;
+	--print-pstack-skills)
+		if [[ $# -ne 1 ]]; then
+			usage >&2
+			exit 2
+		fi
+		printf '%s\n' "${pstack_skill_names[@]}"
+		exit 0
 		;;
 	"")
 		;;
@@ -215,47 +241,62 @@ if [[ ! -f "$pstack/skills/poteto-mode/SKILL.md" ]]; then
 	printf 'PSTACK=%s has no skills/poteto-mode/SKILL.md\n' "$pstack" >&2
 	exit 1
 fi
+for name in "${pstack_skill_names[@]}"; do
+	if [[ ! -f "$pstack/skills/$name/SKILL.md" ]]; then
+		printf 'PSTACK=%s is missing selected skill root: %s\n' "$pstack" "$name" >&2
+		exit 1
+	fi
+done
 
 agent="${HOME}/.pi/agent"
 mkdir -p "$agent/prompts" "$agent/bin"
 installed_jig="$agent/jig"
+installed_update="$agent/update-pstack"
 export PI_STACK_SOURCE_ROOT="$here"
 export PI_STACK_INSTALLED_JIG="$installed_jig"
+export PI_STACK_INSTALLED_UPDATE="$installed_update"
 python3 - <<'PY'
 import os
 import shutil
 from pathlib import Path
 
 source = Path(os.environ["PI_STACK_SOURCE_ROOT"])
-destination = Path(os.environ["PI_STACK_INSTALLED_JIG"])
-relative_files = [Path("bin/jig.sh"), Path("bin/jigctl.py")]
-relative_files.extend(
+
+def sync(destination: Path, relative_files: list[Path]) -> None:
+    wanted = {path.as_posix() for path in relative_files}
+    destination.mkdir(parents=True, exist_ok=True)
+    for current in sorted(destination.rglob("*"), reverse=True):
+        relative = current.relative_to(destination).as_posix()
+        if current.is_symlink() or current.is_file():
+            if relative not in wanted:
+                current.unlink()
+        elif current.is_dir() and not any(current.iterdir()):
+            current.rmdir()
+    for relative in relative_files:
+        src = source / relative
+        dest = destination / relative
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        data = src.read_bytes()
+        if dest.is_symlink() or (dest.exists() and not dest.is_file()):
+            if dest.is_dir():
+                shutil.rmtree(dest)
+            else:
+                dest.unlink()
+        if not dest.exists() or dest.read_bytes() != data:
+            dest.write_bytes(data)
+        dest.chmod(src.stat().st_mode & 0o777)
+
+jig_files = [Path("bin/jig.sh"), Path("bin/jigctl.py")]
+jig_files.extend(
     path.relative_to(source)
     for path in sorted((source / "skills/jig").rglob("*"))
     if path.is_file() and "__pycache__" not in path.parts
 )
-wanted = {path.as_posix() for path in relative_files}
-destination.mkdir(parents=True, exist_ok=True)
-for current in sorted(destination.rglob("*"), reverse=True):
-    relative = current.relative_to(destination).as_posix()
-    if current.is_symlink() or current.is_file():
-        if relative not in wanted:
-            current.unlink()
-    elif current.is_dir() and not any(current.iterdir()):
-        current.rmdir()
-for relative in relative_files:
-    src = source / relative
-    dest = destination / relative
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    data = src.read_bytes()
-    if dest.is_symlink() or (dest.exists() and not dest.is_file()):
-        if dest.is_dir():
-            shutil.rmtree(dest)
-        else:
-            dest.unlink()
-    if not dest.exists() or dest.read_bytes() != data:
-        dest.write_bytes(data)
-    dest.chmod(src.stat().st_mode & 0o777)
+sync(Path(os.environ["PI_STACK_INSTALLED_JIG"]), jig_files)
+sync(
+    Path(os.environ["PI_STACK_INSTALLED_UPDATE"]),
+    [Path("bin/update-pstack"), Path("bin/pstackctl.py")],
+)
 PY
 
 install_md() {
@@ -289,21 +330,31 @@ if [[ -x "$installed_jig/bin/jig.sh" ]]; then
 	fi
 	chmod +x "$wrapper"
 fi
+if [[ -x "$installed_update/bin/update-pstack" ]]; then
+	wrapper="$agent/bin/update-pstack"
+	printf -v source_root '%q' "$here"
+	printf -v agent_root '%q' "$agent"
+	wanted=$(printf '#!/usr/bin/env bash\nset -euo pipefail\ndefault_pi_stack=%s\ndefault_agent=%s\nexport PI_STACK="${PI_STACK:-$default_pi_stack}"\nagent_dir="${PI_CODING_AGENT_DIR:-${PI_AGENT_DIR:-$default_agent}}"\nexec "$agent_dir/update-pstack/bin/update-pstack" "$@"\n' "$source_root" "$agent_root")
+	if [[ ! -f "$wrapper" ]] || [[ "$(cat "$wrapper")" != "$wanted" ]]; then
+		printf '%s' "$wanted" >"$wrapper"
+	fi
+	chmod +x "$wrapper"
+fi
 
 mkdir -p "${HOME}/.local/bin"
-if [[ -x "$agent/bin/jig" ]]; then
-	ln -sfn "$agent/bin/jig" "${HOME}/.local/bin/jig"
-fi
+for name in jig update-pstack; do
+	if [[ -x "$agent/bin/$name" ]]; then
+		ln -sfn "$agent/bin/$name" "${HOME}/.local/bin/$name"
+	fi
+done
 
 conform_out="${agent}/skills-pstack"
 mkdir -p "$conform_out"
 conform_src=()
-for name in poteto-mode how why architect interrogate tdd unslop technical-writing figure-it-out show-me-your-work reflect create-verification-skill maintain-verification-skill; do
-	if [[ -f "$pstack/skills/$name/SKILL.md" ]]; then
-		conform_src+=("$pstack/skills/$name")
-	fi
+for name in "${pstack_skill_names[@]}"; do
+	conform_src+=("$pstack/skills/$name")
 done
-for name in cross-repo; do
+for name in cross-repo update-pstack; do
 	if [[ -f "$here/skills/$name/SKILL.md" ]]; then
 		conform_src+=("$here/skills/$name")
 	fi
@@ -314,7 +365,7 @@ if [[ ${#conform_src[@]} -gt 0 ]]; then
 fi
 
 export PI_AGENT_DIR="$agent"
-python3 - "${required_packages[@]}" <<'PY'
+python3 - "${#pstack_skill_names[@]}" "${pstack_skill_names[@]}" "${required_packages[@]}" <<'PY'
 import json
 import os
 import sys
@@ -324,29 +375,16 @@ from pathlib import Path
 agent = Path(os.environ["PI_AGENT_DIR"])
 path = agent / "settings.json"
 conformed = agent / "skills-pstack"
-required_packages = sys.argv[1:]
+pstack_skill_count = int(sys.argv[1])
+pstack_skills = sys.argv[2 : 2 + pstack_skill_count]
+required_packages = sys.argv[2 + pstack_skill_count :]
 
 tools = ["read", "write", "edit", "bash", "grep", "find", "ls"]
-wanted = [
-	"poteto-mode",
-	"how",
-	"why",
-	"architect",
-	"interrogate",
-	"tdd",
-	"unslop",
-	"technical-writing",
-	"figure-it-out",
-	"show-me-your-work",
-	"reflect",
-	"create-verification-skill",
-	"maintain-verification-skill",
-	"jig",
-	"cross-repo",
-]
-skills = [str((conformed / n).resolve()) for n in wanted if (conformed / n / "SKILL.md").is_file()]
-if len(skills) > 15:
-	sys.exit("skills allowlist grew past 15")
+wanted = [*pstack_skills, "jig", "cross-repo", "update-pstack"]
+missing_skills = [name for name in wanted if not (conformed / name / "SKILL.md").is_file()]
+if missing_skills:
+	sys.exit(f"conformed skills are missing: {', '.join(missing_skills)}")
+skills = [str((conformed / name).resolve()) for name in wanted]
 
 if path.exists():
 	data = json.loads(path.read_text())
@@ -589,6 +627,7 @@ pi-stack is installed for this user.
   skills    ${skill_n}
   packages  ${pkg_msg}
   jig       ${HOME}/.local/bin/jig
+  pstack    ${HOME}/.local/bin/update-pstack
   controller ${installed_jig}/bin/jigctl.py
 Configure one Git repository:
   cd /path/to/repo && jig init
