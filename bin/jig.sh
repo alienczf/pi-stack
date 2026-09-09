@@ -100,7 +100,7 @@ fi
 printf '%s\n' "$state"
 current_state="$(printf '%s' "$state" | state_name)"
 if [[ "$current_state" == "configured" ]]; then
-	printf 'Jig configured this repository. Use /skill:maintain-verification-skill for later verification audits.\n'
+	printf 'Jig configured this repository. Use /skill:reflect for later skill learning and /skill:maintain-verification-skill for verification upkeep.\n'
 	exit 0
 fi
 
@@ -135,7 +135,7 @@ printf '%s\n' "$final_state"
 current_state="$(printf '%s' "$final_state" | state_name)"
 
 if [[ "$current_state" == "configured" && "$pi_status" -eq 0 ]]; then
-	printf 'Jig configured this repository. Use /skill:maintain-verification-skill for later verification audits.\n'
+	printf 'Jig configured this repository. Use /skill:reflect for later skill learning and /skill:maintain-verification-skill for verification upkeep.\n'
 	exit 0
 fi
 

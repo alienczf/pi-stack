@@ -131,6 +131,7 @@ class JigControllerTest(unittest.TestCase):
         self.assertEqual(configured["state"], "configured")
         self.assertEqual(configured["outcome"], "configured")
         self.assertIn("maintain-verification-skill", configured["maintenance"])
+        self.assertEqual(configured["reflection"], "/skill:reflect")
         merged = json.loads(settings.read_text(encoding="utf-8"))
         self.assertEqual(merged["theme"], "keep")
         self.assertEqual(merged["skills"], ["../other/skills", "../.cursor/skills"])
@@ -152,9 +153,19 @@ class JigControllerTest(unittest.TestCase):
             if path.is_file()
         }
         self.assertEqual(after, before)
-        self.output(self.ctl("validate-configuration"))
+        creation_sha256 = self.manifest()["verification"]["sha256"]
+        verification.write_text(
+            "---\nname: verify-fixture\ndescription: Drive and verify the maintained fixture CLI.\n---\n\n"
+            "# Verify maintained fixture\n",
+            encoding="utf-8",
+        )
+        maintained = self.output(self.ctl("validate-configuration"))
+        self.assertEqual(maintained["state"], "configured")
+        resumed = self.output(self.ctl("start"))
+        self.assertEqual(resumed["state"], "configured")
         manifest = self.manifest()
         self.assertEqual(manifest["schemaVersion"], 2)
+        self.assertEqual(manifest["verification"]["sha256"], creation_sha256)
         self.assertEqual(manifest["verification"]["createdBy"], "pstack/skills/create-verification-skill/SKILL.md")
         self.assertEqual(manifest["verification"]["maintainedBy"], "pstack/skills/maintain-verification-skill/SKILL.md")
         self.assertNotIn("firstStep", manifest)

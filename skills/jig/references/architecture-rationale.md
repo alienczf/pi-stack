@@ -2,17 +2,19 @@
 
 ## Chosen shape
 
-Jig has one job. It turns an operator interview into a repository Principle, delegates verification generation to pstack, and stops.
+Jig has one job. It turns an operator interview into a fixed initial repository Principle, delegates verification generation to pstack, and stops.
 
 The durable domain shape is one version 2 configured-repository manifest. It records one repository, one ratified Principle, one pstack-generated verification skill, one public route, and one state-machine position. Product changes do not belong in that model.
 
-The Python standard-library controller remains because exact digest ratification, route ownership, path containment, atomic writes, crash recovery, and idempotent settings merges are deterministic boundaries. The model owns repository interpretation. Pstack owns verification procedure design and proof.
+The Python standard-library controller remains because exact digest ratification, route ownership, path containment, atomic writes, crash recovery, and idempotent settings merges are deterministic boundaries. The model owns repository interpretation. Pstack owns later skill learning plus verification design and proof.
 
 ## Canonical skill tree
 
 Pstack already generates project skills under `.cursor/skills`. Jig keeps that location canonical. Pi's project settings load `../.cursor/skills`, which lets both harnesses read the same files. A second generated copy or symlink would create ownership and drift questions without adding a capability.
 
 The repository Principle is a real skill named `principle-repository`. Its broad description makes it relevant to every nontrivial repository task. The pi-stack overlay also tells poteto agents to read trusted project `principle-*` skills after pstack's built-in Principles.
+
+Jig is not a general skill authoring loop. It compiles the ratified interview into the one fixed Principle shape. Later general skill learning uses pstack `reflect`. Verification starts with `create-verification-skill` and stays current through `maintain-verification-skill`.
 
 ## Removed responsibilities
 
@@ -22,4 +24,4 @@ Version 2 deletes those APIs instead of preserving compatibility paths. A versio
 
 ## Accepted tradeoff
 
-The old controller certified a custom runtime receipt. Version 2 certifies configuration boundaries only. Pstack's generator owns the live proof. The terminal word is therefore `configured`, not `verified`, `kept`, or `reverted`.
+The old controller certified a custom runtime receipt. Version 2 certifies configuration boundaries only. Pstack's generator owns the live proof, and its maintenance workflow may change valid verification files later. The stored verification hash is handoff evidence, not a permanent content lock. The terminal word is therefore `configured`, not `verified`, `kept`, or `reverted`.

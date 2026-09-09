@@ -101,7 +101,6 @@ The overlay does not install an MCP adapter, a todo tool, plan mode, pi-lens, an
 
 - `/poteto` loads poteto-mode.
 - `/goal <objective>` starts a session-scoped objective. Give it a checkable exit predicate. Arrange a wake message before you call `goal_wait` for an external wait.
-- `/skill:cross-repo` reads the current repository's registry and starts one subagent for each listed path. It stops when no registry exists.
 - `/update-pstack` reviews and installs a pstack update while keeping the pi-stack revision unchanged.
 
 ## Configure one repository
@@ -140,7 +139,7 @@ A manifest keeps its original route. A version 1 manifest is an unsupported lega
 6. The controller idempotently adds `../.cursor/skills` to `.pi/settings.json` while preserving unrelated valid settings.
 7. Jig reports `configured` and stops.
 
-Jig never selects, edits, verifies, or merges a product-code improvement. Later verification audits belong to `/skill:maintain-verification-skill`.
+Jig never selects, edits, verifies, or merges a product-code improvement. The init interview produces the fixed repository Principle. Later general skill learning belongs to `/skill:reflect`. Pstack builds repository verification with `/skill:create-verification-skill` and keeps it current with `/skill:maintain-verification-skill`.
 
 ### Repository artifacts
 

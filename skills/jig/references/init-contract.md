@@ -11,6 +11,8 @@ A successful campaign produces and records two repository capabilities:
 
 The controller adds `../.cursor/skills` to `.pi/settings.json`, so Pi and Cursor read one canonical skill tree. It never duplicates or symlinks a skill body. The terminal outcome is `configured`.
 
+Jig compiles only the fixed initial Principle from the ratified interview. Later general skill learning and approved skill edits belong to pstack's `reflect`.
+
 Package selectors, subtree paths, flags, and extra positional arguments fail before state changes. A monorepo is one repository-wide scope.
 
 ## Ownership
@@ -18,9 +20,10 @@ Package selectors, subtree paths, flags, and extra positional arguments fail bef
 | Owner | Decisions and writes |
 | --- | --- |
 | Target operator | Repository Principle values, exceptions, amendments, exact digest ratification, and later product decisions. |
-| Jig skill | Cited repository survey, interview presentation, and semantic synthesis of operator answers. |
-| Python controller | Git-root resolution, route honesty, locks, contained paths, hashes, atomic publication, project settings merge, and the terminal record. |
-| pstack create-verification-skill | Verification surface discovery, skill and feature-map generation, live proof, evidence, and cleanup. |
+| Jig skill | Cited repository survey, interview presentation, and semantic synthesis of operator answers into the fixed initial Principle. |
+| Python controller | Git-root resolution, route honesty, locks, contained paths, initial hashes, atomic publication, project settings merge, and the terminal record. |
+| pstack reflect | Later general skill learning and approved skill edits. |
+| pstack create-verification-skill | Verification discovery, skill and feature-map generation, live proof, evidence, and cleanup. |
 | pstack maintain-verification-skill | Later verification-skill audits and corrections. |
 
 No Jig actor selects or edits a product-code improvement.
@@ -54,12 +57,13 @@ A manifest whose `schemaVersion` is `1` is an unsupported legacy campaign. Jig f
 
 `complete-configuration` accepts only a version and the generated verification `SKILL.md` path. The controller checks containment, regular-file ownership, frontmatter, the `verify-*` name, and the file hash. It does not reimplement pstack's feature counts, helper rules, launch protocol, evidence format, or runtime proof.
 
-`validate-configuration` proves the recorded Principle and verification skill still match their hashes and Pi still loads the canonical skill tree. Verification maintenance belongs to `/skill:maintain-verification-skill`, not Jig init.
+`validate-configuration` proves the recorded Principle still matches its ratified hash, the recorded verification path still names a valid `verify-*` skill, and Pi still loads the canonical skill tree. The verification hash records the configuration handoff. It does not make pstack maintenance invalid.
 
 ## Pstack references
 
 Jig references these logical installed procedures without copying them:
 
+- `pstack/skills/reflect/SKILL.md`
 - `pstack/skills/create-verification-skill/SKILL.md`
 - `pstack/skills/maintain-verification-skill/SKILL.md`
 

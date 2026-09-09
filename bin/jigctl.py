@@ -1364,9 +1364,7 @@ def validate_configured(root: Path, manifest: Dict[str, Any]) -> None:
         raise ValidationError("ratified repository Principle changed")
     parse_frontmatter(principle_raw, "principle-repository")
     verification = manifest["verification"]
-    _, digest = validate_verification_skill(root, verification["skillPath"])
-    if digest != verification["sha256"]:
-        raise ValidationError("configured verification skill changed; run the pstack maintenance skill and reconfigure")
+    validate_verification_skill(root, verification["skillPath"])
     settings = read_contained_json(root, PI_SETTINGS_PATH, "Pi project settings")
     skills = settings.get("skills") if isinstance(settings, dict) else None
     if (
@@ -1429,6 +1427,7 @@ def render_result(manifest: Mapping[str, Any]) -> None:
     elif manifest["currentState"] == "configured":
         result["outcome"] = "configured"
         result["verification"] = manifest["verification"]
+        result["reflection"] = "/skill:reflect"
         result["maintenance"] = f"/skill:maintain-verification-skill {manifest['verification']['skillPath']}"
     print(json.dumps(result, sort_keys=True))
 

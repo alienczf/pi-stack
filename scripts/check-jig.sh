@@ -44,9 +44,14 @@ test -x scripts/check-readme-commands.py || fail "check-readme-commands.py must 
 grep -q 'git rev-parse --show-toplevel' bin/jig.sh || fail "jig.sh must resolve the Git root"
 grep -q 'disable-model-invocation: true' skills/jig/SKILL.md || fail "Jig must require explicit invocation"
 grep -q -- '--skill "$create_skill"' bin/jig.sh || fail "shell route must explicitly load create-verification-skill"
+grep -q 'reflect' skills/jig/SKILL.md || fail "Jig must route later skill learning to reflect"
 grep -q 'maintain-verification-skill' install.sh || fail "installer must register maintain-verification-skill"
+grep -q 'maintain-verification-skill' skills/jig/playbooks/init.md || fail "Jig must route verification upkeep to pstack"
 grep -q 'complete-configuration' skills/jig/playbooks/init.md || fail "init must complete the v2 configuration"
 grep -q 'never selects' skills/jig/SKILL.md || fail "Jig must reject product improvement ownership"
+if grep -q 'configured verification skill changed' bin/jigctl.py; then
+  fail "Jig must accept valid verification maintenance"
+fi
 if grep -qE 'commit-step-selection|prepare-step-worktree|verify-step-output|complete-step-result|begin-verification|complete-verification' bin/jigctl.py; then
 	fail "Jig controller retains removed first-step or verification commands"
 fi

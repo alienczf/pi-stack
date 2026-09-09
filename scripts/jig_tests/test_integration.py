@@ -126,6 +126,7 @@ class IntegrationTest(unittest.TestCase):
         self.assertEqual(installed_settings["theme"], "keep")
         self.assertIn("npm:keep-me", installed_settings["packages"])
         skills = installed_settings["skills"]
+        self.assertTrue(any("skills-pstack/reflect" in path for path in skills))
         self.assertTrue(any("create-verification-skill" in path for path in skills))
         self.assertTrue(any("maintain-verification-skill" in path for path in skills))
         stale = home / ".pi/agent/jig/skills/jig/playbooks/first-step.md"

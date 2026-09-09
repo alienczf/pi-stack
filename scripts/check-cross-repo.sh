@@ -5,41 +5,25 @@ root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
 fail() { printf '%s\n' "$*" >&2; exit 1; }
 
-test ! -e examples/workspace-AGENTS.md || fail "examples/workspace-AGENTS.md must not exist"
 test -f skills/cross-repo/SKILL.md || fail "missing skills/cross-repo/SKILL.md"
-test -f examples/orchestrator/registry.md || fail "missing examples/orchestrator/registry.md"
-test -f examples/orchestrator/README.md || fail "missing examples/orchestrator/README.md"
+test -f prompts/cross-repo.md || fail "missing prompts/cross-repo.md"
+test ! -e examples/orchestrator || fail "retired cross-repo topology example remains"
 
-grep -q 'disable-model-invocation: true' skills/cross-repo/SKILL.md || fail "cross-repo skill must disable model invocation"
+grep -q 'disable-model-invocation: true' skills/cross-repo/SKILL.md || fail "cross-repo skill must require explicit invocation"
+grep -q 'Use only for /skill:cross-repo or /cross-repo' skills/cross-repo/SKILL.md || fail "cross-repo skill must document explicit routes"
 grep -q 'subagent' skills/cross-repo/SKILL.md || fail "skill must dispatch with the subagent tool"
-grep -q 'cwd' skills/cross-repo/SKILL.md || fail "skill must pass cwd to children"
-if grep -q 'pi -p --approve' skills/cross-repo/SKILL.md; then
-	fail "skill must not spawn children with bash pi -p"
-fi
-grep -q 'registry.md' skills/cross-repo/SKILL.md || fail "skill must look for registry.md"
-grep -q 'siblings.tsv' skills/cross-repo/SKILL.md || fail "skill must look for siblings.tsv"
-grep -q 'does not edit' skills/cross-repo/SKILL.md || fail "skill must say the parent does not edit children"
-grep -q 'If none of those files exist, stop' skills/cross-repo/SKILL.md || fail "skill must stop when cwd has no registry"
+grep -q 'workflowScript' skills/cross-repo/SKILL.md || fail "skill must batch multi-repository dispatch"
+grep -q 'cwd' skills/cross-repo/SKILL.md || fail "skill must set the target cwd"
+grep -q '\$ARGUMENTS' prompts/cross-repo.md || fail "prompt must forward the explicit request"
 
-if grep '../AGENTS.md' skills/cross-repo/SKILL.md | grep -qv 'Do not'; then
-	fail "cross-repo must not read ../AGENTS.md as a registry"
+if grep -q 'pi -p' skills/cross-repo/SKILL.md prompts/cross-repo.md; then
+  grep -q 'does not launch `pi -p`' skills/cross-repo/SKILL.md || fail "cross-repo skill must not launch nested Pi"
 fi
-if grep -qiE 'one level under|sibling \.git|parent folder|workspace root|~/trading' skills/cross-repo/SKILL.md; then
-	fail "cross-repo still discovers folder layout"
+if grep -qE '/skill:cross-repo|spans two git repos|multiple domain git repos' overlay/AGENTS.md README.md; then
+  fail "global multi-repository guidance remains"
 fi
-if grep -qiE 'copy .+ to the folder above|copy this to your workspace' README.md examples/orchestrator/README.md overlay/AGENTS.md skills/cross-repo/SKILL.md; then
-	fail "must not instruct copying onto a container folder"
-fi
-if grep -qiE 'required MCP|use MCP|call MCP' skills/cross-repo/SKILL.md; then
-	fail "skill must not require MCP"
-fi
-
-grep -q '/skill:cross-repo' overlay/AGENTS.md || fail "overlay AGENTS.md must name /skill:cross-repo"
-grep -q 'playbooks/investigation.md' overlay/AGENTS.md || fail "overlay AGENTS.md must name investigation.md as the thing not to use"
-grep -q 'Do not place `AGENTS.md` in a directory that has multiple domain git repos as children' overlay/AGENTS.md || fail "overlay AGENTS.md must ban ancestor coding files"
-grep -q 'subagent' examples/orchestrator/AGENTS.md || fail "orchestrator sample must dispatch with subagent"
-if grep -q 'Spawn `pi -p`' examples/orchestrator/AGENTS.md; then
-	fail "orchestrator sample still spawns bash pi -p"
+if grep -qiE 'parent does not edit|never MCP|do not walk parent|find sibling \\.git' skills/cross-repo/SKILL.md prompts/cross-repo.md; then
+  fail "cross-repo still imposes retired topology constraints"
 fi
 
 echo "check-cross-repo ok"

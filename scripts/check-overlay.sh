@@ -66,6 +66,7 @@ printf '%s\n' "$help" | grep -q -- '  -y ' || fail "install.sh --help must docum
 printf '%s\n' "$help" | grep -q -- '--print-pstack-skills' || fail "install.sh --help must document its pstack skill query"
 selected_skills="$(bash install.sh --print-pstack-skills)"
 printf '%s\n' "$selected_skills" | grep -qx poteto-mode || fail "selected pstack skills omit poteto-mode"
+printf '%s\n' "$selected_skills" | grep -qx reflect || fail "selected pstack skills omit reflect"
 printf '%s\n' "$selected_skills" | grep -qx maintain-verification-skill || fail "selected pstack skills omit maintain-verification-skill"
 if bash install.sh -y extra >/dev/null 2>&1; then
 	fail "install.sh accepted an extra argument after -y"
@@ -206,6 +207,8 @@ if not any("skills-pstack/poteto-mode" in s for s in skills):
 	raise SystemExit("skills do not point at skills-pstack/poteto-mode")
 if any("/pstack/skills/poteto-mode" in s for s in skills):
 	raise SystemExit("skills still point at raw pstack")
+if not any("skills-pstack/reflect" in s for s in skills):
+	raise SystemExit("reflect is not installed")
 if not any("skills-pstack/create-verification-skill" in s for s in skills):
 	raise SystemExit("create-verification-skill is not installed")
 if not any("skills-pstack/maintain-verification-skill" in s for s in skills):
@@ -236,6 +239,7 @@ test -x "$home/.pi/agent/jig/bin/jig.sh" || fail "install did not copy the Jig l
 test -x "$home/.pi/agent/jig/bin/jigctl.py" || fail "install did not copy the Jig controller"
 test -f "$home/.pi/agent/jig/skills/jig/references/public-routes.json" || fail "install did not copy the public route matrix"
 test -f "$home/.pi/agent/skills-pstack/jig/SKILL.md" || fail "install did not register the copied Jig skill"
+test -f "$home/.pi/agent/skills-pstack/reflect/SKILL.md" || fail "install did not register reflect"
 test -f "$home/.pi/agent/skills-pstack/create-verification-skill/SKILL.md" || fail "install did not register create-verification-skill"
 test -f "$home/.pi/agent/skills-pstack/maintain-verification-skill/SKILL.md" || fail "install did not register maintain-verification-skill"
 test -f "$home/.pi/agent/skills-pstack/update-pstack/SKILL.md" || fail "install did not register update-pstack"

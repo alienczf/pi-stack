@@ -40,7 +40,7 @@ After that procedure has run its own live proof and cleanup, submit only this co
 
 The controller validates the skill boundary, records its hash, and idempotently adds `../.cursor/skills` to `.pi/settings.json`. It preserves unrelated valid settings and stops on malformed or conflicting settings.
 
-Run `validate-configuration`, then `start`. Report `configured`, the repository Principle path, the verification skill path, and `/skill:maintain-verification-skill` as the later audit route. Do not run maintenance during init.
+Run `validate-configuration`, then `start`. Report `configured`, the repository Principle path, and the verification skill path. Point to `/skill:reflect` for later general skill learning and `/skill:maintain-verification-skill` for verification upkeep. Do not run either during init.
 
 ## Stop
 

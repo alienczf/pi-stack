@@ -1,6 +1,6 @@
 ---
 name: jig
-description: Configure one Git repository with human-ratified repository Principles and a pstack-generated verification skill. Use only for explicit /skill:jig init or /jig init.
+description: Interview an operator to configure one Git repository with an initial repository Principle and pstack verification. Use only for explicit /skill:jig init or /jig init.
 disable-model-invocation: true
 ---
 
@@ -20,10 +20,10 @@ Run `start` with the selected `resourceIsolation` before semantic work. If the m
 
 ## Ownership
 
-The controller owns locks, state transitions, contained paths, exact hashes, atomic publication, project skill-path registration, and the terminal configuration record.
+The controller owns locks, state transitions, contained paths, initial hashes, atomic publication, project skill-path registration, and the terminal configuration record.
 
-The target operator owns `.cursor/skills/principle-repository/SKILL.md`. Never infer an answer, weaken a value, publish the file directly, or ratify without approval of the displayed candidate digest.
+The target operator owns `.cursor/skills/principle-repository/SKILL.md`. Jig compiles the approved interview into that fixed initial Principle. Never infer an answer, weaken a value, publish the file directly, or ratify without approval of the displayed candidate digest.
 
-Pstack's `create-verification-skill` owns surface discovery, the generated verification skill and feature map, live proof, and cleanup. Do not copy or narrow its procedure. Pstack's `maintain-verification-skill` owns later audits.
+Pstack's `reflect` owns later general skill learning and approved skill edits. It does not run during init. Pstack's `create-verification-skill` owns verification discovery, generation, live proof, and cleanup. Pstack's `maintain-verification-skill` owns later verification audits and corrections.
 
 Jig never selects, edits, verifies, or merges a product-code improvement. Report `configured` only when the controller returns it.

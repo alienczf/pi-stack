@@ -27,16 +27,10 @@ Never background bash. Use tmux if you need a long-running process that is not a
 
 Keep the `read` tool enabled.
 
-## Extra matches
-
-If the question spans two git repos, use `/skill:cross-repo`. Do not use pstack `playbooks/investigation.md`.
-
-Do not place `AGENTS.md` in a directory that has multiple domain git repos as children. Ancestor files still load in Pi. Coding rules there leak.
-
 ## Jig handoff
 
 Use `jig init` from the human shell for a fresh resource-isolated Pi campaign. Use `/skill:jig init` or `/jig init` inside the current trusted Pi session. A running agent never launches `pi -p`.
 
 Every route uses the installed controller at `${PI_CODING_AGENT_DIR:-${PI_AGENT_DIR:-$HOME/.pi/agent}}/jig/bin/jigctl.py`. Preserve the manifest's `resourceIsolation` value. An `isolated-shell` campaign resumes with `jig init`. An `inherited-session` campaign resumes with `/skill:jig init` or `/jig init`.
 
-Repository Principles are mandatory. Stop at `awaiting-principles` until the target operator supplies one complete response and explicitly ratifies the displayed candidate digest. Pstack's `create-verification-skill` owns verification generation. Jig stops at `configured` and never selects or performs a product-code improvement.
+Repository Principles are mandatory. Stop at `awaiting-principles` until the target operator supplies one complete response and explicitly ratifies the displayed candidate digest. Pstack's `create-verification-skill` builds repository verification, and `maintain-verification-skill` keeps it current. Use `/skill:reflect` after later work to turn durable learnings into approved skill edits. Jig stops at `configured` and never selects or performs a product-code improvement.
