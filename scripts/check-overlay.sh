@@ -262,6 +262,17 @@ if grep -F -q "$root" "$home/.pi/agent/bin/jig" "$home/.pi/agent/skills-pstack/j
 fi
 test -f "$home/.pi/agent/agents/poteto-agent.md" || fail "piped install did not write poteto-agent"
 grep -q poteto-mode "$home/.pi/agent/agents/poteto-agent.md" || fail "poteto-agent must read poteto-mode"
+python3 - "$home" <<'PY'
+import json
+import sys
+from pathlib import Path
+config = json.loads((Path(sys.argv[1]) / ".pi/agent/extensions/subagent/config.json").read_text())
+assert config == {"intercomBridge": {"mode": "off"}, "control": {"notifyChannels": ["event", "async"]}}
+PY
+cat >"$home/.pi/agent/extensions/subagent/config.json" <<'EOF'
+{"asyncByDefault":true,"intercomBridge":{"mode":"always","instructionFile":"keep.md"},"control":{"enabled":false,"notifyChannels":["event","intercom","async","intercom"]}}
+EOF
+cp "$home/.pi/agent/extensions/subagent/config.json" "$tmp/config.before-refresh"
 
 mkdir -p "$home/.pi/agent/npm/node_modules/pi-subagents/agents"
 printf '%s\n' 'UPSTREAM-ORACLE' >"$home/.pi/agent/npm/node_modules/pi-subagents/agents/oracle.md"
@@ -301,6 +312,22 @@ grep -R -q USER-POTETO "$home/.pi/agent/backups/subagents" || fail "missing pote
 grep -q 'name: poteto-agent' "$home/.pi/agent/agents/poteto-agent.md" || fail "poteto-agent is not the overlay"
 grep -R -q USER-ORACLE "$home/.pi/agent/backups/subagents" || fail "backups missing USER-ORACLE"
 grep -R -q UPSTREAM-ORACLE "$home/.pi/agent/backups/subagents" || fail "backups missing UPSTREAM-ORACLE"
+python3 - "$home" "$tmp/config.before-refresh" <<'PY'
+import json
+import sys
+from pathlib import Path
+agent = Path(sys.argv[1]) / ".pi/agent"
+original = Path(sys.argv[2]).read_text()
+config = json.loads((agent / "extensions/subagent/config.json").read_text())
+assert config == {
+	"asyncByDefault": True,
+	"intercomBridge": {"mode": "off", "instructionFile": "keep.md"},
+	"control": {"enabled": False, "notifyChannels": ["event", "async"]},
+}
+assert any(p.read_text() == original for p in (agent / "backups/subagents").glob("config-*.json"))
+PY
+cp "$home/.pi/agent/extensions/subagent/config.json" "$tmp/config.after-refresh"
+config_backups="$(find "$home/.pi/agent/backups/subagents" -name 'config-*.json' | wc -l)"
 stamps_after_replace="$(stamp_n)"
 [[ "$stamps_after_replace" -ge 1 ]] || fail "replace install created no stamp dir"
 cp "$home/.pi/agent/agents/poteto-agent.md" "$tmp/poteto.after-replace"
@@ -315,6 +342,8 @@ for name in scout researcher reviewer worker delegate oracle; do
 done
 cmp -s "$home/.pi/agent/settings.json" "$tmp/settings.after-replace" || fail "third install changed converged settings.json"
 [[ "$(stamp_n)" == "$stamps_after_replace" ]] || fail "third install created a new stamp dir"
+cmp -s "$home/.pi/agent/extensions/subagent/config.json" "$tmp/config.after-refresh" || fail "third install changed subagent config"
+[[ "$(find "$home/.pi/agent/backups/subagents" -name 'config-*.json' | wc -l)" == "$config_backups" ]] || fail "third install backed up unchanged subagent config"
 
 home_ask="$tmp/home-ask"
 mkdir -p "$home_ask/.pi/agent"

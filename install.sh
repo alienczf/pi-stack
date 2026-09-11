@@ -23,7 +23,8 @@ usage: install.sh [-y | --print-pstack-skills]
 
 Copies the pi-stack overlay into $HOME/.pi/agent.
 Installs poteto-agent and retires the six old role profiles in $HOME/.pi/agent/agents/.
-Disables builtin agents. Existing children keep their prompts until respawn.
+Disables builtin agents, the subagent intercom bridge, and intercom notifications.
+Existing children keep their prompts until respawn.
 Dated backups go to $HOME/.pi/agent/backups/subagents/.
 Rewrites Cursor skill names into $HOME/.pi/agent/skills-pstack. Does not edit pstack.
 Copies the Jig launcher, controller, skill, and references into $HOME/.pi/agent/jig/.
@@ -468,6 +469,36 @@ if not path.exists() or path.read_text() != text:
 	tmp = path.with_name("settings.json.pi-stack-tmp")
 	tmp.write_text(text)
 	tmp.replace(path)
+
+config_path = agent / "extensions/subagent/config.json"
+original = config_path.read_text() if config_path.exists() else None
+config = json.loads(original) if original is not None else {}
+if not isinstance(config, dict):
+	sys.exit("subagent config.json is not an object")
+bridge = config.setdefault("intercomBridge", {})
+control = config.setdefault("control", {})
+if not isinstance(bridge, dict) or not isinstance(control, dict):
+	sys.exit("subagent intercomBridge and control must be objects")
+channels = control.get("notifyChannels", ["event", "async"])
+if not isinstance(channels, list) or not all(isinstance(item, str) for item in channels):
+	sys.exit("subagent control.notifyChannels must be an array of strings")
+bridge["mode"] = "off"
+control["notifyChannels"] = [channel for channel in channels if channel != "intercom"]
+config_text = json.dumps(config, indent=2) + "\n"
+if original != config_text:
+	if original is not None:
+		backup_dir = agent / "backups/subagents"
+		backup_dir.mkdir(parents=True, exist_ok=True)
+		with tempfile.NamedTemporaryFile("w", dir=backup_dir, prefix="config-", suffix=".json", delete=False) as backup:
+			backup.write(original)
+	config_path.parent.mkdir(parents=True, exist_ok=True)
+	with tempfile.NamedTemporaryFile("w", dir=config_path.parent, prefix=".config-", delete=False) as tmp:
+		tmp.write(config_text)
+		config_tmp = Path(tmp.name)
+	try:
+		config_tmp.replace(config_path)
+	finally:
+		config_tmp.unlink(missing_ok=True)
 
 goal_settings = agent / "pi-goal.json"
 if not goal_settings.exists() and not goal_settings.is_symlink():
