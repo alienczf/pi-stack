@@ -86,7 +86,7 @@ The command fast-forwards only the independent pstack Git checkout. It then reru
 
 ## Required packages
 
-Fresh installs get these packages. Existing rows remain unchanged.
+Fresh installs get these packages. Refresh removes retired npm package registrations and uninstalls their copies from Pi's managed npm directory. It preserves unrelated packages and backs up settings before removing registrations. `PI_STACK_SKIP_PACKAGES=1` skips physical package operations until the next normal install.
 
 - `npm:pi-web-access` adds `web_search` and `fetch_content`. Librarian skills are filtered out.
 - The overlay uses the built-in `read`, `edit`, and `grep` tools.

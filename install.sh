@@ -33,6 +33,8 @@ Merges defaultTools, skills, and packages into settings.json without changing pr
 Finds pi on PATH or under ~/.local/share/pi-node and installs
 npm:pi-web-access, npm:pi-subagents, and
 npm:@narumitw/pi-goal.
+Removes retired npm registrations and managed installs; backs up changed settings.
+PI_STACK_SKIP_PACKAGES=1 defers physical package removal until a normal install.
 Creates pi-goal.json with unlimited automatic turns when that file is absent.
 Rewrites cursor/* subagent models to inherit. Links jig and update-pstack into ~/.local/bin.
 Never writes auth.json, models-store.json, private/, or sessions/.
@@ -214,6 +216,8 @@ required_packages=(
 	pi-subagents
 	@narumitw/pi-goal
 )
+retired_packages=(pi-hashline-edit pi-gal)
+export PI_STACK_RETIRED_PACKAGES="${retired_packages[*]}"
 
 plugins_root="$pi_stack/.plugins"
 default_pstack="${plugins_root}/pstack"
@@ -439,6 +443,15 @@ if packages is None:
 if not isinstance(packages, list):
 	sys.exit("settings.json packages is not an array")
 
+retired = set(os.environ["PI_STACK_RETIRED_PACKAGES"].split())
+kept_packages = [entry for entry in packages if npm_package_name(entry) not in retired]
+if kept_packages != packages:
+	backup_dir = agent / "backups/packages"
+	backup_dir.mkdir(parents=True, exist_ok=True)
+	with tempfile.NamedTemporaryFile("w", dir=backup_dir, prefix="settings-", suffix=".json", delete=False) as backup:
+		backup.write(path.read_text())
+packages = kept_packages
+
 by_name = {}
 for i, package in enumerate(packages):
 	name = npm_package_name(package)
@@ -537,6 +550,32 @@ npm_root="${agent}/npm/node_modules"
 
 if [[ "${PI_STACK_SKIP_PACKAGES:-}" != 1 ]]; then
 	if pi_bin="$(resolve_pi)"; then
+		retired_installed="$(python3 - "$npm_root" <<'PY'
+import json
+import os
+import sys
+from pathlib import Path
+root = Path(sys.argv[1])
+manifest = root.parent / "package.json"
+data = json.loads(manifest.read_text()) if manifest.exists() else {}
+for name in os.environ["PI_STACK_RETIRED_PACKAGES"].split():
+	if (root / name).exists() or any(name in data.get(key, {}) for key in ("dependencies", "devDependencies", "optionalDependencies")):
+		print(name)
+PY
+)"
+		for spec in $retired_installed; do
+			PI_CODING_AGENT_DIR="$agent" "$pi_bin" remove "npm:${spec}"
+			python3 - "$npm_root" "$spec" <<'PY'
+import json
+import sys
+from pathlib import Path
+root, name = Path(sys.argv[1]), sys.argv[2]
+manifest = root.parent / "package.json"
+data = json.loads(manifest.read_text()) if manifest.exists() else {}
+if (root / name).exists() or any(name in data.get(key, {}) for key in ("dependencies", "devDependencies", "optionalDependencies")):
+	sys.exit(f"retired package remains after pi remove: {name}")
+PY
+		done
 		for spec in "${required_packages[@]}"; do
 			if [[ ! -d "${npm_root}/${spec}" ]]; then
 				PI_CODING_AGENT_DIR="$agent" "$pi_bin" install "npm:${spec}"

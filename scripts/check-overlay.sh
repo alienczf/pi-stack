@@ -142,7 +142,7 @@ mkdir -p "$home/.pi/agent"
 cat >"$home/.pi/agent/settings.json" <<'EOF'
 {
   "theme": "keep-theme",
-  "packages": ["npm:keep-me"],
+  "packages": ["npm:keep-me", "npm:pi-hashline-edit@1.0.0", {"source":"npm:pi-gal@2.0.0","extensions":[]}],
   "defaultModel": "cursor/auto",
   "enabledModels": ["cursor/auto", "cursor/composer-2.5"],
   "subagents": {
@@ -549,8 +549,28 @@ mkdir -p "$fake_bin"
 cat >"$fake_bin/pi" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-[[ "${1:-}" == install && "${2:-}" == npm:* ]]
+[[ "${1:-}" == install || "${1:-}" == remove ]]
+[[ "${2:-}" == npm:* ]]
 package="${2#npm:}"
+if [[ "$1" == remove ]]; then
+	printf '%s\n' "$2" >>"$PI_REMOVE_LOG"
+	if [[ "${PI_FAKE_REMOVE_NOOP:-}" == 1 ]]; then exit 0; fi
+	python3 - "$PI_CODING_AGENT_DIR/npm" "$package" <<'PY'
+import json
+import shutil
+import sys
+from pathlib import Path
+root, name = Path(sys.argv[1]), sys.argv[2]
+shutil.rmtree(root / "node_modules" / name, ignore_errors=True)
+p = root / "package.json"
+if p.exists():
+	data = json.loads(p.read_text())
+	for key in ("dependencies", "devDependencies", "optionalDependencies"):
+		data.get(key, {}).pop(name, None)
+	p.write_text(json.dumps(data))
+PY
+	exit 0
+fi
 printf '%s\n' "$2" >>"$PI_INSTALL_LOG"
 mkdir -p "$PI_CODING_AGENT_DIR/npm/node_modules/$package"
 printf '{"name":"%s","version":"fixture"}\n' "$package" >"$PI_CODING_AGENT_DIR/npm/node_modules/$package/package.json"
@@ -567,6 +587,33 @@ import sys
 assert Path(sys.argv[1]).read_text().splitlines() == [
 	"npm:pi-web-access", "npm:pi-subagents", "npm:@narumitw/pi-goal",
 ]
+PY
+migration_home="$tmp/migration-home"
+mkdir -p "$migration_home/.pi/agent/npm/node_modules/pi-hashline-edit"
+printf '%s\n' '{"packages":["npm:pi-hashline-edit",{"source":"npm:pi-gal@2.0.0"},"npm:keep-me"]}' >"$migration_home/.pi/agent/settings.json"
+printf '%s\n' '{"dependencies":{"pi-hashline-edit":"1","pi-gal":"2","keep-me":"3"}}' >"$migration_home/.pi/agent/npm/package.json"
+if PATH="$fake_bin:$PATH" HOME="$migration_home" PI_STACK="$root" PSTACK="$stub" PI_STACK_SKIP_PACKAGES=0 PI_INSTALL_LOG="$tmp/noop-install.log" PI_REMOVE_LOG="$tmp/noop-remove.log" PI_FAKE_REMOVE_NOOP=1 bash "$root/install.sh" >"$tmp/noop-remove-output.log" 2>&1; then
+	fail "install accepted a removal that left a retired package behind"
+fi
+grep -q 'retired package remains' "$tmp/noop-remove-output.log" || fail "removal failure was not useful"
+for pass in 1 2; do
+	PATH="$fake_bin:$PATH" HOME="$migration_home" PI_STACK="$root" PSTACK="$stub" PI_STACK_SKIP_PACKAGES=0 PI_INSTALL_LOG="$tmp/migration-install.log" PI_REMOVE_LOG="$tmp/migration-remove.log" bash "$root/install.sh" >"$tmp/migration-$pass.log" 2>&1 || fail "package migration pass $pass failed"
+done
+python3 - "$migration_home" "$tmp/migration-remove.log" <<'PY'
+import json
+import sys
+from pathlib import Path
+agent = Path(sys.argv[1]) / ".pi/agent"
+assert Path(sys.argv[2]).read_text().splitlines() == ["npm:pi-hashline-edit", "npm:pi-gal"]
+assert json.loads((agent / "npm/package.json").read_text()) == {"dependencies": {"keep-me": "3"}}
+settings = json.loads((agent / "settings.json").read_text())
+assert "npm:keep-me" in settings["packages"]
+for name in ("pi-hashline-edit", "pi-gal"):
+	assert not (agent / "npm/node_modules" / name).exists()
+	assert not any((p if isinstance(p, str) else p["source"]).split("@", 1)[0] == f"npm:{name}" for p in settings["packages"])
+backups = list((agent / "backups/packages").glob("settings-*.json"))
+assert len(backups) == 1
+assert json.loads(backups[0].read_text())["packages"] == ["npm:pi-hashline-edit", {"source": "npm:pi-gal@2.0.0"}, "npm:keep-me"]
 PY
 install_log="$tmp/pi-install.log"
 if ! accept_out="$(PATH="$fake_bin:$PATH" HOME="$home2" PI_STACK_GIT="$seed_url" PSTACK_GIT="$pstack_url" PI_INSTALL_LOG="$install_log" python3 "$tty_runner" "$root/install.sh" y 2>&1)"; then
