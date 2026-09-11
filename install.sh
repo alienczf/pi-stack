@@ -30,9 +30,7 @@ Copies the Jig launcher, controller, skill, and references into $HOME/.pi/agent/
 Copies the pstack updater command and controller into $HOME/.pi/agent/update-pstack/.
 Merges defaultTools, skills, and packages into settings.json without changing project trust.
 Finds pi on PATH or under ~/.local/share/pi-node and installs
-npm:pi-web-access, npm:pi-hashline-edit, npm:pi-subagents, and
-npm:@narumitw/pi-goal.
-Creates pi-goal.json with unlimited automatic turns when that file is absent.
+npm:pi-web-access, npm:pi-hashline-edit, and npm:pi-subagents.
 Rewrites cursor/* subagent models to inherit. Links jig and update-pstack into ~/.local/bin.
 Never writes auth.json, models-store.json, private/, or sessions/.
 Does not search for git repositories. Initialize one Git root later with jig init.
@@ -212,7 +210,6 @@ required_packages=(
 	pi-web-access
 	pi-hashline-edit
 	pi-subagents
-	@narumitw/pi-goal
 )
 
 plugins_root="$pi_stack/.plugins"
@@ -371,7 +368,6 @@ python3 - "${#pstack_skill_names[@]}" "${pstack_skill_names[@]}" "${required_pac
 import json
 import os
 import sys
-import tempfile
 from pathlib import Path
 
 agent = Path(os.environ["PI_AGENT_DIR"])
@@ -439,6 +435,7 @@ if packages is None:
 if not isinstance(packages, list):
 	sys.exit("settings.json packages is not an array")
 
+packages = [entry for entry in packages if npm_package_name(entry) != "@narumitw/pi-goal"]
 by_name = {}
 for i, package in enumerate(packages):
 	name = npm_package_name(package)
@@ -469,20 +466,6 @@ if not path.exists() or path.read_text() != text:
 	tmp.write_text(text)
 	tmp.replace(path)
 
-goal_settings = agent / "pi-goal.json"
-if not goal_settings.exists() and not goal_settings.is_symlink():
-	goal_text = json.dumps({
-		"continuationLimits": {"automaticTurns": None, "noProgressTurns": 3}
-	}, indent=2) + "\n"
-	with tempfile.NamedTemporaryFile("w", dir=agent, prefix=".pi-goal.", delete=False) as tmp:
-		tmp.write(goal_text)
-		goal_tmp = Path(tmp.name)
-	try:
-		os.link(goal_tmp, goal_settings)
-	except FileExistsError:
-		pass
-	finally:
-		goal_tmp.unlink(missing_ok=True)
 PY
 
 resolve_pi() {
@@ -523,40 +506,6 @@ if [[ "${PI_STACK_SKIP_PACKAGES:-}" != 1 ]]; then
 		printf 'pi is not installed. Install Pi, then rerun this script:\n  curl -fsSL https://pi.dev/install.sh | sh\n' >&2
 		exit 1
 	fi
-fi
-
-goal_manifest="${npm_root}/@narumitw/pi-goal/package.json"
-if [[ -f "$goal_manifest" ]]; then
-	python3 - "$goal_manifest" <<'PY'
-import json
-import sys
-from pathlib import Path
-
-path = Path(sys.argv[1])
-data = json.loads(path.read_text())
-if data.get("name") != "@narumitw/pi-goal":
-	raise SystemExit(f"pi-goal package identity mismatch in {path}")
-PY
-	python3 - "$agent/prompts/goal.md" <<'PY'
-import hashlib
-import sys
-from pathlib import Path
-
-path = Path(sys.argv[1])
-legacy_sha256 = "c17b0e11552afcc0de0fb894ec8f63ba036cce54afb31f3db79ad64c92b9275a"
-if path.is_symlink():
-	print(f"{path} is not the generated pi-stack goal prompt; keeping it.", file=sys.stderr)
-elif path.is_file():
-	if hashlib.sha256(path.read_bytes()).hexdigest() == legacy_sha256:
-		path.unlink()
-	else:
-		print(f"{path} is not the generated pi-stack goal prompt; keeping it.", file=sys.stderr)
-elif path.exists():
-	print(f"{path} is not a regular file; keeping it.", file=sys.stderr)
-PY
-elif [[ "${PI_STACK_SKIP_PACKAGES:-}" != 1 ]]; then
-	printf 'pi-goal package manifest is missing: %s\n' "$goal_manifest" >&2
-	exit 1
 fi
 
 export PSTACK="$pstack"

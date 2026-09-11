@@ -22,8 +22,7 @@ Plan mode is `PLAN.md` in the working tree.
 
 Public web is `web_search` and `fetch_content`. `gh`, `git`, and `curl` cover private or authenticated URLs those tools cannot reach. Never MCP.
 
-`/loop` is a one-shot prompt template, not a timer. `/goal` comes from `@narumitw/pi-goal`. For pstack autonomous runs, replace the Cursor `/loop` wake step with `/goal` settled continuation. Start `/goal <objective>` with a checkable exit predicate. Call `goal_complete` only after evidence proves the predicate. Call `goal_blocked` only for a repeated genuine impasse.
-When progress depends on an external event, arrange its non-Goal wake message first. For an async child, register `subagent_wait` with `nonBlocking: true`. Then call `goal_wait` alone with `resume_after_ms` only as a bounded fallback. A time-only wake uses `goal_wait` with `resume_after_ms`. Do not use `goal_wait` for ordinary unfinished work.
+`/loop` is a one-shot prompt template, not a timer. For an async child, register `subagent_wait` with `nonBlocking: true` when you need a completion wake, then return control.
 
 Never background bash. Use tmux if you need a long-running process that is not a subagent.
 

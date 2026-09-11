@@ -16,7 +16,7 @@ test -x bin/pstackctl.py || fail "missing executable bin/pstackctl.py"
 test -x scripts/check-update-pstack.sh || fail "missing executable scripts/check-update-pstack.sh"
 test -f skills/update-pstack/SKILL.md || fail "missing update-pstack skill"
 test -f prompts/update-pstack.md || fail "missing update-pstack prompt"
-test ! -e prompts/goal.md || fail "prompts/goal.md must be replaced by the pi-goal extension"
+test ! -e prompts/goal.md || fail "unexpected bundled goal prompt"
 
 grep -q '"grep"' overlay/settings.json || fail "overlay/settings.json defaultTools lacks grep"
 grep -q '"find"' overlay/settings.json || fail "overlay/settings.json defaultTools lacks find"
@@ -25,7 +25,6 @@ grep -q '"read"' overlay/settings.json || fail "overlay/settings.json defaultToo
 grep -q 'npm:pi-web-access' install.sh || fail "install.sh must install npm:pi-web-access"
 grep -q 'npm:pi-hashline-edit' install.sh || fail "install.sh must install npm:pi-hashline-edit"
 grep -q 'npm:pi-subagents' install.sh || fail "install.sh must install npm:pi-subagents"
-grep -q 'npm:@narumitw/pi-goal' install.sh || fail "install.sh must install npm:@narumitw/pi-goal"
 grep -q 'PI_STACK_SKIP_PACKAGES' install.sh || fail "install.sh must honor PI_STACK_SKIP_PACKAGES"
 grep -q 'backups/subagents' install.sh || fail "install.sh must name backups/subagents"
 grep -q 'agents/' install.sh || fail "install.sh must name agents/"
@@ -52,7 +51,7 @@ grep -q 'web_search' overlay/AGENTS.md || fail "AGENTS.md must name web_search"
 grep -q 'fetch_content' overlay/AGENTS.md || fail "AGENTS.md must name fetch_content"
 grep -q 'LINE#HASH' overlay/AGENTS.md || fail "AGENTS.md must name LINE#HASH"
 grep -q 'poteto-mode' prompts/poteto.md || fail "prompts/poteto.md must tell the model to read poteto-mode"
-for token in '/goal' goal_complete goal_blocked goal_wait subagent_wait nonBlocking; do
+for token in subagent_wait nonBlocking; do
 	grep -q "$token" overlay/AGENTS.md || fail "overlay/AGENTS.md must name $token"
 done
 
@@ -124,26 +123,13 @@ printf '%s\n' "$missing_stub_out" | grep -q 'missing selected skill root: how' |
 test ! -e "$tmp/missing-home/.pi/agent" || fail "missing selected skill was detected after installation began"
 home="$tmp/home"
 mkdir -p "$home/.pi/agent/prompts"
-cat >"$home/.pi/agent/prompts/goal.md" <<'EOF'
----
-description: Pin an exit predicate and drive to it
-argument-hint: "<predicate>"
----
-Treat the rest of this message as the exit predicate.
-
-${@:-Drive the current task to a checkable done state.}
-
-Write the predicate at the top of `PLAN.md`. Work until it is true. Do not relax it. Log decisions in `decisions.tsv` when the work is long enough that a reviewer will need the trail.
-EOF
-mkdir -p "$home/.pi/agent/npm/node_modules/@narumitw/pi-goal"
-printf '%s\n' '{"name":"@narumitw/pi-goal","version":"0.54.3"}' >"$home/.pi/agent/npm/node_modules/@narumitw/pi-goal/package.json"
 
 # curl|bash: no checkout beside the process. PI_STACK already has overlay → skip clone.
 mkdir -p "$home/.pi/agent"
 cat >"$home/.pi/agent/settings.json" <<'EOF'
 {
   "theme": "keep-theme",
-  "packages": ["npm:keep-me"],
+  "packages": ["npm:keep-me", "npm:@narumitw/pi-goal"],
   "defaultModel": "cursor/auto",
   "enabledModels": ["cursor/auto", "cursor/composer-2.5"],
   "subagents": {
@@ -164,17 +150,9 @@ EOF
 test -f "$home/.pi/agent/APPEND_SYSTEM.md" || fail "piped install did not write overlay"
 test ! -e "$home/.pi/agent/auth.json" || fail "piped install wrote auth.json"
 test ! -d "$home/.pi/agent/npm/node_modules/pi-web-access" || fail "PI_STACK_SKIP_PACKAGES=1 still ran pi install"
-test ! -e "$home/.pi/agent/prompts/goal.md" || fail "install did not remove the obsolete goal prompt"
-python3 - "$home/.pi/agent/pi-goal.json" <<'PY' || fail "fresh install wrote the wrong pi-goal settings"
-import json
-import sys
-from pathlib import Path
-
-data = json.loads(Path(sys.argv[1]).read_text())
-expected = {"continuationLimits": {"automaticTurns": None, "noProgressTurns": 3}}
-if data != expected:
-	raise SystemExit(f"unexpected pi-goal settings: {data!r}")
-PY
+test ! -e "$home/.pi/agent/prompts/goal.md" || fail "install created a goal prompt"
+test ! -e "$home/.pi/agent/pi-goal.json" || fail "install created pi-goal.json"
+test ! -e "$home/.pi/agent/npm/node_modules/@narumitw/pi-goal" || fail "install fetched the removed goal package"
 python3 - "$home/.pi/agent/settings.json" <<'PY' || fail "piped install dropped packages or skipped required ones"
 import json
 import sys
@@ -202,8 +180,7 @@ if not any("pi-hashline-edit" in source(p) for p in packages):
 	raise SystemExit("pi-hashline-edit missing")
 if not any("pi-subagents" in source(p) for p in packages):
 	raise SystemExit("pi-subagents missing")
-if joined.count("npm:@narumitw/pi-goal") != 1:
-	raise SystemExit("pi-goal missing or duplicated")
+assert not any(s.startswith("npm:@narumitw/pi-goal") for s in joined), joined
 skills = data.get("skills") or []
 if not any("skills-pstack/poteto-mode" in s for s in skills):
 	raise SystemExit("skills do not point at skills-pstack/poteto-mode")
@@ -289,7 +266,6 @@ if ! second_out="$(
 	fail "second piped install with fake upstream failed"
 fi
 grep -q '^custom goal prompt$' "$home/.pi/agent/prompts/goal.md" || fail "install removed a custom goal prompt"
-printf '%s\n' "$second_out" | grep -q 'keeping it' || fail "install did not warn about the custom goal prompt"
 cmp -s "$home/.pi/agent/pi-goal.json" "$tmp/pi-goal.after-custom" || fail "install overwrote existing pi-goal settings"
 for name in scout researcher reviewer worker delegate oracle; do
 	test ! -e "$home/.pi/agent/agents/$name.md" || fail "retired installed agent $name remains"
@@ -318,10 +294,8 @@ cmp -s "$home/.pi/agent/settings.json" "$tmp/settings.after-replace" || fail "th
 
 home_ask="$tmp/home-ask"
 mkdir -p "$home_ask/.pi/agent"
-printf '%s\n' '{"defaultProjectTrust":"ask","packages":["npm:@narumitw/pi-goal@0.54.3"]}' >"$home_ask/.pi/agent/settings.json"
+printf '%s\n' '{"defaultProjectTrust":"ask","packages":["npm:keep-me@1.0.0", "npm:@narumitw/pi-goal@0.54.3", {"source":"npm:@narumitw/pi-goal@0.54.4","extensions":[]}]}' >"$home_ask/.pi/agent/settings.json"
 mkdir -p "$home_ask/.pi/agent/prompts"
-mkdir -p "$home_ask/.pi/agent/npm/node_modules/@narumitw/pi-goal"
-printf '%s\n' '{"name":"@narumitw/pi-goal","version":"0.54.3"}' >"$home_ask/.pi/agent/npm/node_modules/@narumitw/pi-goal/package.json"
 printf 'symlink target\n' >"$tmp/custom-goal-target"
 ln -s "$tmp/custom-goal-target" "$home_ask/.pi/agent/prompts/goal.md"
 printf 'not json\n' >"$home_ask/.pi/agent/pi-goal.json"
@@ -341,11 +315,8 @@ if data.get("defaultProjectTrust") != "ask":
 	raise SystemExit("ask was overwritten")
 packages = data.get("packages") or []
 sources = [entry if isinstance(entry, str) else entry.get("source", "") for entry in packages]
-pinned = "npm:@narumitw/pi-goal@0.54.3"
-if sources.count(pinned) != 1:
-	raise SystemExit("pinned pi-goal package was replaced")
-if "npm:@narumitw/pi-goal" in sources:
-	raise SystemExit("pinned pi-goal package was duplicated")
+assert sources.count("npm:keep-me@1.0.0") == 1
+assert not any(s.startswith("npm:@narumitw/pi-goal") for s in sources), sources
 PY
 
 home_nopi="$tmp/home-nopi"
@@ -411,7 +382,7 @@ from pathlib import Path
 
 path = Path(sys.argv[1])
 text = path.read_text()
-needle = "\t@narumitw/pi-goal\n"
+needle = "\tpi-subagents\n"
 if text.count(needle) != 1:
 	raise SystemExit("required package insertion point changed")
 path.write_text(text.replace(needle, needle + "\tpi-update-fixture\n"))
@@ -515,8 +486,6 @@ npm_root="$home2/.pi/agent/npm/node_modules"
 for package in pi-web-access pi-hashline-edit pi-subagents; do
 	mkdir -p "$npm_root/$package"
 done
-mkdir -p "$npm_root/@narumitw/pi-goal"
-printf '%s\n' '{"name":"@narumitw/pi-goal","version":"fixture"}' >"$npm_root/@narumitw/pi-goal/package.json"
 fake_bin="$tmp/fake-bin"
 mkdir -p "$fake_bin"
 cat >"$fake_bin/pi" <<'EOF'
@@ -528,6 +497,17 @@ printf '%s\n' "$2" >>"$PI_INSTALL_LOG"
 mkdir -p "$PI_CODING_AGENT_DIR/npm/node_modules/$package"
 EOF
 chmod +x "$fake_bin/pi"
+cold_log="$tmp/cold-install.log"
+for pass in 1 2; do
+	PATH="$fake_bin:$PATH" HOME="$tmp/cold-home" PI_STACK="$root" PSTACK="$stub" PI_STACK_SKIP_PACKAGES=0 PI_INSTALL_LOG="$cold_log" bash "$root/install.sh" >"$tmp/cold-install-$pass.log" 2>&1 || fail "cold package install pass $pass failed"
+done
+python3 - "$cold_log" <<'PY'
+from pathlib import Path
+import sys
+assert Path(sys.argv[1]).read_text().splitlines() == ["npm:pi-web-access", "npm:pi-hashline-edit", "npm:pi-subagents"]
+PY
+test ! -e "$tmp/cold-home/.pi/agent/pi-goal.json" || fail "cold install created pi-goal.json"
+test ! -e "$tmp/cold-home/.pi/agent/npm/node_modules/@narumitw/pi-goal" || fail "cold install fetched the removed goal package"
 install_log="$tmp/pi-install.log"
 if ! accept_out="$(PATH="$fake_bin:$PATH" HOME="$home2" PI_STACK_GIT="$seed_url" PSTACK_GIT="$pstack_url" PI_INSTALL_LOG="$install_log" python3 "$tty_runner" "$root/install.sh" y 2>&1)"; then
 	printf '%s\n' "$accept_out" >&2
