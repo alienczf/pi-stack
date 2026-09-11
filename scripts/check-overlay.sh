@@ -23,7 +23,6 @@ grep -q '"find"' overlay/settings.json || fail "overlay/settings.json defaultToo
 grep -q '"ls"' overlay/settings.json || fail "overlay/settings.json defaultTools lacks ls"
 grep -q '"read"' overlay/settings.json || fail "overlay/settings.json defaultTools lacks read"
 grep -q 'npm:pi-web-access' install.sh || fail "install.sh must install npm:pi-web-access"
-grep -q 'npm:pi-hashline-edit' install.sh || fail "install.sh must install npm:pi-hashline-edit"
 grep -q 'npm:pi-subagents' install.sh || fail "install.sh must install npm:pi-subagents"
 grep -q 'npm:@narumitw/pi-goal' install.sh || fail "install.sh must install npm:@narumitw/pi-goal"
 grep -q 'PI_STACK_SKIP_PACKAGES' install.sh || fail "install.sh must honor PI_STACK_SKIP_PACKAGES"
@@ -50,7 +49,7 @@ grep -q 'subagent' overlay/APPEND_SYSTEM.md || fail "APPEND_SYSTEM.md must name 
 grep -q 'TODO.md' overlay/AGENTS.md || fail "AGENTS.md must map TodoWrite to TODO.md"
 grep -q 'web_search' overlay/AGENTS.md || fail "AGENTS.md must name web_search"
 grep -q 'fetch_content' overlay/AGENTS.md || fail "AGENTS.md must name fetch_content"
-grep -q 'LINE#HASH' overlay/AGENTS.md || fail "AGENTS.md must name LINE#HASH"
+grep -q 'built-in `read` and `edit`' overlay/AGENTS.md || fail "AGENTS.md must use built-in editing tools"
 grep -q 'poteto-mode' prompts/poteto.md || fail "prompts/poteto.md must tell the model to read poteto-mode"
 for token in '/goal' goal_complete goal_blocked goal_wait subagent_wait nonBlocking; do
 	grep -q "$token" overlay/AGENTS.md || fail "overlay/AGENTS.md must name $token"
@@ -198,8 +197,7 @@ if not isinstance(web, dict):
 	raise SystemExit("pi-web-access missing or not object form")
 if "!skills/librarian/**" not in web.get("skills", []):
 	raise SystemExit("pi-web-access missing librarian filter")
-if not any("pi-hashline-edit" in source(p) for p in packages):
-	raise SystemExit("pi-hashline-edit missing")
+assert set(joined) == {"npm:keep-me", "npm:pi-web-access", "npm:pi-subagents", "npm:@narumitw/pi-goal"}
 if not any("pi-subagents" in source(p) for p in packages):
 	raise SystemExit("pi-subagents missing")
 if joined.count("npm:@narumitw/pi-goal") != 1:
@@ -541,7 +539,7 @@ if printf '%s\n' "$direct_out" | grep -q 'Update existing pi-stack checkout'; th
 fi
 
 npm_root="$home2/.pi/agent/npm/node_modules"
-for package in pi-web-access pi-hashline-edit pi-subagents; do
+for package in pi-web-access pi-subagents; do
 	mkdir -p "$npm_root/$package"
 done
 mkdir -p "$npm_root/@narumitw/pi-goal"
@@ -555,8 +553,21 @@ set -euo pipefail
 package="${2#npm:}"
 printf '%s\n' "$2" >>"$PI_INSTALL_LOG"
 mkdir -p "$PI_CODING_AGENT_DIR/npm/node_modules/$package"
+printf '{"name":"%s","version":"fixture"}\n' "$package" >"$PI_CODING_AGENT_DIR/npm/node_modules/$package/package.json"
 EOF
 chmod +x "$fake_bin/pi"
+cold_log="$tmp/cold-install.log"
+if ! cold_out="$(PATH="$fake_bin:$PATH" HOME="$tmp/cold-home" PI_STACK="$root" PSTACK="$stub" PI_STACK_SKIP_PACKAGES=0 PI_INSTALL_LOG="$cold_log" bash "$root/install.sh" 2>&1)"; then
+	printf '%s\n' "$cold_out" >&2
+	fail "cold package install failed"
+fi
+python3 - "$cold_log" <<'PY'
+from pathlib import Path
+import sys
+assert Path(sys.argv[1]).read_text().splitlines() == [
+	"npm:pi-web-access", "npm:pi-subagents", "npm:@narumitw/pi-goal",
+]
+PY
 install_log="$tmp/pi-install.log"
 if ! accept_out="$(PATH="$fake_bin:$PATH" HOME="$home2" PI_STACK_GIT="$seed_url" PSTACK_GIT="$pstack_url" PI_INSTALL_LOG="$install_log" python3 "$tty_runner" "$root/install.sh" y 2>&1)"; then
 	printf '%s\n' "$accept_out" >&2

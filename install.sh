@@ -31,7 +31,7 @@ Copies the Jig launcher, controller, skill, and references into $HOME/.pi/agent/
 Copies the pstack updater command and controller into $HOME/.pi/agent/update-pstack/.
 Merges defaultTools, skills, and packages into settings.json without changing project trust.
 Finds pi on PATH or under ~/.local/share/pi-node and installs
-npm:pi-web-access, npm:pi-hashline-edit, npm:pi-subagents, and
+npm:pi-web-access, npm:pi-subagents, and
 npm:@narumitw/pi-goal.
 Creates pi-goal.json with unlimited automatic turns when that file is absent.
 Rewrites cursor/* subagent models to inherit. Links jig and update-pstack into ~/.local/bin.
@@ -211,7 +211,6 @@ fi
 overlay="$here/overlay"
 required_packages=(
 	pi-web-access
-	pi-hashline-edit
 	pi-subagents
 	@narumitw/pi-goal
 )

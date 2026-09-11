@@ -32,7 +32,7 @@ pi-stack is installed for this user.
   agents    $HOME/.pi/agent/agents
   backups   $HOME/.pi/agent/backups/subagents
   skills    <count>
-  packages  pi-web-access, pi-hashline-edit, pi-subagents, @narumitw/pi-goal
+  packages  pi-web-access, pi-subagents, @narumitw/pi-goal
   jig       $HOME/.local/bin/jig
   pstack    $HOME/.local/bin/update-pstack
   controller $HOME/.pi/agent/jig/bin/jigctl.py
@@ -89,7 +89,7 @@ The command fast-forwards only the independent pstack Git checkout. It then reru
 Fresh installs get these packages. Existing rows remain unchanged.
 
 - `npm:pi-web-access` adds `web_search` and `fetch_content`. Librarian skills are filtered out.
-- `npm:pi-hashline-edit` replaces the built-in `read` and `edit` tools with hash-anchored versions. The overlay keeps the built-in `grep`.
+- The overlay uses the built-in `read`, `edit`, and `grep` tools.
 - `npm:pi-subagents` adds the `subagent` and `subagent_wait` tools. A running Pi agent does not start a child with `pi -p`.
 - `npm:@narumitw/pi-goal` replaces the prose `/goal` prompt with settled-idle continuation and the `goal_complete`, `goal_blocked`, and `goal_wait` tools.
 

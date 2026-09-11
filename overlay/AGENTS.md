@@ -18,7 +18,7 @@ Do not pin child models to `cursor/*` unless that provider is authenticated. A m
 
 Plan mode is `PLAN.md` in the working tree.
 
-`read` and `edit` are hash-anchored by pi-hashline-edit. Copy `LINE#HASH` prefixes from `read` into `edit`. Do not guess line numbers.
+Use the built-in `read` and `edit` tools. Read the current file before editing. Match the exact text to replace.
 
 Public web is `web_search` and `fetch_content`. `gh`, `git`, and `curl` cover private or authenticated URLs those tools cannot reach. Never MCP.
 
