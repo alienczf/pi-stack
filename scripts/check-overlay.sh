@@ -29,9 +29,9 @@ grep -q 'npm:@narumitw/pi-goal' install.sh || fail "install.sh must install npm:
 grep -q 'PI_STACK_SKIP_PACKAGES' install.sh || fail "install.sh must honor PI_STACK_SKIP_PACKAGES"
 grep -q 'backups/subagents' install.sh || fail "install.sh must name backups/subagents"
 grep -q 'agents/' install.sh || fail "install.sh must name agents/"
+test -f overlay/agents/poteto-agent.md || fail "missing poteto-agent profile"
 for name in scout researcher oracle reviewer worker delegate; do
-	test -f "overlay/agents/${name}.md" || fail "missing overlay/agents/${name}.md"
-	grep -q "name: ${name}" "overlay/agents/${name}.md" || fail "overlay/agents/${name}.md must contain name: ${name}"
+	test ! -e "overlay/agents/${name}.md" || fail "retired overlay agent ${name} remains"
 done
 grep -q 'conform-skills.py' install.sh || fail "install.sh must run conform-skills.py"
 grep -q 'skills-pstack' install.sh || fail "install.sh must write skills-pstack"
@@ -149,8 +149,10 @@ cat >"$home/.pi/agent/settings.json" <<'EOF'
   "subagents": {
     "defaultModel": "cursor/auto",
     "agentOverrides": {
-      "scout": {"model": "cursor/auto"},
-      "oracle": {"model": "openai-codex/gpt-5.4"}
+      "scout": {"model": "cursor/auto", "disabled": false},
+      "oracle": {"model": "openai-codex/gpt-5.4"},
+      "planner": {"disabled": false},
+      "poteto-agent": {"disabled": true}
     }
   }
 }
@@ -229,6 +231,11 @@ if (overrides.get("scout") or {}).get("model") != "inherit":
 	raise SystemExit("scout model was not inherit")
 if (overrides.get("oracle") or {}).get("model") != "openai-codex/gpt-5.4":
 	raise SystemExit("oracle model pin was rewritten")
+assert subs["disableBuiltins"] is True
+for name in ("scout", "researcher", "oracle", "reviewer", "worker", "delegate"):
+	assert overrides[name]["disabled"] is True, name
+assert overrides["poteto-agent"]["disabled"] is False
+assert all(spec["disabled"] is True for name, spec in overrides.items() if name != "poteto-agent")
 PY
 grep -q '^name: poteto-mode$' "$home/.pi/agent/skills-pstack/poteto-mode/SKILL.md" || fail "install did not slug Poteto Mode"
 grep -q 'name: Poteto Mode' "$stub/skills/poteto-mode/SKILL.md" || fail "install edited upstream pstack"
@@ -253,12 +260,16 @@ grep -F -q "$root" "$home/.pi/agent/bin/update-pstack" || fail "installed update
 if grep -F -q "$root" "$home/.pi/agent/bin/jig" "$home/.pi/agent/skills-pstack/jig/SKILL.md"; then
 	fail "installed Jig entry points depend on the source checkout"
 fi
-test -f "$home/.pi/agent/agents/oracle.md" || fail "piped install did not write agents/oracle.md"
-grep -q poteto-mode "$home/.pi/agent/agents/worker.md" || fail "worker.md must mention poteto-mode"
+test -f "$home/.pi/agent/agents/poteto-agent.md" || fail "piped install did not write poteto-agent"
+grep -q poteto-mode "$home/.pi/agent/agents/poteto-agent.md" || fail "poteto-agent must read poteto-mode"
 
 mkdir -p "$home/.pi/agent/npm/node_modules/pi-subagents/agents"
 printf '%s\n' 'UPSTREAM-ORACLE' >"$home/.pi/agent/npm/node_modules/pi-subagents/agents/oracle.md"
 printf '%s\n' 'USER-ORACLE' >"$home/.pi/agent/agents/oracle.md"
+for name in scout researcher reviewer worker delegate; do
+	printf 'USER-%s\n' "$name" >"$home/.pi/agent/agents/$name.md"
+done
+printf 'USER-POTETO\n' >"$home/.pi/agent/agents/poteto-agent.md"
 stamp_n() {
 	local d="$home/.pi/agent/backups/subagents"
 	if [[ ! -d "$d" ]]; then
@@ -280,21 +291,28 @@ fi
 grep -q '^custom goal prompt$' "$home/.pi/agent/prompts/goal.md" || fail "install removed a custom goal prompt"
 printf '%s\n' "$second_out" | grep -q 'keeping it' || fail "install did not warn about the custom goal prompt"
 cmp -s "$home/.pi/agent/pi-goal.json" "$tmp/pi-goal.after-custom" || fail "install overwrote existing pi-goal settings"
-if grep -q USER-ORACLE "$home/.pi/agent/agents/oracle.md"; then
-	fail "dest oracle.md still USER-ORACLE"
-fi
-grep -q 'name: oracle' "$home/.pi/agent/agents/oracle.md" || fail "dest oracle.md is not the overlay"
+for name in scout researcher reviewer worker delegate oracle; do
+	test ! -e "$home/.pi/agent/agents/$name.md" || fail "retired installed agent $name remains"
+done
+for name in scout researcher reviewer worker delegate; do
+	grep -R -q "USER-$name" "$home/.pi/agent/backups/subagents" || fail "missing backup for $name"
+done
+grep -R -q USER-POTETO "$home/.pi/agent/backups/subagents" || fail "missing poteto backup"
+grep -q 'name: poteto-agent' "$home/.pi/agent/agents/poteto-agent.md" || fail "poteto-agent is not the overlay"
 grep -R -q USER-ORACLE "$home/.pi/agent/backups/subagents" || fail "backups missing USER-ORACLE"
 grep -R -q UPSTREAM-ORACLE "$home/.pi/agent/backups/subagents" || fail "backups missing UPSTREAM-ORACLE"
 stamps_after_replace="$(stamp_n)"
 [[ "$stamps_after_replace" -ge 1 ]] || fail "replace install created no stamp dir"
-cp "$home/.pi/agent/agents/oracle.md" "$tmp/oracle.after-replace"
+cp "$home/.pi/agent/agents/poteto-agent.md" "$tmp/poteto.after-replace"
 cp "$home/.pi/agent/settings.json" "$tmp/settings.after-replace"
 (
 	cd "$tmp"
 	HOME="$home" PI_STACK="$root" PSTACK="$stub" PI_STACK_SKIP_PACKAGES=1 bash <"$root/install.sh"
 ) || fail "third piped install failed"
-cmp -s "$home/.pi/agent/agents/oracle.md" "$tmp/oracle.after-replace" || fail "third install rewrote dest oracle.md"
+cmp -s "$home/.pi/agent/agents/poteto-agent.md" "$tmp/poteto.after-replace" || fail "third install rewrote poteto-agent"
+for name in scout researcher reviewer worker delegate oracle; do
+	test ! -e "$home/.pi/agent/agents/$name.md" || fail "third install restored $name"
+done
 cmp -s "$home/.pi/agent/settings.json" "$tmp/settings.after-replace" || fail "third install changed converged settings.json"
 [[ "$(stamp_n)" == "$stamps_after_replace" ]] || fail "third install created a new stamp dir"
 

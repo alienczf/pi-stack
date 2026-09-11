@@ -15,18 +15,25 @@ if grep -q '`Task` is `pi -p`' overlay/AGENTS.md; then
 	fail "AGENTS.md still maps Task to bash pi -p"
 fi
 
+test -f overlay/agents/poteto-agent.md || fail "missing poteto-agent"
 for agent in scout worker reviewer oracle delegate researcher; do
-	test -f "overlay/agents/${agent}.md" || fail "missing overlay/agents/${agent}.md"
+	test ! -e "overlay/agents/${agent}.md" || fail "retired overlay agent ${agent} remains"
 done
+python3 - <<'PY'
+import json
+from pathlib import Path
+policy = json.loads(Path("overlay/settings.json").read_text())["subagents"]
+assert policy["disableBuiltins"] is True
+assert {p.stem for p in Path("overlay/agents").glob("*.md")} == {"poteto-agent"}
+assert {name for name, spec in policy["agentOverrides"].items() if not spec["disabled"]} == {"poteto-agent"}
+PY
 
 pkg="${HOME}/.pi/agent/npm/node_modules/pi-subagents"
 if command -v pi >/dev/null 2>&1 && [[ -d "$pkg" ]]; then
 	pi list | grep -q 'npm:pi-subagents' || fail "pi list missing npm:pi-subagents"
 	grep -q 'name: "subagent"' "$pkg/src/extension/index.ts" || fail "pi-subagents does not register subagent"
 	grep -q 'name: "subagent_wait"' "$pkg/src/runs/background/wait-tool.ts" || fail "pi-subagents does not register subagent_wait"
-	for agent in scout worker reviewer oracle delegate researcher; do
-		test -f "$pkg/agents/${agent}.md" || fail "missing builtin agent ${agent}.md"
-	done
+	node scripts/check-agent-discovery.mjs "$pkg" || fail "live discovery is not poteto-only"
 	grep -q 'Do not run `pi -p`' "${HOME}/.pi/agent/AGENTS.md" || fail "live AGENTS.md missing bash pi -p ban"
 	grep -q 'subagent' "${HOME}/.pi/agent/APPEND_SYSTEM.md" || fail "live APPEND_SYSTEM.md missing subagent"
 fi
@@ -34,7 +41,7 @@ fi
 test -f scripts/smoke-subagents.sh || fail "missing scripts/smoke-subagents.sh"
 grep -q -- '--tools subagent' scripts/smoke-subagents.sh || fail "smoke must pin parent tools to subagent"
 grep -q 'action doctor' scripts/smoke-subagents.sh || fail "smoke must call subagent doctor"
-grep -q 'agent delegate' scripts/smoke-subagents.sh || fail "smoke must spawn a delegate child"
+grep -q 'agent poteto-agent' scripts/smoke-subagents.sh || fail "smoke must select poteto-agent"
 
 if [[ "${PI_STACK_SMOKE:-}" == 1 ]]; then
 	bash "$root/scripts/smoke-subagents.sh" || fail "live subagent smoke failed"

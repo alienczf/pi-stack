@@ -1,7 +1,4 @@
 #!/usr/bin/env bash
-# Live smoke: a parent pi -p must call the subagent tool from this overlay.
-# 1) action doctor (no child LLM)
-# 2) delegate child, async false, unique token
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -162,7 +159,7 @@ printf '%s\n' "$doctor_report" | grep -q 'builtin' || fail "doctor result missin
 echo "smoke spawn"
 spawn_json="$work/spawn.jsonl"
 spawn_err="$work/spawn.err"
-spawn_prompt="Call the subagent tool exactly once with these fields: agent delegate, async false, context fresh, task: Reply with exactly ${token} and no other text. Do not call tools. After the child returns, print ${token} if it appears in the child output. If it failed, print the error."
+spawn_prompt="Call the subagent tool exactly once with these fields: agent poteto-agent, async false, context fresh, task: Reply with exactly ${token} and no other text. Do not call tools. After the child returns, print ${token} if it appears in the child output. If it failed, print the error."
 run_parent "$spawn_prompt" "$spawn_json" "$spawn_err" 300 \
 	|| fail "spawn pi -p failed\n$(cat "$spawn_err")\n$(tail -c 8000 "$spawn_json")"
 spawn_report="$(parse "$spawn_json" "$spawn_err")"

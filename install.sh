@@ -22,7 +22,8 @@ usage() {
 usage: install.sh [-y | --print-pstack-skills]
 
 Copies the pi-stack overlay into $HOME/.pi/agent.
-Writes pstack-aligned user agents into $HOME/.pi/agent/agents/.
+Installs poteto-agent and retires the six old role profiles in $HOME/.pi/agent/agents/.
+Disables builtin agents. Existing children keep their prompts until respawn.
 Dated backups go to $HOME/.pi/agent/backups/subagents/.
 Rewrites Cursor skill names into $HOME/.pi/agent/skills-pstack. Does not edit pstack.
 Copies the Jig launcher, controller, skill, and references into $HOME/.pi/agent/jig/.
@@ -365,6 +366,7 @@ if [[ ${#conform_src[@]} -gt 0 ]]; then
 fi
 
 export PI_AGENT_DIR="$agent"
+export OVERLAY="$overlay"
 python3 - "${#pstack_skill_names[@]}" "${pstack_skill_names[@]}" "${required_packages[@]}" <<'PY'
 import json
 import os
@@ -399,16 +401,18 @@ data["skills"] = skills
 def is_cursor_model(value):
 	return isinstance(value, str) and (value == "cursor" or value.startswith("cursor/"))
 
-subs = data.get("subagents")
-if isinstance(subs, dict):
-	if is_cursor_model(subs.get("defaultModel")):
-		subs["defaultModel"] = "inherit"
-	overrides = subs.get("agentOverrides")
-	if isinstance(overrides, dict):
-		for spec in overrides.values():
-			if isinstance(spec, dict) and is_cursor_model(spec.get("model")):
-				spec["model"] = "inherit"
-	data["subagents"] = subs
+policy = json.loads((Path(os.environ["OVERLAY"]) / "settings.json").read_text())["subagents"]
+subs = data.setdefault("subagents", {})
+overrides = subs.setdefault("agentOverrides", {})
+if is_cursor_model(subs.get("defaultModel")):
+	subs["defaultModel"] = "inherit"
+for name, spec in overrides.items():
+	if is_cursor_model(spec.get("model")):
+		spec["model"] = "inherit"
+	spec["disabled"] = name != "poteto-agent"
+subs["disableBuiltins"] = policy["disableBuiltins"]
+for name, spec in policy["agentOverrides"].items():
+	overrides.setdefault(name, {}).update(spec)
 
 def npm_package_name(entry):
 	if isinstance(entry, str):
@@ -559,6 +563,7 @@ export PSTACK="$pstack"
 export OVERLAY="$overlay"
 export PI_AGENT_DIR="$agent"
 python3 - <<'PY'
+import json
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -577,6 +582,14 @@ if backup_root.is_dir():
 
 pending_backups = []
 pending_writes = []
+pending_deletes = []
+policy = json.loads((overlay_agents.parent / "settings.json").read_text())["subagents"]
+retired = [name for name, spec in policy["agentOverrides"].items() if spec["disabled"]]
+for name in retired:
+	dest = dest_dir / (name + ".md")
+	if dest.is_file():
+		pending_backups.append((name + ".md", dest.read_bytes()))
+		pending_deletes.append(dest)
 for src in sorted(overlay_agents.glob("*.md")):
 	name = src.stem
 	wanted = src.read_text().replace("__SKILLS_PSTACK__", skills_pstack).replace("__PSTACK__", pstack)
@@ -587,6 +600,7 @@ for src in sorted(overlay_agents.glob("*.md")):
 			pending_writes.append((dest, wanted))
 	else:
 		pending_writes.append((dest, wanted))
+for name in [*retired, *(src.stem for src in overlay_agents.glob("*.md"))]:
 	pkg = pkg_dir / (name + ".md")
 	if pkg.is_file():
 		original = pkg.read_bytes()
@@ -601,6 +615,9 @@ if pending_backups:
 		out = stamp / rel
 		out.parent.mkdir(parents=True, exist_ok=True)
 		out.write_bytes(data)
+
+for dest in pending_deletes:
+	dest.unlink()
 
 for dest, text in pending_writes:
 	if dest.exists() and dest.read_text() == text:
