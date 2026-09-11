@@ -34,6 +34,14 @@ if command -v pi >/dev/null 2>&1 && [[ -d "$pkg" ]]; then
 	grep -q 'name: "subagent"' "$pkg/src/extension/index.ts" || fail "pi-subagents does not register subagent"
 	grep -q 'name: "subagent_wait"' "$pkg/src/runs/background/wait-tool.ts" || fail "pi-subagents does not register subagent_wait"
 	node scripts/check-agent-discovery.mjs "$pkg" || fail "live discovery is not poteto-only"
+	python3 - <<'PY'
+import json
+from pathlib import Path
+config = json.loads((Path.home() / ".pi/agent/extensions/subagent/config.json").read_text())
+assert config["intercomBridge"]["mode"] == "off"
+assert config["control"]["notifyChannels"] == ["event", "async"]
+print("check-subagent-config ok: bridge off; notification channels exactly event and async")
+PY
 	grep -q 'Do not run `pi -p`' "${HOME}/.pi/agent/AGENTS.md" || fail "live AGENTS.md missing bash pi -p ban"
 	grep -q 'subagent' "${HOME}/.pi/agent/APPEND_SYSTEM.md" || fail "live APPEND_SYSTEM.md missing subagent"
 fi
