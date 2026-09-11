@@ -479,11 +479,8 @@ bridge = config.setdefault("intercomBridge", {})
 control = config.setdefault("control", {})
 if not isinstance(bridge, dict) or not isinstance(control, dict):
 	sys.exit("subagent intercomBridge and control must be objects")
-channels = control.get("notifyChannels", ["event", "async"])
-if not isinstance(channels, list) or not all(isinstance(item, str) for item in channels):
-	sys.exit("subagent control.notifyChannels must be an array of strings")
 bridge["mode"] = "off"
-control["notifyChannels"] = [channel for channel in channels if channel != "intercom"]
+control["notifyChannels"] = ["event", "async"]
 config_text = json.dumps(config, indent=2) + "\n"
 if original != config_text:
 	if original is not None:

@@ -270,7 +270,7 @@ config = json.loads((Path(sys.argv[1]) / ".pi/agent/extensions/subagent/config.j
 assert config == {"intercomBridge": {"mode": "off"}, "control": {"notifyChannels": ["event", "async"]}}
 PY
 cat >"$home/.pi/agent/extensions/subagent/config.json" <<'EOF'
-{"asyncByDefault":true,"intercomBridge":{"mode":"always","instructionFile":"keep.md"},"control":{"enabled":false,"notifyChannels":["event","intercom","async","intercom"]}}
+{"asyncByDefault":true,"intercomBridge":{"mode":"always","instructionFile":"keep.md"},"control":{"enabled":false,"notifyChannels":["intercom","async","intercom"]}}
 EOF
 cp "$home/.pi/agent/extensions/subagent/config.json" "$tmp/config.before-refresh"
 

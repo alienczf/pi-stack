@@ -39,8 +39,8 @@ import json
 from pathlib import Path
 config = json.loads((Path.home() / ".pi/agent/extensions/subagent/config.json").read_text())
 assert config["intercomBridge"]["mode"] == "off"
-assert "intercom" not in config["control"]["notifyChannels"]
-print("check-subagent-config ok: bridge off; no intercom notification channel")
+assert config["control"]["notifyChannels"] == ["event", "async"]
+print("check-subagent-config ok: bridge off; notification channels exactly event and async")
 PY
 	grep -q 'Do not run `pi -p`' "${HOME}/.pi/agent/AGENTS.md" || fail "live AGENTS.md missing bash pi -p ban"
 	grep -q 'subagent' "${HOME}/.pi/agent/APPEND_SYSTEM.md" || fail "live APPEND_SYSTEM.md missing subagent"
