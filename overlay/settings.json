@@ -1,4 +1,16 @@
 {
   "defaultTools": ["read", "write", "edit", "bash", "grep", "find", "ls"],
-  "skills": []
+  "skills": [],
+  "subagents": {
+    "disableBuiltins": true,
+    "agentOverrides": {
+      "scout": {"disabled": true},
+      "researcher": {"disabled": true},
+      "reviewer": {"disabled": true},
+      "oracle": {"disabled": true},
+      "worker": {"disabled": true},
+      "delegate": {"disabled": true},
+      "poteto-agent": {"disabled": false}
+    }
+  }
 }
