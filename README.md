@@ -32,7 +32,7 @@ pi-stack is installed for this user.
   agents    $HOME/.pi/agent/agents
   backups   $HOME/.pi/agent/backups/subagents
   skills    <count>
-  packages  pi-web-access, pi-subagents, @narumitw/pi-goal
+  packages  pi-web-access, pi-subagents
   jig       $HOME/.local/bin/jig
   pstack    $HOME/.local/bin/update-pstack
   controller $HOME/.pi/agent/jig/bin/jigctl.py
@@ -91,16 +91,12 @@ Fresh installs get these packages. Refresh removes retired npm package registrat
 - `npm:pi-web-access` adds `web_search` and `fetch_content`. Librarian skills are filtered out.
 - The overlay uses the built-in `read`, `edit`, and `grep` tools.
 - `npm:pi-subagents` adds the `subagent` and `subagent_wait` tools. A running Pi agent does not start a child with `pi -p`.
-- `npm:@narumitw/pi-goal` replaces the prose `/goal` prompt with settled-idle continuation and the `goal_complete`, `goal_blocked`, and `goal_wait` tools.
-
-If `$HOME/.pi/agent/pi-goal.json` is absent, the installer creates it with unlimited automatic turns and a three-run no-progress guard. It preserves an existing file byte for byte.
 
 The overlay does not install an MCP adapter, a todo tool, plan mode, pi-lens, an interactive browser, CDP, or Instant Grep. Those packages duplicate or conflict with its tools.
 
 ## Run process commands
 
 - `/poteto` loads poteto-mode.
-- `/goal <objective>` starts a session-scoped objective. Give it a checkable exit predicate. Arrange a wake message before you call `goal_wait` for an external wait.
 - `/update-pstack` reviews and installs a pstack update while keeping the pi-stack revision unchanged.
 
 ## Configure one repository
