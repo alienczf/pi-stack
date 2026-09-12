@@ -51,7 +51,7 @@ The prompt and `-y` update only when a bootstrap invocation selects the default 
 
 The installer does not update the nested pstack clone or installed package versions. Use `update-pstack` for that independent update. After a source update, the installer installs each newly required package that is absent.
 
-A second run with the same inputs leaves all owned file bytes unchanged. It removes stale files only from the installed Jig and pstack updater resource directories. It never writes `auth.json`, `models-store.json`, `private/`, or `sessions/`.
+A second run with the same inputs leaves all owned file bytes unchanged. It removes stale files from installed skills and the installed Jig and pstack updater resource directories. It never writes `auth.json`, `models-store.json`, `private/`, or `sessions/`.
 
 To use existing source trees, run:
 
@@ -83,6 +83,16 @@ update-pstack apply \
 The command fast-forwards only the independent pstack Git checkout. It then reruns the selected pi-stack `install.sh`. If installation changes pi-stack `HEAD` or tracked state, the command restores the reviewed revision and fails. The same apply command can repair an interrupted installation even when the remote publishes a later revision. Set `PI_STACK` and `PSTACK` to use non-default checkouts.
 
 `/skill:update-pstack` runs the same procedure without the `/update-pstack` prompt alias.
+
+## Pi-specific design skills
+
+Every install applies `overlay/skills` while it conforms pstack into `$HOME/.pi/agent/skills-pstack`. `update-pstack` reapplies the same overlays through `install.sh`. The source pstack tree stays unchanged.
+
+Architect uses one model to sketch, an optional parent pick, then implementation. Exhaust the Design Space permits sequential or parent-inline sketches without a candidate quota. Poteto-mode no longer routes design or parallel work to arena or swarm. Same-model parallel work remains available for disjoint workstreams. The Pi adapter's model policy takes precedence over model defaults in other imported skills and playbooks.
+
+A replacement `SKILL.md` selects the overlay directory as the skill source. Conformance removes old supporting-file symlinks instead of retaining upstream runner prompts. A `patch.json` contains exact-match `old` and `new` text blocks and preserves the skill's other files. If an upstream edit removes or duplicates a patch target, installation fails with `overlay drift` rather than silently keeping the old routing. Review and update the patch before retrying.
+
+The sticky prompt, `/poteto`, and poteto-agent read the installed poteto-mode copy. Existing sessions need to reload their instructions to use the new routes.
 
 ## Required packages
 
@@ -160,6 +170,7 @@ bash -n bin/jig.sh install.sh scripts/check-jig.sh
 python3 -m unittest discover -s scripts/jig_tests -p 'test_*.py'
 bash scripts/check-overlay.sh
 bash scripts/check-conform-skills.sh
+python3 scripts/test_skill_overlays.py
 bash scripts/check-update-pstack.sh
 bash scripts/check-subagents.sh
 bash scripts/check-jig.sh

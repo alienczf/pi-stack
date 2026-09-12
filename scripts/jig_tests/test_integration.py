@@ -31,6 +31,10 @@ class IntegrationTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
+        (self.pstack / "skills/poteto-mode/SKILL.md").write_bytes(
+            (ROOT / "scripts/fixtures/poteto-mode/SKILL.md").read_bytes()
+        )
+
     def tearDown(self):
         self.temporary.cleanup()
 

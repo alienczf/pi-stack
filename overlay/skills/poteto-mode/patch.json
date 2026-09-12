@@ -1,0 +1,30 @@
+[
+  {
+    "old": "- Code crossing a function boundary → the **architect** skill, parallel design exploration before implementing.",
+    "new": "- Code crossing a function boundary → the installed **architect** skill. Sketch with one model, let the parent pick if needed, then implement."
+  },
+  {
+    "old": "- Parallel fan-out → the **swarm** skill for coverage matrices, races, gauntlets, and exploration partitions. Use **arena** for design or code bakeoffs with base selection and grafting.",
+    "new": "- Parallel work is optional. Use same-model children only for disjoint workstreams with separate ownership. Do not fan out across model types."
+  },
+  {
+    "old": "- Contested design → the **interrogate** skill (multi-model adversarial) before shipping.",
+    "new": "- Contested design → examine the disputed constraint and evidence parent-inline with the same model. The parent decides whether another sequential sketch is useful."
+  },
+  {
+    "old": "- **Exhaust the Design Space** (**principle-exhaust-the-design-space**). A novel interaction or architectural decision with no precedent. Build 2-3 competing prototypes and compare before committing.",
+    "new": "- **Exhaust the Design Space** (**principle-exhaust-the-design-space**). A novel interaction or architectural decision with unresolved tradeoffs. Read the installed leaf skill. Sequential or parent-inline sketches with one model are sufficient. No candidate quota or cross-model fanout."
+  },
+  {
+    "old": "**Use `subagent_type: \"poteto-agent\"` for any subagent you spawn inside a playbook step** (code-writing delegates, ad-hoc helpers). `/poteto-mode` and `poteto-agent` route through the same wrapper. Routed workflow skills (`how`, `why`, `interrogate`, `reflect`, `swarm`) set their own `subagent_type` for diverse-model review. Respect what the skill prescribes, don't override to `poteto-agent`.",
+    "new": "Use the Pi `subagent` tool with `agent: \"poteto-agent\"` only when delegation earns its cost. Work parent-inline otherwise. The Pi adapter's single-model policy overrides runner and role defaults in every routed skill and playbook. Do not use a routed skill to introduce cross-model fanout."
+  },
+  {
+    "old": "**Defaults for every `Task` call.** `run_in_background: true`, agent mode (readonly strips MCP), file pointers not inlined context, explicit model per role (configurable via `/setup-pstack`. Defaults `grok-4.6-fast-xhigh` for code, `claude-fable-5-1-thinking-max` for prose and judgment). Code delegates tier by difficulty. The hardest changes (cross-cutting design, gnarly concurrency, subtle algorithms) go to your strongest judgment model (`claude-fable-5-1-thinking-max`), whether the task needs judgment on vague intent or is a precisely specified sequence of steps to execute to the letter. Trivial mechanical edits go to your fast code model. Per-role lines in the `/setup-pstack` rule override these defaults and the model choices in the routed skills (`how`, `why`, `arena`, `swarm`, `architect`, `interrogate`, `reflect`). A role with no line keeps its default, and a role line of `inherit-parent` or `auto` runs that role on the parent chat model (omit Task `model`).",
+    "new": "Keep delegation asynchronous and pass file pointers instead of bulk context. Use the parent's model for every child. Do not select models by role, difficulty, or a model-diversity requirement. Same-model parallel children may handle disjoint workstreams. Use one workflow with `await runs.all` for that work, not for competing design candidates."
+  },
+  {
+    "old": "A second opinion is the same prompt against a different model. Agreement is high-signal.",
+    "new": "A second opinion is optional and uses the same model. The parent owns the final choice."
+  }
+]

@@ -12,6 +12,7 @@ such as "Poteto Mode".
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import sys
@@ -159,18 +160,29 @@ def link_or_replace(src: Path, dest: Path) -> None:
 	dest.symlink_to(target)
 
 
-def conform_one(src: Path, out_root: Path, verbose: bool) -> Path:
+def conform_one(src: Path, out_root: Path, verbose: bool, overlays: Path | None = None) -> Path:
 	src = src.resolve()
+	original = src
+	overlay = overlays / src.name if overlays else None
+	if overlay and (overlay / "SKILL.md").is_file():
+		src = overlay.resolve()
 	skill_md = src / "SKILL.md"
 	if not skill_md.is_file():
 		raise SystemExit(f"no SKILL.md in {src}")
 	dest_dir = (out_root / src.name).resolve()
-	if dest_dir == src:
-		raise SystemExit(f"refusing in-place rewrite of {src}. Set --out to a different directory")
-	dest_dir.mkdir(parents=True, exist_ok=True)
+	if dest_dir in (src, original):
+		raise SystemExit(f"refusing in-place rewrite of {dest_dir}. Set --out to a different directory")
 	text = skill_md.read_text(encoding="utf-8")
+	if overlay and (overlay / "patch.json").is_file():
+		for patch in json.loads((overlay / "patch.json").read_text(encoding="utf-8")):
+			if not patch["old"] or text.count(patch["old"]) != 1:
+				raise SystemExit(f"overlay drift in {skill_md}: expected one match for {patch['old']!r}")
+			text = text.replace(patch["old"], patch["new"], 1)
 	new_text, name, changed = rewrite_skill_text(text, src.name)
+	dest_dir.mkdir(parents=True, exist_ok=True)
 	dest_md = dest_dir / "SKILL.md"
+	if dest_md.is_symlink():
+		dest_md.unlink()
 	if not dest_md.exists() or dest_md.read_text(encoding="utf-8") != new_text:
 		dest_md.write_text(new_text, encoding="utf-8")
 	if verbose and changed:
@@ -195,6 +207,7 @@ def main(argv: list[str] | None = None) -> int:
 	)
 	parser.add_argument("--out", required=True, type=Path, help="directory that will hold one child per skill")
 	parser.add_argument("--tree", type=Path, help="walk this directory for SKILL.md (Pi discovery rules)")
+	parser.add_argument("--overlays", type=Path, help="skill directories with replacement SKILL.md or exact-match patch.json")
 	parser.add_argument("skills", nargs="*", type=Path, help="skill directories that contain SKILL.md")
 	parser.add_argument("-v", "--verbose", action="store_true")
 	args = parser.parse_args(argv)
@@ -212,7 +225,7 @@ def main(argv: list[str] | None = None) -> int:
 		if src in seen:
 			continue
 		seen.add(src)
-		conform_one(src, out, args.verbose)
+		conform_one(src, out, args.verbose, args.overlays)
 	return 0
 
 
