@@ -12,7 +12,9 @@ The child reads poteto-mode in full and decides reversible details without super
 
 Leave `async` on. That is the default. `async:false` only when this turn cannot continue without the child. Do not sleep-poll. Use blocking `subagent_wait` only when this turn must consume the result.
 
-Do not pin child models to `cursor/*` unless that provider is authenticated. A missing pattern warns and the child waits on a model that never comes. Use `inherit` or a listed `provider/id`. Call `{ action: "models" }` before an explicit model.
+Use the parent's model for every child. Do not fan out across model types or select models by role. This policy overrides model defaults in imported skills and playbooks. Same-model parallel work is allowed for disjoint workstreams with separate ownership. Use parent-inline or sequential sketches for design alternatives, then let the parent pick if needed. No runner competition or judge is required.
+
+Read architect, poteto-mode, and principle-exhaust-the-design-space from `__SKILLS_PSTACK__`, not raw pstack. Installation and refresh reapply these Pi-specific overlays. Other imported skills remain upstream copies subject to this adapter's model policy.
 
 `TodoWrite` is `TODO.md` in the working tree. Do not register a todo tool.
 

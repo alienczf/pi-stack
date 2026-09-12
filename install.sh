@@ -6,6 +6,7 @@ pstack_skill_names=(
 	how
 	why
 	architect
+	principle-exhaust-the-design-space
 	interrogate
 	tdd
 	unslop
@@ -27,6 +28,7 @@ Disables builtin agents, the subagent intercom bridge, and intercom notification
 Existing children keep their prompts until respawn.
 Dated backups go to $HOME/.pi/agent/backups/subagents/.
 Rewrites Cursor skill names into $HOME/.pi/agent/skills-pstack. Does not edit pstack.
+Applies pi-stack's single-model skill overlays on every install and refresh.
 Copies the Jig launcher, controller, skill, and references into $HOME/.pi/agent/jig/.
 Copies the pstack updater command and controller into $HOME/.pi/agent/update-pstack/.
 Merges defaultTools, skills, and packages into settings.json without changing project trust.
@@ -303,14 +305,14 @@ PY
 
 install_md() {
 	local src="$1" dest="$2"
-	PSTACK="$pstack" python3 - "$src" "$dest" <<'PY'
+	PSTACK="$pstack" SKILLS_PSTACK="$agent/skills-pstack" python3 - "$src" "$dest" <<'PY'
 import os
 import sys
 from pathlib import Path
 
 src = Path(sys.argv[1])
 dest = Path(sys.argv[2])
-text = src.read_text().replace("__PSTACK__", os.environ["PSTACK"])
+text = src.read_text().replace("__PSTACK__", os.environ["PSTACK"]).replace("__SKILLS_PSTACK__", os.environ["SKILLS_PSTACK"])
 if dest.exists() and dest.read_text() == text:
 	sys.exit(0)
 dest.parent.mkdir(parents=True, exist_ok=True)
@@ -363,7 +365,7 @@ for name in cross-repo update-pstack; do
 done
 conform_src+=("$installed_jig/skills/jig")
 if [[ ${#conform_src[@]} -gt 0 ]]; then
-	python3 "$here/bin/conform-skills.py" --out "$conform_out" "${conform_src[@]}"
+	python3 "$here/bin/conform-skills.py" --out "$conform_out" --overlays "$overlay/skills" "${conform_src[@]}"
 fi
 
 export PI_AGENT_DIR="$agent"
