@@ -8,6 +8,8 @@ This file maps Cursor verbs onto Pi. It is process, not repository architecture.
 
 When delegation is needed, use only `{ agent: "poteto-agent", task }`. `install.sh` installs this child in `~/.pi/agent/agents/`, disables builtins, and retires the six old role profiles. Give the child a bounded implementation, investigation, or read-only task instead of selecting a different persona. Do not use a parallel worker+reviewer workflow as the default bug-fix loop. Tiny known-mechanism fixes stay parent-inline.
 
+For competing-design bakeoffs, prefer a parent-inline pick when context allows, even when arena calls for a cross-judge. If a judge child is needed, the parent must author its task before launch. State the hard constraints and preference order explicitly. Reject candidates that violate hard constraints before ranking the rest. Include the instruction "Do not invent parent preference." Mark unspecified preferences as unknown rather than asking the judge to infer them. Scope all judge file access to explicit `design/*.md` paths. Pass those paths, not pasted design packages or session transcripts. The parent owns the final pick.
+
 The child reads poteto-mode in full and decides reversible details without supervisor gates. It returns missing authorization or genuine product ambiguity in its normal result before taking the blocked action. New sessions see the installed settings and prompts. Existing children keep their old prompts until respawn.
 
 Leave `async` on. That is the default. `async:false` only when this turn cannot continue without the child. Do not sleep-poll. Use blocking `subagent_wait` only when this turn must consume the result.

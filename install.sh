@@ -366,6 +366,18 @@ if [[ ${#conform_src[@]} -gt 0 ]]; then
 	python3 "$here/bin/conform-skills.py" --out "$conform_out" "${conform_src[@]}"
 fi
 
+python3 - "$conform_out/architect/SKILL.md" "$overlay/architect-phase-b.md" <<'PY'
+import sys
+from pathlib import Path
+
+skill, fragment = map(Path, sys.argv[1:])
+text = skill.read_text()
+anchor = 'Arena returns one synthesized design package. The synthesis decision populates the rationale\'s "Synthesis decision" section.'
+if text.count(anchor) != 1:
+	sys.exit("architect Phase B synthesis anchor changed; update overlay/architect-phase-b.md integration before installing")
+skill.write_text(text.replace(anchor, fragment.read_text().strip()))
+PY
+
 export PI_AGENT_DIR="$agent"
 export OVERLAY="$overlay"
 python3 - "${#pstack_skill_names[@]}" "${pstack_skill_names[@]}" "${required_packages[@]}" <<'PY'
