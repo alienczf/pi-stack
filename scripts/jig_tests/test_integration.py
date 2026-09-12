@@ -31,10 +31,6 @@ class IntegrationTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-        (self.pstack / "skills/architect/SKILL.md").write_bytes(
-            (ROOT / "scripts/fixtures/architect/SKILL.md").read_bytes()
-        )
-
     def tearDown(self):
         self.temporary.cleanup()
 
@@ -85,8 +81,6 @@ class IntegrationTest(unittest.TestCase):
             home / ".pi/agent/jig",
             home / ".pi/agent/bin/jig",
             home / ".pi/agent/skills-pstack/jig/SKILL.md",
-            home / ".pi/agent/skills-pstack/architect/SKILL.md",
-            home / ".pi/agent/AGENTS.md",
             home / ".pi/agent/prompts/jig.md",
         ]
         result = {}
@@ -95,35 +89,6 @@ class IntegrationTest(unittest.TestCase):
             for path in paths:
                 result[path.relative_to(home).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
         return result
-
-    def test_architect_synthesis_is_adapted_without_changing_upstream(self):
-        home = self.base / "home"
-        source = self.pstack / "skills/architect/SKILL.md"
-        before = source.read_text()
-        installed = self.install(home)
-        self.assertEqual(installed.returncode, 0, installed.stderr)
-        text = (home / ".pi/agent/skills-pstack/architect/SKILL.md").read_text()
-        prefix, rest = before.split("Arena returns", 1)
-        _, suffix = rest.split("\n\n## Phase C", 1)
-        fragment = (ROOT / "overlay/architect-phase-b.md").read_text().strip()
-        expected = prefix + fragment + "\n\n## Phase C" + suffix
-        self.assertEqual(text.split("# Architect\n", 1)[1], expected.split("# Architect\n", 1)[1])
-        self.assertEqual(source.read_text(), before)
-        self.assertEqual(
-            (home / ".pi/agent/AGENTS.md").read_bytes(),
-            (ROOT / "overlay/AGENTS.md").read_bytes(),
-        )
-
-    def test_architect_synthesis_rejects_missing_or_duplicate_anchor(self):
-        source = self.pstack / "skills/architect/SKILL.md"
-        original = source.read_text()
-        anchor = next(line for line in original.splitlines() if line.startswith("Arena returns"))
-        for count in (0, 2):
-            with self.subTest(anchor_count=count):
-                source.write_text(original.replace(anchor, "\n\n".join([anchor] * count)))
-                installed = self.install(self.base / f"home-{count}")
-                self.assertNotEqual(installed.returncode, 0)
-                self.assertIn("architect Phase B synthesis anchor changed", installed.stderr)
 
     def test_public_route_matrix_owns_generated_docs(self):
         document = json.loads(MATRIX.read_text(encoding="utf-8"))

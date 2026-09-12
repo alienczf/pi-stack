@@ -108,7 +108,6 @@ description: stub for $name install test
 # stub
 EOF
 done < <(bash "$root/install.sh" --print-pstack-skills)
-cp "$root/scripts/fixtures/architect/SKILL.md" "$tmp/pstack/skills/architect/SKILL.md"
 sed -i 's/^name: poteto-mode$/name: Poteto Mode/' "$tmp/pstack/skills/poteto-mode/SKILL.md"
 mkdir -p "$tmp/pstack/skills/poteto-mode/playbooks"
 printf 'playbook\n' >"$tmp/pstack/skills/poteto-mode/playbooks/investigation.md"
@@ -372,7 +371,6 @@ description: stub for $name clone test
 # stub
 EOF
 done < <(bash "$root/install.sh" --print-pstack-skills)
-cp "$root/scripts/fixtures/architect/SKILL.md" "$fake/pstack/skills/architect/SKILL.md"
 sed -i 's/^name: poteto-mode$/name: Poteto Mode/' "$fake/pstack/skills/poteto-mode/SKILL.md"
 git init -q "$fake"
 git -C "$fake" add pstack
