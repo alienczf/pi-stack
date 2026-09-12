@@ -41,6 +41,17 @@ config = json.loads((Path.home() / ".pi/agent/extensions/subagent/config.json").
 assert config["intercomBridge"]["mode"] == "off"
 assert config["control"]["notifyChannels"] == ["event", "async"]
 print("check-subagent-config ok: bridge off; notification channels exactly event and async")
+agent = Path.home() / ".pi/agent"
+settings = json.loads((agent / "settings.json").read_text())
+manifest = agent / "npm/package.json"
+data = json.loads(manifest.read_text()) if manifest.exists() else {}
+for name in ("pi-hashline-edit", "pi-gal", "@narumitw/pi-goal"):
+	assert not (agent / "npm/node_modules" / name).exists(), name
+	assert not any(name in data.get(key, {}) for key in ("dependencies", "devDependencies", "optionalDependencies")), name
+	for entry in settings.get("packages", []):
+		source = entry if isinstance(entry, str) else entry.get("source", "")
+		assert source != f"npm:{name}" and not source.startswith(f"npm:{name}@"), source
+print("check-retired-packages ok: no registrations or managed installs remain")
 PY
 	grep -q 'Do not run `pi -p`' "${HOME}/.pi/agent/AGENTS.md" || fail "live AGENTS.md missing bash pi -p ban"
 	grep -q 'subagent' "${HOME}/.pi/agent/APPEND_SYSTEM.md" || fail "live APPEND_SYSTEM.md missing subagent"
