@@ -471,6 +471,35 @@ def rotate_coordinator(project: Project, stream_id: str) -> str:
     return ensure_coordinator(project, stream_dir, opening_prompt=prompt)
 
 
+def _has_handover(stream_dir: Path, role: str) -> bool:
+    path = stream_dir / "handover" / f"{role}.md"
+    return path.is_file() and path.read_text(encoding="utf-8").strip() != ""
+
+
+def close_stream(project: Project, stream_id: str) -> list[str]:
+    stream_dir = _require_stream(project, stream_id)
+    path = stream_dir / "threads.tsv"
+    rows = load_threads(path)
+    open_threads = [row for row in rows if row.role != "coordinator" and row.status is not Status.archived]
+    missing = [f"handover/{row.role}.md" for row in open_threads if not _has_handover(stream_dir, row.role)]
+    if missing:
+        raise StreamsError(f"stream {stream_id} has no " + ", ".join(missing))
+    report: list[str] = []
+    for row in open_threads:
+        piweb.archive(row.session)
+        transition(row, Status.archived)
+        save_threads(path, rows)
+        report.append(f"archived {row.session} {row.role}")
+    # pi-web refuses to archive a session that is still working, and the
+    # coordinator is usually the one running close.
+    for row in rows:
+        if row.role == "coordinator" and row.status is Status.active:
+            transition(row, Status.done)
+            report.append(f"done {row.session} coordinator")
+    save_threads(path, rows)
+    return report
+
+
 def adopt_thread(
     project: Project,
     stream_id: str,
