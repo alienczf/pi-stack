@@ -309,6 +309,14 @@ class StreamTick:
                 observed.add(row.session)
         self.state.sessions = {sid: seen for sid, seen in self.state.sessions.items() if sid in observed}
         coord = self.coordinator()
+        if coord is not None and self.listing(coord.worktree).get(coord.session, {}).get("archived") is True:
+            # A rotation that stopped after its archive call, or a person in pi-web, can
+            # archive the coordinator and leave its row active. pi-web still reopens an
+            # archived session to answer status or a prompt, so only the listing shows it.
+            transition(coord, Status.archived)
+            self.rows_dirty = True
+            self.state.rotating = True
+            coord = None
         self.state.outages = [sid for sid in self.state.outages if coord is not None and sid == coord.session]
         if coord is not None:
             self.check_outage(coord)
@@ -352,11 +360,11 @@ class StreamTick:
         # even when it did so between two ticks. An adopted thread that is already
         # idle reports idle once too, which tells its coordinator that it waits.
         old = self.state.sessions.get(row.session, Seen(busy=True))
-        if old.replay:
-            # The last resend stopped after queue/clear, so what is not queued now was dropped.
-            self.replay(row, old, Counter(text for text, _kind in _queued(status)))
+        # The last resend stopped after queue/clear, so what is not queued now was dropped.
+        # A replayed prompt starts the thread again, whatever the status said before it.
+        sent = self.replay(row, old, Counter(text for text, _kind in _queued(status)))
         new = Seen(
-            busy=status.get("isStreaming") is True or _count(status.get("pendingMessageCount")) > 0,
+            busy=sent or status.get("isStreaming") is True or _count(status.get("pendingMessageCount")) > 0,
             context=old.context,
         )
         self.state.sessions[row.session] = new
@@ -394,15 +402,18 @@ class StreamTick:
         for text in stale:
             new.queued[text] = self.at
 
-    def replay(self, row: Thread, seen: Seen, waiting: Counter[str]) -> None:
+    def replay(self, row: Thread, seen: Seen, waiting: Counter[str]) -> bool:
+        sent = False
         while seen.replay:
             text, behavior = seen.replay[0]
             if waiting[text] > 0:
                 waiting[text] -= 1
             else:
                 piweb.prompt(row.session, text, behavior)
+                sent = True
             del seen.replay[0]
             self.flush()
+        return sent
 
     def since(self, stamp: str) -> timedelta:
         seen = clock.parse(stamp)
@@ -421,13 +432,6 @@ class StreamTick:
         self.state.rotating = False
 
     def wake_target(self, coord: Thread | None) -> tuple[str, str | None]:
-        if coord is not None and self.listing(coord.worktree).get(coord.session, {}).get("archived") is True:
-            # A rotation that stopped after its archive call leaves the row active.
-            # pi-web still reopens an archived session to answer status or a prompt,
-            # so only the listing shows that nobody watches it.
-            transition(coord, Status.archived)
-            self.rows_dirty = True
-            coord = None
         if coord is not None:
             status = piweb.session_status(coord.session)
             if status.get("isStreaming") is True:
