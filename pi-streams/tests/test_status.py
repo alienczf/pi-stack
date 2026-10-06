@@ -63,14 +63,16 @@ class StatusTests(EngineCase):
         (other / "threads.tsv").write_text(HEADER + OTHER, encoding="utf-8")
         self.stub.set_routes([
             ("GET", "/api/sessions/coord-1/status", 200, live("coord-1", 2, tokens=1200)),
-            ("GET", "/api/sessions/thread-1/status", 200, live("thread-1", 3)),
+            ("GET", "/api/sessions/thread-1/status", 200, live("thread-1", 4)),
             ("GET", "/api/sessions/thread-2/status", 200, live("thread-2", 1)),
         ])
         got = self.run_streams("status", "etl", "--json")
         self.assertEqual(got.returncode, 0, got.stderr)
         self.assertEqual(got.stdout, STATUS_JSON)
-        for _method, path, _query, _body in self.stub.requests:
-            self.assertNotIn("other-coord", path)
+        self.assertEqual(
+            [path for _method, path, _query, _body in self.stub.requests],
+            ["/api/sessions/coord-1/status", "/api/sessions/thread-1/status"],
+        )
         text = self.run_streams("status", "etl")
         self.assertEqual(text.returncode, 0, text.stderr)
         self.assertIn("coord-1", text.stdout)
