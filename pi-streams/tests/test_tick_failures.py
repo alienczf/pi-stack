@@ -80,7 +80,7 @@ class FailureTests(TickCase):
         )
         self.assertEqual(
             self.state(self.etl),
-            {"outages": [], "pending": [], "rotating": False, "sessions": {}, "subscriptions": {}},
+            {"claims": [], "outages": [], "pending": [], "rotating": False, "sessions": {}, "subscriptions": {}},
         )
         self.assertEqual(git(self.home, self.env, "status", "--porcelain"), "")
 

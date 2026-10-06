@@ -63,6 +63,7 @@ class SteerTests(TickCase):
             f'"detail": "{BARS}"}}\n',
         )
         self.assertEqual(self.state(self.etl), {
+            "claims": [],
             "outages": [],
             "pending": [],
             "rotating": False,
