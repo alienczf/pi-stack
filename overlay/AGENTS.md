@@ -1,10 +1,10 @@
 # Pi overlay adapter
 
-This file maps Cursor verbs onto Pi. It is process, not repository architecture. Initialize one whole Git repository with `/skill:jig init`.
+This file maps Cursor verbs onto Pi. It is process, not repository architecture. Repository principles and repeated mistakes belong to pstack's `correct`.
 
 ## Verb map
 
-`Task` is the `subagent` tool from pi-subagents. One child is `{ agent, task }`. Several children are one `{ workflowScript }` with `await runs.all`. Set `cwd` when the child must run in another tree. Do not run `pi -p` from bash. That nested process blocks the parent and has no fleet status. `--tools` that omit `subagent` is how that bash spawn happens. jig.sh is a human launcher and may pin tools. Agents inside Pi may not. `pi -c` continues a session. It is not cwd.
+`Task` is the `subagent` tool from pi-subagents. One child is `{ agent, task }`. Several children are one `{ workflowScript }` with `await runs.all`. Set `cwd` when the child must run in another tree. Do not run `pi -p` from bash. That nested process blocks the parent and has no fleet status. `--tools` that omit `subagent` is how that bash spawn happens. Agents inside Pi may not pin tools. `pi -c` continues a session. It is not cwd.
 
 When delegation is needed, use only `{ agent: "poteto-agent", task }`. `install.sh` installs this child in `~/.pi/agent/agents/`, disables builtins, and retires the six old role profiles. Give the child a bounded implementation, investigation, or read-only task instead of selecting a different persona. Do not use a parallel worker+reviewer workflow as the default bug-fix loop. Tiny known-mechanism fixes stay parent-inline.
 
@@ -28,10 +28,6 @@ Never background bash. Use tmux if you need a long-running process that is not a
 
 Keep the `read` tool enabled.
 
-## Jig handoff
+## Repository skills
 
-Use `jig init` from the human shell for a fresh resource-isolated Pi campaign. Use `/skill:jig init` or `/jig init` inside the current trusted Pi session. A running agent never launches `pi -p`.
-
-Every route uses the installed controller at `${PI_CODING_AGENT_DIR:-${PI_AGENT_DIR:-$HOME/.pi/agent}}/jig/bin/jigctl.py`. Preserve the manifest's `resourceIsolation` value. An `isolated-shell` campaign resumes with `jig init`. An `inherited-session` campaign resumes with `/skill:jig init` or `/jig init`.
-
-Repository Principles are mandatory. Stop at `awaiting-principles` until the target operator supplies one complete response and explicitly ratifies the displayed candidate digest. Pstack's `create-verification-skill` builds repository verification, and `maintain-verification-skill` keeps it current. Use `/skill:reflect` after later work to turn durable learnings into approved skill edits. Jig stops at `configured` and never selects or performs a product-code improvement.
+Use pstack's `correct` for repository principles and for a mistake that repeats. Rank the fix as architecture, then types, lints, tests, and docs last. `create-verification-skill` builds repository verification, and `maintain-verification-skill` keeps it current. Use `/skill:reflect` after later work to turn durable learnings into approved skill edits. A running agent never launches `pi -p`.
