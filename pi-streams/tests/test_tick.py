@@ -61,6 +61,7 @@ class TickTests(TickCase):
         self.assertEqual(self.state(self.etl), {
             "outages": [],
             "pending": [],
+            "rotating": False,
             "sessions": {"t-1": {"asks": [], "busy": True, "context": False, "queued": {}}},
         })
         self.assertEqual(git(self.home, self.env, "log", "-1", "--format=%s"), "pi-streams tick\n")
@@ -86,6 +87,7 @@ class TickTests(TickCase):
         self.assertEqual(self.state(self.etl), {
             "outages": [],
             "pending": [],
+            "rotating": False,
             "sessions": {"t-1": {"asks": [], "busy": False, "context": False, "queued": {}}},
         })
         self.assertEqual(git(self.home, self.env, "rev-list", "--count", "HEAD"), "2\n")
@@ -130,6 +132,7 @@ class TickTests(TickCase):
         self.assertEqual(self.state(self.etl), {
             "outages": [],
             "pending": [],
+            "rotating": False,
             "sessions": {"t-1": {"asks": ["ask-2"], "busy": False, "context": True, "queued": {}}},
         })
 
