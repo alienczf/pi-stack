@@ -1,6 +1,7 @@
 """A home with streams for tick tests, with pi-web bodies in the shapes of @jmfederico/pi-web 1.202607.3.
 
-status() is a SessionStatus and info() a SessionInfo from apiTypes.d.ts.
+status() is a SessionStatus and info() a SessionInfo from apiTypes.d.ts. write_log() writes
+a session .jsonl in the entry shapes of pi-coding-agent's docs/session-format.md.
 """
 from __future__ import annotations
 
@@ -15,6 +16,41 @@ HEADER = "session\trole\trepo\tworktree\tbranch\tbase\tmodel\tthinking\tstatus\t
 SUBSCRIPTIONS = "id\tsource\ttarget\twhen\taction\n"
 STARTED = "2026-10-06T00:00:00Z"
 PROMPTS = ("POST", r"/api/sessions/[^/]+/prompt", 200, {"accepted": True})
+OPENED = "2026-10-06T09:00:00.000Z"
+OPENED_MS = 1791277200000
+USAGE = {
+    "input": 1200,
+    "output": 300,
+    "cacheRead": 0,
+    "cacheWrite": 0,
+    "totalTokens": 1500,
+    "cost": {"input": 0.012, "output": 0.015, "cacheRead": 0, "cacheWrite": 0, "total": 0.027},
+}
+
+
+def user(text: str) -> dict[str, object]:
+    return {"role": "user", "content": text, "timestamp": OPENED_MS}
+
+
+def reply(text: str) -> dict[str, object]:
+    return {
+        "role": "assistant",
+        "content": [{"type": "text", "text": text}],
+        "api": "openai-codex-responses",
+        "provider": "openai-codex",
+        "model": "gpt-6-astra",
+        "usage": USAGE,
+        "stopReason": "stop",
+        "timestamp": OPENED_MS,
+    }
+
+
+def failure(error: str) -> dict[str, object]:
+    return {**reply(""), "content": [], "stopReason": "error", "errorMessage": error}
+
+
+def thinking_change() -> dict[str, object]:
+    return {"type": "thinking_level_change", "thinkingLevel": "xhigh"}
 
 
 def row(
@@ -126,6 +162,22 @@ class TickCase(EngineCase):
 
     def log_path(self, sid: str) -> str:
         return str(self.logs / f"{sid}.jsonl")
+
+    def write_log(self, sid: str, cwd: str, *items: dict[str, object]) -> None:
+        entries: list[dict[str, object]] = [
+            {"type": "session", "version": 3, "id": sid, "timestamp": OPENED, "cwd": cwd},
+        ]
+        for index, item in enumerate(items, start=1):
+            head = {"id": f"e{index}", "parentId": f"e{index - 1}" if index > 1 else None, "timestamp": OPENED}
+            if "role" in item:
+                entries.append({"type": "message", **head, "message": item})
+            else:
+                entries.append({"type": item["type"], **head, **item})
+        text = "".join(json.dumps(entry, separators=(",", ":")) + "\n" for entry in entries)
+        Path(self.log_path(sid)).write_text(text, encoding="utf-8")
+
+    def alerts(self) -> str:
+        return (self.home / "ALERTS").read_text(encoding="utf-8")
 
     def tick(self, at: str, *args: str) -> subprocess.CompletedProcess[str]:
         self.stub.requests.clear()
