@@ -29,30 +29,15 @@ sys.stdout.write(digest.hexdigest())
 PY
 }
 
-assert_streams_layout() {
+assert_streams_base() {
 	local home="$1"
-	local xdg="${2:-}"
-	local unit_dir skills_text
-	if [[ -n "$xdg" ]]; then
-		unit_dir="$xdg/systemd/user"
-	else
-		unit_dir="$home/.config/systemd/user"
-	fi
+	local skills_text
 	test -L "$home/.local/bin/pi-streams" || fail "pi-streams was not linked in $home"
 	[[ "$(readlink -- "$home/.local/bin/pi-streams")" == "$root/bin/pi-streams" ]] || fail "pi-streams link target is wrong in $home"
 	"$home/.local/bin/pi-streams" --help >/dev/null || fail "installed pi-streams does not run in $home"
-	cmp -s "$root/bin/pi-web-cli" "$home/.local/bin/pi-web-cli" || fail "pi-web-cli content is wrong in $home"
-	test -x "$home/.local/bin/pi-web-cli" || fail "pi-web-cli is not executable in $home"
 	cmp -s "$root/prompts/stream.md" "$home/.pi/agent/prompts/stream.md" || fail "stream prompt was not installed in $home"
 	grep -q '^name: stream$' "$home/.pi/agent/skills-pstack/stream/SKILL.md" || fail "stream skill was not installed in $home"
 	grep -q '^name: stream-kickoff$' "$home/.pi/agent/skills-pstack/stream-kickoff/SKILL.md" || fail "stream-kickoff skill was not installed in $home"
-	cmp -s "$root/systemd/pi-streams-tick.service" "$unit_dir/pi-streams-tick.service" || fail "tick service was not installed in $home"
-	cmp -s "$root/systemd/pi-streams-tick.timer" "$unit_dir/pi-streams-tick.timer" || fail "tick timer was not installed in $home"
-	grep -q '^Type=oneshot$' "$unit_dir/pi-streams-tick.service" || fail "tick service is not oneshot"
-	grep -q '^ExecStart=%h/.local/bin/pi-streams tick$' "$unit_dir/pi-streams-tick.service" || fail "tick service ExecStart is wrong"
-	grep -q '^OnBootSec=2min$' "$unit_dir/pi-streams-tick.timer" || fail "tick timer OnBootSec is wrong"
-	grep -q '^OnUnitActiveSec=5min$' "$unit_dir/pi-streams-tick.timer" || fail "tick timer OnUnitActiveSec is wrong"
-	grep -q '^WantedBy=timers.target$' "$unit_dir/pi-streams-tick.timer" || fail "tick timer WantedBy is wrong"
 	skills_text="$(python3 - "$home/.pi/agent/settings.json" <<'PY'
 import json
 import sys
@@ -65,6 +50,40 @@ PY
 )"
 	printf '%s\n' "$skills_text" | grep -qx stream || fail "settings.json is missing the stream skill"
 	printf '%s\n' "$skills_text" | grep -qx stream-kickoff || fail "settings.json is missing the stream-kickoff skill"
+}
+
+assert_streams_layout() {
+	local home="$1"
+	local xdg="${2:-}"
+	local unit_dir
+	if [[ -n "$xdg" ]]; then
+		unit_dir="$xdg/systemd/user"
+	else
+		unit_dir="$home/.config/systemd/user"
+	fi
+	assert_streams_base "$home"
+	cmp -s "$root/bin/pi-web-cli" "$home/.local/bin/pi-web-cli" || fail "pi-web-cli content is wrong in $home"
+	test -x "$home/.local/bin/pi-web-cli" || fail "pi-web-cli is not executable in $home"
+	cmp -s "$root/systemd/pi-streams-tick.service" "$unit_dir/pi-streams-tick.service" || fail "tick service was not installed in $home"
+	cmp -s "$root/systemd/pi-streams-tick.timer" "$unit_dir/pi-streams-tick.timer" || fail "tick timer was not installed in $home"
+	grep -q '^Type=oneshot$' "$unit_dir/pi-streams-tick.service" || fail "tick service is not oneshot"
+	grep -q '^ExecStart=%h/.local/bin/pi-streams tick$' "$unit_dir/pi-streams-tick.service" || fail "tick service ExecStart is wrong"
+	grep -q '^OnBootSec=2min$' "$unit_dir/pi-streams-tick.timer" || fail "tick timer OnBootSec is wrong"
+	grep -q '^OnUnitActiveSec=5min$' "$unit_dir/pi-streams-tick.timer" || fail "tick timer OnUnitActiveSec is wrong"
+	grep -q '^WantedBy=timers.target$' "$unit_dir/pi-streams-tick.timer" || fail "tick timer WantedBy is wrong"
+}
+
+assert_streams_not_in_use() {
+	local home="$1"
+	assert_streams_base "$home"
+	test ! -e "$home/.local/bin/pi-web-cli" || fail "install without a pi-streams home installed pi-web-cli in $home"
+	test ! -e "$home/.config/systemd" || fail "install without a pi-streams home installed the tick units in $home"
+}
+
+register_streams_home() {
+	local home="$1"
+	mkdir -p "$home/.config/pi-streams"
+	printf '%s\n' "$home/proj/streams" >"$home/.config/pi-streams/homes"
 }
 
 test -f overlay/APPEND_SYSTEM.md || fail "missing overlay/APPEND_SYSTEM.md"
@@ -451,13 +470,7 @@ test -L "$home/.local/bin/update-pstack" || fail "install did not link ~/.local/
 test -x "$home/.local/bin/update-pstack" || fail "linked update-pstack is not executable"
 grep -F -q "$root" "$home/.pi/agent/bin/update-pstack" || fail "installed update-pstack wrapper forgot its pi-stack source"
 "$home/.local/bin/update-pstack" --help | grep -q '^usage: update-pstack' || fail "installed update-pstack command does not run"
-assert_streams_layout "$home"
-test -z "$(find "$home/.local/bin" -name 'pi-web-cli.bak-*' -print)" || fail "fresh install backed up pi-web-cli"
-streams_rerun_token="$(
-	sha256sum "$home/.local/bin/pi-web-cli"
-	readlink -- "$home/.local/bin/pi-streams"
-	tree_checksum "$home/.config/systemd"
-)"
+assert_streams_not_in_use "$home"
 test -f "$home/.pi/agent/agents/poteto-agent.md" || fail "piped install did not write poteto-agent"
 grep -q poteto-mode "$home/.pi/agent/agents/poteto-agent.md" || fail "poteto-agent must read poteto-mode"
 python3 - "$home" <<'PY'
@@ -541,14 +554,7 @@ cmp -s "$home/.pi/agent/settings.json" "$tmp/settings.after-replace" || fail "th
 [[ "$(stamp_n)" == "$stamps_after_replace" ]] || fail "third install created a new stamp dir"
 cmp -s "$home/.pi/agent/extensions/subagent/config.json" "$tmp/config.after-refresh" || fail "third install changed subagent config"
 [[ "$(find "$home/.pi/agent/backups/subagents" -name 'config-*.json' | wc -l)" == "$config_backups" ]] || fail "third install backed up unchanged subagent config"
-assert_streams_layout "$home"
-streams_rerun_again="$(
-	sha256sum "$home/.local/bin/pi-web-cli"
-	readlink -- "$home/.local/bin/pi-streams"
-	tree_checksum "$home/.config/systemd"
-)"
-[[ "$streams_rerun_again" == "$streams_rerun_token" ]] || fail "rerun changed pi-streams, pi-web-cli, or the tick units"
-test -z "$(find "$home/.local/bin" -name 'pi-web-cli.bak-*' -print)" || fail "rerun backed up pi-web-cli"
+assert_streams_not_in_use "$home"
 
 home_ask="$tmp/home-ask"
 mkdir -p "$home_ask/.pi/agent"
@@ -988,6 +994,7 @@ fi
 
 same_home="$tmp/home-same-cli"
 mkdir -p "$same_home/.local/bin"
+register_streams_home "$same_home"
 cp "$root/bin/pi-web-cli" "$same_home/.local/bin/pi-web-cli"
 chmod +x "$same_home/.local/bin/pi-web-cli"
 same_inode="$(stat -c %i "$same_home/.local/bin/pi-web-cli")"
@@ -1017,7 +1024,30 @@ printf 'unexpected npm %s\n' "$*" >&2
 exit 1
 EOF
 chmod +x "$fake_npm/npm"
+unused_home="$tmp/home-streams-unused"
+unused_log="$tmp/npm-unused.log"
+: >"$unused_log"
+if ! unused_out="$(
+	env -u PI_STACK_SKIP_SYSTEMD \
+		PATH="$fake_npm:$no_systemctl:/usr/bin:/bin" \
+		HOME="$unused_home" \
+		PI_STACK="$root" \
+		PSTACK="$stub" \
+		PI_STACK_SKIP_PACKAGES=1 \
+		NPM_LOG="$unused_log" \
+		bash "$root/install.sh" 2>&1
+)"; then
+	printf '%s\n' "$unused_out" >&2
+	fail "install without a pi-streams home failed"
+fi
+if printf '%s\n' "$unused_out" | grep -F -q 'npm install -g @jmfederico/pi-web'; then
+	fail "install without a pi-streams home offered to install pi-web"
+fi
+test ! -s "$unused_log" || fail "install without a pi-streams home ran npm"
+assert_streams_not_in_use "$unused_home"
+
 noweb_home="$tmp/home-noweb"
+register_streams_home "$noweb_home"
 noweb_log="$tmp/npm-noweb.log"
 : >"$noweb_log"
 if ! noweb_out="$(
@@ -1037,6 +1067,7 @@ test ! -s "$noweb_log" || fail "skipped package install still ran npm"
 test ! -e "$noweb_home/.local/bin/pi-web" || fail "skipped package install wrote pi-web"
 
 npm_home="$tmp/home-npm-web"
+register_streams_home "$npm_home"
 npm_log="$tmp/npm-web.log"
 : >"$npm_log"
 if ! npm_out="$(
@@ -1074,6 +1105,7 @@ if printf '%s\n' "$npm_again" | grep -F -x -q 'npm install -g @jmfederico/pi-web
 fi
 
 node_home="$tmp/home-piweb-node"
+register_streams_home "$node_home"
 node_log="$tmp/npm-node.log"
 : >"$node_log"
 node_pi_web="$node_home/.local/share/pi-node/node-fixture/bin/pi-web"
@@ -1096,6 +1128,55 @@ if printf '%s\n' "$node_out" | grep -F -x -q 'npm install -g @jmfederico/pi-web'
 	fail "install tried to install pi-web that was already under pi-node"
 fi
 test ! -s "$node_log" || fail "install ran npm even though pi-web was under pi-node"
+
+fake_systemctl="$tmp/fake-systemctl"
+mkdir -p "$fake_systemctl"
+cat >"$fake_systemctl/systemctl" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >>"$SYSTEMCTL_LOG"
+EOF
+chmod +x "$fake_systemctl/systemctl"
+systemd_home="$tmp/home-systemd"
+register_streams_home "$systemd_home"
+systemctl_log="$tmp/systemctl.log"
+: >"$systemctl_log"
+if ! systemd_out="$(
+	env -u PI_STACK_SKIP_SYSTEMD \
+		PATH="$fake_systemctl:/usr/bin:/bin" \
+		HOME="$systemd_home" \
+		PI_STACK="$root" \
+		PSTACK="$stub" \
+		PI_STACK_SKIP_PACKAGES=1 \
+		SYSTEMCTL_LOG="$systemctl_log" \
+		bash "$root/install.sh" 2>&1
+)"; then
+	printf '%s\n' "$systemd_out" >&2
+	fail "install with systemctl failed"
+fi
+[[ "$(cat "$systemctl_log")" == $'--user daemon-reload\n--user enable --now pi-streams-tick.timer' ]] || fail "install did not reload systemd and enable the tick timer"
+assert_streams_layout "$systemd_home"
+
+no_systemd_path="$tmp/no-systemd-path"
+mkdir -p "$no_systemd_path"
+cp -s -n /usr/bin/* /bin/* "$no_systemd_path"/ 2>/dev/null || true
+rm -f "$no_systemd_path/systemctl"
+test -x "$no_systemd_path/bash" || fail "could not build a PATH without systemctl"
+no_systemd_home="$tmp/home-no-systemd"
+register_streams_home "$no_systemd_home"
+if ! no_systemd_out="$(
+	env -u PI_STACK_SKIP_SYSTEMD \
+		PATH="$no_systemd_path" \
+		HOME="$no_systemd_home" \
+		PI_STACK="$root" \
+		PSTACK="$stub" \
+		PI_STACK_SKIP_PACKAGES=1 \
+		bash "$root/install.sh" 2>&1
+)"; then
+	printf '%s\n' "$no_systemd_out" >&2
+	fail "install without systemctl failed"
+fi
+printf '%s\n' "$no_systemd_out" | grep -F -x -q 'systemctl not found. Run pi-streams tick every five minutes another way.' || fail "install without systemctl did not say how to run the tick"
+assert_streams_layout "$no_systemd_home"
 
 ask_home="$tmp/home-streams-ask"
 ask_proj="$tmp/ask-proj"

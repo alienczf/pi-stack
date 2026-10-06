@@ -37,9 +37,10 @@ npm:pi-web-access and npm:pi-subagents.
 Removes retired npm registrations and managed installs; backs up changed settings.
 PI_STACK_SKIP_PACKAGES=1 defers physical package removal until a normal install.
 Rewrites cursor/* subagent models to inherit. Links update-pstack into ~/.local/bin.
-Links pi-streams to this checkout and installs pi-web-cli into ~/.local/bin.
-Installs the stream and stream-kickoff skills, the stream prompt, and the tick timer.
-With --project, runs pi-streams init and then pi-streams doctor.
+Links pi-streams to this checkout. Installs the stream and stream-kickoff skills
+and the stream prompt. With --project, or once pi-streams has a registered home,
+also installs pi-web-cli into ~/.local/bin, pi-web when it is missing, and the
+tick timer. With --project, runs pi-streams init and then pi-streams doctor.
 Never writes auth.json, models-store.json, private/, or sessions/.
 Does not change pi-web's config. Does not search for git repositories.
 
@@ -442,6 +443,10 @@ install_tick_units() {
 	if [[ "${PI_STACK_SKIP_SYSTEMD:-}" == 1 ]]; then
 		return 0
 	fi
+	if ! command -v systemctl >/dev/null 2>&1; then
+		printf 'systemctl not found. Run pi-streams tick every five minutes another way.\n'
+		return 0
+	fi
 	systemctl --user daemon-reload
 	systemctl --user enable --now pi-streams-tick.timer
 }
@@ -526,8 +531,15 @@ for name in update-pstack; do
 		ln -sfn "$agent/bin/$name" "${HOME}/.local/bin/$name"
 	fi
 done
+streams_homes="${XDG_CONFIG_HOME:-$HOME/.config}/pi-streams/homes"
+streams_in_use=0
+if [[ "$have_project" == 1 ]] || { [[ -f "$streams_homes" ]] && grep -q '[^[:space:]]' "$streams_homes"; }; then
+	streams_in_use=1
+fi
 link_pi_streams
-install_pi_web_cli
+if [[ "$streams_in_use" == 1 ]]; then
+	install_pi_web_cli
+fi
 
 conform_out="${agent}/skills-pstack"
 mkdir -p "$conform_out"
@@ -907,8 +919,10 @@ else
 	package_list="$(printf ', %s' "${required_packages[@]}")"
 	pkg_msg="${package_list:2}"
 fi
-ensure_pi_web
-install_tick_units
+if [[ "$streams_in_use" == 1 ]]; then
+	ensure_pi_web
+	install_tick_units
+fi
 cat <<EOF
 pi-stack is installed for this user.
   overlay   ${agent}
