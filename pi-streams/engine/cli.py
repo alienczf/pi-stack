@@ -8,7 +8,7 @@ from pathlib import Path
 from engine import StreamsError
 from engine.doctor import run_doctor
 from engine.project import commit_home, create_stream, home_lock, init_project, load_project, resolve_home
-from engine.threads import ensure_coordinator, format_status, status_report
+from engine.threads import ensure_coordinator, format_status, spawn_thread, status_report
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -34,6 +34,19 @@ def _parser() -> argparse.ArgumentParser:
     status.add_argument("--home")
 
     sub.add_parser("doctor")
+
+    thread = sub.add_parser("thread")
+    thread_sub = thread.add_subparsers(dest="thread_cmd", required=True)
+    spawn = thread_sub.add_parser("spawn")
+    spawn.add_argument("stream")
+    spawn.add_argument("--repo", required=True)
+    spawn.add_argument("--role", required=True)
+    spawn.add_argument("--base")
+    spawn.add_argument("--branch")
+    spawn.add_argument("--model")
+    spawn.add_argument("--thinking")
+    spawn.add_argument("--note", default="")
+    spawn.add_argument("--home")
     return parser
 
 
@@ -63,6 +76,25 @@ def cmd_new(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_thread_spawn(args: argparse.Namespace) -> int:
+    home = resolve_home(args.home)
+    project = load_project(home)
+    sid = spawn_thread(
+        project,
+        args.stream,
+        args.repo,
+        args.role,
+        base=args.base,
+        branch=args.branch,
+        model=args.model,
+        thinking=args.thinking,
+        note=args.note,
+    )
+    print(sid)
+    commit_home(home, f"pi-streams thread spawn {args.stream} {args.role}")
+    return 0
+
+
 def cmd_status(args: argparse.Namespace) -> int:
     home = resolve_home(args.home)
     project = load_project(home)
@@ -85,6 +117,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_status(args)
         if args.cmd == "doctor":
             return run_doctor()
+        if args.cmd == "thread" and args.thread_cmd == "spawn":
+            return cmd_thread_spawn(args)
     except StreamsError as exc:
         print(str(exc), file=sys.stderr)
         return 1
