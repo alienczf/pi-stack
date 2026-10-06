@@ -113,11 +113,12 @@ pi-stack (harness, public)                     ~/Projects/alphalab/streams/   (p
                         tick, rotate, close,                        how to test each repo, gotchas, preferences
                         status, doctor           ALERTS             outage lines for the Grok Bot
   pi-streams/engine/    the code behind it       qmd-etl/           one folder per stream:
-  pi-streams/templates/ project/, stream/          STREAM.md        from the kickoff; only ZF changes it
-  pi-streams/systemd/   tick service and timer     STATE.md         coordinator's working state, kept short
+  pi-streams/templates/ project/, stream/,         STREAM.md        from the kickoff; only ZF changes it
+                        thread-brief.md
+  systemd/              tick service and timer     STATE.md         coordinator's working state, kept short
   skills/stream/        /stream new|status|close   DECISIONS.md     ZF's rulings, append-only
   skills/stream-kickoff/  the interview            threads.tsv      session, role, repo, worktree, branch, model, status
-  prompts/thread-brief.md                          subscriptions.tsv  what to watch, and what to do when it fires
+  prompts/stream.md     the /stream prompt         subscriptions.tsv  what to watch, and what to do when it fires
                                                    checks/          acceptance and cost scripts
                                                    handover/        one file per finished or rotated session
                                                    log/             tick events and steer log (not committed)
@@ -212,23 +213,24 @@ What this means:
 ### 4.3 The policy: warm while small, fresh once big
 
 - **Wake the current session when it's small and recent.** On each wake, the tick prompts the current coordinator session if its context is under 60k tokens and its last turn was under 6 hours ago.
-- **Otherwise rotate.** `pi-streams rotate` asks the session to rewrite `STATE.md` and a handover, archives it in pi-web, and starts a fresh coordinator from the files. `STATE.md` names the current coordinator, and the new one opens with a short summary, so to ZF it reads as one continuing chat.
+- **Otherwise rotate.** `pi-streams rotate` archives the session in pi-web and starts a fresh coordinator from the files. It does not ask the old session for anything first: the coordinator rewrites `STATE.md` at the end of every turn (the template `AGENTS.md`, rule 5), so the files are already current, and a rotation works even when the old session is in an outage. The new one opens with a short summary, so to ZF it reads as one continuing chat.
 - **Keep the start of every prompt identical**, so coordinators share cache. The order is pi's system prompt, then the project home `AGENTS.md`, then `STREAM.md`, which rarely changes, and only then `STATE.md` and the event.
 - **Threads hand over at 150k tokens.** That is where three quarters of the campaign's spend sat. This saves far more than any coordinator choice.
-- **Track the cost.** `pi-streams status` shows each stream's coordinator and thread spend per day, read from session usage. The coordinator should stay under 10% of its threads.
+- **Track the cost.** `pi-streams status` shows each coordinator's cost, read from session usage, and its share of the stream's spend. The coordinator should stay under 10% of its threads.
 
 ### 4.4 Threads
 
 `pi-streams thread spawn <stream> --repo <name> --role <role>` is the only way to start a thread, so `threads.tsv` has one writer. It:
 1. creates a worktree and branch, and writes an untracked `.stream` file holding the stream path (ignored through `.git/info/exclude`, so no repo changes);
 2. runs `pi-web-cli spawn <worktree>`, then sets the model while the session is idle and checks it took;
-3. sends the brief from `prompts/thread-brief.md`: goal pointer, scope, context paths, acceptance, how to verify, what it must not do, and how to report;
-4. checks that the first reply restates the intent correctly before work starts (inner-loop-steering §5.6);
-5. records the row in `threads.tsv`.
+3. sends the brief from `pi-streams/templates/thread-brief.md`: goal pointer, scope, context paths, acceptance, how to verify, what it must not do, and how to report;
+4. records the row in `threads.tsv`.
+
+The coordinator then checks that the thread's first reply restates the brief correctly before work goes on (inner-loop-steering §5.6; the template `AGENTS.md`, rule 4). A spawn that crashes part way is safe to rerun: it finds the worktree and the unrecorded session, and sends the brief only if the session never got it.
 
 `pi-streams thread adopt <session-id>` brings in a session that already exists. It records the session as a thread and writes the `.stream` file into its worktree without respawning it. This is how a brownfield stream takes over work already in flight (§9).
 
-Steers use `pi-web-cli prompt --steer`, so they interrupt a busy session instead of waiting in its queue. In the campaign, 11 of 22 steers sat in a queue for more than 10 minutes (inner-loop-steering §2.8).
+Steers use `pi-web-cli prompt --steer`, so they interrupt a busy session instead of waiting in its queue. In the campaign, 11 of 22 steers sat in a queue for more than 10 minutes (inner-loop-steering §2.8). The tick resends a follow-up that has waited 10 minutes as a steer (§6).
 
 ### 4.5 How ZF talks to it
 
@@ -279,18 +281,20 @@ This is 10 questions instead of the 26 in inner-loop-steering §4.6. ZF deferred
 
 | Source | Example condition | Action |
 | --- | --- | --- |
-| pi-web status and the session event websocket | A thread is idle, asks a question, or reports done; a steer is still queued after 10 minutes; context is over 150k tokens | Prompt the coordinator with the event, or resend the steer with `--steer` |
-| `gh` | A PR in the stream's repos gets a review, CI result or merge | Prompt the coordinator |
-| BigQuery metadata | A table the stream named changes fields, rows or modified time | Prompt the coordinator; if the change is outside the write policy, stop the thread and ask ZF |
-| BigQuery job history | Bytes billed today pass the cap from question 5 | Stop new queries and ask ZF |
-| Schedule | For example, a daily status at 09:00, or a daily `maintain-verification-skill` run | Prompt the coordinator |
-| Worktrees across streams | Two streams claim one worktree or branch | Ask ZF (inner-loop-steering §1.8) |
+| pi-web status, read every tick | A thread goes idle, asks a question, or passes 150k tokens; a follow-up is still queued after 10 minutes; its last model call failed | Prompt the coordinator with the event; resend the queued follow-up with `--steer` |
+| `gh-pr` row | A PR's state, review decision, checks, merge time or review count changes | Prompt the coordinator with the row's action |
+| `cmd` row | A shell command's exit code or output changes. For example, `bq show` on a table the stream named, or a query of today's bytes billed against the cap from question 5 | Prompt the coordinator with the row's action and the last 20 lines of output |
+| `schedule` row | A UTC time of day, for example `09:00` for a daily status or a daily `maintain-verification-skill` run | Prompt the coordinator once a day |
+| Worktrees across streams | Two streams claim one worktree, or one repo and branch | Write `ALERTS` and tell both coordinators (inner-loop-steering §1.8) |
 
-The coordinator adds rows when ZF asks, as Projects does. The mechanical checks from inner-loop-steering §5.4 run here too: delivery, verified park, pending asks, model, context, liveness and child receipts. The tick also commits each project home's durable files (§3).
+`subscriptions.tsv` has the columns `id`, `source`, `target`, `when` and `action`. A row records a baseline at its first reading and fires on a later change. The action is text for the coordinator, so stopping a thread or asking ZF is the coordinator's call under `STREAM.md`. BigQuery checks are `cmd` rows, so the engine holds no BigQuery code. The coordinator adds rows when ZF asks, as Projects does.
+
+Each tick sends a stream's coordinator at most one prompt, listing every event. It goes in as a follow-up when the coordinator is busy, as a prompt when it is warm (§4.3), and to a fresh coordinator after a rotation otherwise. Of the mechanical checks in inner-loop-steering §5.4, the tick runs delivery (the stale queue), pending asks, context, liveness (idle) and outages. It does not check models or child receipts, and it polls status instead of listening on pi-web's session websocket; at a 5-minute tick, polling still meets the 10-minute steer target. The tick also commits each project home's durable files (§3) and pushes them when the home has a remote.
 
 **Outages (Q16).** When a session's last model call failed on a usage limit or a provider error, no model in that pool can be trusted to report it. The tick then:
 - writes a line to the project home's `ALERTS`;
-- marks the affected threads "waiting on quota" so nothing respawns into the outage.
+- marks the affected threads "waiting on quota" so nothing respawns into the outage;
+- holds the coordinator's events until it recovers. The coordinator's row stays active, so `pi-streams new` does not start a second one; the tick's own state remembers the outage.
 
 The Grok Bot's routine already reaches this host over SSH to run `pi-web-cli`. It reads `ALERTS` and messages ZF, using its own token pool. When the next model call succeeds, the tick clears the alert and wakes the coordinator.
 
@@ -374,10 +378,12 @@ curl -fsSL https://raw.githubusercontent.com/alienczf/pi-stack/main/install.sh |
 ```
 
 The installer works through these in order. Each step checks before it changes anything, and a second run changes nothing.
-1. **Overlay, pstack skills and packages,** as today. The skill list now includes `correct`. Unrelated settings and packages, `auth.json` and `sessions/` are untouched, as today.
-2. **pi-web.** It finds pi-web running and leaves it alone. On a host without it, it installs pi-web the way pi-web's own help recommends (`npm install -g @jmfederico/pi-web --allow-scripts=node-pty`, then `pi-web install`).
+1. **Overlay, pstack skills and packages,** as today. The skill list now includes `correct`. Unrelated settings and packages, `auth.json` and `sessions/` are untouched, as today. On a host whose pstack pin predates `correct`, the installer stops and names `/update-pstack`; ZF reviews that update, then reruns the quickstart.
+2. **pi-web.** It finds pi-web on PATH or under `~/.local/share/pi-node` and leaves it alone. On a host without it, it installs pi-web the way pi-web's own README does (`npm install -g @jmfederico/pi-web --allow-scripts=node-pty`, then `pi-web install`).
 3. **`pi-web-cli`.** It backs up the existing file and installs pi-stack's version. The old subcommands and their JSON output stay identical, so the Grok Bot's routine keeps working; the new verbs are additions.
-4. **The `pi-streams` command,** the `/stream` and `stream-kickoff` skills, and the tick timer, enabled.
+4. **The `pi-streams` command,** the `/stream` and `stream-kickoff` skills, and the tick timer, enabled. On a host without `systemctl`, it copies the units and says to run the tick another way.
+
+An install without `--project`, on a host with no registered project home, does only step 1 and the command and skills from step 4. It leaves pi-web, `pi-web-cli` and systemd alone, so updating the overlay never changes those for someone who runs no stream.
 5. **Jig.** It removes Jig's installed copies, and reports that alc-penv and alc-penv-jig still hold `.pi/jig/`, which it leaves alone.
 6. **The project home.** Because of `--project`, it runs `pi-streams init ~/Projects/alphalab`:
    - creates `~/Projects/alphalab/streams/` as a git repo, with the template `AGENTS.md`;
@@ -392,18 +398,18 @@ The installer works through these in order. Each step checks before it changes a
 
    | Question | Default | Used for |
    | --- | --- | --- |
-   | Which URL do you open pi-web at? | The address in `~/.config/pi-web/config.json`. On `pistack` that is `http://127.0.0.1:8504`, which another machine reaches only through a tunnel. | Links that `pi-streams new` prints and the Grok Bot relays |
+   | Which URL do you open pi-web at? | The address in `~/.config/pi-web/config.json`. On `pistack` that is `http://127.0.0.1:8504`, which another machine reaches only through a tunnel. | Links that `pi-streams new` prints and the Grok Bot relays. The engine itself runs on the pi-web host and calls pi-web at `PI_WEB_URL`, or else at the address in pi-web's config, never at this URL. |
    | Where should the project home's private remote live? | None; the project home stays a local git repo | The tick pushes after each commit when a remote is set |
    | Which model and thinking level should coordinators use? | Astra at `xhigh` (§4.1) | `coordinator_model` and `coordinator_thinking`; each stream can override them |
 
-7. **`pi-streams doctor`.** It checks:
-   - pi and pi-web health;
-   - that `pi-web-cli` can list sessions;
-   - that the timer is active;
-   - that the project home is a clean git repo;
-   - that `correct`, `reflect` and both verification skills are installed.
-
-   It ends by printing the next command.
+7. **`pi-streams doctor`.** It prints one PASS, WARN or FAIL line per check, and exits 1 on any FAIL:
+   - pi is installed, and `pi-web-cli` can list sessions and offers `--steer`;
+   - every project home is a clean git repo whose `project.toml` parses;
+   - `correct`, `reflect` and both verification skills are installed;
+   - the tick units are installed (a WARN instead of a FAIL on a host without `systemctl`);
+   - some stream's tick state is under 15 minutes old (WARN);
+   - each project home sits inside a pi-web project, so ZF can open its sessions (WARN);
+   - repos that still hold Jig state (WARN, left alone).
 
 **Step 2: start the stream.** Run `pi-streams new qmd-etl --project ~/Projects/alphalab`, or type `/stream new qmd-etl` in any pi session, or ask the Grok Bot to start a stream. The command:
 - creates `streams/qmd-etl/`;
@@ -430,11 +436,11 @@ It proposes to adopt both worktrees and to archive the idle sessions instead of 
 - The Grok Bot messages ZF.
 - When calls succeed again, the tick wakes the coordinator, which picks up from `STATE.md`.
 
-**Step 6: close.** After A1–A3 pass, `pi-streams close qmd-etl`:
-- harvests the threads' handovers into the project's `context/`;
-- archives the threads in pi-web;
-- writes a final summary;
-- commits.
+**Step 6: close.** After A1–A3 pass, ZF types `/stream close qmd-etl` to the coordinator, which:
+- gets a handover from every open thread;
+- copies lasting knowledge from the handovers into the project's `context/`;
+- starts `correct` or `reflect` where a mistake repeated, with ZF approving reflect's edits;
+- runs `pi-streams close qmd-etl`, which refuses while any thread lacks a handover, then archives the threads, marks the coordinator done and commits. The next tick archives the coordinator once it is idle.
 
 The next alphalab stream starts knowing how to run the datapull, how to push to `Test` cheaply and how to validate against TenV.
 
@@ -457,12 +463,15 @@ Every step is a PR to pi-stack. The last one is the pilot.
 1. **Strip Jig.** Remove its launcher, controller, skill, prompt, routes table and tests; the installer deletes installed copies and reports repo-side `.pi/jig/`. Add `correct` to the pstack skill list.
 2. **`pi-web-cli` into `bin/`** (Q12). Keep today's subcommands and JSON output; add `prompt --steer`, `stop`, `abort`, `queue-clear`, `asks`, `answer`, `model` and `thinking-level`. All of these use routes pi-web already has. Test against a stub server; the installer backs up the old copy.
 3. **The engine and templates:** `pi-streams init`, `new`, `status` and `doctor`, and the project and stream templates.
-4. **Threads:** `thread spawn`, `thread adopt` and `rotate`, with `prompts/thread-brief.md`.
-5. **Skills:** `/stream` (new, status, close) as a thin wrapper around the command, and `stream-kickoff`: scout, ten questions, restate, ratify.
-6. **`pi-streams tick` and the systemd timer.** Subscriptions, mechanical checks, outage alerts and git commits. It gets a test mode that runs the tick against recorded session logs (inner-loop-steering §8, Phase A).
-7. **Harvest and `close`.**
-8. **Quickstart wiring:** `--project`, the setup questions with their defaults, pi-web detection, and `doctor` at the end.
-9. **Pilot:** the ETL stream in `~/Projects/alphalab/streams/`.
+4. **Threads:** `thread spawn`, `thread adopt` and `rotate`, with the thread brief.
+5. **`close`,** before the skills, so that the `/stream` skill never names a command that does not exist yet. A test checks every `pi-streams` and `pi-web-cli` command the prose names.
+6. **Skills:** `/stream` (new, status, close) as a thin wrapper around the command, and `stream-kickoff`: scout, ten questions, restate, ratify. Harvesting handovers into `context/` lives in the `/stream close` steps, since it needs judgement.
+7. **`pi-streams tick`:** thread events, stale steers, outage alerts, waking or rotating the coordinator, archiving a closed coordinator, and git commits.
+8. **Subscriptions and claims:** the `schedule`, `cmd` and `gh-pr` sources, and worktree claims across streams.
+9. **Quickstart wiring:** `--project`, the setup questions with their defaults, pi-web detection, the systemd timer, and `doctor` at the end.
+10. **Pilot:** the ETL stream in `~/Projects/alphalab/streams/`.
+
+The test mode that replays recorded session logs through the tick (inner-loop-steering §8, Phase A) is not built. The pilot is the first run on real sessions.
 
 **Pilot pass criteria:**
 - the quickstart on this host completes with `doctor` green and the Grok Bot's `pi-web-cli` calls unchanged;
