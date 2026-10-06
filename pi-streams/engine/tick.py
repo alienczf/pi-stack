@@ -131,6 +131,12 @@ def _questions(ask: dict[str, object]) -> str:
     )
 
 
+def _working(status: dict[str, object]) -> bool:
+    # pi-web refuses to archive a session in any of these states, not only while it streams.
+    busy = any(status.get(name) is True for name in ("isStreaming", "isCompacting", "isBashRunning"))
+    return busy or _count(status.get("pendingMessageCount")) > 0
+
+
 def _queued(status: dict[str, object]) -> dict[str, str]:
     items = status.get("queuedMessages")
     found: dict[str, str] = {}
@@ -165,6 +171,7 @@ class StreamTick:
         self.observe()
         self.flush()
         self.wake()
+        self.archive_done()
         self.flush()
 
     def emit(self, kind: str, row: Thread | None = None, detail: str = "") -> None:
@@ -301,6 +308,17 @@ class StreamTick:
             self.rows = load_threads(self.rows_path)
             piweb.prompt(sid, text, "follow-up")
         self.state.pending = []
+
+    def archive_done(self) -> None:
+        for row in self.rows:
+            if row.role != "coordinator" or row.status is not Status.done:
+                continue
+            if _working(piweb.session_status(row.session)):
+                continue
+            piweb.archive(row.session)
+            transition(row, Status.archived)
+            self.rows_dirty = True
+            self.emit("archived", row)
 
     def warm(self, coord: Thread, status: dict[str, object]) -> bool:
         tokens = _tokens(status)
