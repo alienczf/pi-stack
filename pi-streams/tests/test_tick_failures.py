@@ -77,7 +77,10 @@ class FailureTests(TickCase):
             '"detail": "pi-web-cli status t-1 failed: {\\n  \\"ok\\": false,\\n  \\"status\\": 500,\\n  '
             '\\"session\\": {\\n    \\"error\\": \\"pi runtime is restarting\\"\\n  }\\n}"}\n',
         )
-        self.assertEqual(self.state(self.etl), {"outages": [], "pending": [], "rotating": False, "sessions": {}})
+        self.assertEqual(
+            self.state(self.etl),
+            {"outages": [], "pending": [], "rotating": False, "sessions": {}, "subscriptions": {}},
+        )
         self.assertEqual(git(self.home, self.env, "status", "--porcelain"), "")
 
     def test_a_rotation_that_fails_after_its_archive_is_finished_by_the_next_tick(self) -> None:

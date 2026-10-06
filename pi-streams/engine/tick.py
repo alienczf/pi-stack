@@ -10,9 +10,10 @@ from pathlib import Path
 
 from engine import StreamsError, clock, piweb, sessionlog
 from engine.project import Project, commit_home, home_lock, load_project, push_home, stream_dirs
+from engine.subscriptions import SOURCES, Subscription, load_subscriptions
 from engine.threads import Status, Thread, load_threads, rotate_coordinator, save_threads, transition
 
-WAKE_KINDS = frozenset({"idle", "ask", "context", "stale-steer", "outage", "recovered"})
+WAKE_KINDS = frozenset({"idle", "ask", "context", "stale-steer", "outage", "recovered", "subscription"})
 QUEUE_FLAGS = {"steer": "steer", "followUp": "follow-up"}
 
 
@@ -38,11 +39,18 @@ class Seen:
 
 
 @dataclass
+class Mark:
+    watch: list[str]
+    fingerprint: str
+
+
+@dataclass
 class TickState:
     sessions: dict[str, Seen] = field(default_factory=dict)
     pending: list[Event] = field(default_factory=list)
     outages: list[str] = field(default_factory=list)
     rotating: bool = False
+    subscriptions: dict[str, Mark] = field(default_factory=dict)
 
 
 def write_atomic(path: Path, text: str) -> None:
@@ -65,6 +73,7 @@ def load_state(path: Path) -> TickState:
             pending=[Event(**item) for item in data.get("pending", [])],
             outages=[str(sid) for sid in data.get("outages", [])],
             rotating=data.get("rotating", False) is True,
+            subscriptions={str(sub): Mark(**mark) for sub, mark in data.get("subscriptions", {}).items()},
         )
     except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
         raise StreamsError(f"{path}: {exc}") from exc
@@ -76,6 +85,7 @@ def save_state(path: Path, state: TickState) -> None:
         "pending": [asdict(event) for event in state.pending],
         "outages": state.outages,
         "rotating": state.rotating,
+        "subscriptions": {sub: asdict(mark) for sub, mark in state.subscriptions.items()},
     }
     write_atomic(path, json.dumps(data, indent=2, sort_keys=True) + "\n")
 
@@ -169,7 +179,7 @@ class StreamTick:
         self.logged = 0
         self.listings: dict[str, dict[str, dict[str, object]]] = {}
         self.loaded = False
-        self.error: str | None = None
+        self.errors: list[str] = []
 
     def run(self) -> None:
         try:
@@ -177,12 +187,12 @@ class StreamTick:
             self.loaded = True
             self.rows = load_threads(self.rows_path)
             self.observe()
+            self.check_subscriptions()
             self.flush()
             self.wake()
             self.archive_done()
         except StreamsError as exc:
-            self.error = str(exc)
-            self.emit("tick-error", detail=self.error)
+            self.fail(str(exc))
         self.flush()
 
     def emit(self, kind: str, row: Thread | None = None, detail: str = "") -> None:
@@ -190,6 +200,41 @@ class StreamTick:
         self.events.append(event)
         if kind in WAKE_KINDS:
             self.state.pending.append(event)
+
+    def fail(self, detail: str) -> None:
+        self.errors.append(detail)
+        self.emit("tick-error", detail=detail)
+
+    def check_subscriptions(self) -> None:
+        if self.coordinator() is None and not self.state.rotating:
+            return
+        try:
+            subs = load_subscriptions(self.stream_dir / "subscriptions.tsv")
+        except StreamsError as exc:
+            self.fail(str(exc))
+            return
+        marks: dict[str, Mark] = {}
+        for sub in subs:
+            old = self.state.subscriptions.get(sub.id)
+            mark = self.check_subscription(sub, old)
+            if mark is not None:
+                marks[sub.id] = mark
+        self.state.subscriptions = marks
+
+    def check_subscription(self, sub: Subscription, old: Mark | None) -> Mark | None:
+        source = SOURCES.get(sub.source)
+        if source is None:
+            self.fail(f"subscription {sub.id}: unknown source {sub.source}")
+            return None
+        try:
+            reading = source(sub, self.stream_dir, self.now)
+        except StreamsError as exc:
+            self.fail(f"subscription {sub.id}: {exc}")
+            return old
+        if old is not None and old.watch == sub.watch() and old.fingerprint != reading.fingerprint:
+            head = f"{sub.id}: {sub.action}" if sub.action else sub.id
+            self.emit("subscription", detail="\n".join([head, *reading.detail]))
+        return Mark(sub.watch(), reading.fingerprint)
 
     def flush(self) -> None:
         if self.rows_dirty:
@@ -366,9 +411,9 @@ def tick_home(home: Path, now: datetime) -> bool:
         for stream_dir in stream_dirs(home):
             run = StreamTick(project, stream_dir, now, alerts)
             run.run()
-            if run.error is not None:
+            for error in run.errors:
                 ok = False
-                print(f"{stream_dir}: {run.error}", file=sys.stderr, flush=True)
+                print(f"{stream_dir}: {error}", file=sys.stderr, flush=True)
             counts = Counter(event.kind for event in run.events)
             if counts:
                 counted = "\t".join(f"{kind}={counts[kind]}" for kind in sorted(counts))
