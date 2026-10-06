@@ -96,6 +96,34 @@ The overlay does not install an MCP adapter, a todo tool, plan mode, pi-lens, an
 
 Use pstack's `correct` for repository principles and for a mistake that keeps coming back. Rank the fix as architecture, then types, lints, tests, and docs last. Use `create-verification-skill` to build repository verification and `maintain-verification-skill` to keep it current. Use `reflect` to turn later work into approved skill edits.
 
+## Streams
+
+One command installs the harness and prepares a project home:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/alienczf/pi-stack/main/install.sh | bash -s -- -y --project ~/Projects/alphalab
+```
+
+From a checkout, `./install.sh -y --project ~/Projects/alphalab` does the same thing. `-y` accepts every setup default. Without it, `pi-streams init` asks these questions on the terminal:
+
+| Question | Default |
+| --- | --- |
+| Which URL do you open pi-web at? | `host` and `port` from `~/.config/pi-web/config.json`, or `http://127.0.0.1:8504` |
+| Where should the project home's private remote live? | none |
+| Which model should coordinators use? | `openai-codex/gpt-6-astra` |
+| Which thinking level should coordinators use? | `xhigh` |
+
+Pass `--pi-web-url`, `--remote`, `--coordinator-model`, or `--coordinator-thinking` to set an answer without the question.
+
+The command also installs:
+
+- `~/.local/bin/pi-streams`, linked to this checkout's `bin/pi-streams`
+- `~/.local/bin/pi-web-cli`, leaving an identical file in place and backing up a different one once
+- the `stream` and `stream-kickoff` skills, and the `stream` prompt
+- `pi-streams-tick.timer`, two minutes after boot and then every five minutes
+
+Lingering is already on, so the timer runs without a login. The installer does not change pi-web's config. When `pi-web` is missing it prints `npm install -g @jmfederico/pi-web` and runs that command only when package installs are enabled. After `--project`, it runs `pi-streams doctor` and exits 1 on FAIL without removing what it wrote.
+
 ## Verify the repository
 
 Run these commands from the pi-stack Git root. None starts a nested Pi process.
