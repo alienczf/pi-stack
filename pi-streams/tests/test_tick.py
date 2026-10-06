@@ -64,7 +64,7 @@ class TickTests(TickCase):
             "pending": [],
             "rotating": False,
             "subscriptions": {},
-            "sessions": {"t-1": {"asks": [], "busy": True, "context": False, "queued": {}}},
+            "sessions": {"t-1": {"asks": [], "busy": True, "context": False, "queued": {}, "replay": []}},
         })
         self.assertEqual(git(self.home, self.env, "log", "-1", "--format=%s"), "pi-streams tick\n")
         self.assertEqual(git(self.home, self.env, "status", "--porcelain"), "")
@@ -92,7 +92,7 @@ class TickTests(TickCase):
             "pending": [],
             "rotating": False,
             "subscriptions": {},
-            "sessions": {"t-1": {"asks": [], "busy": False, "context": False, "queued": {}}},
+            "sessions": {"t-1": {"asks": [], "busy": False, "context": False, "queued": {}, "replay": []}},
         })
         self.assertEqual(git(self.home, self.env, "rev-list", "--count", "HEAD"), "2\n")
 
@@ -154,7 +154,7 @@ class TickTests(TickCase):
             "pending": [],
             "rotating": False,
             "subscriptions": {},
-            "sessions": {"t-1": {"asks": ["ask-2"], "busy": True, "context": True, "queued": {}}},
+            "sessions": {"t-1": {"asks": ["ask-2"], "busy": True, "context": True, "queued": {}, "replay": []}},
         })
 
     def test_a_streaming_coordinator_gets_the_events_as_a_follow_up(self) -> None:
@@ -302,7 +302,7 @@ class TickTests(TickCase):
         ])
         self.assertEqual(
             self.state(self.etl)["sessions"],
-            {"t-1": {"asks": [], "busy": True, "context": False, "queued": {}}},
+            {"t-1": {"asks": [], "busy": True, "context": False, "queued": {}, "replay": []}},
         )
 
 
