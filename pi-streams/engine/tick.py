@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from engine import StreamsError, clock, piweb, sessionlog
-from engine.project import Project, commit_home, home_lock, load_project, stream_dirs
+from engine.project import Project, commit_home, home_lock, load_project, push_home, stream_dirs
 from engine.threads import Status, Thread, load_threads, rotate_coordinator, save_threads, transition
 
 WAKE_KINDS = frozenset({"idle", "ask", "context", "stale-steer", "outage", "recovered"})
@@ -374,6 +374,7 @@ def tick_home(home: Path, now: datetime) -> bool:
                 print(f"{stream_dir}\t{counted}", flush=True)
         alerts.save()
         commit_home(home, "pi-streams tick")
+        push_home(home, project.info.remote)
     return ok
 
 
