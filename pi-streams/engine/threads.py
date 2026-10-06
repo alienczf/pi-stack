@@ -189,10 +189,10 @@ def _as_cost(value: object) -> int | float:
 
 
 def _coordinator_state(session_id: str, session: dict[str, object]) -> dict[str, object]:
+    # pi reports null tokens after a compaction until the next reply.
     usage = session.get("contextUsage")
+    tokens = usage.get("tokens") if isinstance(usage, dict) else None
     model = session.get("model")
-    if not isinstance(usage, dict) or "tokens" not in usage:
-        raise StreamsError("status has no contextUsage.tokens")
     if not isinstance(model, dict) or "id" not in model:
         raise StreamsError("status has no model id")
     if "isStreaming" not in session or "thinkingLevel" not in session or "cost" not in session:
@@ -200,7 +200,7 @@ def _coordinator_state(session_id: str, session: dict[str, object]) -> dict[str,
     return {
         "session": session_id,
         "isStreaming": session["isStreaming"],
-        "contextUsage": {"tokens": usage["tokens"]},
+        "contextUsage": {"tokens": tokens},
         "model": model["id"],
         "thinkingLevel": session["thinkingLevel"],
         "cost": _as_cost(session["cost"]),
@@ -226,8 +226,12 @@ def _one_stream(stream_dir: Path) -> dict[str, object]:
         session = piweb.session_status(coord.session)
         coord_state = _coordinator_state(coord.session, session)
         coord_cost = _as_cost(session["cost"])
+    # pi-web opens a runtime to answer status for an idle session, so finished
+    # threads are counted but not queried.
     thread_cost: int | float = 0
     for row in threads:
+        if row.status not in (Status.active, Status.waiting_quota):
+            continue
         session = piweb.session_status(row.session)
         thread_cost += _as_cost(session.get("cost"))
     share = None if thread_cost == 0 else coord_cost / thread_cost
@@ -269,7 +273,9 @@ def format_status(report: dict[str, object]) -> str:
             lines.append(f"{stream['id']}\tratified={ratified}\t-\tthreads={counted}\tshare={share_text}")
             continue
         usage = coord["contextUsage"]
-        tokens = usage["tokens"] if isinstance(usage, dict) else "-"
+        tokens = usage.get("tokens") if isinstance(usage, dict) else None
+        if tokens is None:
+            tokens = "-"
         streaming = "yes" if coord["isStreaming"] else "no"
         lines.append(
             f"{stream['id']}\tratified={ratified}\t{coord['session']}\tstreaming={streaming}\t"
