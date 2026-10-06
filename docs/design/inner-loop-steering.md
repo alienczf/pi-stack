@@ -22,6 +22,11 @@ Status: draft for ZF review. Date: 2026-10-06 (SGT). Scope: research and design 
   - Each touched worktree carries only an untracked `.stream` pointer.
   - `/goal` becomes a generated pointer to the home.
   - A host script, `steer-check`, runs every 15 minutes across all streams. A fresh Astra steward session per stream wakes only on a delta. The Grok Bot stays ZF's interface.
+- **Is the polyrepo layout anti-agentic? (§7)** Neither Pocock nor poteto takes a position on monorepo versus polyrepo in anything I could reach.
+  - What they do say is about fast checks, small interfaces, short agent docs, and fixing mistakes in the environment rather than in prompts.
+  - On this host the problems are specific: unversioned data edges, alc-cefi-sim-runner with no `AGENTS.md` and no test CI, no home above the repos, and ownership that isn't written down.
+  - Recommendation: keep repos split by team. Add a neutral workspace repo (manifest pinning compatible versions, side-by-side checkout, stream homes), versioned contracts with contract tests at the data edges, short per-repo agent docs, and fast per-repo checks plus one integration check.
+  - A monorepo would not have prevented the interface failures, which happened in BigQuery.
 - **Pilot.** Replay the campaign offline from a stream home built only from ZF's Oct 2 words. It passes if at least 10 of the 14 substantive interventions are matched or pre-empted, with zero ungated writes, zero stand-in "done" relays, and at most one false-positive steer per campaign-day.
 
 ### Evidence conventions
@@ -97,7 +102,7 @@ Inference: a stub plus the real provider gives a data edge two adapters, which m
 Use S5, staged through S6:
 
 - **Pilot.** Create a local git repo at `~/Projects/alphalab/streams/`, side by side with the code repos, using the S5 layout. Nothing is pushed and nothing in a team repo changes.
-- **After the pilot.** Push it to an org repo that ZF owns. The name, visibility and writers are open questions.
+- **After the pilot.** Push it to an org repo that ZF owns. The name, visibility and writers are open questions. The same repo can also hold the workspace manifest (§7.3).
 - **pi-stack** carries the tooling, not stream content: templates, `steer-check`, `steer-send`, the steward prompt, and the kickoff skill.
 
 ### 1.6 Layout of one stream home
@@ -158,7 +163,7 @@ Every file has one writer. poteto's rule: "Give each actor its own owned file, k
 - **Session.** The generated `/goal` names the stream id, home path, `STREAM.md` sha, workstream and interface versions (§4.4).
 - **PR.** A `Stream: <id>/<ws>` line and a link in the PR body, only if the owning team agrees. Otherwise `ledger/landings.tsv` alone links PR to stream.
 - **Ticket.** A link to the stream's line in `streams/README.md`.
-- **Not used.** Edits to a team's `AGENTS.md` or any tracked file; branch-name conventions the team didn't choose; `git config --worktree`, which needs `extensions.worktreeConfig` switched on in the shared repo config (https://git-scm.com/docs/git-config).
+- **Not used.** Edits to a team's `AGENTS.md` or any tracked file; branch-name conventions the team didn't choose; `git config --worktree`, which writes a per-worktree file only if `extensions.worktreeConfig` is enabled in the shared repo config, and otherwise behaves like `--local`, writing the config every worktree shares (https://git-scm.com/docs/git-config).
 
 ### 1.8 Several streams on one repo
 
@@ -193,7 +198,7 @@ Every file has one writer. poteto's rule: "Give each actor its own owned file, k
    - two consumers want incompatible shapes;
    - a provider wants a breaking change.
 5. **Team pushback.** A team rejecting a PR sets the landing to `rejected`, with the reason, in `landings.tsv`. The steward turns it into a decision or a gate; it cannot override the team.
-6. **Integration.** One end-to-end check (`acceptance/check.py`) runs at a pinned set of landings, meaning repo shas or package versions.
+6. **Integration.** One end-to-end check (`acceptance/check.py`) runs at a pinned set of landings, meaning repo shas or package versions. §7.3 ties this to a workspace manifest.
 7. **Code edges versus data edges.**
    - The code edges between these repos are already versioned packages. alc-qslite csproj files pin NuGet versions such as `Alc.Utils2 11.2025.6.182-…`. alc-cefi-sim-runner's `pyproject.toml` pins `alc-qslite-connector[hist]==8.0.0`, `alc-research-cefi==3.1.post1860+g3040ac2` and `alc-dag-py-serialization>=0.1.6`.
    - The edges that broke in the case study were data edges with no version and no owner: the `datapull_etl` table schema and the `signal.yaml` v_i mapping.
@@ -452,7 +457,7 @@ This supports eggbot's root-cause hypothesis ("goal lived in grokbot chat + per-
 
 ## 3. Research findings
 
-The research covered Matt Pocock (@mattpocockuk) and poteto (Lauren Tan, @poteto, author of pstack) plus the resources they link, and the Cursor Projects and self-hosted worker docs. X itself was login-walled: x.com returned 403 and xcancel returned 451. Individual posts were read through `api.fxtwitter.com` or `cdn.syndication.twimg.com`, and long X articles through threadnavigator mirrors. §3.9 lists what could not be reached.
+The research covered Matt Pocock (@mattpocockuk) and poteto (Lauren Tan, @poteto, author of pstack) plus the resources they link, and the Cursor Projects and self-hosted worker docs. X itself was login-walled: x.com returned 403 and xcancel returned 451. Individual posts were read through `api.fxtwitter.com` or `cdn.syndication.twimg.com`, and long X articles through threadnavigator mirrors. §3.9 lists what could not be reached. What they say about repo structure is in §7.1.
 
 ### 3.1 One durable statement of intent, re-read at the start of every session
 
@@ -939,7 +944,133 @@ Today `pi-web-cli` (`~/.local/bin/pi-web-cli`, not versioned in this repo) expos
 
 ---
 
-## 7. Pilot plan
+## 7. Is the polyrepo layout "anti-agentic"?
+
+**Short answer.** Not by anything Pocock or poteto have published that I could reach. Neither takes a position on monorepo versus polyrepo. What they do say concerns properties any layout can have or lack: fast deterministic checks, navigable structure with small interfaces, short agent docs with pointers, and mistakes fixed in the environment rather than in prompts. A layout split by team can have all of these.
+
+On this host the agent-hostile parts are specific, and each can be fixed without a migration:
+- the data edges between repos are unversioned;
+- one key repo has no agent doc and no test CI;
+- there is no home above the repos for cross-repo intent;
+- ownership isn't written down.
+
+A monorepo would not have prevented the case study's interface failures, because those edges live in BigQuery and a yaml mapping, not in a git tree (inference).
+
+### 7.1 What they actually say
+
+**Pocock**
+- **No position on repo layout.** No dictionary entry covers monorepo versus polyrepo; I read all 71 entries in https://github.com/mattpocock/dictionary-of-ai-coding/tree/main/dictionary. The one mention is a usage example in "Context window": "Can I just paste the whole monorepo into the prompt?", answered with "Pick the files the task touches, leave the rest behind a tool call." (https://raw.githubusercontent.com/mattpocock/dictionary-of-ai-coding/main/dictionary/Context%20window.md)
+- **Monorepo as a doc-layout case only.** His setup skill says monorepo signals "are present only in a genuinely large multi-package repo; their absence means single-context, which is almost every repo". Only then does it offer "a root `GLOSSARY-MAP.md` pointing to per-context `GLOSSARY.md` files" (https://raw.githubusercontent.com/mattpocock/skills/main/skills/engineering/setup-matt-pocock-skills/SKILL.md). His README says to "run it once per repo" (https://raw.githubusercontent.com/mattpocock/skills/main/README.md).
+- **AX.** "When the same agent performs well in one repo and badly in another — same model, same harness — the difference is usually AX. The instinct is to blame the model or rewrite the prompt; the fix is more often in the repo." Its dimensions include "Fast, deterministic automated checks — types, tests, lints — that the agent can self-correct from without a human" and "A codebase the agent can navigate without reading everything: predictable structure, a lot of behaviour behind small interfaces, names that say what things do". It adds: "Humans tolerate tribal knowledge, slow CI, and "ask Sarah about the billing module"; agents can't." (https://raw.githubusercontent.com/mattpocock/dictionary-of-ai-coding/main/dictionary/AX.md)
+- **Automated checks.** "An agent in a repo with strict types, a fast test suite, and a linter catches most of its own mistakes before you see them", but "a check only catches what it asserts" (https://raw.githubusercontent.com/mattpocock/dictionary-of-ai-coding/main/dictionary/Automated%20check.md).
+- **Agent docs.** On AGENTS.md: "Short and declarative — it's a brief, not documentation." and "a long AGENTS.md both costs tokens and dilutes itself" (https://raw.githubusercontent.com/mattpocock/dictionary-of-ai-coding/main/dictionary/AGENTS.md.md). On pointers: "A pointer needs two parts to work: a stable path, and enough description for the agent to know when following it is worth it." (https://raw.githubusercontent.com/mattpocock/dictionary-of-ai-coding/main/dictionary/Context%20pointer.md)
+- **Interfaces.** "Design deep modules: a lot of behaviour behind a small interface, placed at a clean seam, testable through that interface." The interface is "everything a caller must know to use the module correctly: the type signature, but also invariants, ordering constraints, error modes, required configuration, and performance characteristics." (codebase-design, §1.1)
+- **Tests.** "Tests verify behavior through public interfaces, not implementation details." and "Test only at pre-agreed seams." (https://raw.githubusercontent.com/mattpocock/skills/main/skills/engineering/tdd/SKILL.md)
+- **Enforced boundaries.** His in-progress `setup-ts-deep-modules` makes each package's entry points the only way in, "then proves the rules bite". It adds a pointer from AGENTS.md: "One line is enough… This is what makes an agent discover the boundary rule instead of tripping over it." (https://raw.githubusercontent.com/mattpocock/skills/main/skills/in-progress/setup-ts-deep-modules/SKILL.md)
+- **Architecture reviews.** `improve-codebase-architecture` says "The aim is testability and AI-navigability", and "ADRs in `docs/adr/` record decisions this command should not re-litigate." (https://raw.githubusercontent.com/mattpocock/skills/main/skills/engineering/improve-codebase-architecture/SKILL.md)
+- **His own repos.** His internal tooling lives in a repo named `total-typescript-monorepo`, described as "The home of all Matt's internal tooling" (https://github.com/mattpocock/total-typescript-monorepo). That is a fact about his repos, not advice; I found no text where he recommends a monorepo for agents.
+
+**poteto**
+- **No position on repo layout.** No pstack file mentions monorepo, polyrepo or multi-repo (grep of the installed copy at commit e5a8186 of https://github.com/cursor/plugins/tree/main/pstack). The interview captions contain neither word, and "repo" appears only in Pocock's question about triggers "in your repo" (https://youtube-distilled.com/watch/MN9dGgmLyso).
+- **A prompt for exactly ZF's question.** "/poteto-mode refactor this repo so its architecture is more agent friendly. use /correct and /architect on past commits and review comments to find the mistakes agents make most here. use /recall for context from past chats. answer open questions with prototypes instead of asking me. come back with a plan backed by real data." (https://github.com/cursor/plugins/blob/main/pstack/docs/guide/07-overnight.md). Her method starts from the mistakes agents actually make in the repo, not from a preferred layout.
+- **Fix ranking.** "When you correct agents for the same mistake again and again, the fix belongs in the repo, not in your next prompt." In order: "Make the mistake impossible with architecture or a better data structure"; "Block it with types, or with a lint or CI check whose error names the fix"; "Catch it with a test"; "Write it down as a doc or agent rule. Nothing fails when an agent skips a rule, so this comes last." Also: "Human review isn't on the list." (https://github.com/cursor/plugins/blob/main/pstack/docs/guide/09-make-it-yours.md)
+- **Design for the agent that only sees one file.** `/correct`: "Assume every contributor is an agent that sees only the files it opened, copies the nearest example, and takes the shortest path that compiles. Design the repo so a change that looks right from one file is right for the whole repo." Also "Replace hand-synced lists with one source of truth.", "Run the same command locally and in CI.", and "keep a table in the agent instruction file that pairs each rule with what enforces it" (https://github.com/cursor/plugins/blob/main/pstack/skills/correct/SKILL.md). `/architect` repeats the agent assumption and adds "Prefer the design that hides more complexity behind a smaller, simpler public surface." (https://github.com/cursor/plugins/blob/main/pstack/skills/architect/SKILL.md)
+- **Boundaries.** "Concentrate guards at system boundaries (CLI, config, network, external APIs)", "Parse raw data into domain types at the boundary", and "Expose domain concepts, not the boundary's private representation." (https://github.com/cursor/plugins/blob/main/pstack/skills/principle-boundary-discipline/SKILL.md)
+- **Tests.** "before you keep a test, ask whether it would still pass if every function it imports returned `undefined`. If yes, it observes no behavior and cannot fail for a defect." (https://github.com/cursor/plugins/blob/main/pstack/skills/principle-test-behavior-not-implementation/SKILL.md)
+- **Verification.** "Every serious project needs a scripted way to drive the real app and prove behavior". Her skill generates that as a project-local skill per repo (https://github.com/cursor/plugins/blob/main/pstack/skills/create-verification-skill/SKILL.md).
+- **In the interview** (auto-captions; speaker inferred from turn-taking; https://www.youtube.com/watch?v=MN9dGgmLyso via youtube-distilled):
+  - About 30:10–32:12: her internal framework is built so "there's really only one way to do something", and "every feature has its own directory". On each agent mistake: "how do I turn this into a lint rule? How do I make it so that the code base makes this impossible?"
+  - About 24:21, on "going from one technology to another, especially one that is better for agents": "a lot of how you can do that migration is, I think, through things like scripts and CLIs, like the deterministic parts like code mods".
+- **Bodies of work.** "Give each body of work its own Project, such as a feature, a migration, a perf push, or a tech-debt cleanup." (07-overnight). Combined with one Workspace repository per Project (§3.8), today's Cursor shape is one body of work per repo. Neither source addresses work that spans repos (inference).
+
+### 7.2 Where this layout is hard for agents today
+
+| What the sources name | This host (read-only survey) | Gap |
+| --- | --- | --- |
+| Fast, deterministic checks per repo | alc-qslite: 563 test files and many build/test workflows. alc-tenv: 448 test files and workflows. alc-cefi-sim-runner: 51 test files (58 in the bq-signal-compiler worktree), but its only workflows are `claude-code-review.yml` and `claude.yml`, so there is no test CI. | alc-cefi-sim-runner |
+| Short agent doc with pointers | `AGENTS.md`: alc-qslite 69 lines (`CLAUDE.md` is `@AGENTS.md`), alc-tenv 9, alc-deploy 28, alc-standardization_utils 74 plus nested files. alc-cefi-sim-runner has none. | alc-cefi-sim-runner; no repo points to cross-repo contracts |
+| Small interfaces at the edges | Code edges are versioned packages (§1.9). Data edges are not: the `datapull_etl` schema and the `signal.yaml` v_i mapping have no version or owner. | the data edges where D1, D2, D3 and D8 happened |
+| One source of truth | No workspace manifest; `~/Projects/alphalab/README.md` is 24 bytes. About 20 `alphalab-hq` repos are checked out side by side, with many worktrees (§1.8). Cross-repo intent lived in one worktree's `.audit/`. | a home above the repos |
+| Ownership a reader can see | No CODEOWNERS in alc-qslite, alc-tenv or alc-cefi-sim-runner. alc-flows is `python/alc-flows` inside alc-qslite, with its own path-filtered workflow. If the §2.1 pairing holds, two teams own paths in one repo and nothing says so. | ownership not encoded |
+| Tooling | A Cursor Project has one Workspace repository; My Machines agents take one repo; cloud agents take up to 20 (§3.8). | partial |
+
+### 7.3 Option K: keep repos split by team, add a workspace repo and contracts at the edges
+
+1. **A neutral workspace repo**, either the same repo as the stream homes (§1.5) or a sibling. It holds:
+   - `manifest.tsv`: repo, remote, pinned ref (sha or release tag), checkout path, and compatibility notes taken from real pins (for example, alc-cefi-sim-runner needs `alc-qslite-connector[hist]==8.0.0`);
+   - a small `ws` script: `ws sync` checks out or updates repos side by side under `~/Projects/alphalab/`, and `ws status` reports where checkouts differ from the manifest;
+   - `streams/` (§1.6);
+   - `contracts/` for graduated data contracts that outlive a stream (§1.9).
+2. **Versioned contracts at the edges, with contract tests.** Code edges already have package versions. Add the data edges: I1 (market-data rows) and I2 (storage and schedule).
+   - The provider's test in the producing repo checks real output against the contract.
+   - Consumers' tests run against a stub generated from the contract.
+   - Both pin the contract sha.
+   - This applies Pocock's "The interface is the test surface" and poteto's "Parse raw data into domain types at the boundary" to data shared between teams (inference).
+3. **Short agent docs per repo.** One `AGENTS.md` per repo that is "a brief, not documentation":
+   - build and test commands;
+   - hard constraints;
+   - one-line pointers such as "cross-repo data, schemas or BigQuery tables: read `<workspace>/contracts/<edge>.md` first";
+   - poteto's rule table (each rule and what enforces it), started when the first rule is added.
+   
+   Start with alc-cefi-sim-runner. Each team writes and reviews its own.
+4. **Fast checks per repo, plus one integration check.**
+   - Each repo keeps its own CI; alc-cefi-sim-runner gets a workflow that runs its existing tests.
+   - One integration check in the workspace repo checks out the manifest's pins and runs the contract chain on stubs: I1 stub, then WS-C compile, then SQL dry-run.
+   - Where credentials allow, it also runs the stream's end-to-end acceptance on one day. Credentials stay on the runner, never in the repo.
+
+### 7.4 Option M: migrate to a monorepo
+
+**What it buys**
+- One checkout and one search scope for agents.
+- Atomic cross-repo code changes in one PR, and one CI view.
+- A natural fit for one-repo tools (a Project's single Workspace, My Machines agents).
+
+**What it costs here**
+- About 20 repos with independent histories, mixing .NET and Python, to import.
+- Packages are published and consumed by version (NuGet; `alc-qslite-connector`). They would need a new release model, or would keep publishing from inside the monorepo, which keeps the version edge anyway.
+- Team-owned review still needs CODEOWNERS and path-filtered CI. `python/alc-flows` inside alc-qslite already shows that pattern at small scale.
+- A much larger tree to navigate. Pocock's answer to "paste the whole monorepo" is to pick the files the task touches, and his setup skill switches to a multi-context glossary map for genuinely large multi-package repos.
+- Migration work. poteto's advice is to migrate with deterministic scripts and codemods, which lowers the cost but doesn't remove the cross-team coordination.
+
+**What it does not fix**
+- **Data edges.** The `datapull_etl` schema and rows live in BigQuery. A monorepo cannot make a BigQuery schema change atomic with code, and cannot stop a session MERGEing into a shared table. D1, D2, D3 and D8 could happen the same way.
+- **Goal drift.** D0 and D4–D7 come from the stream's goal and from relays, not from repo layout.
+- **Several streams on one tree.** A monorepo still needs stream homes and the X1–X4 checks.
+
+### 7.5 Comparison
+
+| | K: split repos + workspace repo + edge contracts | M: monorepo |
+| --- | --- | --- |
+| Team ownership and review | Natural: one repo per team | Needs CODEOWNERS and path rules everywhere |
+| Cross-repo intent | Stream homes in the workspace repo | Still needs stream homes |
+| Code edges | Versioned packages, as today | Atomic changes; versions optional |
+| Data edges (where the case study broke) | Versioned contracts with provider and consumer tests | The same work is still needed |
+| Agent context | Short `AGENTS.md` per repo plus pointers to contracts | One tree; needs multi-context docs and progressive disclosure |
+| Checks | Fast per repo plus one integration check at pins | One CI that needs path filtering to stay fast |
+| Cursor tooling | Cloud agents take up to 20 repos; on this host, side-by-side checkouts | Fits one-repo tools |
+| Migration | Small, incremental, one team at a time | Large, cross-team, all at once |
+| Case-study failures addressed | Interface failures through I1/I2, the writes list and I-b/I-d; goal failures through the stream home | None by itself |
+
+### 7.6 Recommendation
+
+Keep the repos split by team and take option K. The polyrepo layout is not what made the campaign fail; the unowned, unversioned data edges and the missing home above the repos did (§2.2). That is inference from the case study. It is consistent with what both authors say about checks, interfaces and agent docs, but neither has written about this layout.
+
+**Order of work.** Each item is its own PR, in the repo of the team that owns it:
+1. alc-cefi-sim-runner: a short `AGENTS.md`, and a test workflow that runs its existing tests.
+2. I1 as a versioned contract: a provider test where the datapull worker lives (alc-qslite, `python/alc-flows/alc-etl-datapull/`), and a consumer stub test in alc-cefi-sim-runner.
+3. The workspace repo with `manifest.tsv`, `ws sync`/`ws status`, and `streams/`.
+4. The integration check at manifest pins.
+5. CODEOWNERS for `python/alc-flows`, if infra owns it.
+
+**Before going further,** run poteto's own method: `/correct`-style mining of these repos' past commits, reverts and review comments, plus the campaign transcripts, to find the mistake classes and fix each at the highest level that works. Her prompt asks for "a plan backed by real data"; until that runs, this section is a desk estimate.
+
+**When to reconsider M.** Both signals are measurable from `ledger/landings.tsv`:
+- coordinated merges across repos on code edges become a large share of landings (ZF sets the threshold);
+- the integration check keeps breaking on version skew between pinned repos.
+
+---
+
+## 8. Pilot plan
 
 ### Phase A: rules-only replay (no LLM, no live sessions)
 
@@ -1007,10 +1138,11 @@ Each item is its own PR, after ZF answers the open questions:
 3. `steer-check` / `steer-send` in replay mode.
 4. The steward brief as a prompt template (`prompts/steward.md`) and the kickoff interview as a skill.
 5. The host timer.
+6. The workspace repo, manifest and integration check (§7.6), owned by ZF. The per-repo items in §7.6 go to their teams.
 
 ---
 
-## 8. Open questions for ZF
+## 9. Open questions for ZF
 
 1. **Goal and end consumer.** Is §2.1's candidate goal right: every template column, queryable in BigQuery, from a market-data pipeline, compiled from the DAG? Who is the end consumer, and how does it read the output?
 2. **Teams and interface owners.** Is the pairing alc-qslite = core tech, alc-flows = infra, alc-cefi-sim-runner = quant right? Who acknowledges each side of I1, I2 and I3?
@@ -1028,3 +1160,6 @@ Each item is its own PR, after ZF answers the open questions:
 14. **Cursor Project mirror.** Worth trying once Projects on self-hosted workers is documented, with the stream repo as its Workspace, or not at all, given the coordinator would not be on Astra?
 15. **Retention.** `01a0fae3`'s jsonl is gone and MMDev's `store.db` was reinitialised. Should session jsonl be archived (outside git, by path in the ledger) when a stream closes?
 16. **Quota.** Should the steward have a token budget per day? Should a `usage_limited` state page you, or only appear in the digest?
+17. **Workspace repo.** One neutral repo for both stream homes and the manifest, or two? Who owns the integration check, and where does it run with what credentials?
+18. **Per-repo items.** Will the quant team take the alc-cefi-sim-runner `AGENTS.md` and test workflow? Will core tech and infra agree to the I1 provider test and to CODEOWNERS for `python/alc-flows`?
+19. **Monorepo trigger.** Should the "reconsider M" signals in §7.6 be tracked from the start, and at what threshold?
