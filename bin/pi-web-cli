@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import urllib.error
 import urllib.parse
 import urllib.request
 
-BASE = "http://127.0.0.1:8504"
+from collections.abc import Callable
+
+BASE = os.environ.get("PI_WEB_URL", "http://127.0.0.1:8504").rstrip("/")
 
 
 def req(method: str, path: str, body: dict | None = None, timeout: float = 20) -> tuple[int, object]:
@@ -74,6 +77,42 @@ def cmd_commands(sid: str) -> int:
     return out({"ok": ok, "status": code, "commands": data}, ok)
 
 
+class UsageError(Exception):
+    pass
+
+
+def _model_body(args: argparse.Namespace) -> dict[str, str]:
+    provider, slash, model_id = args.model.partition("/")
+    if slash == "" or provider == "" or model_id == "":
+        raise UsageError("model must be provider/modelId")
+    return {"provider": provider, "modelId": model_id}
+
+
+def _answer_body(args: argparse.Namespace) -> dict[str, object]:
+    # ask/submit reads askId itself. askUserSubmissionFromBody requires answers
+    # of {id, values, otherText?}: values are option ids, free text is otherText.
+    # There is no question-id argument, so the answer id repeats askId.
+    return {
+        "askId": args.ask_id,
+        "answers": [
+            {"id": args.ask_id, "values": [], "otherText": args.text},
+        ],
+    }
+
+
+VerbBuilder = Callable[[argparse.Namespace], dict | None]
+VERBS: dict[str, tuple[str, str, VerbBuilder]] = {
+    "stop": ("POST", "/api/sessions/{sid}/stop", lambda _args: {}),
+    "abort": ("POST", "/api/sessions/{sid}/abort", lambda _args: {}),
+    "queue-clear": ("POST", "/api/sessions/{sid}/queue/clear", lambda _args: {}),
+    "archive": ("POST", "/api/sessions/{sid}/archive", lambda _args: {}),
+    "messages": ("GET", "/api/sessions/{sid}/messages", lambda _args: None),
+    "model": ("POST", "/api/sessions/{sid}/model", _model_body),
+    "thinking-level": ("POST", "/api/sessions/{sid}/thinking-level", lambda args: {"level": args.level}),
+    "answer": ("POST", "/api/sessions/{sid}/ask/submit", _answer_body),
+}
+
+
 def main(argv: list[str]) -> int:
     p = argparse.ArgumentParser(description="PI WEB control plane (127.0.0.1:8504)")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -84,10 +123,23 @@ def main(argv: list[str]) -> int:
     pr = sub.add_parser("prompt")
     pr.add_argument("sid")
     pr.add_argument("text", nargs="?")
+    behavior = pr.add_mutually_exclusive_group()
+    behavior.add_argument("--steer", action="store_true")
+    behavior.add_argument("--follow-up", action="store_true")
     st = sub.add_parser("status")
     st.add_argument("sid")
     cm = sub.add_parser("commands")
     cm.add_argument("sid")
+    for name in VERBS:
+        verb = sub.add_parser(name)
+        verb.add_argument("sid")
+        if name == "model":
+            verb.add_argument("model", metavar="provider/modelId")
+        elif name == "thinking-level":
+            verb.add_argument("level")
+        elif name == "answer":
+            verb.add_argument("ask_id", metavar="askId")
+            verb.add_argument("text")
     args = p.parse_args(argv)
     if args.cmd == "list":
         return cmd_list(args.cwd)
@@ -97,12 +149,31 @@ def main(argv: list[str]) -> int:
         text = args.text if args.text is not None else sys.stdin.read()
         if not text.strip():
             return out({"ok": False, "error": "empty prompt"}, False)
+        if args.steer or args.follow_up:
+            streaming = "steer" if args.steer else "followUp"
+            code, data = req(
+                "POST",
+                f"/api/sessions/{args.sid}/prompt",
+                {"text": text, "streamingBehavior": streaming},
+            )
+            ok = code == 200 and isinstance(data, dict) and data.get("accepted") is True
+            return out({"ok": ok, "status": code, "result": data}, ok)
         return cmd_prompt(args.sid, text)
     if args.cmd == "status":
         return cmd_status(args.sid)
     if args.cmd == "commands":
         return cmd_commands(args.sid)
-    return 2
+    spec = VERBS.get(args.cmd)
+    if spec is None:
+        return 2
+    method, template, build = spec
+    try:
+        body = build(args)
+    except UsageError as exc:
+        return out({"ok": False, "error": str(exc)}, False)
+    code, data = req(method, template.replace("{sid}", args.sid), body)
+    ok = code == 200 and not (isinstance(data, dict) and data.get("error"))
+    return out({"ok": ok, "status": code, "result": data}, ok)
 
 
 if __name__ == "__main__":
