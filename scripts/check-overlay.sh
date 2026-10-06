@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+export PI_STACK_SKIP_SYSTEMD=1
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
@@ -28,6 +29,44 @@ sys.stdout.write(digest.hexdigest())
 PY
 }
 
+assert_streams_layout() {
+	local home="$1"
+	local xdg="${2:-}"
+	local unit_dir skills_text
+	if [[ -n "$xdg" ]]; then
+		unit_dir="$xdg/systemd/user"
+	else
+		unit_dir="$home/.config/systemd/user"
+	fi
+	test -L "$home/.local/bin/pi-streams" || fail "pi-streams was not linked in $home"
+	[[ "$(readlink -- "$home/.local/bin/pi-streams")" == "$root/bin/pi-streams" ]] || fail "pi-streams link target is wrong in $home"
+	"$home/.local/bin/pi-streams" --help >/dev/null || fail "installed pi-streams does not run in $home"
+	cmp -s "$root/bin/pi-web-cli" "$home/.local/bin/pi-web-cli" || fail "pi-web-cli content is wrong in $home"
+	test -x "$home/.local/bin/pi-web-cli" || fail "pi-web-cli is not executable in $home"
+	cmp -s "$root/prompts/stream.md" "$home/.pi/agent/prompts/stream.md" || fail "stream prompt was not installed in $home"
+	grep -q '^name: stream$' "$home/.pi/agent/skills-pstack/stream/SKILL.md" || fail "stream skill was not installed in $home"
+	grep -q '^name: stream-kickoff$' "$home/.pi/agent/skills-pstack/stream-kickoff/SKILL.md" || fail "stream-kickoff skill was not installed in $home"
+	cmp -s "$root/systemd/pi-streams-tick.service" "$unit_dir/pi-streams-tick.service" || fail "tick service was not installed in $home"
+	cmp -s "$root/systemd/pi-streams-tick.timer" "$unit_dir/pi-streams-tick.timer" || fail "tick timer was not installed in $home"
+	grep -q '^Type=oneshot$' "$unit_dir/pi-streams-tick.service" || fail "tick service is not oneshot"
+	grep -q '^ExecStart=%h/.local/bin/pi-streams tick$' "$unit_dir/pi-streams-tick.service" || fail "tick service ExecStart is wrong"
+	grep -q '^OnBootSec=2min$' "$unit_dir/pi-streams-tick.timer" || fail "tick timer OnBootSec is wrong"
+	grep -q '^OnUnitActiveSec=5min$' "$unit_dir/pi-streams-tick.timer" || fail "tick timer OnUnitActiveSec is wrong"
+	grep -q '^WantedBy=timers.target$' "$unit_dir/pi-streams-tick.timer" || fail "tick timer WantedBy is wrong"
+	skills_text="$(python3 - "$home/.pi/agent/settings.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+data = json.loads(Path(sys.argv[1]).read_text())
+skills = data.get("skills") or []
+print("\n".join(Path(entry).name for entry in skills if isinstance(entry, str)))
+PY
+)"
+	printf '%s\n' "$skills_text" | grep -qx stream || fail "settings.json is missing the stream skill"
+	printf '%s\n' "$skills_text" | grep -qx stream-kickoff || fail "settings.json is missing the stream-kickoff skill"
+}
+
 test -f overlay/APPEND_SYSTEM.md || fail "missing overlay/APPEND_SYSTEM.md"
 test -f overlay/AGENTS.md || fail "missing overlay/AGENTS.md"
 test -f overlay/settings.json || fail "missing overlay/settings.json"
@@ -39,6 +78,13 @@ test -x bin/pstackctl.py || fail "missing executable bin/pstackctl.py"
 test -x scripts/check-update-pstack.sh || fail "missing executable scripts/check-update-pstack.sh"
 test -f skills/update-pstack/SKILL.md || fail "missing update-pstack skill"
 test -f prompts/update-pstack.md || fail "missing update-pstack prompt"
+test -x bin/pi-streams || fail "missing executable bin/pi-streams"
+test -x bin/pi-web-cli || fail "missing executable bin/pi-web-cli"
+test -f prompts/stream.md || fail "missing prompts/stream.md"
+test -f skills/stream/SKILL.md || fail "missing stream skill"
+test -f skills/stream-kickoff/SKILL.md || fail "missing stream-kickoff skill"
+test -f systemd/pi-streams-tick.service || fail "missing pi-streams tick service"
+test -f systemd/pi-streams-tick.timer || fail "missing pi-streams tick timer"
 test ! -e prompts/goal.md || fail "unexpected bundled goal prompt"
 
 grep -q '"grep"' overlay/settings.json || fail "overlay/settings.json defaultTools lacks grep"
@@ -84,6 +130,9 @@ fi
 help="$(bash install.sh --help)"
 printf '%s\n' "$help" | grep -q -- '  -y ' || fail "install.sh --help must document -y"
 printf '%s\n' "$help" | grep -q -- '--print-pstack-skills' || fail "install.sh --help must document its pstack skill query"
+for flag in --project --pi-web-url --remote --coordinator-model --coordinator-thinking; do
+	printf '%s\n' "$help" | grep -q -F -- "$flag" || fail "install.sh --help must document $flag"
+done
 selected_skills="$(bash install.sh --print-pstack-skills)"
 printf '%s\n' "$selected_skills" | grep -qx poteto-mode || fail "selected pstack skills omit poteto-mode"
 printf '%s\n' "$selected_skills" | grep -qx reflect || fail "selected pstack skills omit reflect"
@@ -91,6 +140,9 @@ printf '%s\n' "$selected_skills" | grep -qx correct || fail "selected pstack ski
 printf '%s\n' "$selected_skills" | grep -qx maintain-verification-skill || fail "selected pstack skills omit maintain-verification-skill"
 if bash install.sh -y extra >/dev/null 2>&1; then
 	fail "install.sh accepted an extra argument after -y"
+fi
+if bash install.sh --project >/dev/null 2>&1; then
+	fail "install.sh accepted --project without a root"
 fi
 printf '%s\n' "$help" | grep -q -- '--repos' && fail "install.sh --help must not name --repos"
 printf '%s\n' "$help" | grep -qi workspace && fail "install.sh --help must not name workspace"
@@ -121,6 +173,15 @@ printf '%s\n' "$help" | grep -F -q '.plugins' || fail "install.sh --help must na
 tmp=$(mktemp -d)
 cleanup() { rm -rf "$tmp"; }
 trap cleanup EXIT
+no_systemctl="$tmp/no-systemctl"
+mkdir -p "$no_systemctl"
+cat >"$no_systemctl/systemctl" <<'EOF'
+#!/bin/sh
+printf 'systemctl %s\n' "$*" >&2
+exit 99
+EOF
+chmod +x "$no_systemctl/systemctl"
+export PATH="$no_systemctl:$PATH"
 while IFS= read -r name; do
 	mkdir -p "$tmp/pstack/skills/$name"
 	cat >"$tmp/pstack/skills/$name/SKILL.md" <<EOF
@@ -390,6 +451,13 @@ test -L "$home/.local/bin/update-pstack" || fail "install did not link ~/.local/
 test -x "$home/.local/bin/update-pstack" || fail "linked update-pstack is not executable"
 grep -F -q "$root" "$home/.pi/agent/bin/update-pstack" || fail "installed update-pstack wrapper forgot its pi-stack source"
 "$home/.local/bin/update-pstack" --help | grep -q '^usage: update-pstack' || fail "installed update-pstack command does not run"
+assert_streams_layout "$home"
+test -z "$(find "$home/.local/bin" -name 'pi-web-cli.bak-*' -print)" || fail "fresh install backed up pi-web-cli"
+streams_rerun_token="$(
+	sha256sum "$home/.local/bin/pi-web-cli"
+	readlink -- "$home/.local/bin/pi-streams"
+	tree_checksum "$home/.config/systemd"
+)"
 test -f "$home/.pi/agent/agents/poteto-agent.md" || fail "piped install did not write poteto-agent"
 grep -q poteto-mode "$home/.pi/agent/agents/poteto-agent.md" || fail "poteto-agent must read poteto-mode"
 python3 - "$home" <<'PY'
@@ -473,6 +541,14 @@ cmp -s "$home/.pi/agent/settings.json" "$tmp/settings.after-replace" || fail "th
 [[ "$(stamp_n)" == "$stamps_after_replace" ]] || fail "third install created a new stamp dir"
 cmp -s "$home/.pi/agent/extensions/subagent/config.json" "$tmp/config.after-refresh" || fail "third install changed subagent config"
 [[ "$(find "$home/.pi/agent/backups/subagents" -name 'config-*.json' | wc -l)" == "$config_backups" ]] || fail "third install backed up unchanged subagent config"
+assert_streams_layout "$home"
+streams_rerun_again="$(
+	sha256sum "$home/.local/bin/pi-web-cli"
+	readlink -- "$home/.local/bin/pi-streams"
+	tree_checksum "$home/.config/systemd"
+)"
+[[ "$streams_rerun_again" == "$streams_rerun_token" ]] || fail "rerun changed pi-streams, pi-web-cli, or the tick units"
+test -z "$(find "$home/.local/bin" -name 'pi-web-cli.bak-*' -print)" || fail "rerun backed up pi-web-cli"
 
 home_ask="$tmp/home-ask"
 mkdir -p "$home_ask/.pi/agent"
@@ -503,7 +579,7 @@ PY
 
 home_nopi="$tmp/home-nopi"
 mkdir -p "$home_nopi"
-path_nopi="/usr/bin:/bin"
+path_nopi="$no_systemctl:/usr/bin:/bin"
 if ! PATH="$path_nopi" command -v python3 >/dev/null 2>&1; then
 	fail "need /usr/bin/python3 to test missing pi"
 fi
@@ -534,7 +610,7 @@ initial_pstack_head="$(git -C "$fake" rev-parse HEAD)"
 
 seed="$tmp/seed"
 mkdir -p "$seed"
-cp -a "$root/install.sh" "$root/overlay" "$root/prompts" "$root/bin" "$root/skills" "$root/.gitignore" "$seed/"
+cp -a "$root/install.sh" "$root/overlay" "$root/prompts" "$root/bin" "$root/skills" "$root/systemd" "$root/.gitignore" "$seed/"
 git init -q "$seed"
 git -C "$seed" add .
 git -C "$seed" -c user.email=t@t -c user.name=t commit -qm seed
@@ -828,6 +904,291 @@ fi
 printf '%s\n' "$missing_upstream_out" | grep -q 'has no upstream' || fail "missing upstream failure was not useful"
 test "$(git -C "$home2/.pi-stack" rev-parse HEAD)" = "$missing_upstream_head" || fail "checkout without upstream changed while update was refused"
 git -C "$home2/.pi-stack" branch --set-upstream-to="origin/$managed_branch" >/dev/null
+
+streams_home="$tmp/home-streams"
+streams_xdg="$tmp/streams-xdg"
+streams_proj="$tmp/proj-root"
+mkdir -p "$streams_home/.local/bin" "$streams_xdg" "$streams_proj"
+printf 'old pi-web-cli\n' >"$streams_home/.local/bin/pi-web-cli"
+cp "$streams_home/.local/bin/pi-web-cli" "$tmp/old-pi-web-cli"
+set +e
+streams_out="$(
+	HOME="$streams_home" \
+		XDG_CONFIG_HOME="$streams_xdg" \
+		PI_STACK="$root" \
+		PSTACK="$stub" \
+		PI_STACK_SKIP_PACKAGES=1 \
+		PI_WEB_URL="http://127.0.0.1:9" \
+		GIT_AUTHOR_NAME="Test" \
+		GIT_AUTHOR_EMAIL="test@example.com" \
+		GIT_COMMITTER_NAME="Test" \
+		GIT_COMMITTER_EMAIL="test@example.com" \
+		bash -s -- --project "$streams_proj" -y \
+		--pi-web-url "http://127.0.0.1:9" \
+		--remote "https://example.test/streams.git" \
+		--coordinator-model "acme/widget" \
+		--coordinator-thinking "low" <"$root/install.sh" 2>&1
+)"
+streams_status=$?
+set -e
+[[ "$streams_status" -eq 1 ]] || fail "install --project exited $streams_status, expected 1 because pi-web is unreachable"
+printf '%s\n' "$streams_out" | grep -F -q 'FAIL pi-web: list failed' || fail "doctor did not fail because pi-web is unreachable"
+if printf '%s\n' "$streams_out" | grep -F -q '[none]:'; then
+	fail "-y asked a setup question"
+fi
+printf '%s\n' "$streams_out" | grep -F -q "Backed up $streams_home/.local/bin/pi-web-cli to " || fail "install did not report the pi-web-cli backup"
+mapfile -t pi_web_cli_baks < <(find "$streams_home/.local/bin" -maxdepth 1 -name 'pi-web-cli.bak-*' -print)
+[[ "${#pi_web_cli_baks[@]}" -eq 1 ]] || fail "expected one pi-web-cli backup, found ${#pi_web_cli_baks[@]}"
+basename "${pi_web_cli_baks[0]}" | grep -Eq '^pi-web-cli\.bak-[0-9]{8}-[0-9]{6}$' || fail "pi-web-cli backup name is not a UTC timestamp"
+cmp -s "$tmp/old-pi-web-cli" "${pi_web_cli_baks[0]}" || fail "pi-web-cli backup does not match the previous file"
+cmp -s "$root/bin/pi-web-cli" "$streams_home/.local/bin/pi-web-cli" || fail "pi-web-cli was not replaced with the checkout copy"
+test ! -e "$streams_home/.config/systemd/user/pi-streams-tick.service" || fail "tick units ignored XDG_CONFIG_HOME"
+test ! -e "$streams_home/.pi/agent/auth.json" || fail "install --project wrote auth.json"
+test -f "$streams_proj/streams/project.toml" || fail "project home was not created"
+test -d "$streams_proj/streams/.git" || fail "project home is not a git repo"
+grep -F -q 'http://127.0.0.1:9' "$streams_proj/streams/project.toml" || fail "pi-web url was not recorded"
+grep -F -q 'https://example.test/streams.git' "$streams_proj/streams/project.toml" || fail "remote was not recorded"
+grep -F -q 'acme/widget' "$streams_proj/streams/project.toml" || fail "coordinator model was not recorded"
+[[ "$(grep -c 'thinking = "low"' "$streams_proj/streams/project.toml")" -eq 2 ]] || fail "coordinator thinking was not recorded"
+assert_streams_layout "$streams_home" "$streams_xdg"
+streams_home_sum="$(tree_checksum "$streams_home")"
+streams_xdg_sum="$(tree_checksum "$streams_xdg")"
+streams_toml_sum="$(sha256sum "$streams_proj/streams/project.toml")"
+streams_head="$(git -C "$streams_proj/streams" rev-parse HEAD)"
+set +e
+streams_again="$(
+	HOME="$streams_home" \
+		XDG_CONFIG_HOME="$streams_xdg" \
+		PI_STACK="$root" \
+		PSTACK="$stub" \
+		PI_STACK_SKIP_PACKAGES=1 \
+		PI_WEB_URL="http://127.0.0.1:9" \
+		GIT_AUTHOR_NAME="Test" \
+		GIT_AUTHOR_EMAIL="test@example.com" \
+		GIT_COMMITTER_NAME="Test" \
+		GIT_COMMITTER_EMAIL="test@example.com" \
+		bash -s -- --project "$streams_proj" -y \
+		--pi-web-url "http://127.0.0.1:9" \
+		--remote "https://example.test/streams.git" \
+		--coordinator-model "acme/widget" \
+		--coordinator-thinking "low" <"$root/install.sh" 2>&1
+)"
+streams_again_status=$?
+set -e
+[[ "$streams_again_status" -eq 1 ]] || fail "second install --project exited $streams_again_status, expected 1"
+if printf '%s\n' "$streams_again" | grep -F -q 'Backed up '; then
+	fail "second install backed up pi-web-cli again"
+fi
+[[ "$(tree_checksum "$streams_home")" == "$streams_home_sum" ]] || fail "second install --project changed the home"
+[[ "$(tree_checksum "$streams_xdg")" == "$streams_xdg_sum" ]] || fail "second install --project changed the systemd units"
+[[ "$(sha256sum "$streams_proj/streams/project.toml")" == "$streams_toml_sum" ]] || fail "second install --project changed project.toml"
+[[ "$(git -C "$streams_proj/streams" rev-parse HEAD)" == "$streams_head" ]] || fail "second install --project changed the project home commit"
+[[ -z "$(git -C "$streams_proj/streams" status --porcelain)" ]] || fail "second install --project left the project home dirty"
+[[ "$(find "$streams_home/.local/bin" -maxdepth 1 -name 'pi-web-cli.bak-*' | wc -l)" -eq 1 ]] || fail "second install created another pi-web-cli backup"
+
+same_home="$tmp/home-same-cli"
+mkdir -p "$same_home/.local/bin"
+cp "$root/bin/pi-web-cli" "$same_home/.local/bin/pi-web-cli"
+chmod +x "$same_home/.local/bin/pi-web-cli"
+same_inode="$(stat -c %i "$same_home/.local/bin/pi-web-cli")"
+if ! same_out="$(HOME="$same_home" PI_STACK="$root" PSTACK="$stub" PI_STACK_SKIP_PACKAGES=1 bash "$root/install.sh" 2>&1)"; then
+	printf '%s\n' "$same_out" >&2
+	fail "install left an identical pi-web-cli and then failed"
+fi
+[[ "$(stat -c %i "$same_home/.local/bin/pi-web-cli")" == "$same_inode" ]] || fail "install rewrote an identical pi-web-cli"
+test -z "$(find "$same_home/.local/bin" -name 'pi-web-cli.bak-*' -print)" || fail "install backed up an identical pi-web-cli"
+if printf '%s\n' "$same_out" | grep -F -q 'Backed up '; then
+	fail "install reported a backup of an identical pi-web-cli"
+fi
+
+fake_npm="$tmp/fake-npm"
+mkdir -p "$fake_npm"
+cat >"$fake_npm/npm" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >>"$NPM_LOG"
+if [[ "${1:-}" == install && "${2:-}" == -g && "${3:-}" == @jmfederico/pi-web ]]; then
+	mkdir -p "${HOME}/.local/bin"
+	printf '#!/bin/sh\nexit 0\n' >"${HOME}/.local/bin/pi-web"
+	chmod +x "${HOME}/.local/bin/pi-web"
+	exit 0
+fi
+printf 'unexpected npm %s\n' "$*" >&2
+exit 1
+EOF
+chmod +x "$fake_npm/npm"
+noweb_home="$tmp/home-noweb"
+noweb_log="$tmp/npm-noweb.log"
+: >"$noweb_log"
+if ! noweb_out="$(
+	PATH="$fake_npm:$no_systemctl:/usr/bin:/bin" \
+		HOME="$noweb_home" \
+		PI_STACK="$root" \
+		PSTACK="$stub" \
+		PI_STACK_SKIP_PACKAGES=1 \
+		NPM_LOG="$noweb_log" \
+		bash "$root/install.sh" 2>&1
+)"; then
+	printf '%s\n' "$noweb_out" >&2
+	fail "install without pi-web failed while packages were skipped"
+fi
+printf '%s\n' "$noweb_out" | grep -F -x -q 'npm install -g @jmfederico/pi-web' || fail "install did not say how to install pi-web"
+test ! -s "$noweb_log" || fail "skipped package install still ran npm"
+test ! -e "$noweb_home/.local/bin/pi-web" || fail "skipped package install wrote pi-web"
+
+npm_home="$tmp/home-npm-web"
+npm_log="$tmp/npm-web.log"
+: >"$npm_log"
+if ! npm_out="$(
+	PATH="$fake_npm:$fake_bin:$no_systemctl:/usr/bin:/bin" \
+		HOME="$npm_home" \
+		PI_STACK="$root" \
+		PSTACK="$stub" \
+		PI_STACK_SKIP_PACKAGES=0 \
+		PI_INSTALL_LOG="$tmp/npm-web-pi.log" \
+		NPM_LOG="$npm_log" \
+		bash "$root/install.sh" 2>&1
+)"; then
+	printf '%s\n' "$npm_out" >&2
+	fail "install did not install a missing pi-web"
+fi
+printf '%s\n' "$npm_out" | grep -F -x -q 'npm install -g @jmfederico/pi-web' || fail "install did not print the pi-web install command"
+[[ "$(cat "$npm_log")" == "install -g @jmfederico/pi-web" ]] || fail "npm was not run as npm install -g @jmfederico/pi-web"
+test -x "$npm_home/.local/bin/pi-web" || fail "npm install did not put pi-web on the home bin path"
+if ! npm_again="$(
+	PATH="$fake_npm:$fake_bin:$no_systemctl:/usr/bin:/bin" \
+		HOME="$npm_home" \
+		PI_STACK="$root" \
+		PSTACK="$stub" \
+		PI_STACK_SKIP_PACKAGES=0 \
+		PI_INSTALL_LOG="$tmp/npm-web-pi-again.log" \
+		NPM_LOG="$npm_log" \
+		bash "$root/install.sh" 2>&1
+)"; then
+	printf '%s\n' "$npm_again" >&2
+	fail "second install with pi-web present failed"
+fi
+[[ "$(cat "$npm_log")" == "install -g @jmfederico/pi-web" ]] || fail "second install ran npm again"
+if printf '%s\n' "$npm_again" | grep -F -x -q 'npm install -g @jmfederico/pi-web'; then
+	fail "second install printed the pi-web install command after pi-web was present"
+fi
+
+node_home="$tmp/home-piweb-node"
+node_log="$tmp/npm-node.log"
+: >"$node_log"
+node_pi_web="$node_home/.local/share/pi-node/node-fixture/bin/pi-web"
+mkdir -p "$(dirname "$node_pi_web")"
+printf '#!/bin/sh\nexit 0\n' >"$node_pi_web"
+chmod +x "$node_pi_web"
+if ! node_out="$(
+	PATH="$fake_npm:$no_systemctl:/usr/bin:/bin" \
+		HOME="$node_home" \
+		PI_STACK="$root" \
+		PSTACK="$stub" \
+		PI_STACK_SKIP_PACKAGES=1 \
+		NPM_LOG="$node_log" \
+		bash "$root/install.sh" 2>&1
+)"; then
+	printf '%s\n' "$node_out" >&2
+	fail "install did not accept pi-web under pi-node"
+fi
+if printf '%s\n' "$node_out" | grep -F -x -q 'npm install -g @jmfederico/pi-web'; then
+	fail "install tried to install pi-web that was already under pi-node"
+fi
+test ! -s "$node_log" || fail "install ran npm even though pi-web was under pi-node"
+
+ask_home="$tmp/home-streams-ask"
+ask_proj="$tmp/ask-proj"
+mkdir -p "$ask_home/.config/pi-web" "$ask_proj"
+printf '%s\n' '{"host":"127.0.0.1","port":9}' >"$ask_home/.config/pi-web/config.json"
+cp "$ask_home/.config/pi-web/config.json" "$tmp/pi-web-config.before"
+cat >"$tmp/run-streams-tty.py" <<'PY'
+import errno
+import os
+import pty
+import select
+import signal
+import sys
+import time
+
+argv = sys.argv[1:]
+pid, terminal = pty.fork()
+if pid == 0:
+    os.execvp(argv[0], argv)
+
+output = bytearray()
+sent = 0
+deadline = time.time() + 60
+status = None
+while time.time() < deadline:
+    ready, _, _ = select.select([terminal], [], [], 0.5)
+    if ready:
+        try:
+            chunk = os.read(terminal, 4096)
+        except OSError as error:
+            if error.errno != errno.EIO:
+                raise
+            chunk = b""
+        if chunk:
+            output.extend(chunk)
+            prompts = output.count(b"]: ")
+            if prompts > sent:
+                os.write(terminal, b"\n" * (prompts - sent))
+                sent = prompts
+            continue
+    waited, code = os.waitpid(pid, os.WNOHANG)
+    if waited:
+        status = code
+        break
+else:
+    os.kill(pid, signal.SIGKILL)
+    os.waitpid(pid, 0)
+    sys.stdout.buffer.write(output)
+    raise SystemExit("installer prompt did not finish")
+
+while True:
+    try:
+        chunk = os.read(terminal, 4096)
+    except OSError:
+        break
+    if not chunk:
+        break
+    output.extend(chunk)
+
+sys.stdout.buffer.write(output)
+if status is None:
+    _, status = os.waitpid(pid, 0)
+if os.WIFEXITED(status):
+    raise SystemExit(os.WEXITSTATUS(status))
+raise SystemExit(128 + os.WTERMSIG(status))
+PY
+set +e
+ask_out="$(
+	HOME="$ask_home" \
+		PI_STACK="$root" \
+		PSTACK="$stub" \
+		PI_STACK_SKIP_PACKAGES=1 \
+		PI_WEB_URL="http://127.0.0.1:9" \
+		GIT_AUTHOR_NAME="Test" \
+		GIT_AUTHOR_EMAIL="test@example.com" \
+		GIT_COMMITTER_NAME="Test" \
+		GIT_COMMITTER_EMAIL="test@example.com" \
+		python3 "$tmp/run-streams-tty.py" bash "$root/install.sh" --project "$ask_proj" 2>&1
+)"
+ask_status=$?
+set -e
+[[ "$ask_status" -eq 1 ]] || fail "install --project without -y exited $ask_status, expected 1"
+printf '%s\n' "$ask_out" | grep -F -q 'Which URL do you open pi-web at? [http://127.0.0.1:9]:' || fail "url question did not show its default"
+printf '%s\n' "$ask_out" | grep -F -q "Where should the project home's private remote live? [none]:" || fail "remote question did not show its default"
+printf '%s\n' "$ask_out" | grep -F -q 'Which model should coordinators use? [openai-codex/gpt-6-astra]:' || fail "model question did not show its default"
+printf '%s\n' "$ask_out" | grep -F -q 'Which thinking level should coordinators use? [xhigh]:' || fail "thinking question did not show its default"
+printf '%s\n' "$ask_out" | grep -F -q 'FAIL pi-web: list failed' || fail "doctor did not fail after the setup questions"
+test -f "$ask_proj/streams/project.toml" || fail "answering the setup questions did not create the project home"
+grep -F -q 'http://127.0.0.1:9' "$ask_proj/streams/project.toml" || fail "accepted url default was not recorded"
+grep -F -q 'remote = ""' "$ask_proj/streams/project.toml" || fail "accepted remote default was not recorded"
+grep -F -q 'openai-codex/gpt-6-astra' "$ask_proj/streams/project.toml" || fail "accepted model default was not recorded"
+cmp -s "$ask_home/.config/pi-web/config.json" "$tmp/pi-web-config.before" || fail "install changed pi-web config.json"
+test ! -e "$ask_home/.pi/agent/auth.json" || fail "install without -y wrote auth.json"
 
 if grep -R -E '/home/[^$]|workspace root' -- install.sh overlay skills/cross-repo skills/update-pstack | grep -v '^Binary'; then
 	fail "hardcoded home path or workspace root in overlay files"

@@ -1,0 +1,9 @@
+[Unit]
+Description=Run pi-streams tick every five minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+
+[Install]
+WantedBy=timers.target
