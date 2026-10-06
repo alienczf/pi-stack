@@ -135,6 +135,24 @@ def is_ratified(text: str) -> bool:
     return False
 
 
+def _unrecorded(cwd: Path, rows: list[Thread]) -> list[dict[str, object]]:
+    known = {row.session for row in rows}
+    return [
+        item
+        for item in piweb.list_sessions(str(cwd))
+        if isinstance(item.get("id"), str) and item["id"] not in known and item.get("archived") is not True
+    ]
+
+
+def _resume_or_spawn(cwd: Path, rows: list[Thread]) -> tuple[str, bool]:
+    # A crash after spawn leaves a listed session with no row. It needs its
+    # opening prompt only if it never received one.
+    found = _unrecorded(cwd, rows)
+    if found:
+        return str(found[0]["id"]), found[0].get("messageCount") == 0
+    return piweb.spawn(str(cwd)), True
+
+
 def ensure_coordinator(project: Project, stream_dir: Path, *, opening_prompt: str | None = None) -> str:
     stream_dir = stream_dir.resolve()
     path = stream_dir / "threads.tsv"
@@ -142,22 +160,10 @@ def ensure_coordinator(project: Project, stream_dir: Path, *, opening_prompt: st
     for row in rows:
         if row.role == "coordinator" and row.status is Status.active:
             return row.session
-    # A listed session that already has a row was archived. Adopting it would
-    # reuse the coordinator rotate just replaced.
-    known = {row.session for row in rows}
-    listed = piweb.list_sessions(str(stream_dir))
-    unknown: list[str] = []
-    for item in listed:
-        sid = item.get("id")
-        if isinstance(sid, str) and sid not in known:
-            unknown.append(sid)
-    spawned = False
-    if unknown:
-        sid = unknown[0]
-    else:
-        sid = piweb.spawn(str(stream_dir))
-        spawned = True
+    sid, needs_opening = _resume_or_spawn(stream_dir, rows)
     piweb.configure_session(sid, project.coordinator.model, project.coordinator.thinking)
+    if needs_opening:
+        piweb.prompt(sid, KICKOFF if opening_prompt is None else opening_prompt)
     rows.append(
         Thread(
             session=sid,
@@ -173,8 +179,6 @@ def ensure_coordinator(project: Project, stream_dir: Path, *, opening_prompt: st
         )
     )
     save_threads(path, rows)
-    if spawned:
-        piweb.prompt(sid, KICKOFF if opening_prompt is None else opening_prompt)
     return sid
 
 

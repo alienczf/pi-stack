@@ -85,7 +85,7 @@ class NewTests(EngineCase):
     def test_new_adopts_a_listed_session_without_spawn(self) -> None:
         stream = self.stream()
         self.stub.set_routes([
-            ("GET", "/api/sessions", 200, [{"id": "coord-existing", "cwd": stream}]),
+            ("GET", "/api/sessions", 200, [{"id": "coord-existing", "cwd": stream, "messageCount": 12}]),
             ("GET", "/api/sessions/coord-existing/status", 200, status_body("coord-existing")),
             ("POST", "/api/sessions/coord-existing/prompt", 200, {"accepted": True}),
         ])
@@ -106,6 +106,44 @@ class NewTests(EngineCase):
         self.assertNotIn("/api/sessions/coord-existing/prompt", paths)
         posted = [item for item in self.stub.requests if item[0] == "POST" and item[1] == "/api/sessions"]
         self.assertEqual(posted, [])
+
+    def test_failed_kickoff_is_resent_and_archived_sessions_are_skipped(self) -> None:
+        stream = self.stream()
+        self.stub.set_routes([
+            ("GET", "/api/sessions", 200, []),
+            ("POST", "/api/sessions", 200, {"id": "coord-1"}),
+            ("GET", "/api/sessions/coord-1/status", 200, status_body("coord-1")),
+            ("POST", "/api/sessions/coord-1/prompt", 503, {"error": "busy"}),
+        ])
+        failed = self.run_streams("new", "etl")
+        self.assertEqual(failed.returncode, 1)
+        self.assertEqual((self.home / "etl" / "threads.tsv").read_text(encoding="utf-8"), HEADER)
+        self.stub.requests.clear()
+        self.stub.set_routes([
+            ("GET", "/api/sessions", 200, [
+                {"id": "stale", "cwd": stream, "messageCount": 30, "archived": True},
+                {"id": "coord-1", "cwd": stream, "messageCount": 0},
+            ]),
+            ("GET", "/api/sessions/coord-1/status", 200, status_body("coord-1")),
+            ("POST", "/api/sessions/coord-1/prompt", 200, {"accepted": True}),
+        ])
+        again = self.run_streams("new", "etl")
+        self.assertEqual(again.returncode, 0, again.stderr)
+        self.assertEqual(again.stdout, "http://127.0.0.1:8504\ncoord-1\n")
+        self.assertEqual(
+            [(method, path) for method, path, _query, _body in self.stub.requests],
+            [
+                ("GET", "/api/sessions"),
+                ("POST", "/api/sessions/coord-1/model"),
+                ("POST", "/api/sessions/coord-1/thinking-level"),
+                ("GET", "/api/sessions/coord-1/status"),
+                ("POST", "/api/sessions/coord-1/prompt"),
+            ],
+        )
+        self.assert_call(4, "POST", "/api/sessions/coord-1/prompt", {"text": "/skill:stream-kickoff"})
+        cells = (self.home / "etl" / "threads.tsv").read_text(encoding="utf-8").splitlines()[1].split("\t")
+        self.assertEqual(cells[:2], ["coord-1", "coordinator"])
+        self.assertEqual(git(self.home, self.env, "log", "-1", "--format=%s").strip(), "pi-streams new etl")
 
     def test_status_mismatch_fails_new(self) -> None:
         stream = self.stream()
