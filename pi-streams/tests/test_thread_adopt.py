@@ -88,6 +88,27 @@ class AdoptTests(EngineCase):
             "pi-streams thread adopt etl sess-adopt",
         )
 
+    def test_adopt_refuses_an_archived_session(self) -> None:
+        proc = self.run_streams("init", str(self.root), "-y")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        stream_dir = (self.home / "etl").resolve()
+        stream_dir.mkdir()
+        (stream_dir / "STREAM.md").write_text("ratified: no\n", encoding="utf-8")
+        (stream_dir / "threads.tsv").write_text(HEADER, encoding="utf-8")
+        worktree = self.fx.alpha_wt.resolve()
+        self.stub.set_routes([
+            ("GET", "/api/sessions", 200, [
+                {"id": "sess-old", "cwd": str(worktree), "messageCount": 9, "archived": True},
+            ]),
+        ])
+        refused = self.run_streams(
+            "thread", "adopt", "etl", "sess-old", "--worktree", str(worktree), "--role", "review"
+        )
+        self.assertEqual(refused.returncode, 1)
+        self.assertEqual(refused.stderr, "session sess-old is archived\n")
+        self.assertEqual((stream_dir / "threads.tsv").read_text(encoding="utf-8"), HEADER)
+        self.assertFalse((worktree / ".stream").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

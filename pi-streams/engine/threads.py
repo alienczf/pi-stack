@@ -483,9 +483,11 @@ def adopt_thread(
     worktree = worktree.expanduser().resolve()
     if not worktree.is_dir():
         raise StreamsError(f"worktree is not a directory: {worktree}")
-    listed = piweb.list_sessions(str(worktree))
-    if session_id not in [item.get("id") for item in listed]:
+    listed = [item for item in piweb.list_sessions(str(worktree)) if item.get("id") == session_id]
+    if not listed:
         raise StreamsError(f"session {session_id} is not in {worktree}")
+    if listed[0].get("archived") is True:
+        raise StreamsError(f"session {session_id} is archived")
     branch = git(worktree, "branch", "--show-current").strip()
     if branch == "":
         raise StreamsError(f"{worktree} has no branch")
