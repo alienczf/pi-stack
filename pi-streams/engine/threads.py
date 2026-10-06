@@ -3,10 +3,9 @@ from __future__ import annotations
 import enum
 import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 
-from engine import StreamsError, repo_root
+from engine import StreamsError, clock, repo_root
 from engine import piweb
 from engine.project import STREAM_ID, Project, Repo, git, stream_dirs
 
@@ -58,7 +57,7 @@ class Thread:
 
 
 def utc_now() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return clock.stamp(clock.now())
 
 
 def transition(row: Thread, new: Status) -> None:

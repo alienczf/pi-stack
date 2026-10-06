@@ -7,7 +7,15 @@ from pathlib import Path
 
 from engine import StreamsError
 from engine.doctor import run_doctor
-from engine.project import commit_home, create_stream, home_lock, init_project, load_project, resolve_home
+from engine.project import (
+    commit_home,
+    create_stream,
+    home_lock,
+    init_project,
+    load_project,
+    read_homes,
+    resolve_home,
+)
 from engine.threads import (
     adopt_thread,
     close_stream,
@@ -17,6 +25,7 @@ from engine.threads import (
     spawn_thread,
     status_report,
 )
+from engine.tick import run_tick
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -69,6 +78,9 @@ def _parser() -> argparse.ArgumentParser:
     close = sub.add_parser("close")
     close.add_argument("stream")
     close.add_argument("--home")
+
+    tick = sub.add_parser("tick")
+    tick.add_argument("--home")
     return parser
 
 
@@ -149,6 +161,11 @@ def cmd_close(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_tick(args: argparse.Namespace) -> int:
+    homes = [resolve_home(args.home)] if args.home else read_homes()
+    return run_tick(homes)
+
+
 def cmd_status(args: argparse.Namespace) -> int:
     home = resolve_home(args.home)
     project = load_project(home)
@@ -175,6 +192,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_rotate(args)
         if args.cmd == "close":
             return cmd_close(args)
+        if args.cmd == "tick":
+            return cmd_tick(args)
         if args.cmd == "thread" and args.thread_cmd == "spawn":
             return cmd_thread_spawn(args)
         if args.cmd == "thread" and args.thread_cmd == "adopt":

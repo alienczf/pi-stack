@@ -8,9 +8,10 @@ import sys
 from engine import StreamsError, repo_root
 
 
-def _run(args: list[str]) -> subprocess.CompletedProcess[str]:
+def _run(args: list[str], stdin: str | None = None) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [sys.executable, os.fspath(repo_root() / "bin" / "pi-web-cli"), *args],
+        input=stdin,
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -19,8 +20,8 @@ def _run(args: list[str]) -> subprocess.CompletedProcess[str]:
     )
 
 
-def call(args: list[str]) -> dict[str, object]:
-    proc = _run(args)
+def call(args: list[str], stdin: str | None = None) -> dict[str, object]:
+    proc = _run(args, stdin)
     try:
         data = json.loads(proc.stdout) if proc.stdout.strip() else {}
     except json.JSONDecodeError as exc:
@@ -66,8 +67,10 @@ def session_status(sid: str) -> dict[str, object]:
     return session
 
 
-def prompt(sid: str, text: str) -> None:
-    call(["prompt", sid, text])
+def prompt(sid: str, text: str, behavior: str | None = None) -> None:
+    # On argv, a text that starts with a dash would parse as a flag.
+    flags = [] if behavior is None else [f"--{behavior}"]
+    call(["prompt", sid, *flags], stdin=text)
 
 
 def archive(sid: str) -> None:
