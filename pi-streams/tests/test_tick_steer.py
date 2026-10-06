@@ -65,6 +65,7 @@ class SteerTests(TickCase):
         self.assertEqual(self.state(self.etl), {
             "outages": [],
             "pending": [],
+            "rotating": False,
             "sessions": {"t-1": {"asks": [], "busy": True, "context": False, "queued": {
                 BARS: "2026-10-06T12:10:00Z",
                 RERUN: "2026-10-06T12:09:59Z",
