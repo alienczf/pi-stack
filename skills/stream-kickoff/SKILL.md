@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 # Stream kickoff
 
-If STREAM.md's first line already holds a `ratified:` marker with ZF's words and a date, say so and stop. Find facts yourself. Ask ZF only for decisions, and never answer one for ZF. Start no thread and adopt no session until ZF ratifies STREAM.md.
+If STREAM.md's first line already holds a `ratified:` marker with a date and ZF's words, say so and stop. Find facts yourself. Ask ZF only for decisions, and never answer one for ZF. Start no thread and adopt no session until ZF ratifies STREAM.md.
 
 ## Scout
 
@@ -37,7 +37,7 @@ Ask one question at a time, with your recommended answer from the scout. ZF acce
 
 ## Ratify
 
-Write the answers into STREAM.md's sections. Only after ZF confirms the restatement, set its first line to `ratified: <ZF's confirming words, verbatim> <UTC date>`, with the date from `date -u +%F`. From then on only ZF changes STREAM.md.
+Write the answers into STREAM.md's sections. Only after ZF confirms the restatement, set its first line to `ratified: <UTC date> <ZF's confirming words, verbatim>`, with the date from `date -u +%F`. The date comes first because pi-streams reads the first word after `ratified:`, and `no` means unratified. From then on only ZF changes STREAM.md.
 
 ## Plan
 
