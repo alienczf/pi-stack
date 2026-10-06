@@ -8,7 +8,7 @@ from pathlib import Path
 from engine import StreamsError
 from engine.doctor import run_doctor
 from engine.project import commit_home, create_stream, home_lock, init_project, load_project, resolve_home
-from engine.threads import ensure_coordinator, format_status, spawn_thread, status_report
+from engine.threads import adopt_thread, ensure_coordinator, format_status, spawn_thread, status_report
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -47,6 +47,12 @@ def _parser() -> argparse.ArgumentParser:
     spawn.add_argument("--thinking")
     spawn.add_argument("--note", default="")
     spawn.add_argument("--home")
+    adopt = thread_sub.add_parser("adopt")
+    adopt.add_argument("stream")
+    adopt.add_argument("session_id")
+    adopt.add_argument("--worktree", required=True)
+    adopt.add_argument("--role", required=True)
+    adopt.add_argument("--home")
     return parser
 
 
@@ -95,6 +101,15 @@ def cmd_thread_spawn(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_thread_adopt(args: argparse.Namespace) -> int:
+    home = resolve_home(args.home)
+    project = load_project(home)
+    sid = adopt_thread(project, args.stream, args.session_id, Path(args.worktree), args.role)
+    print(sid)
+    commit_home(home, f"pi-streams thread adopt {args.stream} {args.session_id}")
+    return 0
+
+
 def cmd_status(args: argparse.Namespace) -> int:
     home = resolve_home(args.home)
     project = load_project(home)
@@ -119,6 +134,8 @@ def main(argv: list[str] | None = None) -> int:
             return run_doctor()
         if args.cmd == "thread" and args.thread_cmd == "spawn":
             return cmd_thread_spawn(args)
+        if args.cmd == "thread" and args.thread_cmd == "adopt":
+            return cmd_thread_adopt(args)
     except StreamsError as exc:
         print(str(exc), file=sys.stderr)
         return 1
