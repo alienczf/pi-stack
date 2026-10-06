@@ -168,7 +168,7 @@ class DoctorTests(EngineCase):
             self._report(pi, "PASS pi-web: list ok", "FAIL systemd: missing pi-streams-tick.service, pi-streams-tick.timer\n"),
         )
 
-    def test_doctor_warns_about_missing_tick_units_without_systemctl(self) -> None:
+    def test_doctor_warns_without_systemctl_whether_or_not_the_units_are_there(self) -> None:
         bindir = self.tmp / "bin"
         bindir.mkdir()
         pi = bindir / "pi"
@@ -177,21 +177,19 @@ class DoctorTests(EngineCase):
         for name in ("python3", "git"):
             (bindir / name).symlink_to(shutil.which(name, path="/usr/bin:/bin"))
         self.env["PATH"] = str(bindir)
-        unit_dir = self.xdg / "systemd" / "user"
-        for name in ("pi-streams-tick.service", "pi-streams-tick.timer"):
-            (unit_dir / name).unlink()
         self.stub.set_routes([("GET", "/api/sessions", 200, [])])
-        proc = self.run_streams("doctor")
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertEqual(
-            proc.stdout,
-            self._report(
-                str(pi.resolve()),
-                "PASS pi-web: list ok",
-                "WARN systemd: missing pi-streams-tick.service, pi-streams-tick.timer; "
-                "systemctl not found, so run pi-streams tick every five minutes another way\n",
-            ),
+        expected = self._report(
+            str(pi.resolve()),
+            "PASS pi-web: list ok",
+            "WARN systemd: systemctl not found, so run pi-streams tick every five minutes another way\n",
         )
+        # install.sh copies the units even where systemctl is missing.
+        installed = self.run_streams("doctor")
+        self.assertEqual((installed.returncode, installed.stdout), (0, expected), installed.stderr)
+        for name in ("pi-streams-tick.service", "pi-streams-tick.timer"):
+            (self.xdg / "systemd" / "user" / name).unlink()
+        missing = self.run_streams("doctor")
+        self.assertEqual((missing.returncode, missing.stdout), (0, expected), missing.stderr)
 
     def test_doctor_names_the_one_missing_tick_unit(self) -> None:
         pi = self._pi_on_path()
