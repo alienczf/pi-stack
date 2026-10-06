@@ -11,10 +11,12 @@ from tick_support import (
     TickCase,
     failure,
     got_list,
+    got_post,
     got_prompt,
     got_status,
     info,
     reply,
+    rotation,
     row,
     status,
     thinking_change,
@@ -181,6 +183,51 @@ class OutageTests(TickCase):
                 "recovered coord-1 coordinator",
             ),
         ])
+        self.assertEqual(self.alerts(), "")
+        self.assertEqual((self.state(self.etl)["outages"], self.state(self.etl)["pending"]), ([], []))
+
+    def test_a_coordinator_archived_during_its_outage_is_replaced(self) -> None:
+        self.write_log("coord-1", str(self.etl), user("/skill:stream-kickoff"), failure(LIMIT))
+        self.stub.set_routes(self.routes(status("t-1", streaming=True, ask=ASK)))
+        self.assertEqual(self.tick("2026-10-06T12:00:00Z").stdout, f"{self.etl}\task=1\toutage=1\n")
+
+        self.stub.set_routes([
+            ("GET", "/api/sessions/t-1/status", 200, status("t-1", streaming=True, ask=ASK)),
+            ("POST", "/api/sessions", 200, info("coord-2", str(self.etl), self.log_path("coord-2"))),
+            ("GET", "/api/sessions/coord-2/status", 200, status("coord-2", tokens=None)),
+            ("GET", "/api/sessions", 200, [
+                {**info("coord-1", str(self.etl), self.log_path("coord-1")), "archived": True},
+                info("t-1", "/wt/datapull", self.log_path("t-1")),
+            ]),
+            PROMPTS,
+        ])
+        later = self.tick("2026-10-06T12:05:00Z")
+        self.assertEqual((later.returncode, later.stdout, later.stderr), (0, "", ""))
+        self.assertEqual(self.stub.requests, [
+            got_status("t-1"),
+            got_list("/wt/datapull"),
+            got_list(str(self.etl)),
+            got_list(str(self.etl)),
+            ("POST", "/api/sessions", "", {"cwd": str(self.etl)}),
+            got_post("coord-2", "model", {"provider": "openai-codex", "modelId": "gpt-6-astra"}),
+            got_post("coord-2", "thinking-level", {"level": "xhigh"}),
+            got_status("coord-2"),
+            got_prompt("coord-2", rotation("etl")),
+            got_prompt(
+                "coord-2",
+                "pi-streams tick 2026-10-06T12:05:00Z:\n"
+                "ask t-1 datapull Which venue first?\n"
+                f"outage coord-1 coordinator {SHOWN}",
+                "followUp",
+            ),
+        ])
+        self.assertEqual(
+            self.rows(self.etl),
+            HEADER
+            + row("coord-1", "coordinator", str(self.etl), status="archived")
+            + row("t-1", "datapull", "/wt/datapull")
+            + f"coord-2\tcoordinator\t\t{self.etl}\t\t\topenai-codex/gpt-6-astra\txhigh\tactive\t2026-10-06T12:05:00Z\n",
+        )
         self.assertEqual(self.alerts(), "")
         self.assertEqual((self.state(self.etl)["outages"], self.state(self.etl)["pending"]), ([], []))
 
