@@ -87,6 +87,7 @@ printf '%s\n' "$help" | grep -q -- '--print-pstack-skills' || fail "install.sh -
 selected_skills="$(bash install.sh --print-pstack-skills)"
 printf '%s\n' "$selected_skills" | grep -qx poteto-mode || fail "selected pstack skills omit poteto-mode"
 printf '%s\n' "$selected_skills" | grep -qx reflect || fail "selected pstack skills omit reflect"
+printf '%s\n' "$selected_skills" | grep -qx correct || fail "selected pstack skills omit correct"
 printf '%s\n' "$selected_skills" | grep -qx maintain-verification-skill || fail "selected pstack skills omit maintain-verification-skill"
 if bash install.sh -y extra >/dev/null 2>&1; then
 	fail "install.sh accepted an extra argument after -y"
@@ -134,14 +135,25 @@ sed -i 's/^name: poteto-mode$/name: Poteto Mode/' "$tmp/pstack/skills/poteto-mod
 mkdir -p "$tmp/pstack/skills/poteto-mode/playbooks"
 printf 'playbook\n' >"$tmp/pstack/skills/poteto-mode/playbooks/investigation.md"
 stub="$tmp/pstack"
+test -f "$stub/skills/correct/SKILL.md" || fail "pstack stub is missing correct"
 missing_stub="$tmp/missing-pstack"
 cp -a "$stub" "$missing_stub"
 rm "$missing_stub/skills/how/SKILL.md"
 if missing_stub_out="$(HOME="$tmp/missing-home" PI_STACK="$root" PSTACK="$missing_stub" PI_STACK_SKIP_PACKAGES=1 bash "$root/install.sh" 2>&1)"; then
 	fail "install accepted a missing selected pstack skill"
 fi
-printf '%s\n' "$missing_stub_out" | grep -q 'missing selected skill root: how' || fail "missing selected skill error was not useful"
+printf '%s\n' "$missing_stub_out" | grep -q 'predates selected skill how' || fail "missing selected skill error was not useful"
+printf '%s\n' "$missing_stub_out" | grep -q 'update-pstack status' || fail "missing selected skill error did not name update-pstack"
 test ! -e "$tmp/missing-home/.pi/agent" || fail "missing selected skill was detected after installation began"
+missing_correct="$tmp/missing-correct"
+cp -a "$stub" "$missing_correct"
+rm "$missing_correct/skills/correct/SKILL.md"
+if missing_correct_out="$(HOME="$tmp/missing-correct-home" PI_STACK="$root" PSTACK="$missing_correct" PI_STACK_SKIP_PACKAGES=1 bash "$root/install.sh" 2>&1)"; then
+	fail "install accepted a pstack checkout that predates correct"
+fi
+printf '%s\n' "$missing_correct_out" | grep -q 'update-pstack' || fail "outdated pstack checkout did not name update-pstack"
+printf '%s\n' "$missing_correct_out" | grep -q 'predates selected skill correct' || fail "outdated pstack checkout did not name correct"
+test ! -e "$tmp/missing-correct-home/.pi/agent" || fail "outdated pstack checkout was detected after installation began"
 
 legacy_home="$tmp/home-legacy-jig"
 legacy_agent="$legacy_home/.pi/agent"
@@ -330,6 +342,8 @@ if any("/pstack/skills/poteto-mode" in s for s in skills):
 	raise SystemExit("skills still point at raw pstack")
 if not any("skills-pstack/reflect" in s for s in skills):
 	raise SystemExit("reflect is not installed")
+if not any("skills-pstack/correct" in s for s in skills):
+	raise SystemExit("correct is not installed")
 if not any("skills-pstack/create-verification-skill" in s for s in skills):
 	raise SystemExit("create-verification-skill is not installed")
 if not any("skills-pstack/maintain-verification-skill" in s for s in skills):
@@ -365,6 +379,7 @@ test ! -e "$home/.local/bin/jig" || fail "install linked jig"
 test ! -e "$home/.pi/agent/prompts/jig.md" || fail "install copied the jig prompt"
 test ! -e "$home/.pi/agent/skills-pstack/jig" || fail "install registered jig"
 test -f "$home/.pi/agent/skills-pstack/reflect/SKILL.md" || fail "install did not register reflect"
+test -f "$home/.pi/agent/skills-pstack/correct/SKILL.md" || fail "install did not register correct"
 test -f "$home/.pi/agent/skills-pstack/create-verification-skill/SKILL.md" || fail "install did not register create-verification-skill"
 test -f "$home/.pi/agent/skills-pstack/maintain-verification-skill/SKILL.md" || fail "install did not register maintain-verification-skill"
 test -f "$home/.pi/agent/skills-pstack/update-pstack/SKILL.md" || fail "install did not register update-pstack"
