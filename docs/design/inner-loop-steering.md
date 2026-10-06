@@ -533,7 +533,7 @@ The research covered Matt Pocock (@mattpocockuk) and poteto (Lauren Tan, @poteto
 - The orchestrate ledger is keyed by PR plus head SHA: "The ledger answers 'was this verified', not memory and not the transcript." A worker may self-report, and a verifier overrides it (orchestrate.md, above).
 - `prove-it-works`: check the real artifact, not a proxy (https://github.com/cursor/plugins/blob/main/pstack/skills/principle-prove-it-works/SKILL.md).
 - Pocock: "Without feedback on how the code it produces actually runs, the agent will be flying blind." (https://raw.githubusercontent.com/mattpocock/skills/main/README.md). He also treats a subagent's report as a "secondary source" for the parent (https://raw.githubusercontent.com/mattpocock/dictionary-of-ai-coding/main/dictionary/Subagent.md).
-- From a search-index excerpt of poteto's "Loops You Can Trust" (the full article was unreachable): "“I fixed it” isn’t good enough. Show me the failing test and the passing test." (https://bittide.aicompass.dev/article/243275b7-708c-4307-92f3-17c348f9ceb1, a mirror that timed out on fetch).
+- poteto's "Loops You Can Trust" (2026-06-24): "“I fixed it” isn’t good enough. Show me the failing test and the passing test." Also: "One key aspect of building trustworthy loops is that every stage can stop the line." And: "Make loops autonomous only after it earns your trust." (https://x.com/poteto/status/2069824386283319343, full text via https://api.fxtwitter.com/poteto/status/2069824386283319343)
 - Both pstack's orchestrate verifier and its `interrogate` skill use a reviewer from a **different model family**. ZF's rule here is no multi-model-type fan-out, so this design substitutes a fresh-context Astra reviewer plus deterministic checks.
 
 ### 3.7 Orchestrator shape: a deterministic loop with an LLM for judgment
@@ -561,6 +561,7 @@ The research covered Matt Pocock (@mattpocockuk) and poteto (Lauren Tan, @poteto
 | Subscriptions and timers | "Subscriptions belong to a single agent conversation. Events wake that agent as follow-up messages." "A subscription lasts at most 180 days." (https://cursor.com/docs/cloud-agent/capabilities). The changelog says cloud agents only "for now" (https://cursor.com/changelog). | A self-hosted cloud agent offers a timer tool (direct observation of this run's tool list). Cursor has no notion of pi; steering still has to go through `pi-web-cli`. |
 | Hooks | `stop` can return a `followup_message`. `preCompact` "cannot block or modify the compaction behavior". `sessionStart` fires when a self-hosted worker is claimed (https://cursor.com/docs/agent/hooks). | Applies to Cursor agents, not pi sessions. |
 | API v1 | `POST /v1/agents`. "Maximum 20 repositories. On self-hosted targets, only a named any-repo pool takes more than one repository. `machine`, the default pool, and repo-backed pools take one". A follow-up while busy returns `409 agent_busy`. "Webhooks are coming soon." (https://cursor.com/docs/cloud-agent/api/endpoints) | Cloud agents can span repos; a My Machines agent cannot. A steward started this way would get the stream repo as its one repo. |
+| Multi-repo environments | "Cloud agents can also run in multi-repo environments. Use one when a task spans separate frontend, backend, infrastructure, or shared-library repositories. The agent can inspect the full workspace, make coordinated changes, and open pull requests in the repos it changes." (https://cursor.com/docs/cloud-agent). "Select multiple repositories when you create the environment." (https://cursor.com/docs/cloud-agent/setup). Automations can take several repos too (https://cursor.com/changelog/05-13-26, https://cursor.com/changelog/05-20-26). | Cursor-hosted only. On self-hosted workers: a My Machines agent "gets one repo in `repos`. To start an agent with several repos, use an any-repo pool." (https://cursor.com/docs/cloud-agent/self-hosted/my-machines). "There is no named self-hosted multi-repo environment object in the portal yet." (https://cursor.com/docs/cloud-agent/self-hosted/pool). Whether a Project's Workspace can be a multi-repo environment is not documented. |
 
 ### 3.9 Where the sources disagree with ZF's rules, and what was unreachable
 
@@ -571,8 +572,7 @@ The research covered Matt Pocock (@mattpocockuk) and poteto (Lauren Tan, @poteto
 
 **Not reachable or not verified**
 - X profiles and timelines: x.com 403, xcancel 451, nitter 403, threadreaderapp and unrollnow behind login or JS walls. Only individual post IDs could be verified.
-- poteto's "Loops You Can Trust" (search-index excerpts only).
-- Her talk "How I shipped 2,500 PRs last month to production" (only a mention on https://barnabyrobson.org/on-pstack/).
+- Talk venues and dates. "How I Shipped 2000 PRs Last Month — Trusting AI Agents｜Grok Bot｜Lauren Tan" was read through auto-captions (https://www.youtube.com/watch?v=NjoZoUm85x0 via https://youtube-distilled.com/watch/NjoZoUm85x0); its original venue is unknown. A talk titled "How I shipped 2,500 PRs last month to production" is mentioned on https://barnabyrobson.org/on-pstack/ and may be the same one.
 - Complete Guide Pt. 3 (not found).
 - Her LinkedIn (search snippets only).
 - Pocock's videos "What is the dumb zone?" and "/handoff is my new favourite skill" (search snippets only).
@@ -971,7 +971,16 @@ A monorepo would not have prevented the case study's interface failures, because
 - **His own repos.** His internal tooling lives in a repo named `total-typescript-monorepo`, described as "The home of all Matt's internal tooling" (https://github.com/mattpocock/total-typescript-monorepo). That is a fact about his repos, not advice; I found no text where he recommends a monorepo for agents.
 
 **poteto**
-- **No position on repo layout.** No pstack file mentions monorepo, polyrepo or multi-repo (grep of the installed copy at commit e5a8186 of https://github.com/cursor/plugins/tree/main/pstack). The interview captions contain neither word, and "repo" appears only in Pocock's question about triggers "in your repo" (https://youtube-distilled.com/watch/MN9dGgmLyso).
+- **No position on repo layout.** No pstack file mentions monorepo, polyrepo or multi-repo (grep of the installed copy at commit e5a8186 of https://github.com/cursor/plugins/tree/main/pstack). Neither do "Loops You Can Trust" (§3.6), her 2026-10-05 constraints post, or the captions of her "2000 PRs" talk. The interview captions contain neither word, and "repo" appears only in Pocock's question about triggers "in your repo" (https://youtube-distilled.com/watch/MN9dGgmLyso). Her X timeline could not be searched (§3.9), so this means "not found", not "never said".
+- **Constraints are a scale answer, not a layout answer.** "large companies have had to solve this problem since even before agents. because before you had agent slop, you had human slop. … the solution to this was constraints: lint rules, smarter compilers and diagnostics, high quality tests, investments into observability, and so on" (https://x.com/poteto/status/2106916667599278365, via https://api.fxtwitter.com/poteto/status/2106916667599278365).
+- **The codebase is the memory, with one paved path.** From the "2000 PRs" talk (auto-captions, https://youtube-distilled.com/watch/NjoZoUm85x0):
+  - "the code base is really like the best form of memory because agents love to extend existing patterns that they see."
+  - "We want to keep or enforce a single paved path for most blessed patterns. … there should be enough guidance in the code base in CI in lint rules so that the agents are guided to … follow that pat[tern]".
+  - "whenever you see tech debt or bad patterns, your instinct should be I need to write a lint rule against it."
+  - "We have a lot of conventions about where code should live."
+- **Same signals as humans; scripts before agents.** "agents should get the same signals human engineers use to write good code: compiler diagnostics, lints, static analysis, and so on." And: "If a script can do it deterministically, use the script. Agents are useful for the fuzzy parts". ("Loops You Can Trust", §3.6)
+- **Shared code starts from its README.** "For certain kinds of work, like creating shared code or packages that others will use, I am a big believer in readme driven development. … you start with describing the APIs to a hypothetical user, and work backwards to the implementation and architecture." (Complete Guide Pt. 2, https://threadnavigator.com/thread/2097732320606507506/)
+- **Migrate callers, then delete.** "Migrate callers and delete the old API in the same wave instead of preserving compatibility layers." (https://github.com/cursor/plugins/blob/main/pstack/skills/principle-migrate-callers-then-delete-legacy-apis/SKILL.md). Her StyleX loop "searches the repository for behavioral, test, automation, and consumer dependencies" before deleting a class ("Loops You Can Trust"). Both assume every caller is visible and editable together, which is not true by default across repos owned by different teams (inference). §7.3 and §7.4 deal with this.
 - **A prompt for exactly ZF's question.** "/poteto-mode refactor this repo so its architecture is more agent friendly. use /correct and /architect on past commits and review comments to find the mistakes agents make most here. use /recall for context from past chats. answer open questions with prototypes instead of asking me. come back with a plan backed by real data." (https://github.com/cursor/plugins/blob/main/pstack/docs/guide/07-overnight.md). Her method starts from the mistakes agents actually make in the repo, not from a preferred layout.
 - **Fix ranking.** "When you correct agents for the same mistake again and again, the fix belongs in the repo, not in your next prompt." In order: "Make the mistake impossible with architecture or a better data structure"; "Block it with types, or with a lint or CI check whose error names the fix"; "Catch it with a test"; "Write it down as a doc or agent rule. Nothing fails when an agent skips a rule, so this comes last." Also: "Human review isn't on the list." (https://github.com/cursor/plugins/blob/main/pstack/docs/guide/09-make-it-yours.md)
 - **Design for the agent that only sees one file.** `/correct`: "Assume every contributor is an agent that sees only the files it opened, copies the nearest example, and takes the shortest path that compiles. Design the repo so a change that looks right from one file is right for the whole repo." Also "Replace hand-synced lists with one source of truth.", "Run the same command locally and in CI.", and "keep a table in the agent instruction file that pairs each rule with what enforces it" (https://github.com/cursor/plugins/blob/main/pstack/skills/correct/SKILL.md). `/architect` repeats the agent assumption and adds "Prefer the design that hides more complexity behind a smaller, simpler public surface." (https://github.com/cursor/plugins/blob/main/pstack/skills/architect/SKILL.md)
@@ -992,7 +1001,7 @@ A monorepo would not have prevented the case study's interface failures, because
 | Small interfaces at the edges | Code edges are versioned packages (§1.9). Data edges are not: the `datapull_etl` schema and the `signal.yaml` v_i mapping have no version or owner. | the data edges where D1, D2, D3 and D8 happened |
 | One source of truth | No workspace manifest; `~/Projects/alphalab/README.md` is 24 bytes. About 20 `alphalab-hq` repos are checked out side by side, with many worktrees (§1.8). Cross-repo intent lived in one worktree's `.audit/`. | a home above the repos |
 | Ownership a reader can see | No CODEOWNERS in alc-qslite, alc-tenv or alc-cefi-sim-runner. alc-flows is `python/alc-flows` inside alc-qslite, with its own path-filtered workflow. If the §2.1 pairing holds, two teams own paths in one repo and nothing says so. | ownership not encoded |
-| Tooling | A Cursor Project has one Workspace repository; My Machines agents take one repo; cloud agents take up to 20 (§3.8). | partial |
+| Tooling | Cursor-hosted cloud agents and automations support multi-repo environments, and the API takes up to 20 repos. A Cursor Project picks one Workspace repository, and a My Machines agent takes one repo; several repos on a self-hosted worker need an any-repo pool (§3.8). | partial on this host |
 
 ### 7.3 Option K: keep repos split by team, add a workspace repo and contracts at the edges
 
@@ -1005,7 +1014,9 @@ A monorepo would not have prevented the case study's interface failures, because
    - The provider's test in the producing repo checks real output against the contract.
    - Consumers' tests run against a stub generated from the contract.
    - Both pin the contract sha.
+   - The contract's `CONTRACT.md` is written first, as the README for the edge, in the spirit of poteto's readme-driven development for "shared code or packages that others will use".
    - This applies Pocock's "The interface is the test surface" and poteto's "Parse raw data into domain types at the boundary" to data shared between teams (inference).
+   - **Old versions are deleted, not kept.** Across team repos, one PR cannot migrate every caller, so a contract bump briefly leaves two versions live. That is the compatibility layer poteto's migrate-callers principle warns against. Keep it bounded: `CONTRACT.md` already lists every consumer, each consumer's migration is a landing in its own repo (`ledger/landings.tsv`), and the old version is deleted when the last consumer's vendored copy moves to the new sha. The steward flags an old version that is still live after its consumers have moved (inference; a cross-repo form of her rule).
 3. **Short agent docs per repo.** One `AGENTS.md` per repo that is "a brief, not documentation":
    - build and test commands;
    - hard constraints;
@@ -1023,6 +1034,7 @@ A monorepo would not have prevented the case study's interface failures, because
 **What it buys**
 - One checkout and one search scope for agents.
 - Atomic cross-repo code changes in one PR, and one CI view.
+- poteto's migrate-callers-then-delete fits directly: every code caller is in one tree, so an old API can go in the same wave (§7.1).
 - A natural fit for one-repo tools (a Project's single Workspace, My Machines agents).
 
 **What it costs here**
@@ -1047,7 +1059,8 @@ A monorepo would not have prevented the case study's interface failures, because
 | Data edges (where the case study broke) | Versioned contracts with provider and consumer tests | The same work is still needed |
 | Agent context | Short `AGENTS.md` per repo plus pointers to contracts | One tree; needs multi-context docs and progressive disclosure |
 | Checks | Fast per repo plus one integration check at pins | One CI that needs path filtering to stay fast |
-| Cursor tooling | Cloud agents take up to 20 repos; on this host, side-by-side checkouts | Fits one-repo tools |
+| Cursor tooling | Cursor-hosted multi-repo environments; on this host, side-by-side checkouts or an any-repo pool | Fits one-repo tools |
+| Removing an old API | Bounded two-version window per contract bump, tracked in the ledger | One wave, as poteto's principle asks, for code edges only |
 | Migration | Small, incremental, one team at a time | Large, cross-team, all at once |
 | Case-study failures addressed | Interface failures through I1/I2, the writes list and I-b/I-d; goal failures through the stream home | None by itself |
 
