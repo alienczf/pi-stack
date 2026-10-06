@@ -458,6 +458,24 @@ def spawn_thread(
     return sid
 
 
+def rotate_coordinator(project: Project, stream_id: str) -> str:
+    stream_dir = _require_stream(project, stream_id)
+    path = stream_dir / "threads.tsv"
+    rows = load_threads(path)
+    active = [row for row in rows if row.role == "coordinator" and row.status is Status.active]
+    if not active:
+        raise StreamsError(f"stream {stream_id} has no active coordinator")
+    for row in active:
+        piweb.archive(row.session)
+        transition(row, Status.archived)
+    save_threads(path, rows)
+    prompt = (
+        f"You are the new coordinator for stream {stream_id}. "
+        "Your memory is the files in this folder. Read STATE.md, then continue."
+    )
+    return ensure_coordinator(project, stream_dir, opening_prompt=prompt)
+
+
 def adopt_thread(
     project: Project,
     stream_id: str,
