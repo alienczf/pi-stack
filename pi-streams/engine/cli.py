@@ -10,6 +10,7 @@ from engine.doctor import run_doctor
 from engine.project import commit_home, create_stream, home_lock, init_project, load_project, resolve_home
 from engine.threads import (
     adopt_thread,
+    close_stream,
     ensure_coordinator,
     format_status,
     rotate_coordinator,
@@ -64,6 +65,10 @@ def _parser() -> argparse.ArgumentParser:
     rotate = sub.add_parser("rotate")
     rotate.add_argument("stream")
     rotate.add_argument("--home")
+
+    close = sub.add_parser("close")
+    close.add_argument("stream")
+    close.add_argument("--home")
     return parser
 
 
@@ -134,6 +139,16 @@ def cmd_rotate(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_close(args: argparse.Namespace) -> int:
+    home = resolve_home(args.home)
+    with home_lock(home):
+        project = load_project(home)
+        report = close_stream(project, args.stream)
+        commit_home(home, f"pi-streams close {args.stream}")
+    sys.stdout.write("".join(f"{line}\n" for line in report))
+    return 0
+
+
 def cmd_status(args: argparse.Namespace) -> int:
     home = resolve_home(args.home)
     project = load_project(home)
@@ -158,6 +173,8 @@ def main(argv: list[str] | None = None) -> int:
             return run_doctor()
         if args.cmd == "rotate":
             return cmd_rotate(args)
+        if args.cmd == "close":
+            return cmd_close(args)
         if args.cmd == "thread" and args.thread_cmd == "spawn":
             return cmd_thread_spawn(args)
         if args.cmd == "thread" and args.thread_cmd == "adopt":
