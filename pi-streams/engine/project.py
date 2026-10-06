@@ -401,6 +401,20 @@ def commit_home(home: Path, message: str) -> bool:
     return True
 
 
+def push_home(home: Path, remote: str) -> None:
+    if remote == "":
+        return
+    ensure_origin(home, remote)
+    branch = git(home, "branch", "--show-current").strip()
+    try:
+        pushed = git(home, "rev-parse", "--verify", "--quiet", f"refs/remotes/origin/{branch}").strip()
+    except StreamsError:
+        pushed = ""
+    if pushed == git(home, "rev-parse", "HEAD").strip():
+        return
+    git(home, "push", "--quiet", "--set-upstream", "origin", branch)
+
+
 def init_project(
     project_root: Path,
     *,
