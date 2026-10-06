@@ -387,7 +387,7 @@ def ensure_origin(home: Path, remote: str) -> None:
 
 @contextlib.contextmanager
 def home_lock(home: Path) -> Iterator[None]:
-    # Every stream's coordinator and the tick write into one home repo.
+    # The coordinators of every stream commit into this one repo.
     with open(home / ".git" / "pi-streams.lock", "a", encoding="utf-8") as handle:
         fcntl.flock(handle, fcntl.LOCK_EX)
         yield
