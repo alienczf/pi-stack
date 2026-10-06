@@ -58,7 +58,7 @@ class TickTests(TickCase):
         self.assertFalse((self.etl / "log" / "events.jsonl").exists())
         self.assertEqual(self.state(self.etl), {
             "pending": [],
-            "sessions": {"t-1": {"asks": [], "busy": True, "context": False}},
+            "sessions": {"t-1": {"asks": [], "busy": True, "context": False, "queued": {}}},
         })
         self.assertEqual(git(self.home, self.env, "log", "-1", "--format=%s"), "pi-streams tick\n")
         self.assertEqual(git(self.home, self.env, "status", "--porcelain"), "")
@@ -81,7 +81,7 @@ class TickTests(TickCase):
         )
         self.assertEqual(self.state(self.etl), {
             "pending": [],
-            "sessions": {"t-1": {"asks": [], "busy": False, "context": False}},
+            "sessions": {"t-1": {"asks": [], "busy": False, "context": False, "queued": {}}},
         })
         self.assertEqual(git(self.home, self.env, "rev-list", "--count", "HEAD"), "2\n")
 
@@ -124,7 +124,7 @@ class TickTests(TickCase):
         )
         self.assertEqual(self.state(self.etl), {
             "pending": [],
-            "sessions": {"t-1": {"asks": ["ask-2"], "busy": False, "context": True}},
+            "sessions": {"t-1": {"asks": ["ask-2"], "busy": False, "context": True, "queued": {}}},
         })
 
     def test_a_streaming_coordinator_gets_the_events_as_a_follow_up(self) -> None:
@@ -252,7 +252,10 @@ class TickTests(TickCase):
             got_list(ops),
             got_prompt("coord-9", "pi-streams tick 2026-10-06T12:05:00Z:\nidle t-9 review"),
         ])
-        self.assertEqual(self.state(self.etl)["sessions"], {"t-1": {"asks": [], "busy": True, "context": False}})
+        self.assertEqual(
+            self.state(self.etl)["sessions"],
+            {"t-1": {"asks": [], "busy": True, "context": False, "queued": {}}},
+        )
 
 
 if __name__ == "__main__":

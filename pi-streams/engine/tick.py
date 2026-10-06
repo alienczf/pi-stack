@@ -11,7 +11,8 @@ from engine import StreamsError, clock, piweb
 from engine.project import Project, commit_home, home_lock, load_project, stream_dirs
 from engine.threads import Status, Thread, load_threads, rotate_coordinator, save_threads
 
-WAKE_KINDS = frozenset({"idle", "ask", "context"})
+WAKE_KINDS = frozenset({"idle", "ask", "context", "stale-steer"})
+QUEUE_FLAGS = {"steer": "steer", "followUp": "follow-up"}
 
 
 @dataclass
@@ -32,6 +33,7 @@ class Seen:
     busy: bool = False
     asks: list[str] = field(default_factory=list)
     context: bool = False
+    queued: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -90,6 +92,15 @@ def _questions(ask: dict[str, object]) -> str:
     return "\n".join(
         item["question"] for item in questions if isinstance(item, dict) and isinstance(item.get("question"), str)
     )
+
+
+def _queued(status: dict[str, object]) -> dict[str, str]:
+    items = status.get("queuedMessages")
+    found: dict[str, str] = {}
+    for item in items if isinstance(items, list) else []:
+        if isinstance(item, dict) and item.get("kind") in QUEUE_FLAGS and isinstance(item.get("text"), str):
+            found.setdefault(item["text"], item["kind"])
+    return found
 
 
 class StreamTick:
@@ -176,6 +187,27 @@ class StreamTick:
         if not old.context and tokens is not None and tokens >= self.caps.thread_handover_tokens:
             new.context = True
             self.emit("context", row, f"{tokens} tokens")
+        self.resend_stale(row, status, old, new)
+
+    def resend_stale(self, row: Thread, status: dict[str, object], old: Seen, new: Seen) -> None:
+        queued = _queued(status)
+        new.queued = {text: old.queued.get(text, self.at) for text in queued}
+        limit = timedelta(minutes=self.caps.steer_queue_minutes)
+        stale = [text for text, seen in new.queued.items() if self.since(seen) >= limit]
+        if not stale:
+            return
+        for text in stale:
+            self.emit("stale-steer", row, text)
+        # queue/clear drops every queued message, not only the stale ones.
+        piweb.queue_clear(row.session)
+        for text, kind in queued.items():
+            piweb.prompt(row.session, text, "steer" if text in stale else QUEUE_FLAGS[kind])
+        for text in stale:
+            new.queued[text] = self.at
+
+    def since(self, stamp: str) -> timedelta:
+        seen = clock.parse(stamp)
+        return timedelta(0) if seen is None else self.now - seen
 
     def wake(self) -> None:
         coord = self.coordinator()
