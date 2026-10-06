@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from collections import Counter
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
@@ -41,6 +42,7 @@ class TickState:
     sessions: dict[str, Seen] = field(default_factory=dict)
     pending: list[Event] = field(default_factory=list)
     outages: list[str] = field(default_factory=list)
+    rotating: bool = False
 
 
 def write_atomic(path: Path, text: str) -> None:
@@ -62,6 +64,7 @@ def load_state(path: Path) -> TickState:
             sessions={str(sid): Seen(**seen) for sid, seen in data.get("sessions", {}).items()},
             pending=[Event(**item) for item in data.get("pending", [])],
             outages=[str(sid) for sid in data.get("outages", [])],
+            rotating=data.get("rotating", False) is True,
         )
     except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
         raise StreamsError(f"{path}: {exc}") from exc
@@ -72,6 +75,7 @@ def save_state(path: Path, state: TickState) -> None:
         "sessions": {sid: asdict(seen) for sid, seen in state.sessions.items()},
         "pending": [asdict(event) for event in state.pending],
         "outages": state.outages,
+        "rotating": state.rotating,
     }
     write_atomic(path, json.dumps(data, indent=2, sort_keys=True) + "\n")
 
@@ -164,14 +168,21 @@ class StreamTick:
         self.events: list[Event] = []
         self.logged = 0
         self.listings: dict[str, dict[str, dict[str, object]]] = {}
+        self.loaded = False
+        self.error: str | None = None
 
     def run(self) -> None:
-        self.state = load_state(self.state_path)
-        self.rows = load_threads(self.rows_path)
-        self.observe()
-        self.flush()
-        self.wake()
-        self.archive_done()
+        try:
+            self.state = load_state(self.state_path)
+            self.loaded = True
+            self.rows = load_threads(self.rows_path)
+            self.observe()
+            self.flush()
+            self.wake()
+            self.archive_done()
+        except StreamsError as exc:
+            self.error = str(exc)
+            self.emit("tick-error", detail=self.error)
         self.flush()
 
     def emit(self, kind: str, row: Thread | None = None, detail: str = "") -> None:
@@ -190,7 +201,9 @@ class StreamTick:
                 for event in self.events[self.logged :]:
                     handle.write(json.dumps(asdict(event), ensure_ascii=False) + "\n")
             self.logged = len(self.events)
-        save_state(self.state_path, self.state)
+        # A state file that does not parse is left for a person to read.
+        if self.loaded:
+            save_state(self.state_path, self.state)
 
     def listing(self, cwd: str) -> dict[str, dict[str, object]]:
         if cwd not in self.listings:
@@ -294,20 +307,30 @@ class StreamTick:
 
     def wake(self) -> None:
         coord = self.coordinator()
-        if not self.state.pending or coord is None or self.out(coord):
+        if not self.state.pending or (coord is None and not self.state.rotating):
+            return
+        if coord is not None and self.out(coord):
             return
         text = "\n".join([f"pi-streams tick {self.at}:", *(event.line() for event in self.state.pending)])
-        status = piweb.session_status(coord.session)
-        if status.get("isStreaming") is True:
-            piweb.prompt(coord.session, text, "follow-up")
-        elif self.warm(coord, status):
-            piweb.prompt(coord.session, text)
-        else:
-            self.flush()
-            sid = rotate_coordinator(self.project, self.stream)
-            self.rows = load_threads(self.rows_path)
-            piweb.prompt(sid, text, "follow-up")
+        sid, behavior = self.wake_target(coord)
+        piweb.prompt(sid, text, behavior)
         self.state.pending = []
+        self.state.rotating = False
+
+    def wake_target(self, coord: Thread | None) -> tuple[str, str | None]:
+        if coord is not None:
+            status = piweb.session_status(coord.session)
+            if status.get("isStreaming") is True:
+                return coord.session, "follow-up"
+            if self.warm(coord, status):
+                return coord.session, None
+        # A rotation that fails after its archive leaves no active coordinator.
+        # The flag lets the next tick finish it instead of waiting for pi-streams rotate.
+        self.state.rotating = True
+        self.flush()
+        sid = rotate_coordinator(self.project, self.stream)
+        self.rows = load_threads(self.rows_path)
+        return sid, "follow-up"
 
     def archive_done(self) -> None:
         for row in self.rows:
@@ -329,25 +352,33 @@ class StreamTick:
         return modified is not None and self.now - modified < timedelta(hours=self.caps.warm_idle_hours)
 
 
-def tick_home(home: Path, now: datetime) -> list[str]:
-    lines: list[str] = []
+def tick_home(home: Path, now: datetime) -> bool:
+    ok = True
     with home_lock(home):
         project = load_project(home)
         alerts = Alerts(home / "ALERTS")
         for stream_dir in stream_dirs(home):
             run = StreamTick(project, stream_dir, now, alerts)
             run.run()
+            if run.error is not None:
+                ok = False
+                print(f"{stream_dir}: {run.error}", file=sys.stderr, flush=True)
             counts = Counter(event.kind for event in run.events)
             if counts:
-                lines.append(f"{stream_dir}\t" + "\t".join(f"{kind}={counts[kind]}" for kind in sorted(counts)))
+                counted = "\t".join(f"{kind}={counts[kind]}" for kind in sorted(counts))
+                print(f"{stream_dir}\t{counted}", flush=True)
         alerts.save()
         commit_home(home, "pi-streams tick")
-    return lines
+    return ok
 
 
 def run_tick(homes: list[Path]) -> int:
     now = clock.now()
+    ok = True
     for home in homes:
-        for line in tick_home(home, now):
-            print(line)
-    return 0
+        try:
+            ok = tick_home(home, now) and ok
+        except (StreamsError, OSError) as exc:
+            ok = False
+            print(f"{home}: {exc}", file=sys.stderr, flush=True)
+    return 0 if ok else 1
