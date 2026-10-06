@@ -458,6 +458,43 @@ def spawn_thread(
     return sid
 
 
+def adopt_thread(
+    project: Project,
+    stream_id: str,
+    session_id: str,
+    worktree: Path,
+    role: str,
+) -> str:
+    _require_role(role)
+    stream_dir = _require_stream(project, stream_id)
+    worktree = worktree.expanduser().resolve()
+    if not worktree.is_dir():
+        raise StreamsError(f"worktree is not a directory: {worktree}")
+    listed = piweb.list_sessions(str(worktree))
+    if session_id not in [item.get("id") for item in listed]:
+        raise StreamsError(f"session {session_id} is not in {worktree}")
+    branch = git(worktree, "branch", "--show-current").strip()
+    if branch == "":
+        raise StreamsError(f"{worktree} has no branch")
+    repo = repo_for_worktree(project, worktree)
+    session = piweb.session_status(session_id)
+    raw = session.get("model")
+    thinking = session.get("thinkingLevel")
+    if not isinstance(raw, dict) or not isinstance(raw.get("provider"), str) or not isinstance(raw.get("id"), str):
+        raise StreamsError("status has no model provider/id")
+    if not isinstance(thinking, str) or thinking == "":
+        raise StreamsError("status has no thinkingLevel")
+    model = f"{raw['provider']}/{raw['id']}"
+    sha = git(worktree, "rev-parse", "HEAD").strip()
+    write_stream_pointer(worktree, stream_dir)
+    ensure_stream_exclude(worktree)
+    _append_thread(
+        stream_dir / "threads.tsv",
+        _thread_row(session_id, role, repo.name, worktree, branch, sha, model, thinking),
+    )
+    return session_id
+
+
 def _thread_row(
     sid: str,
     role: str,
