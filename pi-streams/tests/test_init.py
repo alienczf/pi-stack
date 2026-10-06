@@ -162,6 +162,20 @@ class InitTests(EngineCase):
             "https://example.test/streams.git",
         )
 
+    def test_init_keeps_an_origin_that_is_not_the_remote(self) -> None:
+        self.home.mkdir()
+        git(self.home, self.env, "init", "--quiet")
+        git(self.home, self.env, "remote", "add", "origin", "https://example.test/other.git")
+        proc = self.run_streams("init", str(self.root), "--remote", "https://example.test/streams.git", "-y")
+        self.assertEqual(
+            (proc.returncode, proc.stderr.splitlines()[-1]),
+            (1, "origin is https://example.test/other.git, but project.toml names remote https://example.test/streams.git"),
+        )
+        self.assertEqual(
+            git(self.home, self.env, "remote", "get-url", "origin").strip(),
+            "https://example.test/other.git",
+        )
+
     def test_pi_web_url_comes_from_config(self) -> None:
         config = self.user_home / ".config" / "pi-web"
         config.mkdir(parents=True)

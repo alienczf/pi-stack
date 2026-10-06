@@ -49,6 +49,31 @@ class PushTests(TickCase):
         self.assertIn(str(self.remote), proc.stderr)
         self.assertEqual(git(self.home, self.env, "status", "--porcelain"), "")
 
+    def test_tick_will_not_push_to_an_origin_project_toml_does_not_name(self) -> None:
+        other = self.tmp / "other.git"
+        for bare in (self.remote, other):
+            git(self.tmp, self.env, "init", "--bare", "--quiet", str(bare))
+        git(self.home, self.env, "remote", "add", "origin", str(other))
+        proc = self.tick("2026-10-06T12:00:00Z")
+        self.assertEqual((proc.returncode, proc.stdout), (1, ""))
+        self.assertEqual(
+            proc.stderr,
+            f"{self.home.resolve()}: origin is {other}, but project.toml names remote {self.remote}\n",
+        )
+        for bare in (self.remote, other):
+            self.assertEqual(git(bare, self.env, "for-each-ref"), "")
+
+    def test_tick_will_not_push_a_detached_head(self) -> None:
+        git(self.tmp, self.env, "init", "--bare", "--quiet", str(self.remote))
+        git(self.home, self.env, "checkout", "--quiet", "--detach")
+        proc = self.tick("2026-10-06T12:00:00Z")
+        self.assertEqual((proc.returncode, proc.stdout), (1, ""))
+        self.assertEqual(
+            proc.stderr,
+            f"{self.home.resolve()}: HEAD is detached, so tick cannot push it to {self.remote}\n",
+        )
+        self.assertEqual(git(self.remote, self.env, "for-each-ref"), "")
+
 
 if __name__ == "__main__":
     unittest.main()
