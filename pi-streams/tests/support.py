@@ -146,6 +146,7 @@ class EngineCase(unittest.TestCase):
         return subprocess.run(
             [os.fspath(CLI), *args],
             env=self.env,
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
             encoding="utf-8",
