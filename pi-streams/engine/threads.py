@@ -17,7 +17,6 @@ class Status(enum.Enum):
     archived = "archived"
 
 
-# The only legal status changes.
 TRANSITIONS: dict[Status, frozenset[Status]] = {
     Status.active: frozenset({Status.waiting_quota, Status.done, Status.archived}),
     Status.waiting_quota: frozenset({Status.active, Status.archived}),
