@@ -36,6 +36,7 @@ class Seen:
     asks: list[str] = field(default_factory=list)
     context: bool = False
     queued: dict[str, str] = field(default_factory=dict)
+    replay: list[list[str]] = field(default_factory=list)
 
 
 @dataclass
@@ -211,9 +212,13 @@ class StreamTick:
             self.flush()
             self.wake()
             self.archive_done()
-        except StreamsError as exc:
+        except (StreamsError, OSError) as exc:
             self.fail(str(exc))
-        self.flush()
+        try:
+            self.flush()
+        except OSError as exc:
+            if str(exc) not in self.errors:
+                self.errors.append(str(exc))
 
     def emit(self, kind: str, row: Thread | None = None, detail: str = "") -> None:
         event = Event(self.at, kind, row.session if row else "", row.role if row else "", detail)
@@ -329,7 +334,7 @@ class StreamTick:
             if not self.out(row):
                 self.set_out(row, True)
                 self.emit("outage", row, summary)
-        elif self.out(row):
+        elif message is not None and self.out(row):
             self.set_out(row, False)
             self.alerts.clear(self.stream, row.session)
             self.emit("recovered", row)
@@ -347,6 +352,9 @@ class StreamTick:
         # even when it did so between two ticks. An adopted thread that is already
         # idle reports idle once too, which tells its coordinator that it waits.
         old = self.state.sessions.get(row.session, Seen(busy=True))
+        if old.replay:
+            # The last resend stopped after queue/clear, so what is not queued now was dropped.
+            self.replay(row, old, Counter(text for text, _kind in _queued(status)))
         new = Seen(
             busy=status.get("isStreaming") is True or _count(status.get("pendingMessageCount")) > 0,
             context=old.context,
@@ -378,12 +386,23 @@ class StreamTick:
             return
         for text in stale:
             self.emit("stale-steer", row, text)
+        new.replay = [[text, "steer" if text in stale else QUEUE_FLAGS[kind]] for text, kind in queued]
+        self.flush()
         # queue/clear drops every queued message, not only the stale ones.
         piweb.queue_clear(row.session)
-        for text, kind in queued:
-            piweb.prompt(row.session, text, "steer" if text in stale else QUEUE_FLAGS[kind])
+        self.replay(row, new, Counter())
         for text in stale:
             new.queued[text] = self.at
+
+    def replay(self, row: Thread, seen: Seen, waiting: Counter[str]) -> None:
+        while seen.replay:
+            text, behavior = seen.replay[0]
+            if waiting[text] > 0:
+                waiting[text] -= 1
+            else:
+                piweb.prompt(row.session, text, behavior)
+            del seen.replay[0]
+            self.flush()
 
     def since(self, stamp: str) -> timedelta:
         seen = clock.parse(stamp)
@@ -402,6 +421,13 @@ class StreamTick:
         self.state.rotating = False
 
     def wake_target(self, coord: Thread | None) -> tuple[str, str | None]:
+        if coord is not None and self.listing(coord.worktree).get(coord.session, {}).get("archived") is True:
+            # A rotation that stopped after its archive call leaves the row active.
+            # pi-web still reopens an archived session to answer status or a prompt,
+            # so only the listing shows that nobody watches it.
+            transition(coord, Status.archived)
+            self.rows_dirty = True
+            coord = None
         if coord is not None:
             status = piweb.session_status(coord.session)
             if status.get("isStreaming") is True:
