@@ -456,9 +456,10 @@ def rotate_coordinator(project: Project, stream_id: str) -> str:
     stream_dir = _require_stream(project, stream_id)
     path = stream_dir / "threads.tsv"
     rows = load_threads(path)
-    active = [row for row in rows if row.role == "coordinator" and row.status is Status.active]
-    if not active:
-        raise StreamsError(f"stream {stream_id} has no active coordinator")
+    coordinators = [row for row in rows if row.role == "coordinator"]
+    if not coordinators:
+        raise StreamsError(f"stream {stream_id} has no coordinator; run pi-streams new {stream_id}")
+    active = [row for row in coordinators if row.status is Status.active]
     for row in active:
         piweb.archive(row.session)
         transition(row, Status.archived)
