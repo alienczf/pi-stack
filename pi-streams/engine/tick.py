@@ -13,7 +13,7 @@ from engine.project import Project, commit_home, home_lock, load_project, push_h
 from engine.subscriptions import SOURCES, Subscription, load_subscriptions
 from engine.threads import Status, Thread, load_threads, rotate_coordinator, save_threads, transition
 
-WAKE_KINDS = frozenset({"idle", "ask", "context", "stale-steer", "outage", "recovered", "subscription"})
+WAKE_KINDS = frozenset({"idle", "ask", "context", "stale-steer", "outage", "recovered", "subscription", "claim"})
 QUEUE_FLAGS = {"steer": "steer", "followUp": "follow-up"}
 
 
@@ -46,12 +46,21 @@ class Mark:
 
 
 @dataclass
+class Claim:
+    key: str
+    alert: str
+    row: Thread
+    detail: str
+
+
+@dataclass
 class TickState:
     sessions: dict[str, Seen] = field(default_factory=dict)
     pending: list[Event] = field(default_factory=list)
     outages: list[str] = field(default_factory=list)
     rotating: bool = False
     subscriptions: dict[str, Mark] = field(default_factory=dict)
+    claims: list[str] = field(default_factory=list)
 
 
 def write_atomic(path: Path, text: str) -> None:
@@ -75,6 +84,7 @@ def load_state(path: Path) -> TickState:
             outages=[str(sid) for sid in data.get("outages", [])],
             rotating=data.get("rotating", False) is True,
             subscriptions={str(sub): Mark(**mark) for sub, mark in data.get("subscriptions", {}).items()},
+            claims=[str(key) for key in data.get("claims", [])],
         )
     except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
         raise StreamsError(f"{path}: {exc}") from exc
@@ -87,6 +97,7 @@ def save_state(path: Path, state: TickState) -> None:
         "outages": state.outages,
         "rotating": state.rotating,
         "subscriptions": {sub: asdict(mark) for sub, mark in state.subscriptions.items()},
+        "claims": state.claims,
     }
     write_atomic(path, json.dumps(data, indent=2, sort_keys=True) + "\n")
 
@@ -162,7 +173,14 @@ def _queued(status: dict[str, object]) -> list[tuple[str, str]]:
 
 
 class StreamTick:
-    def __init__(self, project: Project, stream_dir: Path, now: datetime, alerts: Alerts) -> None:
+    def __init__(
+        self,
+        project: Project,
+        stream_dir: Path,
+        now: datetime,
+        alerts: Alerts,
+        claims: list[Claim] | None,
+    ) -> None:
         self.project = project
         self.caps = project.caps
         self.stream_dir = stream_dir
@@ -170,6 +188,7 @@ class StreamTick:
         self.now = now
         self.at = clock.stamp(now)
         self.alerts = alerts
+        self.claims = claims
         self.state_path = stream_dir / "log" / "tick-state.json"
         self.events_path = stream_dir / "log" / "events.jsonl"
         self.rows_path = stream_dir / "threads.tsv"
@@ -187,6 +206,7 @@ class StreamTick:
             self.state = load_state(self.state_path)
             self.loaded = True
             self.rows = load_threads(self.rows_path)
+            self.check_claims()
             self.observe()
             self.check_subscriptions()
             self.flush()
@@ -209,6 +229,19 @@ class StreamTick:
     def fail(self, detail: str) -> None:
         self.errors.append(detail)
         self.emit("tick-error", detail=detail)
+
+    def check_claims(self) -> None:
+        if self.claims is None:
+            return
+        for claim in self.claims:
+            self.alerts.add(f"{self.at} {claim.alert}")
+            if claim.key not in self.state.claims:
+                self.emit("claim", claim.row, claim.detail)
+        held = [claim.key for claim in self.claims]
+        for key in self.state.claims:
+            if key not in held:
+                self.alerts.clear("claim", key)
+        self.state.claims = held
 
     def check_subscriptions(self) -> None:
         if self.coordinator() is None and not self.state.rotating:
@@ -433,13 +466,47 @@ class StreamTick:
         return modified is not None and self.now - modified < timedelta(hours=self.caps.warm_idle_hours)
 
 
+def find_claims(dirs: list[Path]) -> dict[str, list[Claim]] | None:
+    held: list[tuple[str, Thread]] = []
+    for stream_dir in dirs:
+        try:
+            rows = load_threads(stream_dir / "threads.tsv")
+        except StreamsError:
+            # Without every stream's rows, a claim that is not found may still hold.
+            return None
+        held += [(stream_dir.name, row) for row in rows if row.status is not Status.archived]
+    found: dict[str, list[Claim]] = {}
+    for index, (a_stream, a) in enumerate(held):
+        for b_stream, b in held[index + 1 :]:
+            what = _shared(a, b) if a_stream != b_stream else ""
+            if what == "":
+                continue
+            key = f"{a_stream}/{a.session},{b_stream}/{b.session}"
+            alert = f"claim {key} {a.role} and {b.role} share {what}"
+            for stream, row, other_stream, other in ((a_stream, a, b_stream, b), (b_stream, b, a_stream, a)):
+                detail = f"shares {what} with {other_stream} {other.role} {other.session}"
+                found.setdefault(stream, []).append(Claim(key, alert, row, detail))
+    return found
+
+
+def _shared(a: Thread, b: Thread) -> str:
+    if a.worktree != "" and a.worktree == b.worktree:
+        return f"worktree {a.worktree}"
+    if a.repo != "" and a.branch != "" and (a.repo, a.branch) == (b.repo, b.branch):
+        return f"{a.repo} branch {a.branch}"
+    return ""
+
+
 def tick_home(home: Path, now: datetime) -> bool:
     ok = True
     with home_lock(home):
         project = load_project(home)
         alerts = Alerts(home / "ALERTS")
-        for stream_dir in stream_dirs(home):
-            run = StreamTick(project, stream_dir, now, alerts)
+        dirs = stream_dirs(home)
+        claims = find_claims(dirs)
+        for stream_dir in dirs:
+            mine = None if claims is None else claims.get(stream_dir.name, [])
+            run = StreamTick(project, stream_dir, now, alerts, mine)
             run.run()
             for error in run.errors:
                 ok = False
