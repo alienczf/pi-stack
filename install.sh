@@ -13,6 +13,7 @@ pstack_skill_names=(
 	figure-it-out
 	show-me-your-work
 	reflect
+	correct
 	create-verification-skill
 	maintain-verification-skill
 )
@@ -219,9 +220,14 @@ plugins_root="$pi_stack/.plugins"
 default_pstack="${plugins_root}/pstack"
 pstack_git="${PSTACK_GIT:-https://github.com/cursor/plugins.git}"
 pstack="${PSTACK:-}"
+pstack_existed=0
+if [[ -n "$pstack" ]]; then
+	pstack_existed=1
+fi
 if [[ -z "$pstack" ]]; then
 	if [[ -f "${default_pstack}/skills/poteto-mode/SKILL.md" ]]; then
 		pstack="$default_pstack"
+		pstack_existed=1
 	else
 		if [[ -e "$plugins_root" && ! -d "$plugins_root/.git" ]]; then
 			printf '%s exists and is not a git clone. Set PSTACK or remove it.\n' "$plugins_root" >&2
@@ -244,7 +250,11 @@ if [[ ! -f "$pstack/skills/poteto-mode/SKILL.md" ]]; then
 fi
 for name in "${pstack_skill_names[@]}"; do
 	if [[ ! -f "$pstack/skills/$name/SKILL.md" ]]; then
-		printf 'PSTACK=%s is missing selected skill root: %s\n' "$pstack" "$name" >&2
+		if [[ "$pstack_existed" == 1 ]]; then
+			printf 'PSTACK=%s predates selected skill %s. Review it with update-pstack status, apply it with update-pstack apply --expected-pi-stack REVISION --expected-current REVISION --expected-upstream REVISION (or /update-pstack in pi), then rerun the installer.\n' "$pstack" "$name" >&2
+		else
+			printf 'PSTACK=%s is missing selected skill root: %s\n' "$pstack" "$name" >&2
+		fi
 		exit 1
 	fi
 done
