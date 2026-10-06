@@ -252,7 +252,7 @@ class StreamTick:
             if not self.out(row):
                 self.set_out(row, True)
                 self.emit("outage", row, summary)
-        elif self.out(row):
+        elif message is not None and self.out(row):
             self.set_out(row, False)
             self.alerts.clear(self.stream, row.session)
             self.emit("recovered", row)

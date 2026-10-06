@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
 
 from support import git
 from tick_support import (
@@ -113,6 +114,21 @@ class OutageTests(TickCase):
             '"detail": ""}\n',
         )
         self.assertEqual(git(self.home, self.env, "status", "--porcelain"), "")
+
+    def test_a_log_with_no_reply_does_not_end_an_outage(self) -> None:
+        self.write_log("t-1", "/wt/datapull", user("Pull the 1m bars."), failure(LIMIT))
+        self.stub.set_routes(self.routes(status("t-1")))
+        self.assertEqual(self.tick("2026-10-06T12:00:00Z").returncode, 0)
+        out = HEADER + row("coord-1", "coordinator", str(self.etl)) + row("t-1", "datapull", "/wt/datapull", status="waiting_quota")
+        alert = f"2026-10-06T12:00:00Z etl t-1 datapull {SHOWN}\n"
+
+        Path(self.log_path("t-1")).unlink()
+        gone = self.tick("2026-10-06T12:05:00Z")
+        self.assertEqual((gone.returncode, gone.stdout), (0, ""))
+        self.write_log("t-1", "/wt/datapull", user("Continue."))
+        unanswered = self.tick("2026-10-06T12:10:00Z")
+        self.assertEqual((unanswered.returncode, unanswered.stdout), (0, ""))
+        self.assertEqual((self.rows(self.etl), self.alerts()), (out, alert))
 
     def test_a_coordinator_in_an_outage_stays_active_and_gets_its_events_after(self) -> None:
         self.write_log("coord-1", str(self.etl), user("/skill:stream-kickoff"), failure(LIMIT))
