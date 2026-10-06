@@ -451,16 +451,17 @@ install_tick_units() {
 	systemctl --user enable --now pi-streams-tick.timer
 }
 
-resolve_pi_web() {
-	if command -v pi-web >/dev/null 2>&1; then
-		command -v pi-web
+resolve_node_tool() {
+	local name="$1"
+	if command -v "$name" >/dev/null 2>&1; then
+		command -v "$name"
 		return 0
 	fi
 	local bins=()
 	local saved
 	saved="$(shopt -p nullglob || true)"
 	shopt -s nullglob
-	bins=("${HOME}/.local/bin/pi-web" "${HOME}/.local/share/pi-node"/node-*/bin/pi-web)
+	bins=("${HOME}/.local/bin/${name}" "${HOME}/.local/share/pi-node"/node-*/bin/"${name}")
 	eval "$saved"
 	local c
 	for c in "${bins[@]}"; do
@@ -473,7 +474,7 @@ resolve_pi_web() {
 }
 
 ensure_pi_web() {
-	if resolve_pi_web >/dev/null; then
+	if resolve_node_tool pi-web >/dev/null; then
 		return 0
 	fi
 	printf 'npm install -g @jmfederico/pi-web --allow-scripts=node-pty\n'
@@ -481,13 +482,21 @@ ensure_pi_web() {
 	if [[ "${PI_STACK_SKIP_PACKAGES:-}" == 1 ]]; then
 		return 0
 	fi
-	npm install -g @jmfederico/pi-web --allow-scripts=node-pty
+	local npm
+	if ! npm="$(resolve_node_tool npm)"; then
+		printf 'npm is not on PATH or under ~/.local/share/pi-node. Install Node.js, then run the two commands above.\n' >&2
+		return 1
+	fi
+	# npm and pi-web start with #!/usr/bin/env node, and node sits beside npm.
+	local node_path
+	node_path="$(dirname "$npm"):$PATH"
+	PATH="$node_path" "$npm" install -g @jmfederico/pi-web --allow-scripts=node-pty
 	local pi_web
-	if ! pi_web="$(resolve_pi_web)"; then
+	if ! pi_web="$(resolve_node_tool pi-web)"; then
 		printf 'npm install -g @jmfederico/pi-web did not put pi-web on PATH\n' >&2
 		return 1
 	fi
-	"$pi_web" install
+	PATH="$node_path" "$pi_web" install
 }
 
 run_project_setup() {
