@@ -181,10 +181,13 @@ class StreamTick:
             self.flush()
             self.wake()
             self.archive_done()
-        except StreamsError as exc:
+        except (StreamsError, OSError) as exc:
             self.error = str(exc)
             self.emit("tick-error", detail=self.error)
-        self.flush()
+        try:
+            self.flush()
+        except OSError as exc:
+            self.error = self.error or str(exc)
 
     def emit(self, kind: str, row: Thread | None = None, detail: str = "") -> None:
         event = Event(self.at, kind, row.session if row else "", row.role if row else "", detail)

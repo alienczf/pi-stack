@@ -80,6 +80,26 @@ class FailureTests(TickCase):
         self.assertEqual(self.state(self.etl), {"outages": [], "pending": [], "rotating": False, "sessions": {}})
         self.assertEqual(git(self.home, self.env, "status", "--porcelain"), "")
 
+    def test_a_stream_whose_log_cannot_be_written_does_not_stop_the_others(self) -> None:
+        (self.etl / "log" / "events.jsonl").mkdir(parents=True)
+        ops = self.make_stream(
+            self.home,
+            "ops",
+            row("coord-2", "coordinator", str((self.home / "ops").resolve())) + row("t-2", "review", "/wt/review"),
+        )
+        self.stub.set_routes([
+            ("GET", "/api/sessions/t-1/status", 200, status("t-1", streaming=True, ask=ASK)),
+            ("GET", "/api/sessions/t-2/status", 200, status("t-2", streaming=True, ask=ASK)),
+            ("GET", "/api/sessions/coord-2/status", 200, status("coord-2")),
+            self.listed(info("coord-2", str(ops), self.log_path("coord-2")), info("t-2", "/wt/review", self.log_path("t-2"))),
+            PROMPTS,
+        ])
+        proc = self.tick("2026-10-06T12:00:00Z")
+        self.assertEqual((proc.returncode, proc.stdout), (1, f"{self.etl}\task=1\ttick-error=1\n{ops}\task=1\n"))
+        self.assertTrue(proc.stderr.startswith(f"{self.etl}: [Errno 21] Is a directory"), proc.stderr)
+        self.assertEqual(self.stub.requests[-1], got_prompt("coord-2", "pi-streams tick 2026-10-06T12:00:00Z:\nask t-2 review Which venue first?"))
+        self.assertEqual(git(self.home, self.env, "status", "--porcelain"), "")
+
     def test_a_rotation_that_fails_after_its_archive_is_finished_by_the_next_tick(self) -> None:
         self.stub.set_routes([
             ("GET", "/api/sessions/t-1/status", 200, status("t-1", streaming=True, ask=ASK)),
