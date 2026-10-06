@@ -4,7 +4,7 @@ Role: {role}. Repo: {repo}. Branch: {branch}. Base: {base}.
 
 Read {stream_dir}/STREAM.md. Restate its goal and acceptance in your first reply before working.
 
-Stay in {worktree}. Never write outside it. Verify on the real artifact.
+Stay in {worktree}. Never write outside it, except for the handover below. Verify on the real artifact.
 
 {note}
 

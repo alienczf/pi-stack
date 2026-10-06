@@ -28,7 +28,7 @@ def expected_brief(stream_dir: str, worktree: str, base: str) -> str:
         "\n"
         f"Read {stream_dir}/STREAM.md. Restate its goal and acceptance in your first reply before working.\n"
         "\n"
-        f"Stay in {worktree}. Never write outside it. Verify on the real artifact.\n"
+        f"Stay in {worktree}. Never write outside it, except for the handover below. Verify on the real artifact.\n"
         "\n"
         "ship the slice\n"
         "\n"
