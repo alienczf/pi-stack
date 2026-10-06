@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import json
 import os
 import re
@@ -7,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import tomllib
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -382,6 +385,14 @@ def ensure_origin(home: Path, remote: str) -> None:
     git(home, "remote", "add", "origin", remote)
 
 
+@contextlib.contextmanager
+def home_lock(home: Path) -> Iterator[None]:
+    # Every stream's coordinator and the tick write into one home repo.
+    with open(home / ".git" / "pi-streams.lock", "a", encoding="utf-8") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        yield
+
+
 def commit_home(home: Path, message: str) -> bool:
     git(home, "add", "-A")
     if git(home, "status", "--porcelain").strip() == "":
@@ -448,14 +459,15 @@ def init_project(
         )
         first = True
     home_path.mkdir(parents=True, exist_ok=True)
-    copy_missing(templates_dir() / "project", home_path)
-    if first:
-        seed_context(home_path, repos)
-    save_project(home_path, project)
     ensure_git(home_path)
-    ensure_origin(home_path, project.info.remote)
-    register_home(home_path)
-    commit_home(home_path, "pi-streams init")
+    with home_lock(home_path):
+        copy_missing(templates_dir() / "project", home_path)
+        if first:
+            seed_context(home_path, repos)
+        save_project(home_path, project)
+        ensure_origin(home_path, project.info.remote)
+        register_home(home_path)
+        commit_home(home_path, "pi-streams init")
     return home_path
 
 

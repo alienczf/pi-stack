@@ -7,7 +7,7 @@ from pathlib import Path
 
 from engine import StreamsError
 from engine.doctor import run_doctor
-from engine.project import commit_home, create_stream, init_project, load_project, resolve_home
+from engine.project import commit_home, create_stream, home_lock, init_project, load_project, resolve_home
 from engine.threads import ensure_coordinator, format_status, status_report
 
 
@@ -53,12 +53,13 @@ def cmd_init(args: argparse.Namespace) -> int:
 
 def cmd_new(args: argparse.Namespace) -> int:
     home = resolve_home(args.home)
-    project = load_project(home)
-    stream_dir = create_stream(home, args.stream_id)
-    sid = ensure_coordinator(project, stream_dir)
+    with home_lock(home):
+        project = load_project(home)
+        stream_dir = create_stream(home, args.stream_id)
+        sid = ensure_coordinator(project, stream_dir)
+        commit_home(home, f"pi-streams new {args.stream_id}")
     print(project.info.pi_web_url)
     print(sid)
-    commit_home(home, f"pi-streams new {args.stream_id}")
     return 0
 
 
