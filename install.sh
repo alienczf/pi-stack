@@ -476,15 +476,18 @@ ensure_pi_web() {
 	if resolve_pi_web >/dev/null; then
 		return 0
 	fi
-	printf 'npm install -g @jmfederico/pi-web\n'
+	printf 'npm install -g @jmfederico/pi-web --allow-scripts=node-pty\n'
+	printf 'pi-web install\n'
 	if [[ "${PI_STACK_SKIP_PACKAGES:-}" == 1 ]]; then
 		return 0
 	fi
-	npm install -g @jmfederico/pi-web
-	if ! resolve_pi_web >/dev/null; then
+	npm install -g @jmfederico/pi-web --allow-scripts=node-pty
+	local pi_web
+	if ! pi_web="$(resolve_pi_web)"; then
 		printf 'npm install -g @jmfederico/pi-web did not put pi-web on PATH\n' >&2
 		return 1
 	fi
+	"$pi_web" install
 }
 
 run_project_setup() {
