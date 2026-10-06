@@ -108,6 +108,7 @@ bash scripts/check-conform-skills.sh
 bash scripts/check-update-pstack.sh
 bash scripts/check-subagents.sh
 bash scripts/check-cross-repo.sh
+python3 -m unittest discover -s pi-streams/tests
 ```
 <!-- readme-checks:end -->
 
