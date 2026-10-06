@@ -95,39 +95,42 @@ def cmd_new(args: argparse.Namespace) -> int:
 
 def cmd_thread_spawn(args: argparse.Namespace) -> int:
     home = resolve_home(args.home)
-    project = load_project(home)
-    sid = spawn_thread(
-        project,
-        args.stream,
-        args.repo,
-        args.role,
-        base=args.base,
-        branch=args.branch,
-        model=args.model,
-        thinking=args.thinking,
-        note=args.note,
-    )
+    with home_lock(home):
+        project = load_project(home)
+        sid = spawn_thread(
+            project,
+            args.stream,
+            args.repo,
+            args.role,
+            base=args.base,
+            branch=args.branch,
+            model=args.model,
+            thinking=args.thinking,
+            note=args.note,
+        )
+        commit_home(home, f"pi-streams thread spawn {args.stream} {args.role}")
     print(sid)
-    commit_home(home, f"pi-streams thread spawn {args.stream} {args.role}")
     return 0
 
 
 def cmd_thread_adopt(args: argparse.Namespace) -> int:
     home = resolve_home(args.home)
-    project = load_project(home)
-    sid = adopt_thread(project, args.stream, args.session_id, Path(args.worktree), args.role)
+    with home_lock(home):
+        project = load_project(home)
+        sid = adopt_thread(project, args.stream, args.session_id, Path(args.worktree), args.role)
+        commit_home(home, f"pi-streams thread adopt {args.stream} {args.session_id}")
     print(sid)
-    commit_home(home, f"pi-streams thread adopt {args.stream} {args.session_id}")
     return 0
 
 
 def cmd_rotate(args: argparse.Namespace) -> int:
     home = resolve_home(args.home)
-    project = load_project(home)
-    sid = rotate_coordinator(project, args.stream)
+    with home_lock(home):
+        project = load_project(home)
+        sid = rotate_coordinator(project, args.stream)
+        commit_home(home, f"pi-streams rotate {args.stream}")
     print(project.info.pi_web_url)
     print(sid)
-    commit_home(home, f"pi-streams rotate {args.stream}")
     return 0
 
 
