@@ -122,9 +122,12 @@ def systemd_user_dir() -> Path:
 def check_systemd_units() -> list[Finding]:
     base = systemd_user_dir()
     missing = [name for name in TICK_UNITS if not (base / name).is_file()]
-    if missing:
-        return [Finding("FAIL", "systemd", "missing " + ", ".join(missing))]
-    return [Finding("PASS", "systemd", "pi-streams-tick.service and pi-streams-tick.timer are installed")]
+    if not missing:
+        return [Finding("PASS", "systemd", "pi-streams-tick.service and pi-streams-tick.timer are installed")]
+    detail = "missing " + ", ".join(missing)
+    if shutil.which("systemctl") is None:
+        return [Finding("WARN", "systemd", detail + "; systemctl not found, so run pi-streams tick every five minutes another way")]
+    return [Finding("FAIL", "systemd", detail)]
 
 
 def _tick_state_fresh(path: Path, now: float) -> bool:
