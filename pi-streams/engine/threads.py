@@ -410,47 +410,41 @@ def spawn_thread(
     worktree = (Path(project.info.worktrees_dir) / repo.name / f"{stream_id}-{role}").resolve()
     _outside_repos(worktree, project)
     rows_path = stream_dir / "threads.tsv"
+    rows = load_threads(rows_path)
     if worktree.exists():
         pointer = worktree / ".stream"
         marker = pointer.read_text(encoding="utf-8").strip() if pointer.is_file() else ""
         if marker != str(stream_dir):
             raise StreamsError(f"worktree {worktree} is not stream {stream_id}")
         ensure_stream_exclude(worktree)
-        listed = piweb.list_sessions(str(worktree))
-        known = {row.session for row in load_threads(rows_path)}
-        for item in listed:
-            sid = item.get("id")
-            if isinstance(sid, str) and sid in known:
-                return sid
-        fresh = [item["id"] for item in listed if isinstance(item.get("id"), str)]
-        if fresh:
-            sid = str(fresh[0])
-            piweb.configure_session(sid, model_name, thinking_level)
-            _append_thread(
-                rows_path,
-                _thread_row(sid, role, repo.name, worktree, branch_name, sha, model_name, thinking_level),
-            )
-            return sid
+        earlier = [row for row in rows if row.worktree == str(worktree)]
+        for row in earlier:
+            if row.status is not Status.archived:
+                return row.session
+        branch_name = git(worktree, "branch", "--show-current").strip()
+        if earlier:
+            sha = earlier[-1].base
     else:
         worktree.parent.mkdir(parents=True, exist_ok=True)
         git(repo_path, "worktree", "add", "-b", branch_name, str(worktree), sha)
         write_stream_pointer(worktree, stream_dir)
         ensure_stream_exclude(worktree)
-    sid = piweb.spawn(str(worktree))
+    sid, needs_brief = _resume_or_spawn(worktree, rows)
     piweb.configure_session(sid, model_name, thinking_level)
-    piweb.prompt(
-        sid,
-        render_brief(
-            stream=stream_id,
-            stream_dir=str(stream_dir),
-            role=role,
-            repo=repo.name,
-            worktree=str(worktree),
-            branch=branch_name,
-            base=sha,
-            note=note,
-        ),
-    )
+    if needs_brief:
+        piweb.prompt(
+            sid,
+            render_brief(
+                stream=stream_id,
+                stream_dir=str(stream_dir),
+                role=role,
+                repo=repo.name,
+                worktree=str(worktree),
+                branch=branch_name,
+                base=sha,
+                note=note,
+            ),
+        )
     _append_thread(
         rows_path,
         _thread_row(sid, role, repo.name, worktree, branch_name, sha, model_name, thinking_level),

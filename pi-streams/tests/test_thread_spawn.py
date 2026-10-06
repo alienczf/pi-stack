@@ -62,35 +62,27 @@ class SpawnTests(EngineCase):
         base = git(self.fx.alpha, self.env, "rev-parse", "HEAD").strip()
         worktree = (self.root / ".worktrees" / "alpha" / "etl-datapull").resolve()
         self.stub.set_routes([
+            ("GET", "/api/sessions", 200, []),
             ("POST", "/api/sessions", 200, {"id": "thread-1"}),
             ("GET", "/api/sessions/thread-1/status", 200, status_body("thread-1")),
             ("POST", "/api/sessions/thread-1/prompt", 200, {"accepted": True}),
         ])
-        proc = self.run_streams(
-            "thread",
-            "spawn",
-            "etl",
-            "--repo",
-            "alpha",
-            "--role",
-            "datapull",
-            "--note",
-            "ship the slice",
-        )
+        proc = self.spawn_datapull()
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(proc.stdout, "thread-1\n")
-        self.assertEqual(len(self.stub.requests), 5)
-        self.assert_call(0, "POST", "/api/sessions", {"cwd": str(worktree)})
+        self.assertEqual(len(self.stub.requests), 6)
+        self.assert_call(0, "GET", "/api/sessions", None, cwd=str(worktree))
+        self.assert_call(1, "POST", "/api/sessions", {"cwd": str(worktree)})
         self.assert_call(
-            1,
+            2,
             "POST",
             "/api/sessions/thread-1/model",
             {"provider": "openai-codex", "modelId": "gpt-6-astra"},
         )
-        self.assert_call(2, "POST", "/api/sessions/thread-1/thinking-level", {"level": "xhigh"})
-        self.assert_call(3, "GET", "/api/sessions/thread-1/status", None)
+        self.assert_call(3, "POST", "/api/sessions/thread-1/thinking-level", {"level": "xhigh"})
+        self.assert_call(4, "GET", "/api/sessions/thread-1/status", None)
         self.assert_call(
-            4,
+            5,
             "POST",
             "/api/sessions/thread-1/prompt",
             {"text": expected_brief(str(self.stream_dir), str(worktree), base)},
@@ -125,10 +117,14 @@ class SpawnTests(EngineCase):
         self.assertEqual(git(self.home, self.env, "log", "-1", "--format=%s").strip(), "pi-streams thread spawn etl datapull")
         head = git(self.home, self.env, "rev-parse", "HEAD")
         before = len(self.stub.requests)
-        self.stub.set_routes([
-            ("GET", "/api/sessions", 200, [{"id": "thread-1", "cwd": str(worktree)}]),
-        ])
-        again = self.run_streams(
+        again = self.spawn_datapull()
+        self.assertEqual(again.returncode, 0, again.stderr)
+        self.assertEqual(again.stdout, "thread-1\n")
+        self.assertEqual(self.stub.requests[before:], [])
+        self.assertEqual(git(self.home, self.env, "rev-parse", "HEAD"), head)
+
+    def spawn_datapull(self):
+        return self.run_streams(
             "thread",
             "spawn",
             "etl",
@@ -139,11 +135,88 @@ class SpawnTests(EngineCase):
             "--note",
             "ship the slice",
         )
+
+    def test_failed_brief_is_resent_on_rerun(self) -> None:
+        base = git(self.fx.alpha, self.env, "rev-parse", "HEAD").strip()
+        worktree = (self.root / ".worktrees" / "alpha" / "etl-datapull").resolve()
+        self.stub.set_routes([
+            ("GET", "/api/sessions", 200, []),
+            ("POST", "/api/sessions", 200, {"id": "thread-1"}),
+            ("GET", "/api/sessions/thread-1/status", 200, status_body("thread-1")),
+            ("POST", "/api/sessions/thread-1/prompt", 503, {"error": "busy"}),
+        ])
+        failed = self.spawn_datapull()
+        self.assertEqual(failed.returncode, 1)
+        self.assertEqual((self.stream_dir / "threads.tsv").read_text(encoding="utf-8"), HEADER)
+        self.stub.requests.clear()
+        self.stub.set_routes([
+            ("GET", "/api/sessions", 200, [
+                {"id": "old-1", "cwd": str(worktree), "messageCount": 40, "archived": True},
+                {"id": "thread-1", "cwd": str(worktree), "messageCount": 0},
+            ]),
+            ("GET", "/api/sessions/thread-1/status", 200, status_body("thread-1")),
+            ("POST", "/api/sessions/thread-1/prompt", 200, {"accepted": True}),
+        ])
+        again = self.spawn_datapull()
         self.assertEqual(again.returncode, 0, again.stderr)
         self.assertEqual(again.stdout, "thread-1\n")
-        self.assertEqual(len(self.stub.requests), before + 1)
-        self.assert_call(before, "GET", "/api/sessions", None, cwd=str(worktree))
-        self.assertEqual(git(self.home, self.env, "rev-parse", "HEAD"), head)
+        self.assertEqual(
+            [(method, path) for method, path, _query, _body in self.stub.requests],
+            [
+                ("GET", "/api/sessions"),
+                ("POST", "/api/sessions/thread-1/model"),
+                ("POST", "/api/sessions/thread-1/thinking-level"),
+                ("GET", "/api/sessions/thread-1/status"),
+                ("POST", "/api/sessions/thread-1/prompt"),
+            ],
+        )
+        self.assert_call(
+            4,
+            "POST",
+            "/api/sessions/thread-1/prompt",
+            {"text": expected_brief(str(self.stream_dir), str(worktree), base)},
+        )
+        cells = (self.stream_dir / "threads.tsv").read_text(encoding="utf-8").splitlines()[1].split("\t")
+        self.assertEqual(cells[:2], ["thread-1", "datapull"])
+
+    def test_successor_in_an_archived_threads_worktree_keeps_its_base(self) -> None:
+        base = git(self.fx.alpha, self.env, "rev-parse", "HEAD").strip()
+        worktree = (self.root / ".worktrees" / "alpha" / "etl-datapull").resolve()
+        self.stub.set_routes([
+            ("GET", "/api/sessions", 200, []),
+            ("POST", "/api/sessions", 200, {"id": "thread-1"}),
+            ("GET", "/api/sessions/thread-1/status", 200, status_body("thread-1")),
+            ("POST", "/api/sessions/thread-1/prompt", 200, {"accepted": True}),
+        ])
+        self.assertEqual(self.spawn_datapull().returncode, 0)
+        rows = (self.stream_dir / "threads.tsv").read_text(encoding="utf-8")
+        (self.stream_dir / "threads.tsv").write_text(rows.replace("\tactive\t", "\tarchived\t"), encoding="utf-8")
+        (self.fx.alpha / "later").write_text("later\n", encoding="utf-8")
+        git(self.fx.alpha, self.env, "add", "-A")
+        git(self.fx.alpha, self.env, "commit", "-m", "later")
+        self.stub.requests.clear()
+        self.stub.set_routes([
+            ("GET", "/api/sessions", 200, [
+                {"id": "thread-1", "cwd": str(worktree), "messageCount": 80, "archived": True},
+            ]),
+            ("POST", "/api/sessions", 200, {"id": "thread-2"}),
+            ("GET", "/api/sessions/thread-2/status", 200, status_body("thread-2")),
+            ("POST", "/api/sessions/thread-2/prompt", 200, {"accepted": True}),
+        ])
+        successor = self.spawn_datapull()
+        self.assertEqual(successor.returncode, 0, successor.stderr)
+        self.assertEqual(successor.stdout, "thread-2\n")
+        self.assert_call(
+            5,
+            "POST",
+            "/api/sessions/thread-2/prompt",
+            {"text": expected_brief(str(self.stream_dir), str(worktree), base)},
+        )
+        lines = (self.stream_dir / "threads.tsv").read_text(encoding="utf-8").splitlines()
+        self.assertEqual(
+            [line.split("\t")[0] + " " + line.split("\t")[5] + " " + line.split("\t")[8] for line in lines[1:]],
+            [f"thread-1 {base} archived", f"thread-2 {base} active"],
+        )
 
 
 if __name__ == "__main__":
