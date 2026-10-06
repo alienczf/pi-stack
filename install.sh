@@ -251,7 +251,7 @@ fi
 for name in "${pstack_skill_names[@]}"; do
 	if [[ ! -f "$pstack/skills/$name/SKILL.md" ]]; then
 		if [[ "$pstack_existed" == 1 ]]; then
-			printf 'PSTACK=%s predates selected skill %s. Review it with update-pstack status, apply it with update-pstack apply --expected-pi-stack REVISION --expected-current REVISION --expected-upstream REVISION (or /update-pstack in pi), then rerun the installer.\n' "$pstack" "$name" >&2
+			printf 'PSTACK=%s predates selected skill %s. Update it on the reviewed path with /update-pstack in pi, or update-pstack status and the apply command it plans, then rerun the installer.\n' "$pstack" "$name" >&2
 		else
 			printf 'PSTACK=%s is missing selected skill root: %s\n' "$pstack" "$name" >&2
 		fi
@@ -358,13 +358,12 @@ if [[ ${#conform_src[@]} -gt 0 ]]; then
 fi
 
 # A link is an earlier install only when it points at the launcher or into the jig tree.
-legacy_jig_kinds=(dir file link file dir)
-legacy_jig_paths=(
-	"$agent/jig"
-	"$agent/bin/jig"
-	"${HOME}/.local/bin/jig"
-	"$agent/prompts/jig.md"
-	"$agent/skills-pstack/jig"
+legacy_jig=(
+	"dir $agent/jig"
+	"file $agent/bin/jig"
+	"link ${HOME}/.local/bin/jig"
+	"file $agent/prompts/jig.md"
+	"dir $agent/skills-pstack/jig"
 )
 legacy_jig_artifact() {
 	local kind="$1" path="$2" target resolved
@@ -393,18 +392,12 @@ legacy_jig_artifact() {
 	esac
 }
 removed_jig_paths=()
-removed_jig_kinds=()
-for i in "${!legacy_jig_kinds[@]}"; do
-	if legacy_jig_artifact "${legacy_jig_kinds[$i]}" "${legacy_jig_paths[$i]}"; then
-		removed_jig_paths+=("${legacy_jig_paths[$i]}")
-		removed_jig_kinds+=("${legacy_jig_kinds[$i]}")
-	fi
-done
-for i in "${!removed_jig_paths[@]}"; do
-	case "${removed_jig_kinds[$i]}" in
-		dir) rm -rf -- "${removed_jig_paths[$i]}" ;;
-		file|link) rm -f -- "${removed_jig_paths[$i]}" ;;
-	esac
+for entry in "${legacy_jig[@]}"; do
+	kind="${entry%% *}"
+	path="${entry#* }"
+	legacy_jig_artifact "$kind" "$path" || continue
+	rm -rf -- "$path"
+	removed_jig_paths+=("$path")
 done
 if [[ ${#removed_jig_paths[@]} -gt 0 ]]; then
 	PI_STACK_REMOVED_JIG="$(printf '%s\n' "${removed_jig_paths[@]}")"
