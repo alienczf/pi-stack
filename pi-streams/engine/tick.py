@@ -273,11 +273,11 @@ class StreamTick:
         # even when it did so between two ticks. An adopted thread that is already
         # idle reports idle once too, which tells its coordinator that it waits.
         old = self.state.sessions.get(row.session, Seen(busy=True))
-        if old.replay:
-            # The last resend stopped after queue/clear, so what is not queued now was dropped.
-            self.replay(row, old, Counter(text for text, _kind in _queued(status)))
+        # The last resend stopped after queue/clear, so what is not queued now was dropped.
+        # A replayed prompt starts the thread again, whatever the status said before it.
+        sent = self.replay(row, old, Counter(text for text, _kind in _queued(status)))
         new = Seen(
-            busy=status.get("isStreaming") is True or _count(status.get("pendingMessageCount")) > 0,
+            busy=sent or status.get("isStreaming") is True or _count(status.get("pendingMessageCount")) > 0,
             context=old.context,
         )
         self.state.sessions[row.session] = new
@@ -315,15 +315,18 @@ class StreamTick:
         for text in stale:
             new.queued[text] = self.at
 
-    def replay(self, row: Thread, seen: Seen, waiting: Counter[str]) -> None:
+    def replay(self, row: Thread, seen: Seen, waiting: Counter[str]) -> bool:
+        sent = False
         while seen.replay:
             text, behavior = seen.replay[0]
             if waiting[text] > 0:
                 waiting[text] -= 1
             else:
                 piweb.prompt(row.session, text, behavior)
+                sent = True
             del seen.replay[0]
             self.flush()
+        return sent
 
     def since(self, stamp: str) -> timedelta:
         seen = clock.parse(stamp)

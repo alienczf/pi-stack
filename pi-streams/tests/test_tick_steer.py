@@ -113,6 +113,26 @@ class SteerTests(TickCase):
         ])
         self.assertEqual(self.state(self.etl)["sessions"]["t-1"]["replay"], [])
 
+    def test_a_replay_that_restarts_an_idle_thread_reports_no_idle(self) -> None:
+        self.stub.set_routes(self.thread(("followUp", BARS)))
+        self.assertEqual(self.tick("2026-10-06T12:00:00Z").returncode, 0)
+        refused = ("POST", "/api/sessions/t-1/prompt", 500, {"error": "pi-web restarting"})
+        self.stub.set_routes([refused, *self.thread(("followUp", BARS))])
+        self.assertEqual(self.tick("2026-10-06T12:10:00Z").returncode, 1)
+
+        self.stub.set_routes([("GET", "/api/sessions/t-1/status", 200, status("t-1")), *self.thread()])
+        again = self.tick("2026-10-06T12:15:00Z")
+        self.assertEqual((again.returncode, again.stdout, again.stderr), (0, "", ""))
+        self.assertEqual(self.stub.requests, [
+            got_status("t-1"),
+            got_prompt("t-1", BARS, "steer"),
+            got_list("/wt/datapull"),
+            got_list(str(self.etl)),
+            got_status("coord-1"),
+            got_prompt("coord-1", f"pi-streams tick 2026-10-06T12:15:00Z:\nstale-steer t-1 datapull {BARS}"),
+        ])
+        self.assertEqual(self.state(self.etl)["sessions"]["t-1"]["busy"], True)
+
     def test_a_resend_whose_clear_failed_sends_each_message_once(self) -> None:
         self.stub.set_routes(self.thread(("followUp", BARS)))
         self.assertEqual(self.tick("2026-10-06T12:00:00Z").returncode, 0)
