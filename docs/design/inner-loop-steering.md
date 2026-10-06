@@ -2,6 +2,14 @@
 
 Status: draft for ZF review. Date: 2026-10-06 (SGT). Scope: research and design only. Nothing on hpc180-options-01 was modified, no pi session was prompted, no BigQuery table was read or written, and pi-stack install config is unchanged.
 
+> **Read [pi-streams.md](pi-streams.md) first.** It is the design to build: Cursor Projects run on pi-web threads, with ZF's 2026-10-06 answers to §9. This doc is the evidence and research behind it. Where the two differ, pi-streams.md wins:
+> - **ZF's interface.** ZF talks to a per-stream coordinator in pi-web. The Grok Bot is the outer loop and the outage channel; it is no longer ZF's only interface. This replaces §6's option D.
+> - **The steward.** It is now called the coordinator. It stays warm while its context is small and starts fresh once big, based on measured cache and cost data, instead of always starting fresh (§5.1–§5.2).
+> - **Where streams live.** Each stream is its own repo, created from a template that pi-stack ships (§1.5).
+> - **Teams.** There are no team handoffs. The interface acknowledgements, vendored contract copies and per-team items in §1.2, §1.9, §4.3 and §7.3–§7.6 are background only.
+> - **Interfaces.** The interface to converge on is an artifact the firm already agreed, such as its signal definition, surfaced in the kickoff interview.
+> - **`pil`.** Not adopted (§1.10).
+
 ## Summary
 
 - **Central question.** Where does a multi-day stream of work live when it spans several repos owned by different teams, and when several streams share one repo? **Answer: in a neutral stream home above all repos.** That is one directory per stream, `streams/<id>/`, in a dedicated repo that no code team owns. The stream's direction never lives in a code repo's worktree, and no repo or PR is the stream's owner or starting point (§1).
@@ -1163,6 +1171,8 @@ Each item is its own PR, after ZF answers the open questions:
 ---
 
 ## 9. Open questions for ZF
+
+ZF answered these on 2026-10-06. The answers and what follows from them are in [pi-streams.md §1](pi-streams.md#1-what-zf-decided). The questions are kept below as asked.
 
 1. **Goal and end consumer.** Is §2.1's candidate goal right: every template column, queryable in BigQuery, from a market-data pipeline, compiled from the DAG? Who is the end consumer, and how does it read the output?
 2. **Teams and interface owners.** Is the pairing alc-qslite = core tech, alc-flows = infra, alc-cefi-sim-runner = quant right? Who acknowledges each side of I1, I2 and I3?
