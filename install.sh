@@ -27,16 +27,15 @@ Disables builtin agents, the subagent intercom bridge, and intercom notification
 Existing children keep their prompts until respawn.
 Dated backups go to $HOME/.pi/agent/backups/subagents/.
 Rewrites Cursor skill names into $HOME/.pi/agent/skills-pstack. Does not edit pstack.
-Copies the Jig launcher, controller, skill, and references into $HOME/.pi/agent/jig/.
 Copies the pstack updater command and controller into $HOME/.pi/agent/update-pstack/.
 Merges defaultTools, skills, and packages into settings.json without changing project trust.
 Finds pi on PATH or under ~/.local/share/pi-node and installs
 npm:pi-web-access and npm:pi-subagents.
 Removes retired npm registrations and managed installs; backs up changed settings.
 PI_STACK_SKIP_PACKAGES=1 defers physical package removal until a normal install.
-Rewrites cursor/* subagent models to inherit. Links jig and update-pstack into ~/.local/bin.
+Rewrites cursor/* subagent models to inherit. Links update-pstack into ~/.local/bin.
 Never writes auth.json, models-store.json, private/, or sessions/.
-Does not search for git repositories. Initialize one Git root later with jig init.
+Does not search for git repositories.
 
 If PI_STACK is unset and this script has no adjacent checkout, uses
 $HOME/.pi-stack. Clones alienczf/pi-stack there when overlay/ is missing.
@@ -252,10 +251,8 @@ done
 
 agent="${HOME}/.pi/agent"
 mkdir -p "$agent/prompts" "$agent/bin"
-installed_jig="$agent/jig"
 installed_update="$agent/update-pstack"
 export PI_STACK_SOURCE_ROOT="$here"
-export PI_STACK_INSTALLED_JIG="$installed_jig"
 export PI_STACK_INSTALLED_UPDATE="$installed_update"
 python3 - <<'PY'
 import os
@@ -288,13 +285,6 @@ def sync(destination: Path, relative_files: list[Path]) -> None:
             dest.write_bytes(data)
         dest.chmod(src.stat().st_mode & 0o777)
 
-jig_files = [Path("bin/jig.sh"), Path("bin/jigctl.py")]
-jig_files.extend(
-    path.relative_to(source)
-    for path in sorted((source / "skills/jig").rglob("*"))
-    if path.is_file() and "__pycache__" not in path.parts
-)
-sync(Path(os.environ["PI_STACK_INSTALLED_JIG"]), jig_files)
 sync(
     Path(os.environ["PI_STACK_INSTALLED_UPDATE"]),
     [Path("bin/update-pstack"), Path("bin/pstackctl.py")],
@@ -324,14 +314,6 @@ for src in "$here/prompts"/*.md; do
 	install_md "$src" "$agent/prompts/$(basename "$src")"
 done
 
-if [[ -x "$installed_jig/bin/jig.sh" ]]; then
-	wrapper="$agent/bin/jig"
-	wanted=$'#!/usr/bin/env bash\nset -euo pipefail\nagent_dir="${PI_CODING_AGENT_DIR:-${PI_AGENT_DIR:-${HOME}/.pi/agent}}"\nexec "$agent_dir/jig/bin/jig.sh" "$@"\n'
-	if [[ ! -f "$wrapper" ]] || [[ "$(cat "$wrapper")" != "$wanted" ]]; then
-		printf '%s' "$wanted" >"$wrapper"
-	fi
-	chmod +x "$wrapper"
-fi
 if [[ -x "$installed_update/bin/update-pstack" ]]; then
 	wrapper="$agent/bin/update-pstack"
 	printf -v source_root '%q' "$here"
@@ -344,7 +326,7 @@ if [[ -x "$installed_update/bin/update-pstack" ]]; then
 fi
 
 mkdir -p "${HOME}/.local/bin"
-for name in jig update-pstack; do
+for name in update-pstack; do
 	if [[ -x "$agent/bin/$name" ]]; then
 		ln -sfn "$agent/bin/$name" "${HOME}/.local/bin/$name"
 	fi
@@ -361,10 +343,65 @@ for name in cross-repo update-pstack; do
 		conform_src+=("$here/skills/$name")
 	fi
 done
-conform_src+=("$installed_jig/skills/jig")
 if [[ ${#conform_src[@]} -gt 0 ]]; then
 	python3 "$here/bin/conform-skills.py" --out "$conform_out" "${conform_src[@]}"
 fi
+
+# A link is an earlier install only when it points at the launcher or into the jig tree.
+legacy_jig_kinds=(dir file link file dir)
+legacy_jig_paths=(
+	"$agent/jig"
+	"$agent/bin/jig"
+	"${HOME}/.local/bin/jig"
+	"$agent/prompts/jig.md"
+	"$agent/skills-pstack/jig"
+)
+legacy_jig_artifact() {
+	local kind="$1" path="$2" target resolved
+	case "$kind" in
+		dir)
+			[[ -d "$path" && ! -L "$path" ]]
+			;;
+		file)
+			[[ -f "$path" && ! -L "$path" ]]
+			;;
+		link)
+			[[ -L "$path" ]] || return 1
+			target="$(readlink -- "$path")"
+			case "$target" in
+				"$agent/bin/jig"|"$agent/jig"|"$agent/jig"/*) return 0 ;;
+			esac
+			resolved="$(readlink -f -- "$path" 2>/dev/null || true)"
+			case "$resolved" in
+				"$agent/bin/jig"|"$agent/jig"|"$agent/jig"/*) return 0 ;;
+			esac
+			return 1
+			;;
+		*)
+			return 1
+			;;
+	esac
+}
+removed_jig_paths=()
+removed_jig_kinds=()
+for i in "${!legacy_jig_kinds[@]}"; do
+	if legacy_jig_artifact "${legacy_jig_kinds[$i]}" "${legacy_jig_paths[$i]}"; then
+		removed_jig_paths+=("${legacy_jig_paths[$i]}")
+		removed_jig_kinds+=("${legacy_jig_kinds[$i]}")
+	fi
+done
+for i in "${!removed_jig_paths[@]}"; do
+	case "${removed_jig_kinds[$i]}" in
+		dir) rm -rf -- "${removed_jig_paths[$i]}" ;;
+		file|link) rm -f -- "${removed_jig_paths[$i]}" ;;
+	esac
+done
+if [[ ${#removed_jig_paths[@]} -gt 0 ]]; then
+	PI_STACK_REMOVED_JIG="$(printf '%s\n' "${removed_jig_paths[@]}")"
+else
+	PI_STACK_REMOVED_JIG=""
+fi
+export PI_STACK_REMOVED_JIG
 
 export PI_AGENT_DIR="$agent"
 export OVERLAY="$overlay"
@@ -383,7 +420,7 @@ pstack_skills = sys.argv[2 : 2 + pstack_skill_count]
 required_packages = sys.argv[2 + pstack_skill_count :]
 
 tools = ["read", "write", "edit", "bash", "grep", "find", "ls"]
-wanted = [*pstack_skills, "jig", "cross-repo", "update-pstack"]
+wanted = [*pstack_skills, "cross-repo", "update-pstack"]
 missing_skills = [name for name in wanted if not (conformed / name / "SKILL.md").is_file()]
 if missing_skills:
 	sys.exit(f"conformed skills are missing: {', '.join(missing_skills)}")
@@ -397,7 +434,30 @@ else:
 	data = {}
 
 data["defaultTools"] = tools
-data["skills"] = skills
+
+def is_legacy_jig_skill(entry):
+	if not isinstance(entry, str):
+		return False
+	text = entry.rstrip("/")
+	if text.endswith("/skills-pstack/jig"):
+		return True
+	jig_root = (agent / "jig").resolve()
+	candidate = Path(text)
+	if not candidate.is_absolute():
+		candidate = Path.cwd() / candidate
+	candidate = candidate.resolve()
+	return candidate == jig_root or jig_root in candidate.parents
+
+existing_skills = data.get("skills", [])
+removed_jig_skills = []
+extras = []
+if isinstance(existing_skills, list):
+	for entry in existing_skills:
+		if is_legacy_jig_skill(entry):
+			removed_jig_skills.append(entry)
+		elif entry not in skills:
+			extras.append(entry)
+data["skills"] = [*skills, *extras]
 
 def is_cursor_model(value):
 	return isinstance(value, str) and (value == "cursor" or value.startswith("cursor/"))
@@ -442,7 +502,7 @@ if not isinstance(packages, list):
 
 retired = set(os.environ["PI_STACK_RETIRED_PACKAGES"].split())
 kept_packages = [entry for entry in packages if npm_package_name(entry) not in retired]
-if kept_packages != packages:
+if kept_packages != packages or removed_jig_skills:
 	backup_dir = agent / "backups/packages"
 	backup_dir.mkdir(parents=True, exist_ok=True)
 	with tempfile.NamedTemporaryFile("w", dir=backup_dir, prefix="settings-", suffix=".json", delete=False) as backup:
@@ -505,6 +565,12 @@ if original != config_text:
 		config_tmp.replace(config_path)
 	finally:
 		config_tmp.unlink(missing_ok=True)
+
+removed = [line for line in os.environ.get("PI_STACK_REMOVED_JIG", "").splitlines() if line]
+if removed_jig_skills:
+	removed.append("settings.json skills: " + ", ".join(str(entry) for entry in removed_jig_skills))
+if removed:
+	print("Removed earlier Jig install: " + ", ".join(removed))
 
 PY
 
@@ -658,12 +724,5 @@ pi-stack is installed for this user.
   backups   ${agent}/backups/subagents
   skills    ${skill_n}
   packages  ${pkg_msg}
-  jig       ${HOME}/.local/bin/jig
   pstack    ${HOME}/.local/bin/update-pstack
-  controller ${installed_jig}/bin/jigctl.py
-Configure one Git repository:
-  cd /path/to/repo && jig init
-Or use the current trusted Pi session:
-  /skill:jig init
-  /jig init
 EOF
