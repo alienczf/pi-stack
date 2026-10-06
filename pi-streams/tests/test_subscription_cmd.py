@@ -18,9 +18,10 @@ from engine.subscriptions import Subscription
 def _alive(pid: int) -> bool:
     try:
         stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
-    except FileNotFoundError:
+    except (FileNotFoundError, ProcessLookupError):
         return False
-    return stat.rsplit(")", 1)[1].split()[0] != "Z"
+    # A killed child is a zombie, then briefly dead while it is reaped.
+    return stat.rsplit(")", 1)[1].split()[0] not in ("Z", "X")
 
 
 class CmdTimeoutTests(unittest.TestCase):
