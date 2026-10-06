@@ -7,11 +7,11 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from engine import StreamsError, clock, piweb
+from engine import StreamsError, clock, piweb, sessionlog
 from engine.project import Project, commit_home, home_lock, load_project, stream_dirs
-from engine.threads import Status, Thread, load_threads, rotate_coordinator, save_threads
+from engine.threads import Status, Thread, load_threads, rotate_coordinator, save_threads, transition
 
-WAKE_KINDS = frozenset({"idle", "ask", "context", "stale-steer"})
+WAKE_KINDS = frozenset({"idle", "ask", "context", "stale-steer", "outage", "recovered"})
 QUEUE_FLAGS = {"steer": "steer", "followUp": "follow-up"}
 
 
@@ -40,6 +40,7 @@ class Seen:
 class TickState:
     sessions: dict[str, Seen] = field(default_factory=dict)
     pending: list[Event] = field(default_factory=list)
+    outages: list[str] = field(default_factory=list)
 
 
 def write_atomic(path: Path, text: str) -> None:
@@ -58,8 +59,9 @@ def load_state(path: Path) -> TickState:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         return TickState(
-            sessions={str(sid): Seen(**seen) for sid, seen in data["sessions"].items()},
-            pending=[Event(**item) for item in data["pending"]],
+            sessions={str(sid): Seen(**seen) for sid, seen in data.get("sessions", {}).items()},
+            pending=[Event(**item) for item in data.get("pending", [])],
+            outages=[str(sid) for sid in data.get("outages", [])],
         )
     except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
         raise StreamsError(f"{path}: {exc}") from exc
@@ -69,8 +71,43 @@ def save_state(path: Path, state: TickState) -> None:
     data = {
         "sessions": {sid: asdict(seen) for sid, seen in state.sessions.items()},
         "pending": [asdict(event) for event in state.pending],
+        "outages": state.outages,
     }
     write_atomic(path, json.dumps(data, indent=2, sort_keys=True) + "\n")
+
+
+class Alerts:
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        try:
+            self.lines = path.read_text(encoding="utf-8").splitlines() if path.is_file() else []
+        except OSError as exc:
+            raise StreamsError(f"could not read {path}: {exc}") from exc
+        self.changed = False
+
+    def add(self, line: str) -> None:
+        if all(_alert_key(item) != _alert_key(line) for item in self.lines):
+            self.lines.append(line)
+            self.changed = True
+
+    def clear(self, *key: str) -> None:
+        kept = [item for item in self.lines if _alert_key(item) != key]
+        if len(kept) < len(self.lines):
+            self.lines = kept
+            self.changed = True
+
+    def save(self) -> None:
+        if self.changed:
+            write_atomic(self.path, "".join(f"{line}\n" for line in self.lines))
+            self.changed = False
+
+
+def _alert_key(line: str) -> tuple[str, ...]:
+    return tuple(line.split(" ")[1:3])
+
+
+def _summary(error: object) -> str:
+    return " ".join(error[:200].splitlines()) if isinstance(error, str) else ""
 
 
 def _count(value: object) -> int:
@@ -104,13 +141,14 @@ def _queued(status: dict[str, object]) -> dict[str, str]:
 
 
 class StreamTick:
-    def __init__(self, project: Project, stream_dir: Path, now: datetime) -> None:
+    def __init__(self, project: Project, stream_dir: Path, now: datetime, alerts: Alerts) -> None:
         self.project = project
         self.caps = project.caps
         self.stream_dir = stream_dir
         self.stream = stream_dir.name
         self.now = now
         self.at = clock.stamp(now)
+        self.alerts = alerts
         self.state_path = stream_dir / "log" / "tick-state.json"
         self.events_path = stream_dir / "log" / "events.jsonl"
         self.rows_path = stream_dir / "threads.tsv"
@@ -167,6 +205,43 @@ class StreamTick:
                 self.observe_thread(row)
                 observed.add(row.session)
         self.state.sessions = {sid: seen for sid, seen in self.state.sessions.items() if sid in observed}
+        coord = self.coordinator()
+        self.state.outages = [sid for sid in self.state.outages if coord is not None and sid == coord.session]
+        if coord is not None:
+            self.check_outage(coord)
+        for row in self.rows:
+            if not self.out(row):
+                self.alerts.clear(self.stream, row.session)
+
+    def out(self, row: Thread) -> bool:
+        # The coordinator stays active during its outage, so that pi-streams new
+        # does not start a second one; the tick state remembers it instead.
+        if row.role == "coordinator":
+            return row.session in self.state.outages
+        return row.status is Status.waiting_quota
+
+    def check_outage(self, row: Thread) -> None:
+        info = self.listing(row.worktree).get(row.session)
+        if info is None or not isinstance(info.get("path"), str):
+            return
+        message = sessionlog.last_assistant(Path(info["path"]))
+        if message is not None and message.get("stopReason") == "error":
+            summary = _summary(message.get("errorMessage"))
+            self.alerts.add(" ".join(part for part in (self.at, self.stream, row.session, row.role, summary) if part))
+            if not self.out(row):
+                self.set_out(row, True)
+                self.emit("outage", row, summary)
+        elif self.out(row):
+            self.set_out(row, False)
+            self.alerts.clear(self.stream, row.session)
+            self.emit("recovered", row)
+
+    def set_out(self, row: Thread, out: bool) -> None:
+        if row.role == "coordinator":
+            self.state.outages = [row.session] if out else []
+            return
+        transition(row, Status.waiting_quota if out else Status.active)
+        self.rows_dirty = True
 
     def observe_thread(self, row: Thread) -> None:
         status = piweb.session_status(row.session)
@@ -178,6 +253,7 @@ class StreamTick:
         self.state.sessions[row.session] = new
         if old.busy and not new.busy:
             self.emit("idle", row)
+        self.check_outage(row)
         ask = status.get("pendingAsk")
         if isinstance(ask, dict) and isinstance(ask.get("askId"), str):
             new.asks = [ask["askId"]]
@@ -211,7 +287,7 @@ class StreamTick:
 
     def wake(self) -> None:
         coord = self.coordinator()
-        if not self.state.pending or coord is None:
+        if not self.state.pending or coord is None or self.out(coord):
             return
         text = "\n".join([f"pi-streams tick {self.at}:", *(event.line() for event in self.state.pending)])
         status = piweb.session_status(coord.session)
@@ -230,7 +306,7 @@ class StreamTick:
         tokens = _tokens(status)
         if tokens is not None and tokens >= self.caps.warm_context_tokens:
             return False
-        info = self.listing(str(self.stream_dir)).get(coord.session)
+        info = self.listing(coord.worktree).get(coord.session)
         modified = clock.parse(info.get("modified")) if info is not None else None
         return modified is not None and self.now - modified < timedelta(hours=self.caps.warm_idle_hours)
 
@@ -239,12 +315,14 @@ def tick_home(home: Path, now: datetime) -> list[str]:
     lines: list[str] = []
     with home_lock(home):
         project = load_project(home)
+        alerts = Alerts(home / "ALERTS")
         for stream_dir in stream_dirs(home):
-            run = StreamTick(project, stream_dir, now)
+            run = StreamTick(project, stream_dir, now, alerts)
             run.run()
             counts = Counter(event.kind for event in run.events)
             if counts:
                 lines.append(f"{stream_dir}\t" + "\t".join(f"{kind}={counts[kind]}" for kind in sorted(counts)))
+        alerts.save()
         commit_home(home, "pi-streams tick")
     return lines
 
