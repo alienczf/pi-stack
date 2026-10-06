@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+import contextlib
+import hashlib
+import os
 import re
+import signal
+import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -9,6 +14,8 @@ from pathlib import Path
 from engine import StreamsError
 
 SUBSCRIPTION_COLUMNS = ("id", "source", "target", "when", "action")
+CMD_TIMEOUT_SECONDS = 60
+CMD_DETAIL_LINES = 20
 _HHMM = re.compile(r"([01][0-9]|2[0-3]):([0-5][0-9])")
 
 
@@ -65,6 +72,32 @@ def read_schedule(sub: Subscription, _stream_dir: Path, now: datetime) -> Readin
     return Reading(day.isoformat())
 
 
+def read_cmd(sub: Subscription, stream_dir: Path, _now: datetime) -> Reading:
+    try:
+        proc = subprocess.Popen(
+            ["bash", "-c", sub.target],
+            cwd=stream_dir,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+        )
+    except OSError as exc:
+        raise StreamsError(f"could not start bash: {exc}") from exc
+    try:
+        out, err = proc.communicate(timeout=CMD_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        # Children of bash keep the pipes open, so the whole group goes.
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(proc.pid, signal.SIGKILL)
+        proc.communicate()
+        raise StreamsError(f"timed out after {CMD_TIMEOUT_SECONDS} s") from None
+    lines = out.decode("utf-8", "replace").splitlines() + err.decode("utf-8", "replace").splitlines()
+    fingerprint = f"exit={proc.returncode} sha256={hashlib.sha256(out).hexdigest()}"
+    return Reading(fingerprint, lines[-CMD_DETAIL_LINES:])
+
+
 SOURCES: dict[str, Source] = {
     "schedule": read_schedule,
+    "cmd": read_cmd,
 }
