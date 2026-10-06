@@ -117,14 +117,13 @@ Pass `--pi-web-url`, `--remote`, `--coordinator-model`, or `--coordinator-thinki
 
 The pi-web URL in `project.toml` is the address you open in a browser, which may be a tunnel. `pi-streams` runs on the pi-web host and calls pi-web at `PI_WEB_URL` when it is set, otherwise at the `host` and `port` in `~/.config/pi-web/config.json`, otherwise at `http://127.0.0.1:8504`.
 
-The command also installs:
+Every install links `~/.local/bin/pi-streams` to this checkout's `bin/pi-streams` and installs the `stream` and `stream-kickoff` skills and the `stream` prompt. With `--project`, or on a later install once `pi-streams` has a registered home, it also installs:
 
-- `~/.local/bin/pi-streams`, linked to this checkout's `bin/pi-streams`
 - `~/.local/bin/pi-web-cli`, leaving an identical file in place and backing up a different one once
-- the `stream` and `stream-kickoff` skills, and the `stream` prompt
+- `pi-web` when it is missing, by printing and running `npm install -g @jmfederico/pi-web`. With `PI_STACK_SKIP_PACKAGES=1` it only prints the command.
 - `pi-streams-tick.timer`, two minutes after boot and then every five minutes
 
-Lingering is already on, so the timer runs without a login. The installer does not change pi-web's config. When `pi-web` is missing it prints `npm install -g @jmfederico/pi-web` and runs that command only when package installs are enabled. After `--project`, it runs `pi-streams doctor` and exits 1 on FAIL without removing what it wrote.
+The timer runs without a login session only when systemd lingering is on for your user. Without `systemctl`, the installer copies the units, prints a note, and leaves scheduling `pi-streams tick` to you. The installer does not change pi-web's config. After `--project`, it runs `pi-streams doctor` and exits 1 on FAIL without removing what it wrote.
 
 ## Verify the repository
 
