@@ -395,6 +395,7 @@ The installer works through these in order. Each step checks before it changes a
    | Which URL do you open pi-web at? | The address in `~/.config/pi-web/config.json`. On `pistack` that is `http://127.0.0.1:8504`, which another machine reaches only through a tunnel. | Links that `pi-streams new` prints and the Grok Bot relays |
    | Where should the project home's private remote live? | None; the project home stays a local git repo | The tick pushes after each commit when a remote is set |
    | Which model and thinking level should coordinators use? | Astra at `xhigh` (§4.1) | `coordinator_model` and `coordinator_thinking`; each stream can override them |
+
 7. **`pi-streams doctor`.** It checks:
    - pi and pi-web health;
    - that `pi-web-cli` can list sessions;
