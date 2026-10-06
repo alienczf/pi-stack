@@ -298,7 +298,7 @@ def render_brief(
     base: str,
     note: str,
 ) -> str:
-    text = (repo_root() / "prompts" / "thread-brief.md").read_text(encoding="utf-8")
+    text = (repo_root() / "pi-streams" / "templates" / "thread-brief.md").read_text(encoding="utf-8")
     values = {
         "stream": stream,
         "stream_dir": stream_dir,
