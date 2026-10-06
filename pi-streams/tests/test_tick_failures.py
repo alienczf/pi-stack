@@ -1,6 +1,7 @@
 """tick records a failure in one stream or home and still ticks the others."""
 from __future__ import annotations
 
+import json
 import unittest
 
 from support import git
@@ -151,6 +152,44 @@ class FailureTests(TickCase):
         self.assertEqual(
             self.rows(self.etl),
             archived
+            + f"coord-2\tcoordinator\t\t{self.etl}\t\t\topenai-codex/gpt-6-astra\txhigh\tactive\t2026-10-06T12:05:00Z\n",
+        )
+        self.assertEqual((self.state(self.etl)["rotating"], self.state(self.etl)["pending"]), (False, []))
+
+    def test_a_rotation_that_stopped_after_pi_web_archived_the_coordinator_is_finished(self) -> None:
+        state = {"outages": [], "pending": [ASKED], "rotating": True, "sessions": {}}
+        (self.etl / "log").mkdir()
+        (self.etl / "log" / "tick-state.json").write_text(json.dumps(state), encoding="utf-8")
+        self.stub.set_routes([
+            ("GET", "/api/sessions/t-1/status", 200, status("t-1", streaming=True)),
+            ("GET", "/api/sessions/coord-1/status", 200, status("coord-1")),
+            ("POST", "/api/sessions", 200, info("coord-2", str(self.etl), self.log_path("coord-2"))),
+            ("GET", "/api/sessions/coord-2/status", 200, status("coord-2", tokens=None)),
+            ("GET", "/api/sessions", 200, [
+                {**info("coord-1", str(self.etl), self.log_path("coord-1")), "archived": True},
+                info("t-1", "/wt/datapull", self.log_path("t-1")),
+            ]),
+            PROMPTS,
+        ])
+        proc = self.tick("2026-10-06T12:05:00Z")
+        self.assertEqual((proc.returncode, proc.stdout, proc.stderr), (0, "", ""))
+        self.assertEqual(self.stub.requests, [
+            got_status("t-1"),
+            got_list("/wt/datapull"),
+            got_list(str(self.etl)),
+            got_list(str(self.etl)),
+            ("POST", "/api/sessions", "", {"cwd": str(self.etl)}),
+            got_post("coord-2", "model", {"provider": "openai-codex", "modelId": "gpt-6-astra"}),
+            got_post("coord-2", "thinking-level", {"level": "xhigh"}),
+            got_status("coord-2"),
+            got_prompt("coord-2", rotation("etl")),
+            got_prompt("coord-2", "pi-streams tick 2026-10-06T12:05:00Z:\nask t-1 datapull Which venue first?", "followUp"),
+        ])
+        self.assertEqual(
+            self.rows(self.etl),
+            HEADER
+            + row("coord-1", "coordinator", str(self.etl), status="archived")
+            + row("t-1", "datapull", "/wt/datapull")
             + f"coord-2\tcoordinator\t\t{self.etl}\t\t\topenai-codex/gpt-6-astra\txhigh\tactive\t2026-10-06T12:05:00Z\n",
         )
         self.assertEqual((self.state(self.etl)["rotating"], self.state(self.etl)["pending"]), (False, []))
