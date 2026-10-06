@@ -5,7 +5,8 @@ Status: draft for ZF review. Date: 2026-10-06 (SGT). Scope: research and design 
 > **Read [pi-streams.md](pi-streams.md) first.** It is the design to build: Cursor Projects run on pi-web threads, with ZF's 2026-10-06 answers to §9. This doc is the evidence and research behind it. Where the two differ, pi-streams.md wins:
 > - **ZF's interface.** ZF talks to a per-stream coordinator in pi-web. The Grok Bot is the outer loop and the outage channel; it is no longer ZF's only interface. This replaces §6's option D.
 > - **The steward.** It is now called the coordinator. It stays warm while its context is small and starts fresh once big, based on measured cache and cost data, instead of always starting fresh (§5.1–§5.2).
-> - **Where streams live.** Each stream is its own repo, created from a template that pi-stack ships (§1.5).
+> - **Where streams live.** pi-stack is the one harness repo, and Jig is removed from it. Each project gets one private *project home* with a folder per stream and context shared across them (pi-streams.md §3). For alphalab this is the local repo at `~/Projects/alphalab/streams/` that §1.5 recommends. Whether it gets a remote is a question `pi-streams init` asks.
+> - **Setup questions.** Anything specific to a host, project or stream (§9's naming, remote and model questions among them) is asked by `pi-streams init` or the kickoff, each with a default, not decided in the design.
 > - **Teams.** There are no team handoffs. The interface acknowledgements, vendored contract copies and per-team items in §1.2, §1.9, §4.3 and §7.3–§7.6 are background only.
 > - **Interfaces.** The interface to converge on is an artifact the firm already agreed, such as its signal definition, surfaced in the kickoff interview.
 > - **`pil`.** Not adopted (§1.10).
