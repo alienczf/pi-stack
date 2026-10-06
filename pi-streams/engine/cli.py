@@ -1,0 +1,94 @@
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+from engine import StreamsError
+from engine.doctor import run_doctor
+from engine.project import commit_home, create_stream, init_project, load_project, resolve_home
+from engine.threads import ensure_coordinator, format_status, status_report
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="pi-streams")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    init = sub.add_parser("init")
+    init.add_argument("project_root")
+    init.add_argument("--home")
+    init.add_argument("-y", action="store_true")
+    init.add_argument("--pi-web-url")
+    init.add_argument("--remote")
+    init.add_argument("--coordinator-model")
+    init.add_argument("--coordinator-thinking")
+
+    new = sub.add_parser("new")
+    new.add_argument("stream_id", metavar="id")
+    new.add_argument("--home")
+
+    status = sub.add_parser("status")
+    status.add_argument("stream_id", metavar="id", nargs="?")
+    status.add_argument("--json", action="store_true")
+    status.add_argument("--home")
+
+    sub.add_parser("doctor")
+    return parser
+
+
+def cmd_init(args: argparse.Namespace) -> int:
+    home = init_project(
+        Path(args.project_root),
+        home=Path(args.home) if args.home else None,
+        assume_yes=args.y,
+        pi_web_url=args.pi_web_url,
+        remote=args.remote,
+        coordinator_model=args.coordinator_model,
+        coordinator_thinking=args.coordinator_thinking,
+    )
+    print(home)
+    return 0
+
+
+def cmd_new(args: argparse.Namespace) -> int:
+    home = resolve_home(args.home)
+    project = load_project(home)
+    stream_dir = create_stream(home, args.stream_id)
+    sid = ensure_coordinator(project, stream_dir)
+    print(project.info.pi_web_url)
+    print(sid)
+    commit_home(home, f"pi-streams new {args.stream_id}")
+    return 0
+
+
+def cmd_status(args: argparse.Namespace) -> int:
+    home = resolve_home(args.home)
+    project = load_project(home)
+    report = status_report(project, args.stream_id)
+    if args.json:
+        print(json.dumps(report, indent=2))
+    else:
+        sys.stdout.write(format_status(report))
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _parser().parse_args(argv)
+    try:
+        if args.cmd == "init":
+            return cmd_init(args)
+        if args.cmd == "new":
+            return cmd_new(args)
+        if args.cmd == "status":
+            return cmd_status(args)
+        if args.cmd == "doctor":
+            return run_doctor()
+    except StreamsError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    print(f"unknown command {args.cmd}", file=sys.stderr)
+    return 2
