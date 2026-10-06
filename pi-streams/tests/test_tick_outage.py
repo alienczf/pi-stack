@@ -61,13 +61,13 @@ class OutageTests(TickCase):
         self.write_log("t-1", "/wt/datapull", user("Pull the 1m bars."), failure(LIMIT), thinking_change())
         self.stub.set_routes(self.routes(status("t-1")))
         down = self.tick("2026-10-06T12:00:00Z")
-        self.assertEqual((down.returncode, down.stdout, down.stderr), (0, f"{self.etl}\toutage=1\n", ""))
+        self.assertEqual((down.returncode, down.stdout, down.stderr), (0, f"{self.etl}\tidle=1\toutage=1\n", ""))
         self.assertEqual(self.stub.requests, [
             got_status("t-1"),
             got_list("/wt/datapull"),
             got_list(str(self.etl)),
             got_status("coord-1"),
-            got_prompt("coord-1", f"pi-streams tick 2026-10-06T12:00:00Z:\noutage t-1 datapull {SHOWN}"),
+            got_prompt("coord-1", f"pi-streams tick 2026-10-06T12:00:00Z:\nidle t-1 datapull\noutage t-1 datapull {SHOWN}"),
         ])
         self.assertEqual(
             self.rows(self.etl),
@@ -106,6 +106,7 @@ class OutageTests(TickCase):
         self.assertEqual(self.alerts(), "")
         self.assertEqual(
             self.events(self.etl),
+            '{"at": "2026-10-06T12:00:00Z", "kind": "idle", "session": "t-1", "role": "datapull", "detail": ""}\n'
             '{"at": "2026-10-06T12:00:00Z", "kind": "outage", "session": "t-1", "role": "datapull", '
             f'"detail": "{SHOWN}"}}\n'
             '{"at": "2026-10-06T12:10:00Z", "kind": "recovered", "session": "t-1", "role": "datapull", '
@@ -115,7 +116,7 @@ class OutageTests(TickCase):
 
     def test_a_coordinator_in_an_outage_stays_active_and_gets_its_events_after(self) -> None:
         self.write_log("coord-1", str(self.etl), user("/skill:stream-kickoff"), failure(LIMIT))
-        self.stub.set_routes(self.routes(status("t-1", ask=ASK)))
+        self.stub.set_routes(self.routes(status("t-1", streaming=True, ask=ASK)))
         down = self.tick("2026-10-06T12:00:00Z")
         self.assertEqual((down.returncode, down.stdout, down.stderr), (0, f"{self.etl}\task=1\toutage=1\n", ""))
         self.assertEqual(self.stub.requests, [got_status("t-1"), got_list("/wt/datapull"), got_list(str(self.etl))])
@@ -170,7 +171,7 @@ class OutageTests(TickCase):
     def test_an_alert_goes_once_its_thread_is_archived(self) -> None:
         self.write_log("t-1", "/wt/datapull", user("Pull the 1m bars."), failure(LIMIT))
         self.stub.set_routes(self.routes(status("t-1")))
-        self.assertEqual(self.tick("2026-10-06T12:00:00Z").stdout, f"{self.etl}\toutage=1\n")
+        self.assertEqual(self.tick("2026-10-06T12:00:00Z").stdout, f"{self.etl}\tidle=1\toutage=1\n")
         self.assertEqual(self.alerts(), f"2026-10-06T12:00:00Z etl t-1 datapull {SHOWN}\n")
 
         (self.etl / "threads.tsv").write_text(

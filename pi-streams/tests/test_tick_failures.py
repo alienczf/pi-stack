@@ -52,7 +52,7 @@ class FailureTests(TickCase):
         )
         self.stub.set_routes([
             ("GET", "/api/sessions/t-1/status", 500, {"error": "pi runtime is restarting"}),
-            ("GET", "/api/sessions/t-2/status", 200, status("t-2", ask=ASK)),
+            ("GET", "/api/sessions/t-2/status", 200, status("t-2", streaming=True, ask=ASK)),
             ("GET", "/api/sessions/coord-2/status", 200, status("coord-2")),
             self.listed(info("coord-2", str(ops), self.log_path("coord-2")), info("t-2", "/wt/review", self.log_path("t-2"))),
             PROMPTS,
@@ -82,7 +82,7 @@ class FailureTests(TickCase):
 
     def test_a_rotation_that_fails_after_its_archive_is_finished_by_the_next_tick(self) -> None:
         self.stub.set_routes([
-            ("GET", "/api/sessions/t-1/status", 200, status("t-1", ask=ASK)),
+            ("GET", "/api/sessions/t-1/status", 200, status("t-1", streaming=True, ask=ASK)),
             ("GET", "/api/sessions/coord-1/status", 200, status("coord-1", tokens=60000)),
             ("POST", "/api/sessions", 500, {"error": "pi exited with code 1"}),
             self.listed(),
@@ -109,7 +109,7 @@ class FailureTests(TickCase):
         self.assertEqual((self.state(self.etl)["rotating"], self.state(self.etl)["pending"]), (True, [ASKED]))
 
         self.stub.set_routes([
-            ("GET", "/api/sessions/t-1/status", 200, status("t-1", ask=ASK)),
+            ("GET", "/api/sessions/t-1/status", 200, status("t-1", streaming=True, ask=ASK)),
             ("POST", "/api/sessions", 200, info("coord-2", str(self.etl), self.log_path("coord-2"))),
             ("GET", "/api/sessions/coord-2/status", 200, status("coord-2", tokens=None)),
             self.listed(),

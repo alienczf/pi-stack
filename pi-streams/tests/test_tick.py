@@ -92,9 +92,24 @@ class TickTests(TickCase):
         })
         self.assertEqual(git(self.home, self.env, "rev-list", "--count", "HEAD"), "2\n")
 
+    def test_a_thread_that_finished_before_the_first_tick_wakes_the_coordinator(self) -> None:
+        self.stub.set_routes([
+            ("GET", "/api/sessions/t-1/status", 200, status("t-1")),
+            *self.coordinator(status("coord-1")),
+        ])
+        first = self.tick("2026-10-06T12:00:00Z")
+        self.assertEqual((first.returncode, first.stdout, first.stderr), (0, f"{self.etl}\tidle=1\n", ""))
+        self.assertEqual(
+            self.stub.requests[-1],
+            got_prompt("coord-1", "pi-streams tick 2026-10-06T12:00:00Z:\nidle t-1 datapull"),
+        )
+        again = self.tick("2026-10-06T12:05:00Z")
+        self.assertEqual((again.returncode, again.stdout), (0, ""))
+        self.assertEqual(self.stub.requests, [got_status("t-1"), got_list("/wt/datapull"), got_list(str(self.etl))])
+
     def test_an_ask_and_a_full_context_are_reported_once(self) -> None:
         self.stub.set_routes([
-            ("GET", "/api/sessions/t-1/status", 200, status("t-1", tokens=150000, ask=ASK)),
+            ("GET", "/api/sessions/t-1/status", 200, status("t-1", streaming=True, tokens=150000, ask=ASK)),
             *self.coordinator(status("coord-1")),
         ])
         first = self.tick("2026-10-06T12:00:00Z")
@@ -111,7 +126,7 @@ class TickTests(TickCase):
         self.assertEqual(self.stub.requests, [got_status("t-1"), got_list("/wt/datapull"), got_list(str(self.etl))])
 
         self.stub.set_routes([
-            ("GET", "/api/sessions/t-1/status", 200, status("t-1", tokens=160000, ask=ASK_2)),
+            ("GET", "/api/sessions/t-1/status", 200, status("t-1", streaming=True, tokens=160000, ask=ASK_2)),
             *self.coordinator(status("coord-1")),
         ])
         newer = self.tick("2026-10-06T12:10:00Z")
@@ -133,12 +148,12 @@ class TickTests(TickCase):
             "outages": [],
             "pending": [],
             "rotating": False,
-            "sessions": {"t-1": {"asks": ["ask-2"], "busy": False, "context": True, "queued": {}}},
+            "sessions": {"t-1": {"asks": ["ask-2"], "busy": True, "context": True, "queued": {}}},
         })
 
     def test_a_streaming_coordinator_gets_the_events_as_a_follow_up(self) -> None:
         self.stub.set_routes([
-            ("GET", "/api/sessions/t-1/status", 200, status("t-1", ask=ASK_2)),
+            ("GET", "/api/sessions/t-1/status", 200, status("t-1", streaming=True, ask=ASK_2)),
             *self.coordinator(status("coord-1", streaming=True, tokens=90000)),
         ])
         proc = self.tick("2026-10-06T12:00:00Z")
@@ -157,7 +172,7 @@ class TickTests(TickCase):
 
     def test_a_coordinator_at_the_context_cap_is_rotated_and_the_new_one_gets_the_events(self) -> None:
         self.stub.set_routes([
-            ("GET", "/api/sessions/t-1/status", 200, status("t-1", ask=ASK_2)),
+            ("GET", "/api/sessions/t-1/status", 200, status("t-1", streaming=True, ask=ASK_2)),
             ("POST", "/api/sessions", 200, info("coord-2", str(self.etl), self.log_path("coord-2"))),
             ("GET", "/api/sessions/coord-2/status", 200, status("coord-2", tokens=None)),
             *self.coordinator(status("coord-1", tokens=60000)),
@@ -194,7 +209,7 @@ class TickTests(TickCase):
 
     def test_a_coordinator_idle_for_six_hours_is_rotated(self) -> None:
         self.stub.set_routes([
-            ("GET", "/api/sessions/t-1/status", 200, status("t-1", ask=ASK)),
+            ("GET", "/api/sessions/t-1/status", 200, status("t-1", streaming=True, ask=ASK)),
             *self.coordinator(status("coord-1", tokens=None), modified="2026-10-06T06:00:00.000Z"),
         ])
         warm = self.tick("2026-10-06T11:59:59Z")
@@ -205,7 +220,7 @@ class TickTests(TickCase):
         ))
 
         self.stub.set_routes([
-            ("GET", "/api/sessions/t-1/status", 200, status("t-1", ask=ASK_2)),
+            ("GET", "/api/sessions/t-1/status", 200, status("t-1", streaming=True, ask=ASK_2)),
             ("POST", "/api/sessions", 200, info("coord-2", str(self.etl), self.log_path("coord-2"))),
             ("GET", "/api/sessions/coord-2/status", 200, status("coord-2", tokens=None)),
             *self.coordinator(status("coord-1", tokens=None), modified="2026-10-06T06:00:00.000Z"),
