@@ -1139,6 +1139,67 @@ if printf '%s\n' "$node_out" | grep -F -q 'npm install -g @jmfederico/pi-web'; t
 fi
 test ! -s "$node_log" || fail "install ran npm even though pi-web was under pi-node"
 
+no_node_path="$tmp/no-node-path"
+mkdir -p "$no_node_path"
+cp -s -n /usr/bin/* /bin/* "$no_node_path"/ 2>/dev/null || true
+rm -f "$no_node_path/node" "$no_node_path/nodejs" "$no_node_path/npm" "$no_node_path/npx"
+test -x "$no_node_path/bash" || fail "could not build a PATH without node"
+
+pinode_home="$tmp/home-pinode-npm"
+register_streams_home "$pinode_home"
+pinode_bin="$pinode_home/.local/share/pi-node/node-fixture/bin"
+mkdir -p "$pinode_bin"
+printf '#!/bin/sh\nexit 0\n' >"$pinode_bin/node"
+cat >"$pinode_bin/npm" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+here="$(cd "$(dirname "$0")" && pwd)"
+[[ "$(command -v node)" == "$here/node" ]] || { printf 'npm ran without its node on PATH\n' >&2; exit 1; }
+printf '%s\n' "$*" >>"$NPM_LOG"
+cat >"$here/pi-web" <<'PIWEB'
+#!/usr/bin/env bash
+[[ "$(command -v node)" == "$(cd "$(dirname "$0")" && pwd)/node" ]] || { printf 'pi-web ran without its node on PATH\n' >&2; exit 1; }
+printf '%s\n' "$*" >>"$PI_WEB_LOG"
+PIWEB
+chmod +x "$here/pi-web"
+EOF
+chmod +x "$pinode_bin/node" "$pinode_bin/npm"
+pinode_npm_log="$tmp/npm-pinode.log"
+pinode_web_log="$tmp/pi-web-pinode.log"
+: >"$pinode_npm_log"
+: >"$pinode_web_log"
+if ! pinode_out="$(
+	PATH="$fake_bin:$no_systemctl:$no_node_path" \
+		HOME="$pinode_home" \
+		PI_STACK="$root" \
+		PSTACK="$stub" \
+		PI_STACK_SKIP_PACKAGES=0 \
+		PI_INSTALL_LOG="$tmp/npm-pinode-pi.log" \
+		NPM_LOG="$pinode_npm_log" \
+		PI_WEB_LOG="$pinode_web_log" \
+		bash "$root/install.sh" 2>&1
+)"; then
+	printf '%s\n' "$pinode_out" >&2
+	fail "install did not install pi-web with the npm under pi-node"
+fi
+[[ "$(cat "$pinode_npm_log")" == "install -g @jmfederico/pi-web --allow-scripts=node-pty" ]] || fail "install did not run the npm under pi-node"
+[[ "$(cat "$pinode_web_log")" == "install" ]] || fail "install did not run pi-web install with its node on PATH"
+
+nonpm_home="$tmp/home-no-npm"
+register_streams_home "$nonpm_home"
+if nonpm_out="$(
+	PATH="$fake_bin:$no_systemctl:$no_node_path" \
+		HOME="$nonpm_home" \
+		PI_STACK="$root" \
+		PSTACK="$stub" \
+		PI_STACK_SKIP_PACKAGES=0 \
+		PI_INSTALL_LOG="$tmp/no-npm-pi.log" \
+		bash "$root/install.sh" 2>&1
+)"; then
+	fail "install without npm exited 0"
+fi
+printf '%s\n' "$nonpm_out" | grep -F -x -q 'npm is not on PATH or under ~/.local/share/pi-node. Install Node.js, then run the two commands above.' || fail "install without npm did not say how to get it"
+
 fake_systemctl="$tmp/fake-systemctl"
 mkdir -p "$fake_systemctl"
 cat >"$fake_systemctl/systemctl" <<'EOF'
