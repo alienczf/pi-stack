@@ -372,17 +372,21 @@ def ensure_git(home: Path) -> None:
 def ensure_origin(home: Path, remote: str) -> None:
     if remote == "":
         return
+    # get-url would apply insteadOf rewrites, and the raw value is what init wrote.
     proc = subprocess.run(
-        ["git", "-C", os.fspath(home), "remote", "get-url", "origin"],
+        ["git", "-C", os.fspath(home), "config", "--get", "remote.origin.url"],
         capture_output=True,
         text=True,
         encoding="utf-8",
         env=_git_env(),
         check=False,
     )
-    if proc.returncode == 0:
+    if proc.returncode != 0:
+        git(home, "remote", "add", "origin", remote)
         return
-    git(home, "remote", "add", "origin", remote)
+    origin = proc.stdout.strip()
+    if origin != remote:
+        raise StreamsError(f"origin is {origin}, but project.toml names remote {remote}")
 
 
 @contextlib.contextmanager
@@ -406,6 +410,8 @@ def push_home(home: Path, remote: str) -> None:
         return
     ensure_origin(home, remote)
     branch = git(home, "branch", "--show-current").strip()
+    if branch == "":
+        raise StreamsError(f"HEAD is detached, so tick cannot push it to {remote}")
     try:
         pushed = git(home, "rev-parse", "--verify", "--quiet", f"refs/remotes/origin/{branch}").strip()
     except StreamsError:
