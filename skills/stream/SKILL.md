@@ -10,7 +10,7 @@ The arguments are `new <id>`, `status [<id>]` or `close <id>`. Pass any extra fl
 
 ## New and status
 
-Run `pi-streams new <id>` and report its output, starting with the coordinator's pi-web link. The kickoff interview waits for ZF there.
+Run `pi-streams new <id>`. Report the pi-web URL and the coordinator's session id it prints. The kickoff interview waits for ZF in that session.
 
 Run `pi-streams status [<id>]` and report its output unchanged.
 
@@ -25,5 +25,5 @@ Paths here are relative to the stream folder. Prompt threads only with `pi-web-c
 3. Read every handover. Copy only lasting knowledge into the project's `../context/` files: how to test a repo, gotchas, and ZF's preferences. Keep each entry short. Update an existing entry instead of adding a duplicate, and list any new file in `../context/README.md`.
 4. For a mistake that repeated across threads, start a thread in that repo with `pi-streams thread spawn <id> --repo NAME --role correct-NAME --note TEXT`, where TEXT names the mistake and the handovers that show it. Prompt it with pstack's `/skill:correct`, wait, then get its handover as in step 2.
 5. For a thread that fought one problem repeatedly, prompt it with pstack's `/skill:reflect` and wait. Reflect stops for approval, so read its last reply with `pi-web-cli messages <session>`, show it to ZF, and send ZF's choice back.
-6. Run `pi-streams close <id>`. It commits, so commit nothing yourself. If it refuses, fix what it names and run it again.
+6. Run `pi-streams close <id>`. It archives the threads, marks you, the coordinator, done, and commits, so commit nothing yourself. If it refuses or stops on a busy thread, fix what it names and run it again.
 7. Report each context entry you added or changed with its file, the reflect and correct results with any PR links, and the close output.
