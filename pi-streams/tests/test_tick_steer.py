@@ -69,7 +69,7 @@ class SteerTests(TickCase):
             "sessions": {"t-1": {"asks": [], "busy": True, "context": False, "queued": {
                 BARS: "2026-10-06T12:10:00Z",
                 RERUN: "2026-10-06T12:09:59Z",
-            }}},
+            }, "replay": []}},
         })
 
     def test_a_steer_that_still_waits_is_left_alone(self) -> None:
@@ -92,6 +92,45 @@ class SteerTests(TickCase):
             got_prompt("t-1", BARS, "steer"),
             got_prompt("t-1", BARS, "steer"),
         ])
+
+    def test_a_resend_that_fails_after_the_clear_is_finished_on_the_next_tick(self) -> None:
+        self.stub.set_routes(self.thread(("followUp", BARS)))
+        self.assertEqual(self.tick("2026-10-06T12:00:00Z").returncode, 0)
+        refused = ("POST", "/api/sessions/t-1/prompt", 500, {"error": "pi-web restarting"})
+        self.stub.set_routes([refused, *self.thread(("followUp", BARS), ("followUp", RERUN))])
+        due = self.tick("2026-10-06T12:10:00Z")
+        self.assertEqual(due.returncode, 1)
+        self.assertEqual(self.stub.requests[2:], [got_post("t-1", "queue/clear"), got_prompt("t-1", BARS, "steer")])
+        self.assertEqual(self.state(self.etl)["sessions"]["t-1"]["replay"], [[BARS, "steer"], [RERUN, "follow-up"]])
+
+        self.stub.set_routes(self.thread())
+        again = self.tick("2026-10-06T12:15:00Z")
+        self.assertEqual(again.returncode, 0, again.stderr)
+        self.assertEqual(self.stub.requests[:3], [
+            got_status("t-1"),
+            got_prompt("t-1", BARS, "steer"),
+            got_prompt("t-1", RERUN, "followUp"),
+        ])
+        self.assertEqual(self.state(self.etl)["sessions"]["t-1"]["replay"], [])
+
+    def test_a_resend_whose_clear_failed_sends_each_message_once(self) -> None:
+        self.stub.set_routes(self.thread(("followUp", BARS)))
+        self.assertEqual(self.tick("2026-10-06T12:00:00Z").returncode, 0)
+        refused = ("POST", "/api/sessions/t-1/queue/clear", 500, {"error": "pi-web restarting"})
+        self.stub.set_routes([refused, *self.thread(("followUp", BARS), ("followUp", RERUN))])
+        self.assertEqual(self.tick("2026-10-06T12:10:00Z").returncode, 1)
+
+        self.stub.set_routes(self.thread(("followUp", BARS), ("followUp", RERUN)))
+        again = self.tick("2026-10-06T12:15:00Z")
+        self.assertEqual(again.returncode, 0, again.stderr)
+        self.assertEqual(self.stub.requests[:5], [
+            got_status("t-1"),
+            got_list("/wt/datapull"),
+            got_post("t-1", "queue/clear"),
+            got_prompt("t-1", BARS, "steer"),
+            got_prompt("t-1", RERUN, "followUp"),
+        ])
+        self.assertEqual(self.state(self.etl)["sessions"]["t-1"]["replay"], [])
 
     def test_a_message_that_left_the_queue_waits_from_its_return(self) -> None:
         self.stub.set_routes(self.thread(("steer", BARS)))
