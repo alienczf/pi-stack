@@ -459,6 +459,13 @@ This supports eggbot's root-cause hypothesis ("goal lived in grokbot chat + per-
 
 The research covered Matt Pocock (@mattpocockuk) and poteto (Lauren Tan, @poteto, author of pstack) plus the resources they link, and the Cursor Projects and self-hosted worker docs. X itself was login-walled: x.com returned 403 and xcancel returned 451. Individual posts were read through `api.fxtwitter.com` or `cdn.syndication.twimg.com`, and long X articles through threadnavigator mirrors. §3.9 lists what could not be reached. What they say about repo structure is in §7.1.
 
+**poteto provenance.** pstack's `plugin.json` names Lauren Tan as author and its README opens "i'm [poteto](https://x.com/poteto)", so pstack files count as her own writing. On 2026-10-06 every poteto quote in this doc was re-checked by script against her sources, with whitespace and quote marks normalised:
+- pstack on `main` at commit `df58112` (v0.15.15, 2026-10-05), as well as the installed v0.15.13 copy;
+- her X posts and articles;
+- the talk transcripts, excluding the captions site's own summaries.
+
+The interview is on Matt Pocock's channel, dated 2026-10-02. Its captions have no speaker labels, so each quote given to her was read in context, and all sit in her answers (Dune, "I use uh cursor projects a lot"). The "2000 PRs" talk is a solo talk that opens "Hi, my name's Lauren. You might know me as potato on X"; it is a re-upload on a third-party channel ("Raner", 2026-09-21).
+
 ### 3.1 One durable statement of intent, re-read at the start of every session
 
 - Pocock defines a spec as "the durable statement of intent it reads at the start of every session" (https://raw.githubusercontent.com/mattpocock/dictionary-of-ai-coding/main/dictionary/Spec.md).
@@ -971,7 +978,7 @@ A monorepo would not have prevented the case study's interface failures, because
 - **His own repos.** His internal tooling lives in a repo named `total-typescript-monorepo`, described as "The home of all Matt's internal tooling" (https://github.com/mattpocock/total-typescript-monorepo). That is a fact about his repos, not advice; I found no text where he recommends a monorepo for agents.
 
 **poteto**
-- **No position on repo layout.** No pstack file mentions monorepo, polyrepo or multi-repo (grep of the installed copy at commit e5a8186 of https://github.com/cursor/plugins/tree/main/pstack). Neither do "Loops You Can Trust" (§3.6), her 2026-10-05 constraints post, or the captions of her "2000 PRs" talk. The interview captions contain neither word, and "repo" appears only in Pocock's question about triggers "in your repo" (https://youtube-distilled.com/watch/MN9dGgmLyso). Her X timeline could not be searched (§3.9), so this means "not found", not "never said".
+- **No position on repo layout.** No pstack file mentions monorepo, polyrepo, multi-repo or cross-repo (grep of all 164 files on `main` at commit `df58112`, https://github.com/cursor/plugins/tree/main/pstack, and of the installed v0.15.13 copy). Neither do "Loops You Can Trust" (§3.6), her 2026-10-05 constraints post, or the captions of her "2000 PRs" talk. The interview captions contain neither word, and "repo" appears only in Pocock's question about triggers "in your repo" (https://youtube-distilled.com/watch/MN9dGgmLyso). Her X timeline could not be searched (§3.9), so this means "not found", not "never said".
 - **Constraints are a scale answer, not a layout answer.** "large companies have had to solve this problem since even before agents. because before you had agent slop, you had human slop. … the solution to this was constraints: lint rules, smarter compilers and diagnostics, high quality tests, investments into observability, and so on" (https://x.com/poteto/status/2106916667599278365, via https://api.fxtwitter.com/poteto/status/2106916667599278365).
 - **The codebase is the memory, with one paved path.** From the "2000 PRs" talk (auto-captions, https://youtube-distilled.com/watch/NjoZoUm85x0):
   - "the code base is really like the best form of memory because agents love to extend existing patterns that they see."
