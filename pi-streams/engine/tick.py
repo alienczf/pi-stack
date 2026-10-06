@@ -265,7 +265,9 @@ class StreamTick:
 
     def observe_thread(self, row: Thread) -> None:
         status = piweb.session_status(row.session)
-        old = self.state.sessions.get(row.session, Seen())
+        # Every thread starts on a prompt, so one first seen idle has finished it,
+        # even when it did so between two ticks.
+        old = self.state.sessions.get(row.session, Seen(busy=True))
         new = Seen(
             busy=status.get("isStreaming") is True or _count(status.get("pendingMessageCount")) > 0,
             context=old.context,
