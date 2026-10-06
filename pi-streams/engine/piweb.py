@@ -73,6 +73,10 @@ def prompt(sid: str, text: str, behavior: str | None = None) -> None:
     call(["prompt", sid, *flags], stdin=text)
 
 
+def queue_clear(sid: str) -> None:
+    call(["queue-clear", sid])
+
+
 def archive(sid: str) -> None:
     call(["archive", sid])
 
