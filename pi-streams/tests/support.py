@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -24,6 +25,10 @@ def make_env(home: Path, xdg: Path, pi_web_url: str) -> dict[str, str]:
         "HOME": str(home),
         "XDG_CONFIG_HOME": str(xdg),
         "PI_WEB_URL": pi_web_url,
+        # A request to any address but the stub goes to a dead proxy, even when
+        # a test removes PI_WEB_URL and the engine falls back to a default.
+        "http_proxy": "http://127.0.0.1:9",
+        "no_proxy": urllib.parse.urlsplit(pi_web_url).netloc,
         "GIT_AUTHOR_NAME": "Test",
         "GIT_AUTHOR_EMAIL": "test@example.com",
         "GIT_COMMITTER_NAME": "Test",
