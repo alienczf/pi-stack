@@ -141,13 +141,13 @@ def _working(status: dict[str, object]) -> bool:
     return busy or _count(status.get("pendingMessageCount")) > 0
 
 
-def _queued(status: dict[str, object]) -> dict[str, str]:
+def _queued(status: dict[str, object]) -> list[tuple[str, str]]:
     items = status.get("queuedMessages")
-    found: dict[str, str] = {}
-    for item in items if isinstance(items, list) else []:
-        if isinstance(item, dict) and item.get("kind") in QUEUE_FLAGS and isinstance(item.get("text"), str):
-            found.setdefault(item["text"], item["kind"])
-    return found
+    return [
+        (item["text"], item["kind"])
+        for item in (items if isinstance(items, list) else [])
+        if isinstance(item, dict) and item.get("kind") in QUEUE_FLAGS and isinstance(item.get("text"), str)
+    ]
 
 
 class StreamTick:
@@ -287,16 +287,19 @@ class StreamTick:
 
     def resend_stale(self, row: Thread, status: dict[str, object], old: Seen, new: Seen) -> None:
         queued = _queued(status)
-        new.queued = {text: old.queued.get(text, self.at) for text in queued}
+        new.queued = {text: old.queued.get(text, self.at) for text, _kind in queued}
         limit = timedelta(minutes=self.caps.steer_queue_minutes)
-        stale = [text for text, seen in new.queued.items() if self.since(seen) >= limit]
+        # A steer that still waits cannot be sent any harder, so only follow-ups go stale.
+        stale = list(dict.fromkeys(
+            text for text, kind in queued if kind == "followUp" and self.since(new.queued[text]) >= limit
+        ))
         if not stale:
             return
         for text in stale:
             self.emit("stale-steer", row, text)
         # queue/clear drops every queued message, not only the stale ones.
         piweb.queue_clear(row.session)
-        for text, kind in queued.items():
+        for text, kind in queued:
             piweb.prompt(row.session, text, "steer" if text in stale else QUEUE_FLAGS[kind])
         for text in stale:
             new.queued[text] = self.at

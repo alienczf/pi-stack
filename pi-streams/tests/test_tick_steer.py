@@ -72,6 +72,27 @@ class SteerTests(TickCase):
             }}},
         })
 
+    def test_a_steer_that_still_waits_is_left_alone(self) -> None:
+        self.stub.set_routes(self.thread(("steer", BARS)))
+        self.assertEqual(self.tick("2026-10-06T12:00:00Z").returncode, 0)
+        late = self.tick("2026-10-06T12:30:00Z")
+        self.assertEqual((late.returncode, late.stdout), (0, ""))
+        self.assertEqual(self.stub.requests, [got_status("t-1"), got_list("/wt/datapull"), got_list(str(self.etl))])
+        self.assertEqual(self.state(self.etl)["sessions"]["t-1"]["queued"], {BARS: "2026-10-06T12:00:00Z"})
+
+    def test_every_copy_of_a_repeated_message_is_resent(self) -> None:
+        self.stub.set_routes(self.thread(("followUp", BARS), ("followUp", BARS)))
+        self.assertEqual(self.tick("2026-10-06T12:00:00Z").returncode, 0)
+        due = self.tick("2026-10-06T12:10:00Z")
+        self.assertEqual((due.returncode, due.stdout), (0, f"{self.etl}\tstale-steer=1\n"))
+        self.assertEqual(self.stub.requests[:5], [
+            got_status("t-1"),
+            got_list("/wt/datapull"),
+            got_post("t-1", "queue/clear"),
+            got_prompt("t-1", BARS, "steer"),
+            got_prompt("t-1", BARS, "steer"),
+        ])
+
     def test_a_message_that_left_the_queue_waits_from_its_return(self) -> None:
         self.stub.set_routes(self.thread(("steer", BARS)))
         self.assertEqual(self.tick("2026-10-06T12:00:00Z").returncode, 0)
