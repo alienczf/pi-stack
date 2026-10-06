@@ -35,6 +35,7 @@ class Seen:
     asks: list[str] = field(default_factory=list)
     context: bool = False
     queued: dict[str, str] = field(default_factory=dict)
+    replay: list[list[str]] = field(default_factory=list)
 
 
 @dataclass
@@ -269,6 +270,9 @@ class StreamTick:
         # even when it did so between two ticks. An adopted thread that is already
         # idle reports idle once too, which tells its coordinator that it waits.
         old = self.state.sessions.get(row.session, Seen(busy=True))
+        if old.replay:
+            # The last resend stopped after queue/clear, so what is not queued now was dropped.
+            self.replay(row, old, Counter(text for text, _kind in _queued(status)))
         new = Seen(
             busy=status.get("isStreaming") is True or _count(status.get("pendingMessageCount")) > 0,
             context=old.context,
@@ -300,12 +304,23 @@ class StreamTick:
             return
         for text in stale:
             self.emit("stale-steer", row, text)
+        new.replay = [[text, "steer" if text in stale else QUEUE_FLAGS[kind]] for text, kind in queued]
+        self.flush()
         # queue/clear drops every queued message, not only the stale ones.
         piweb.queue_clear(row.session)
-        for text, kind in queued:
-            piweb.prompt(row.session, text, "steer" if text in stale else QUEUE_FLAGS[kind])
+        self.replay(row, new, Counter())
         for text in stale:
             new.queued[text] = self.at
+
+    def replay(self, row: Thread, seen: Seen, waiting: Counter[str]) -> None:
+        while seen.replay:
+            text, behavior = seen.replay[0]
+            if waiting[text] > 0:
+                waiting[text] -= 1
+            else:
+                piweb.prompt(row.session, text, behavior)
+            del seen.replay[0]
+            self.flush()
 
     def since(self, stamp: str) -> timedelta:
         seen = clock.parse(stamp)
