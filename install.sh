@@ -500,19 +500,6 @@ run_project_setup() {
 		cmd+=(-y)
 	fi
 	"${cmd[@]}"
-	# pi-web-cli defaults to 127.0.0.1:8504. Doctor must use the URL init recorded.
-	PI_WEB_URL="$(
-		python3 - "$project_root" <<'PY'
-import sys
-import tomllib
-from pathlib import Path
-
-root = Path(sys.argv[1]).expanduser().resolve()
-data = tomllib.loads((root / "streams" / "project.toml").read_text(encoding="utf-8"))
-sys.stdout.write(str(data["project"]["pi_web_url"]))
-PY
-	)"
-	export PI_WEB_URL
 	"${HOME}/.local/bin/pi-streams" doctor
 }
 
