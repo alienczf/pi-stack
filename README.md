@@ -115,6 +115,8 @@ From a checkout, `./install.sh -y --project ~/Projects/alphalab` does the same t
 
 Pass `--pi-web-url`, `--remote`, `--coordinator-model`, or `--coordinator-thinking` to set an answer without the question.
 
+The pi-web URL in `project.toml` is the address you open in a browser, which may be a tunnel. `pi-streams` runs on the pi-web host and calls pi-web at `PI_WEB_URL` when it is set, otherwise at the `host` and `port` in `~/.config/pi-web/config.json`, otherwise at `http://127.0.0.1:8504`.
+
 The command also installs:
 
 - `~/.local/bin/pi-streams`, linked to this checkout's `bin/pi-streams`

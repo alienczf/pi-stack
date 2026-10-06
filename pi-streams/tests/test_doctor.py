@@ -113,6 +113,20 @@ class DoctorTests(EngineCase):
         self.assertEqual(proc.stderr, "")
         self.assertEqual(proc.stdout, self._lines(pi, "FAIL pi-web: list failed"))
 
+    def test_doctor_reaches_pi_web_from_its_config_without_pi_web_url(self) -> None:
+        pi = self._pi_on_path()
+        self.assertIn('pi_web_url = "http://127.0.0.1:8504"\n', (self.home / "project.toml").read_text(encoding="utf-8"))
+        del self.env["PI_WEB_URL"]
+        config = self.user_home / ".config" / "pi-web" / "config.json"
+        config.parent.mkdir(parents=True)
+        port = urllib.parse.urlsplit(self.stub.url).port
+        config.write_text(json.dumps({"host": "127.0.0.1", "port": port}) + "\n", encoding="utf-8")
+        self.stub.set_routes([("GET", "/api/sessions", 200, [])])
+        proc = self.run_streams("doctor")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stdout, self._lines(pi, "PASS pi-web: list ok"))
+        self.assertEqual([(method, path) for method, path, _query, _body in self.stub.requests], [("GET", "/api/sessions")])
+
     def test_doctor_warns_about_jig_and_leaves_it(self) -> None:
         pi = self._pi_on_path()
         jig = self.fx.alpha / ".pi" / "jig"

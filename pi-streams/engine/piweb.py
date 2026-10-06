@@ -6,16 +6,21 @@ import subprocess
 import sys
 
 from engine import StreamsError, repo_root
+from engine.project import default_pi_web_url
 
 
 def _run(args: list[str], stdin: str | None = None) -> subprocess.CompletedProcess[str]:
+    # project.toml's pi_web_url is the address a browser opens, which may be a
+    # tunnel. The engine runs beside pi-web, so it follows pi-web's own config.
+    env = os.environ.copy()
+    env.setdefault("PI_WEB_URL", default_pi_web_url())
     return subprocess.run(
         [sys.executable, os.fspath(repo_root() / "bin" / "pi-web-cli"), *args],
         input=stdin,
         capture_output=True,
         text=True,
         encoding="utf-8",
-        env=os.environ.copy(),
+        env=env,
         check=False,
     )
 
