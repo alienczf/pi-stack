@@ -59,6 +59,7 @@ class TickTests(TickCase):
         self.assertEqual(self.stub.requests, [got_status("t-1"), got_list("/wt/datapull"), got_list(str(self.etl))])
         self.assertFalse((self.etl / "log" / "events.jsonl").exists())
         self.assertEqual(self.state(self.etl), {
+            "claims": [],
             "outages": [],
             "pending": [],
             "rotating": False,
@@ -86,6 +87,7 @@ class TickTests(TickCase):
             '{"at": "2026-10-06T12:05:00Z", "kind": "idle", "session": "t-1", "role": "datapull", "detail": ""}\n',
         )
         self.assertEqual(self.state(self.etl), {
+            "claims": [],
             "outages": [],
             "pending": [],
             "rotating": False,
@@ -147,6 +149,7 @@ class TickTests(TickCase):
             '"detail": "May I write to Test?"}\n',
         )
         self.assertEqual(self.state(self.etl), {
+            "claims": [],
             "outages": [],
             "pending": [],
             "rotating": False,
