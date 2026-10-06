@@ -59,8 +59,9 @@ def cmd_spawn(cwd: str) -> int:
     return out({"ok": ok, "status": code, "session": data}, ok)
 
 
-def cmd_prompt(sid: str, text: str) -> int:
-    code, data = req("POST", f"/api/sessions/{sid}/prompt", {"text": text})
+def cmd_prompt(sid: str, text: str, streaming: str | None = None) -> int:
+    body = {"text": text} if streaming is None else {"text": text, "streamingBehavior": streaming}
+    code, data = req("POST", f"/api/sessions/{sid}/prompt", body)
     ok = code == 200 and isinstance(data, dict) and data.get("accepted") is True
     return out({"ok": ok, "status": code, "result": data}, ok)
 
@@ -89,27 +90,23 @@ def _model_body(args: argparse.Namespace) -> dict[str, str]:
 
 
 def _answer_body(args: argparse.Namespace) -> dict[str, object]:
-    # ask/submit reads askId itself. askUserSubmissionFromBody requires answers
-    # of {id, values, otherText?}: values are option ids, free text is otherText.
-    # There is no question-id argument, so the answer id repeats askId.
+    # values holds option ids; free text goes in otherText.
     return {
         "askId": args.ask_id,
-        "answers": [
-            {"id": args.ask_id, "values": [], "otherText": args.text},
-        ],
+        "answers": [{"id": args.question_id, "values": [], "otherText": args.text}],
     }
 
 
 VerbBuilder = Callable[[argparse.Namespace], dict | None]
-VERBS: dict[str, tuple[str, str, VerbBuilder]] = {
-    "stop": ("POST", "/api/sessions/{sid}/stop", lambda _args: {}),
-    "abort": ("POST", "/api/sessions/{sid}/abort", lambda _args: {}),
-    "queue-clear": ("POST", "/api/sessions/{sid}/queue/clear", lambda _args: {}),
-    "archive": ("POST", "/api/sessions/{sid}/archive", lambda _args: {}),
-    "messages": ("GET", "/api/sessions/{sid}/messages", lambda _args: None),
-    "model": ("POST", "/api/sessions/{sid}/model", _model_body),
-    "thinking-level": ("POST", "/api/sessions/{sid}/thinking-level", lambda args: {"level": args.level}),
-    "answer": ("POST", "/api/sessions/{sid}/ask/submit", _answer_body),
+VERBS: dict[str, tuple[str, str, tuple[str, ...], VerbBuilder]] = {
+    "stop": ("POST", "stop", (), lambda _args: {}),
+    "abort": ("POST", "abort", (), lambda _args: {}),
+    "queue-clear": ("POST", "queue/clear", (), lambda _args: {}),
+    "archive": ("POST", "archive", (), lambda _args: {}),
+    "messages": ("GET", "messages", (), lambda _args: None),
+    "model": ("POST", "model", ("model",), _model_body),
+    "thinking-level": ("POST", "thinking-level", ("level",), lambda args: {"level": args.level}),
+    "answer": ("POST", "ask/submit", ("ask_id", "question_id", "text"), _answer_body),
 }
 
 
@@ -130,16 +127,11 @@ def main(argv: list[str]) -> int:
     st.add_argument("sid")
     cm = sub.add_parser("commands")
     cm.add_argument("sid")
-    for name in VERBS:
+    for name, (_method, _suffix, positionals, _build) in VERBS.items():
         verb = sub.add_parser(name)
         verb.add_argument("sid")
-        if name == "model":
-            verb.add_argument("model", metavar="provider/modelId")
-        elif name == "thinking-level":
-            verb.add_argument("level")
-        elif name == "answer":
-            verb.add_argument("ask_id", metavar="askId")
-            verb.add_argument("text")
+        for positional in positionals:
+            verb.add_argument(positional)
     args = p.parse_args(argv)
     if args.cmd == "list":
         return cmd_list(args.cwd)
@@ -149,29 +141,18 @@ def main(argv: list[str]) -> int:
         text = args.text if args.text is not None else sys.stdin.read()
         if not text.strip():
             return out({"ok": False, "error": "empty prompt"}, False)
-        if args.steer or args.follow_up:
-            streaming = "steer" if args.steer else "followUp"
-            code, data = req(
-                "POST",
-                f"/api/sessions/{args.sid}/prompt",
-                {"text": text, "streamingBehavior": streaming},
-            )
-            ok = code == 200 and isinstance(data, dict) and data.get("accepted") is True
-            return out({"ok": ok, "status": code, "result": data}, ok)
-        return cmd_prompt(args.sid, text)
+        streaming = "steer" if args.steer else "followUp" if args.follow_up else None
+        return cmd_prompt(args.sid, text, streaming)
     if args.cmd == "status":
         return cmd_status(args.sid)
     if args.cmd == "commands":
         return cmd_commands(args.sid)
-    spec = VERBS.get(args.cmd)
-    if spec is None:
-        return 2
-    method, template, build = spec
+    method, suffix, _positionals, build = VERBS[args.cmd]
     try:
         body = build(args)
     except UsageError as exc:
         return out({"ok": False, "error": str(exc)}, False)
-    code, data = req(method, template.replace("{sid}", args.sid), body)
+    code, data = req(method, f"/api/sessions/{args.sid}/{suffix}", body)
     ok = code == 200 and not (isinstance(data, dict) and data.get("error"))
     return out({"ok": ok, "status": code, "result": data}, ok)
 

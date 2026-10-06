@@ -226,14 +226,14 @@ class PiWebCliTests(unittest.TestCase):
         self.assert_request("POST", "/api/sessions/sess-1/thinking-level", {"level": "xhigh"})
 
     def test_answer(self) -> None:
-        proc = self.run_cli("answer", "sess-1", "ask-9", "no")
+        proc = self.run_cli("answer", "sess-1", "ask-9", "q-1", "no")
         self.assert_completed(proc, 0, OK_STDOUT)
         self.assert_request(
             "POST",
             "/api/sessions/sess-1/ask/submit",
             {
                 "askId": "ask-9",
-                "answers": [{"id": "ask-9", "values": [], "otherText": "no"}],
+                "answers": [{"id": "q-1", "values": [], "otherText": "no"}],
             },
         )
 
