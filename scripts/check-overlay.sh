@@ -1014,9 +1014,12 @@ cat >"$fake_npm/npm" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "$*" >>"$NPM_LOG"
-if [[ "${1:-}" == install && "${2:-}" == -g && "${3:-}" == @jmfederico/pi-web ]]; then
+if [[ "$*" == "install -g @jmfederico/pi-web --allow-scripts=node-pty" ]]; then
 	mkdir -p "${HOME}/.local/bin"
-	printf '#!/bin/sh\nexit 0\n' >"${HOME}/.local/bin/pi-web"
+	cat >"${HOME}/.local/bin/pi-web" <<'PIWEB'
+#!/bin/sh
+printf '%s\n' "$*" >>"$PI_WEB_LOG"
+PIWEB
 	chmod +x "${HOME}/.local/bin/pi-web"
 	exit 0
 fi
@@ -1062,14 +1065,17 @@ if ! noweb_out="$(
 	printf '%s\n' "$noweb_out" >&2
 	fail "install without pi-web failed while packages were skipped"
 fi
-printf '%s\n' "$noweb_out" | grep -F -x -q 'npm install -g @jmfederico/pi-web' || fail "install did not say how to install pi-web"
+printf '%s\n' "$noweb_out" | grep -F -x -q 'npm install -g @jmfederico/pi-web --allow-scripts=node-pty' || fail "install did not say how to install pi-web"
+printf '%s\n' "$noweb_out" | grep -F -x -q 'pi-web install' || fail "install did not say how to start pi-web"
 test ! -s "$noweb_log" || fail "skipped package install still ran npm"
 test ! -e "$noweb_home/.local/bin/pi-web" || fail "skipped package install wrote pi-web"
 
 npm_home="$tmp/home-npm-web"
 register_streams_home "$npm_home"
 npm_log="$tmp/npm-web.log"
+pi_web_log="$tmp/pi-web.log"
 : >"$npm_log"
+: >"$pi_web_log"
 if ! npm_out="$(
 	PATH="$fake_npm:$fake_bin:$no_systemctl:/usr/bin:/bin" \
 		HOME="$npm_home" \
@@ -1078,14 +1084,16 @@ if ! npm_out="$(
 		PI_STACK_SKIP_PACKAGES=0 \
 		PI_INSTALL_LOG="$tmp/npm-web-pi.log" \
 		NPM_LOG="$npm_log" \
+		PI_WEB_LOG="$pi_web_log" \
 		bash "$root/install.sh" 2>&1
 )"; then
 	printf '%s\n' "$npm_out" >&2
 	fail "install did not install a missing pi-web"
 fi
-printf '%s\n' "$npm_out" | grep -F -x -q 'npm install -g @jmfederico/pi-web' || fail "install did not print the pi-web install command"
-[[ "$(cat "$npm_log")" == "install -g @jmfederico/pi-web" ]] || fail "npm was not run as npm install -g @jmfederico/pi-web"
+printf '%s\n' "$npm_out" | grep -F -x -q 'npm install -g @jmfederico/pi-web --allow-scripts=node-pty' || fail "install did not print the pi-web install command"
+[[ "$(cat "$npm_log")" == "install -g @jmfederico/pi-web --allow-scripts=node-pty" ]] || fail "npm was not run as pi-web's README says"
 test -x "$npm_home/.local/bin/pi-web" || fail "npm install did not put pi-web on the home bin path"
+[[ "$(cat "$pi_web_log")" == "install" ]] || fail "install did not run pi-web install"
 if ! npm_again="$(
 	PATH="$fake_npm:$fake_bin:$no_systemctl:/usr/bin:/bin" \
 		HOME="$npm_home" \
@@ -1094,13 +1102,15 @@ if ! npm_again="$(
 		PI_STACK_SKIP_PACKAGES=0 \
 		PI_INSTALL_LOG="$tmp/npm-web-pi-again.log" \
 		NPM_LOG="$npm_log" \
+		PI_WEB_LOG="$pi_web_log" \
 		bash "$root/install.sh" 2>&1
 )"; then
 	printf '%s\n' "$npm_again" >&2
 	fail "second install with pi-web present failed"
 fi
-[[ "$(cat "$npm_log")" == "install -g @jmfederico/pi-web" ]] || fail "second install ran npm again"
-if printf '%s\n' "$npm_again" | grep -F -x -q 'npm install -g @jmfederico/pi-web'; then
+[[ "$(cat "$npm_log")" == "install -g @jmfederico/pi-web --allow-scripts=node-pty" ]] || fail "second install ran npm again"
+[[ "$(cat "$pi_web_log")" == "install" ]] || fail "second install ran pi-web install again"
+if printf '%s\n' "$npm_again" | grep -F -q 'npm install -g @jmfederico/pi-web'; then
 	fail "second install printed the pi-web install command after pi-web was present"
 fi
 
@@ -1124,7 +1134,7 @@ if ! node_out="$(
 	printf '%s\n' "$node_out" >&2
 	fail "install did not accept pi-web under pi-node"
 fi
-if printf '%s\n' "$node_out" | grep -F -x -q 'npm install -g @jmfederico/pi-web'; then
+if printf '%s\n' "$node_out" | grep -F -q 'npm install -g @jmfederico/pi-web'; then
 	fail "install tried to install pi-web that was already under pi-node"
 fi
 test ! -s "$node_log" || fail "install ran npm even though pi-web was under pi-node"
