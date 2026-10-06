@@ -160,6 +160,10 @@ class TickCase(EngineCase):
         (stream_dir / "subscriptions.tsv").write_text(SUBSCRIPTIONS, encoding="utf-8")
         return stream_dir
 
+    def subscribe(self, stream_dir: Path, *rows: str) -> None:
+        text = SUBSCRIPTIONS + "".join(f"{line}\n" for line in rows)
+        (stream_dir / "subscriptions.tsv").write_text(text, encoding="utf-8")
+
     def log_path(self, sid: str) -> str:
         return str(self.logs / f"{sid}.jsonl")
 
