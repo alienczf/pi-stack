@@ -53,12 +53,10 @@ class StatusTests(EngineCase):
     def test_status_json_literal(self) -> None:
         proc = self.run_streams("init", str(self.root), "-y")
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        etl = self.home / "etl"
-        etl.mkdir()
+        etl = self.register_stream("etl")
         (etl / "STREAM.md").write_text("ratified: no\n", encoding="utf-8")
         (etl / "threads.tsv").write_text(HEADER + COORD + THREAD_ACTIVE + THREAD_ARCHIVED, encoding="utf-8")
-        other = self.home / "other"
-        other.mkdir()
+        other = self.register_stream("other")
         (other / "STREAM.md").write_text("ratified: yes\n", encoding="utf-8")
         (other / "threads.tsv").write_text(HEADER + OTHER, encoding="utf-8")
         self.stub.set_routes([

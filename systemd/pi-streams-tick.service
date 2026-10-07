@@ -1,0 +1,6 @@
+[Unit]
+Description=Run one pi-streams tick
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/pi-streams tick

@@ -6,21 +6,27 @@ import subprocess
 import sys
 
 from engine import StreamsError, repo_root
+from engine.project import default_pi_web_url
 
 
-def _run(args: list[str]) -> subprocess.CompletedProcess[str]:
+def _run(args: list[str], stdin: str | None = None) -> subprocess.CompletedProcess[str]:
+    # project.toml's pi_web_url is the address a browser opens, which may be a
+    # tunnel. The engine runs beside pi-web, so it follows pi-web's own config.
+    env = os.environ.copy()
+    env.setdefault("PI_WEB_URL", default_pi_web_url())
     return subprocess.run(
         [sys.executable, os.fspath(repo_root() / "bin" / "pi-web-cli"), *args],
+        input=stdin,
         capture_output=True,
         text=True,
         encoding="utf-8",
-        env=os.environ.copy(),
+        env=env,
         check=False,
     )
 
 
-def call(args: list[str]) -> dict[str, object]:
-    proc = _run(args)
+def call(args: list[str], stdin: str | None = None) -> dict[str, object]:
+    proc = _run(args, stdin)
     try:
         data = json.loads(proc.stdout) if proc.stdout.strip() else {}
     except json.JSONDecodeError as exc:
@@ -66,8 +72,14 @@ def session_status(sid: str) -> dict[str, object]:
     return session
 
 
-def prompt(sid: str, text: str) -> None:
-    call(["prompt", sid, text])
+def prompt(sid: str, text: str, behavior: str | None = None) -> None:
+    # On argv, a text that starts with a dash would parse as a flag.
+    flags = [] if behavior is None else [f"--{behavior}"]
+    call(["prompt", sid, *flags], stdin=text)
+
+
+def queue_clear(sid: str) -> None:
+    call(["queue-clear", sid])
 
 
 def archive(sid: str) -> None:

@@ -13,7 +13,7 @@ PROSE = (
     "skills/stream-kickoff/SKILL.md",
     "prompts/stream.md",
     "pi-streams/templates/thread-brief.md",
-    "pi-streams/templates/project/AGENTS.md",
+    "pi-streams/templates/stream/AGENTS.md",
 )
 COMMAND = re.compile(r"`((?:pi-streams|pi-web-cli) [^`]+)`")
 

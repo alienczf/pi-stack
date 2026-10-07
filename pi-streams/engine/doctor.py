@@ -1,14 +1,25 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 from engine import StreamsError
 from engine import piweb
-from engine.project import git, load_project, read_homes
+from engine.project import (
+    StreamRow,
+    git,
+    load_project,
+    load_projects,
+    load_stream_config,
+    load_stream_rows,
+    pi_stack_revision,
+    read_homes,
+)
 
 PSTACK_SKILLS = (
     "correct",
@@ -16,6 +27,8 @@ PSTACK_SKILLS = (
     "create-verification-skill",
     "maintain-verification-skill",
 )
+TICK_UNITS = ("pi-streams-tick.service", "pi-streams-tick.timer")
+TICK_FRESH_SECONDS = 15 * 60
 
 
 @dataclass(frozen=True)
@@ -73,26 +86,54 @@ def check_steer() -> list[Finding]:
     return [Finding("FAIL", "steer", "prompt --help does not offer --steer")]
 
 
-def check_homes() -> list[Finding]:
+def _check_stream(row: StreamRow, harness: str) -> list[Finding]:
+    repo = Path(row.path)
+    if not (repo / ".git").exists():
+        return [Finding("FAIL", "stream", f"{repo} is not a git repo")]
+    try:
+        status = git(repo, "status", "--porcelain")
+    except StreamsError as exc:
+        return [Finding("FAIL", "stream", f"{repo} is not a git repo: {exc}")]
     findings: list[Finding] = []
-    for home in read_homes():
-        if not (home / ".git").exists():
-            findings.append(Finding("FAIL", "home", f"{home} is not a git repo"))
+    if status.strip() != "":
+        findings.append(Finding("FAIL", "stream", f"{repo} has uncommitted changes"))
+    try:
+        recorded = load_stream_config(repo / "stream.toml").pi_stack_revision
+    except StreamsError as exc:
+        findings.append(Finding("FAIL", "revision", f"{row.id} {exc}"))
+        return findings
+    if recorded == harness:
+        findings.append(Finding("PASS", "revision", f"{row.id} records {harness}"))
+    else:
+        findings.append(Finding("WARN", "revision", f"{row.id} records {recorded}, harness is {harness}"))
+    return findings
+
+
+def check_index() -> list[Finding]:
+    findings: list[Finding] = []
+    harness = pi_stack_revision()
+    for index in read_homes():
+        if not index.is_dir():
+            findings.append(Finding("FAIL", "index", f"{index} is not a directory"))
             continue
+        files = sorted((index / "projects").glob("*.toml")) if (index / "projects").is_dir() else []
+        if not files:
+            findings.append(Finding("FAIL", "index", f"{index} has no project file"))
+            continue
+        for path in files:
+            try:
+                load_project(path)
+            except StreamsError as exc:
+                findings.append(Finding("FAIL", "project", f"{path} does not parse: {exc}"))
+                continue
+            findings.append(Finding("PASS", "project", f"{path} parses"))
         try:
-            status = git(home, "status", "--porcelain")
+            rows = load_stream_rows(index)
         except StreamsError as exc:
-            findings.append(Finding("FAIL", "home", f"{home} is not a git repo: {exc}"))
+            findings.append(Finding("FAIL", "index", str(exc)))
             continue
-        if status.strip() != "":
-            findings.append(Finding("FAIL", "home", f"{home} has uncommitted changes"))
-            continue
-        try:
-            load_project(home)
-        except StreamsError as exc:
-            findings.append(Finding("FAIL", "home", f"{home} project.toml does not parse: {exc}"))
-            continue
-        findings.append(Finding("PASS", "home", f"{home} is a clean git repo and project.toml parses"))
+        for row in rows:
+            findings.extend(_check_stream(row, harness))
     return findings
 
 
@@ -104,16 +145,118 @@ def check_skills() -> list[Finding]:
     return [Finding("PASS", "skills", "present")]
 
 
-def check_jig() -> list[Finding]:
-    findings: list[Finding] = []
-    for home in read_homes():
+def _config_base() -> Path:
+    xdg = os.environ.get("XDG_CONFIG_HOME")
+    if xdg:
+        return Path(xdg)
+    return Path.home() / ".config"
+
+
+def systemd_user_dir() -> Path:
+    return _config_base() / "systemd" / "user"
+
+
+def check_systemd_units() -> list[Finding]:
+    base = systemd_user_dir()
+    if shutil.which("systemctl") is None:
+        return [Finding("WARN", "systemd", "systemctl not found, so run pi-streams tick every five minutes another way")]
+    missing = [name for name in TICK_UNITS if not (base / name).is_file()]
+    if missing:
+        return [Finding("FAIL", "systemd", "missing " + ", ".join(missing))]
+    return [Finding("PASS", "systemd", "pi-streams-tick.service and pi-streams-tick.timer are installed")]
+
+
+def _tick_state_fresh(path: Path, now: float) -> bool:
+    if not path.is_file():
+        return False
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        return False
+    return mtime > now - TICK_FRESH_SECONDS
+
+
+def check_tick() -> list[Finding]:
+    now = time.time()
+    considered = False
+    for index in read_homes():
         try:
-            project = load_project(home)
+            rows = load_stream_rows(index)
         except StreamsError:
             continue
-        for repo in project.repos:
-            if (Path(repo.path) / ".pi" / "jig").exists():
-                findings.append(Finding("WARN", "jig", f"{repo.name} still holds .pi/jig/ (left alone)"))
+        if not rows:
+            continue
+        considered = True
+        for row in rows:
+            if _tick_state_fresh(Path(row.path) / "log" / "tick-state.json", now):
+                return []
+    if not considered:
+        return []
+    return [Finding("WARN", "tick", "no tick-state.json under any home is newer than 15 minutes")]
+
+
+def pi_web_project_dirs() -> list[Path]:
+    path = Path.home() / ".pi-web" / "projects.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(data, dict):
+        return []
+    projects = data.get("projects")
+    if not isinstance(projects, list):
+        return []
+    found: list[Path] = []
+    for item in projects:
+        if not isinstance(item, dict):
+            continue
+        raw = item.get("path")
+        if isinstance(raw, str) and raw.strip() != "":
+            found.append(Path(raw).expanduser())
+    return found
+
+
+def _inside(child: Path, parent: Path) -> bool:
+    try:
+        child.resolve().relative_to(parent.expanduser().resolve())
+    except (OSError, ValueError):
+        return False
+    return True
+
+
+def check_pi_web_projects() -> list[Finding]:
+    directories = pi_web_project_dirs()
+    findings: list[Finding] = []
+    for index in read_homes():
+        try:
+            projects = load_projects(index)
+        except StreamsError:
+            continue
+        for project in projects:
+            root = Path(project.info.root)
+            if any(_inside(root, directory) for directory in directories):
+                continue
+            findings.append(
+                Finding(
+                    "WARN",
+                    "pi-web-project",
+                    f"{root} is not inside a directory listed in ~/.pi-web/projects.json",
+                )
+            )
+    return findings
+
+
+def check_jig() -> list[Finding]:
+    findings: list[Finding] = []
+    for index in read_homes():
+        try:
+            projects = load_projects(index)
+        except StreamsError:
+            continue
+        for project in projects:
+            for repo in project.repos:
+                if (Path(repo.path) / ".pi" / "jig").exists():
+                    findings.append(Finding("WARN", "jig", f"{repo.name} still holds .pi/jig/ (left alone)"))
     return findings
 
 
@@ -121,9 +264,12 @@ CHECK_FNS: list[Callable[[], list[Finding]]] = [
     check_pi,
     check_pi_web,
     check_steer,
-    check_homes,
+    check_index,
     check_skills,
     check_jig,
+    check_systemd_units,
+    check_tick,
+    check_pi_web_projects,
 ]
 
 

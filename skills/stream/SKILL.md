@@ -22,7 +22,7 @@ Paths here are relative to the stream folder. Prompt threads only with `pi-web-c
 2. Prompt each thread that is not archived and has no `handover/<role>.md` with this text, then wait until the file exists:
    `Write <stream folder>/handover/<role>.md and leave it uncommitted. Follow pstack's poteto-mode/playbooks/pause-safely.md: your intent, what you did with proof, what is left, and what the next agent should know. Then stop.`
    Never write a thread's handover yourself.
-3. Read every handover. Copy only lasting knowledge into the project's `../context/` files: how to test a repo, gotchas, and ZF's preferences. Keep each entry short. Update an existing entry instead of adding a duplicate, and list any new file in `../context/README.md`.
+3. Read every handover. Copy only lasting knowledge into this stream's `context/` files: how to test a repo, gotchas, and ZF's preferences. Keep each entry short. Update an existing entry instead of adding a duplicate, and list any new file in `context/README.md`.
 4. For a mistake that repeated across threads, start a thread in that repo with `pi-streams thread spawn <id> --repo NAME --role correct-NAME --note TEXT`, where TEXT names the mistake and the handovers that show it. Prompt it with pstack's `/skill:correct`, wait, then get its handover as in step 2.
 5. For a thread that fought one problem repeatedly, prompt it with pstack's `/skill:reflect` and wait. Reflect stops for approval, so read its last reply with `pi-web-cli messages <session>`, show it to ZF, and send ZF's choice back.
 6. Run `pi-streams close <id>`. It archives the threads, marks you, the coordinator, done, and commits, so commit nothing yourself. If it refuses or stops on a busy thread, fix what it names and run it again.

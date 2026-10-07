@@ -96,6 +96,34 @@ The overlay does not install an MCP adapter, a todo tool, plan mode, pi-lens, an
 
 Use pstack's `correct` for repository principles and for a mistake that keeps coming back. Rank the fix as architecture, then types, lints, tests, and docs last. Use `create-verification-skill` to build repository verification and `maintain-verification-skill` to keep it current. Use `reflect` to turn later work into approved skill edits.
 
+## Streams
+
+One command installs the harness and prepares a project:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/alienczf/pi-stack/main/install.sh | bash -s -- -y --project ~/Projects/alphalab
+```
+
+From a checkout, `./install.sh -y --project ~/Projects/alphalab` does the same thing. `-y` accepts every setup default. Without it, `pi-streams init` asks these questions on the terminal:
+
+| Question | Default |
+| --- | --- |
+| Which URL do you open pi-web at? | `host` and `port` from `~/.config/pi-web/config.json`, or `http://127.0.0.1:8504` |
+| Which model should coordinators use? | `openai-codex/gpt-6-astra` |
+| Which thinking level should coordinators use? | `xhigh` |
+
+Pass `--pi-web-url`, `--coordinator-model`, or `--coordinator-thinking` to set an answer without the question.
+
+The pi-web URL in `projects/<name>.toml` is the address you open in a browser, which may be a tunnel. `pi-streams` runs on the pi-web host and calls pi-web at `PI_WEB_URL` when it is set, otherwise at the `host` and `port` in `~/.config/pi-web/config.json`, otherwise at `http://127.0.0.1:8504`.
+
+Every install links `~/.local/bin/pi-streams` to this checkout's `bin/pi-streams` and installs the `stream` and `stream-kickoff` skills and the `stream` prompt. With `--project`, or on a later install once `pi-streams` has a registered home, it also installs:
+
+- `~/.local/bin/pi-web-cli`, leaving an identical file in place and backing up a different one once
+- `pi-web` when it is missing, by printing and running pi-web's own install, `npm install -g @jmfederico/pi-web --allow-scripts=node-pty` and then `pi-web install`. It uses the `npm` on `PATH`, otherwise the one under `~/.local/share/pi-node`, and exits 1 when there is neither. With `PI_STACK_SKIP_PACKAGES=1` it only prints the commands.
+- `pi-streams-tick.timer`, two minutes after boot and then every five minutes
+
+The timer runs without a login session only when systemd lingering is on for your user. Without `systemctl`, the installer copies the units, prints a note, and leaves scheduling `pi-streams tick` to you. The installer does not change pi-web's config. After `--project`, it runs `pi-streams doctor` and exits 1 on FAIL without removing what it wrote.
+
 ## Verify the repository
 
 Run these commands from the pi-stack Git root. None starts a nested Pi process.

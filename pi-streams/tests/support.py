@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -24,6 +25,10 @@ def make_env(home: Path, xdg: Path, pi_web_url: str) -> dict[str, str]:
         "HOME": str(home),
         "XDG_CONFIG_HOME": str(xdg),
         "PI_WEB_URL": pi_web_url,
+        # A request to any address but the stub goes to a dead proxy, even when
+        # a test removes PI_WEB_URL and the engine falls back to a default.
+        "http_proxy": "http://127.0.0.1:9",
+        "no_proxy": urllib.parse.urlsplit(pi_web_url).netloc,
         "GIT_AUTHOR_NAME": "Test",
         "GIT_AUTHOR_EMAIL": "test@example.com",
         "GIT_COMMITTER_NAME": "Test",
@@ -146,6 +151,7 @@ class EngineCase(unittest.TestCase):
         return subprocess.run(
             [os.fspath(CLI), *args],
             env=self.env,
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -155,3 +161,36 @@ class EngineCase(unittest.TestCase):
     @property
     def home(self) -> Path:
         return self.root / "streams"
+
+    @property
+    def index(self) -> Path:
+        return self.xdg / "pi-streams"
+
+    @property
+    def project_file(self) -> Path:
+        return self.index / "projects" / f"{self.root.name}.toml"
+
+    def register_stream(
+        self,
+        stream_id: str,
+        stream_dir: Path | None = None,
+        index: Path | None = None,
+        project: str | None = None,
+    ) -> Path:
+        stream_dir = (self.home / stream_id if stream_dir is None else stream_dir).resolve()
+        stream_dir.mkdir(parents=True, exist_ok=True)
+        index = self.index if index is None else index
+        project = self.root.name if project is None else project
+        path = index / "streams.tsv"
+        header = "id\tpath\tproject\n"
+        text = path.read_text(encoding="utf-8") if path.is_file() else header
+        if not text.endswith("\n"):
+            text += "\n"
+        row = f"{stream_id}\t{stream_dir}\t{project}\n"
+        lines = text.splitlines()
+        if row.strip() not in lines:
+            if not lines or lines[0] != "id\tpath\tproject":
+                text = header + text
+            text += row
+            path.write_text(text, encoding="utf-8")
+        return stream_dir

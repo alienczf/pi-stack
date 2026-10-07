@@ -29,10 +29,11 @@ class RotateTests(EngineCase):
         proc = self.run_streams("init", str(self.root), "-y")
         self.assertEqual(proc.returncode, 0, proc.stderr)
         stream_dir = (self.home / "etl").resolve()
-        stream_dir.mkdir()
+        stream_dir.mkdir(parents=True)
         (stream_dir / "STREAM.md").write_text("ratified: no\n", encoding="utf-8")
         (stream_dir / "STATE.md").write_text("# STATE\n", encoding="utf-8")
         (stream_dir / "threads.tsv").write_text(HEADER + OLD, encoding="utf-8")
+        self.register_stream("etl", stream_dir)
         self.stub.requests.clear()
         self.stub.set_routes([
             ("GET", "/api/sessions", 200, [{"id": "coord-1", "cwd": str(stream_dir)}]),
@@ -80,15 +81,16 @@ class RotateTests(EngineCase):
         self.assertEqual(lines[2].split("\t")[0], "coord-2")
         self.assertEqual(lines[2].split("\t")[1], "coordinator")
         self.assertEqual(lines[2].split("\t")[8], "active")
-        self.assertEqual(git(self.home, self.env, "log", "-1", "--format=%s").strip(), "pi-streams rotate etl")
+        self.assertEqual(git(stream_dir, self.env, "log", "-1", "--format=%s").strip(), "pi-streams rotate etl")
 
     def test_rerun_after_a_failed_spawn_finishes_the_rotation(self) -> None:
         proc = self.run_streams("init", str(self.root), "-y")
         self.assertEqual(proc.returncode, 0, proc.stderr)
         stream_dir = (self.home / "etl").resolve()
-        stream_dir.mkdir()
+        stream_dir.mkdir(parents=True)
         (stream_dir / "STREAM.md").write_text("ratified: no\n", encoding="utf-8")
         (stream_dir / "threads.tsv").write_text(HEADER + OLD, encoding="utf-8")
+        self.register_stream("etl", stream_dir)
         self.stub.set_routes([
             ("GET", "/api/sessions", 200, [{"id": "coord-1", "cwd": str(stream_dir), "messageCount": 50}]),
             ("POST", "/api/sessions", 500, {"error": "spawn failed"}),
@@ -125,9 +127,10 @@ class RotateTests(EngineCase):
         proc = self.run_streams("init", str(self.root), "-y")
         self.assertEqual(proc.returncode, 0, proc.stderr)
         stream_dir = (self.home / "etl").resolve()
-        stream_dir.mkdir()
+        stream_dir.mkdir(parents=True)
         (stream_dir / "STREAM.md").write_text("ratified: no\n", encoding="utf-8")
         (stream_dir / "threads.tsv").write_text(HEADER, encoding="utf-8")
+        self.register_stream("etl", stream_dir)
         self.stub.requests.clear()
         refused = self.run_streams("rotate", "etl")
         self.assertEqual(refused.returncode, 1)

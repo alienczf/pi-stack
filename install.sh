@@ -20,7 +20,9 @@ pstack_skill_names=(
 
 usage() {
 	cat <<'EOF'
-usage: install.sh [-y | --print-pstack-skills]
+usage: install.sh [-y] [--project <root>] [--pi-web-url <url>]
+                  [--coordinator-model <provider/id>] [--coordinator-thinking <level>]
+                  [--print-pstack-skills]
 
 Copies the pi-stack overlay into $HOME/.pi/agent.
 Installs poteto-agent and retires the six old role profiles in $HOME/.pi/agent/agents/.
@@ -35,8 +37,12 @@ npm:pi-web-access and npm:pi-subagents.
 Removes retired npm registrations and managed installs; backs up changed settings.
 PI_STACK_SKIP_PACKAGES=1 defers physical package removal until a normal install.
 Rewrites cursor/* subagent models to inherit. Links update-pstack into ~/.local/bin.
+Links pi-streams to this checkout. Installs the stream and stream-kickoff skills
+and the stream prompt. With --project, or once pi-streams has a registered home,
+also installs pi-web-cli into ~/.local/bin, pi-web when it is missing, and the
+tick timer. With --project, runs pi-streams init and then pi-streams doctor.
 Never writes auth.json, models-store.json, private/, or sessions/.
-Does not search for git repositories.
+Does not change pi-web's config. Does not search for git repositories.
 
 If PI_STACK is unset and this script has no adjacent checkout, uses
 $HOME/.pi-stack. Clones alienczf/pi-stack there when overlay/ is missing.
@@ -46,7 +52,16 @@ If PSTACK is unset, uses $PI_STACK/.plugins/pstack. Clones cursor/plugins
 A later install does not refresh pstack. Use update-pstack after reviewing upstream changes.
 
 Options
-  -y            update the bootstrap-selected default checkout without prompting
+  -y            update the bootstrap-selected default checkout without prompting,
+                and accept the pi-streams setup defaults
+  --project <root>
+                after install, run pi-streams init on this project root
+  --pi-web-url <url>
+                pi-web address to record for the project
+  --coordinator-model <provider/id>
+                model coordinators use
+  --coordinator-thinking <level>
+                thinking level coordinators use
   --print-pstack-skills  print the pstack skill roots selected by pi-stack
 
 Environment
@@ -55,7 +70,8 @@ Environment
   PI_STACK_GIT  git URL for that clone (default https://github.com/alienczf/pi-stack.git)
   PSTACK        pstack tree with skills/poteto-mode/SKILL.md
   PSTACK_GIT    git URL for the clone (default https://github.com/cursor/plugins.git)
-  PI_STACK_SKIP_PACKAGES  if 1, write package names only, do not run pi install
+  PI_STACK_SKIP_PACKAGES  if 1, write package names only, do not run pi install or npm install -g pi-web
+  PI_STACK_SKIP_SYSTEMD   if 1, copy the tick units and do not run systemctl
 EOF
 }
 
@@ -105,32 +121,79 @@ update_managed_pi_stack() {
 }
 
 update_decision="ask"
-case "${1:-}" in
-	-h | --help)
-		usage
-		exit 0
-		;;
+original_args=("$@")
+assume_yes=0
+print_skills=0
+have_project=0
+project_root=""
+have_pi_web_url=0
+pi_web_url=""
+have_coordinator_model=0
+coordinator_model=""
+have_coordinator_thinking=0
+coordinator_thinking=""
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+	usage
+	exit 0
+fi
+
+require_value() {
+	if [[ $# -lt 2 || -z "${2:-}" || "${2:-}" == -* ]]; then
+		usage >&2
+		exit 2
+	fi
+}
+
+while [[ $# -gt 0 ]]; do
+	case "$1" in
 	-y)
 		update_decision="yes"
+		assume_yes=1
+		shift
 		;;
 	--print-pstack-skills)
-		if [[ $# -ne 1 ]]; then
-			usage >&2
-			exit 2
-		fi
-		printf '%s\n' "${pstack_skill_names[@]}"
-		exit 0
+		print_skills=1
+		shift
 		;;
-	"")
+	--project)
+		require_value "$@"
+		project_root="$2"
+		have_project=1
+		shift 2
+		;;
+	--pi-web-url)
+		require_value "$@"
+		pi_web_url="$2"
+		have_pi_web_url=1
+		shift 2
+		;;
+	--coordinator-model)
+		require_value "$@"
+		coordinator_model="$2"
+		have_coordinator_model=1
+		shift 2
+		;;
+	--coordinator-thinking)
+		require_value "$@"
+		coordinator_thinking="$2"
+		have_coordinator_thinking=1
+		shift 2
 		;;
 	*)
 		usage >&2
 		exit 2
 		;;
-esac
-if [[ $# -gt 1 ]]; then
-	usage >&2
-	exit 2
+	esac
+done
+
+if [[ "$print_skills" == 1 ]]; then
+	if [[ "$assume_yes" == 1 || "$have_project" == 1 || "$have_pi_web_url" == 1 || "$have_coordinator_model" == 1 || "$have_coordinator_thinking" == 1 ]]; then
+		usage >&2
+		exit 2
+	fi
+	printf '%s\n' "${pstack_skill_names[@]}"
+	exit 0
 fi
 
 if ! command -v python3 >/dev/null 2>&1; then
@@ -205,7 +268,7 @@ if [[ ! -f "$pi_stack/overlay/APPEND_SYSTEM.md" ]]; then
 fi
 pi_stack="$(cd "$pi_stack" && pwd)"
 if [[ "$here" != "$pi_stack" ]]; then
-	exec bash "$pi_stack/install.sh"
+	exec bash "$pi_stack/install.sh" "${original_args[@]}"
 fi
 
 overlay="$here/overlay"
@@ -318,6 +381,132 @@ dest.write_text(text)
 PY
 }
 
+link_pi_streams() {
+	local dest="${HOME}/.local/bin/pi-streams"
+	local target="$here/bin/pi-streams"
+	mkdir -p "${HOME}/.local/bin"
+	if [[ -L "$dest" && "$(readlink -- "$dest")" == "$target" ]]; then
+		return 0
+	fi
+	ln -sfn "$target" "$dest"
+}
+
+install_pi_web_cli() {
+	local src="$here/bin/pi-web-cli"
+	local dest="${HOME}/.local/bin/pi-web-cli"
+	mkdir -p "${HOME}/.local/bin"
+	if [[ -e "$dest" || -L "$dest" ]]; then
+		if cmp -s "$src" "$dest"; then
+			return 0
+		fi
+		local stamp backup
+		stamp="$(date -u +%Y%m%d-%H%M%S)"
+		backup="${dest}.bak-${stamp}"
+		if [[ -e "$backup" || -L "$backup" ]]; then
+			backup="${backup}-$$"
+		fi
+		mv -- "$dest" "$backup"
+		printf 'Backed up %s to %s\n' "$dest" "$backup"
+	fi
+	cp -- "$src" "$dest"
+	chmod +x "$dest"
+}
+
+copy_if_changed() {
+	local src="$1" dest="$2"
+	if [[ -f "$dest" && ! -L "$dest" ]] && cmp -s "$src" "$dest"; then
+		return 0
+	fi
+	mkdir -p "$(dirname "$dest")"
+	if [[ -e "$dest" || -L "$dest" ]]; then
+		rm -rf -- "$dest"
+	fi
+	cp -- "$src" "$dest"
+}
+
+install_tick_units() {
+	local unit_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+	local name
+	for name in pi-streams-tick.service pi-streams-tick.timer; do
+		copy_if_changed "$here/systemd/$name" "$unit_dir/$name"
+	done
+	if [[ "${PI_STACK_SKIP_SYSTEMD:-}" == 1 ]]; then
+		return 0
+	fi
+	if ! command -v systemctl >/dev/null 2>&1; then
+		printf 'systemctl not found. Run pi-streams tick every five minutes another way.\n'
+		return 0
+	fi
+	systemctl --user daemon-reload
+	systemctl --user enable --now pi-streams-tick.timer
+}
+
+resolve_node_tool() {
+	local name="$1"
+	if command -v "$name" >/dev/null 2>&1; then
+		command -v "$name"
+		return 0
+	fi
+	local bins=()
+	local saved
+	saved="$(shopt -p nullglob || true)"
+	shopt -s nullglob
+	bins=("${HOME}/.local/bin/${name}" "${HOME}/.local/share/pi-node"/node-*/bin/"${name}")
+	eval "$saved"
+	local c
+	for c in "${bins[@]}"; do
+		if [[ -x "$c" ]]; then
+			printf '%s\n' "$c"
+			return 0
+		fi
+	done
+	return 1
+}
+
+ensure_pi_web() {
+	if resolve_node_tool pi-web >/dev/null; then
+		return 0
+	fi
+	printf 'npm install -g @jmfederico/pi-web --allow-scripts=node-pty\n'
+	printf 'pi-web install\n'
+	if [[ "${PI_STACK_SKIP_PACKAGES:-}" == 1 ]]; then
+		return 0
+	fi
+	local npm
+	if ! npm="$(resolve_node_tool npm)"; then
+		printf 'npm is not on PATH or under ~/.local/share/pi-node. Install Node.js, then run the two commands above.\n' >&2
+		return 1
+	fi
+	# npm and pi-web start with #!/usr/bin/env node, and node sits beside npm.
+	local node_path
+	node_path="$(dirname "$npm"):$PATH"
+	PATH="$node_path" "$npm" install -g @jmfederico/pi-web --allow-scripts=node-pty
+	local pi_web
+	if ! pi_web="$(resolve_node_tool pi-web)"; then
+		printf 'npm install -g @jmfederico/pi-web did not put pi-web on PATH\n' >&2
+		return 1
+	fi
+	PATH="$node_path" "$pi_web" install
+}
+
+run_project_setup() {
+	local cmd=("${HOME}/.local/bin/pi-streams" init "$project_root")
+	if [[ "$have_pi_web_url" == 1 ]]; then
+		cmd+=(--pi-web-url "$pi_web_url")
+	fi
+	if [[ "$have_coordinator_model" == 1 ]]; then
+		cmd+=(--coordinator-model "$coordinator_model")
+	fi
+	if [[ "$have_coordinator_thinking" == 1 ]]; then
+		cmd+=(--coordinator-thinking "$coordinator_thinking")
+	fi
+	if [[ "$assume_yes" == 1 ]]; then
+		cmd+=(-y)
+	fi
+	"${cmd[@]}"
+	"${HOME}/.local/bin/pi-streams" doctor
+}
+
 install_md "$overlay/APPEND_SYSTEM.md" "$agent/APPEND_SYSTEM.md"
 install_md "$overlay/AGENTS.md" "$agent/AGENTS.md"
 for src in "$here/prompts"/*.md; do
@@ -341,6 +530,15 @@ for name in update-pstack; do
 		ln -sfn "$agent/bin/$name" "${HOME}/.local/bin/$name"
 	fi
 done
+streams_homes="${XDG_CONFIG_HOME:-$HOME/.config}/pi-streams/homes"
+streams_in_use=0
+if [[ "$have_project" == 1 ]] || { [[ -f "$streams_homes" ]] && grep -q '[^[:space:]]' "$streams_homes"; }; then
+	streams_in_use=1
+fi
+link_pi_streams
+if [[ "$streams_in_use" == 1 ]]; then
+	install_pi_web_cli
+fi
 
 conform_out="${agent}/skills-pstack"
 mkdir -p "$conform_out"
@@ -348,7 +546,7 @@ conform_src=()
 for name in "${pstack_skill_names[@]}"; do
 	conform_src+=("$pstack/skills/$name")
 done
-for name in cross-repo update-pstack; do
+for name in cross-repo update-pstack stream stream-kickoff; do
 	if [[ -f "$here/skills/$name/SKILL.md" ]]; then
 		conform_src+=("$here/skills/$name")
 	fi
@@ -423,7 +621,7 @@ pstack_skills = sys.argv[2 : 2 + pstack_skill_count]
 required_packages = sys.argv[2 + pstack_skill_count :]
 
 tools = ["read", "write", "edit", "bash", "grep", "find", "ls"]
-wanted = [*pstack_skills, "cross-repo", "update-pstack"]
+wanted = [*pstack_skills, "cross-repo", "update-pstack", "stream", "stream-kickoff"]
 missing_skills = [name for name in wanted if not (conformed / name / "SKILL.md").is_file()]
 if missing_skills:
 	sys.exit(f"conformed skills are missing: {', '.join(missing_skills)}")
@@ -720,6 +918,10 @@ else
 	package_list="$(printf ', %s' "${required_packages[@]}")"
 	pkg_msg="${package_list:2}"
 fi
+if [[ "$streams_in_use" == 1 ]]; then
+	ensure_pi_web
+	install_tick_units
+fi
 cat <<EOF
 pi-stack is installed for this user.
   overlay   ${agent}
@@ -729,3 +931,6 @@ pi-stack is installed for this user.
   packages  ${pkg_msg}
   pstack    ${HOME}/.local/bin/update-pstack
 EOF
+if [[ "$have_project" == 1 ]]; then
+	run_project_setup
+fi

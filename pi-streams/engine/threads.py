@@ -3,12 +3,11 @@ from __future__ import annotations
 import enum
 import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 
-from engine import StreamsError, repo_root
+from engine import StreamsError, clock, repo_root
 from engine import piweb
-from engine.project import STREAM_ID, Project, Repo, git, stream_dirs
+from engine.project import Project, Repo, git, require_stream, stream_rows
 
 _ROLE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
@@ -58,7 +57,7 @@ class Thread:
 
 
 def utc_now() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return clock.stamp(clock.now())
 
 
 def transition(row: Thread, new: Status) -> None:
@@ -209,7 +208,7 @@ def _coordinator_state(session_id: str, session: dict[str, object]) -> dict[str,
     }
 
 
-def _one_stream(stream_dir: Path) -> dict[str, object]:
+def _one_stream(stream_id: str, stream_dir: Path) -> dict[str, object]:
     text = (stream_dir / "STREAM.md").read_text(encoding="utf-8")
     rows = load_threads(stream_dir / "threads.tsv")
     counts = {name: 0 for name in ("active", "waiting_quota", "done", "archived")}
@@ -238,7 +237,7 @@ def _one_stream(stream_dir: Path) -> dict[str, object]:
         thread_cost += _as_cost(session.get("cost"))
     share = None if thread_cost == 0 else coord_cost / thread_cost
     return {
-        "id": stream_dir.name,
+        "id": stream_id,
         "ratified": is_ratified(text),
         "coordinator": coord_state,
         "threads": counts,
@@ -246,13 +245,9 @@ def _one_stream(stream_dir: Path) -> dict[str, object]:
     }
 
 
-def status_report(project: Project, stream_id: str | None) -> dict[str, object]:
-    dirs = stream_dirs(Path(project.info.home))
-    if stream_id is not None:
-        dirs = [path for path in dirs if path.name == stream_id]
-        if not dirs:
-            raise StreamsError(f"no stream {stream_id}")
-    return {"streams": [_one_stream(path) for path in dirs]}
+def status_report(index: Path, stream_id: str | None) -> dict[str, object]:
+    rows = stream_rows(index, stream_id)
+    return {"streams": [_one_stream(row.id, Path(row.path)) for row in rows]}
 
 
 def format_status(report: dict[str, object]) -> str:
@@ -368,13 +363,8 @@ def _require_role(role: str) -> None:
         raise StreamsError(f"invalid role: {role}")
 
 
-def _require_stream(project: Project, stream_id: str) -> Path:
-    if STREAM_ID.fullmatch(stream_id) is None:
-        raise StreamsError(f"invalid stream id: {stream_id}")
-    stream_dir = (Path(project.info.home) / stream_id).resolve()
-    if not (stream_dir / "threads.tsv").is_file():
-        raise StreamsError(f"no stream {stream_id}")
-    return stream_dir
+def _require_stream(index: Path, project: Project, stream_id: str) -> Path:
+    return require_stream(index, project.info.name, stream_id)
 
 
 def _append_thread(path: Path, row: Thread) -> None:
@@ -386,6 +376,7 @@ def _append_thread(path: Path, row: Thread) -> None:
 
 
 def spawn_thread(
+    index: Path,
     project: Project,
     stream_id: str,
     repo_name: str,
@@ -398,7 +389,7 @@ def spawn_thread(
     note: str,
 ) -> str:
     _require_role(role)
-    stream_dir = _require_stream(project, stream_id)
+    stream_dir = _require_stream(index, project, stream_id)
     repo = _repo_named(project, repo_name)
     repo_path = Path(repo.path)
     base_ref = "HEAD" if base is None else base
@@ -452,8 +443,8 @@ def spawn_thread(
     return sid
 
 
-def rotate_coordinator(project: Project, stream_id: str) -> str:
-    stream_dir = _require_stream(project, stream_id)
+def rotate_coordinator(index: Path, project: Project, stream_id: str) -> str:
+    stream_dir = _require_stream(index, project, stream_id)
     path = stream_dir / "threads.tsv"
     rows = load_threads(path)
     coordinators = [row for row in rows if row.role == "coordinator"]
@@ -476,8 +467,8 @@ def _has_handover(stream_dir: Path, role: str) -> bool:
     return path.is_file() and path.read_text(encoding="utf-8").strip() != ""
 
 
-def close_stream(project: Project, stream_id: str) -> list[str]:
-    stream_dir = _require_stream(project, stream_id)
+def close_stream(index: Path, project: Project, stream_id: str) -> list[str]:
+    stream_dir = _require_stream(index, project, stream_id)
     path = stream_dir / "threads.tsv"
     rows = load_threads(path)
     open_threads = [row for row in rows if row.role != "coordinator" and row.status is not Status.archived]
@@ -501,6 +492,7 @@ def close_stream(project: Project, stream_id: str) -> list[str]:
 
 
 def adopt_thread(
+    index: Path,
     project: Project,
     stream_id: str,
     session_id: str,
@@ -508,7 +500,7 @@ def adopt_thread(
     role: str,
 ) -> str:
     _require_role(role)
-    stream_dir = _require_stream(project, stream_id)
+    stream_dir = _require_stream(index, project, stream_id)
     worktree = worktree.expanduser().resolve()
     if not worktree.is_dir():
         raise StreamsError(f"worktree is not a directory: {worktree}")

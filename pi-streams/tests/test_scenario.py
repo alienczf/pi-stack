@@ -170,13 +170,13 @@ class ScenarioTests(EngineCase):
             [THREAD, "datapull", "active"],
             [COORD_2, "coordinator", "active"],
         ])
-        self.assertEqual(git(self.home, self.env, "log", "--format=%s").splitlines(), [
+        repo = self.home / "etl"
+        self.assertEqual(git(repo, self.env, "log", "--format=%s").splitlines(), [
             "pi-streams rotate etl",
             "pi-streams thread spawn etl datapull",
             "pi-streams new etl",
-            "pi-streams init",
         ])
-        self.assertEqual(git(self.home, self.env, "status", "--porcelain"), "")
+        self.assertEqual(git(repo, self.env, "status", "--porcelain"), "")
 
 
 if __name__ == "__main__":

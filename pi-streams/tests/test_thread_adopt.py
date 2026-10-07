@@ -14,9 +14,10 @@ class AdoptTests(EngineCase):
         proc = self.run_streams("init", str(self.root), "-y")
         self.assertEqual(proc.returncode, 0, proc.stderr)
         stream_dir = (self.home / "etl").resolve()
-        stream_dir.mkdir()
+        stream_dir.mkdir(parents=True)
         (stream_dir / "STREAM.md").write_text("ratified: no\n", encoding="utf-8")
         (stream_dir / "threads.tsv").write_text(HEADER, encoding="utf-8")
+        self.register_stream("etl", stream_dir)
         worktree = self.fx.alpha_wt.resolve()
         base = git(worktree, self.env, "rev-parse", "HEAD").strip()
         self.stub.requests.clear()
@@ -84,7 +85,7 @@ class AdoptTests(EngineCase):
         )
         self.assertRegex(cells[9], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
         self.assertEqual(
-            git(self.home, self.env, "log", "-1", "--format=%s").strip(),
+            git(stream_dir, self.env, "log", "-1", "--format=%s").strip(),
             "pi-streams thread adopt etl sess-adopt",
         )
 
@@ -92,9 +93,10 @@ class AdoptTests(EngineCase):
         proc = self.run_streams("init", str(self.root), "-y")
         self.assertEqual(proc.returncode, 0, proc.stderr)
         stream_dir = (self.home / "etl").resolve()
-        stream_dir.mkdir()
+        stream_dir.mkdir(parents=True)
         (stream_dir / "STREAM.md").write_text("ratified: no\n", encoding="utf-8")
         (stream_dir / "threads.tsv").write_text(HEADER, encoding="utf-8")
+        self.register_stream("etl", stream_dir)
         worktree = self.fx.alpha_wt.resolve()
         self.stub.set_routes([
             ("GET", "/api/sessions", 200, [

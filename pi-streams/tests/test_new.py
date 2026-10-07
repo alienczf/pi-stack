@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import urllib.parse
+from pathlib import Path
 
 from support import EngineCase, git
 
@@ -72,15 +73,15 @@ class NewTests(EngineCase):
         self.assertRegex(cells[9], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
         self.assertEqual(len(cells), 10)
         self.assertTrue((self.home / "etl" / "STREAM.md").read_text(encoding="utf-8").startswith("ratified: no\n"))
-        self.assertEqual(git(self.home, self.env, "log", "-1", "--format=%s").strip(), "pi-streams new etl")
-        self.assertEqual(git(self.home, self.env, "rev-list", "--count", "HEAD").strip(), "2")
-        head = git(self.home, self.env, "rev-parse", "HEAD")
+        self.assertEqual(git(Path(self.stream()), self.env, "log", "-1", "--format=%s").strip(), "pi-streams new etl")
+        self.assertEqual(git(Path(self.stream()), self.env, "rev-list", "--count", "HEAD").strip(), "1")
+        head = git(Path(self.stream()), self.env, "rev-parse", "HEAD")
         before = len(self.stub.requests)
         again = self.run_streams("new", "etl")
         self.assertEqual(again.returncode, 0, again.stderr)
         self.assertEqual(again.stdout, "http://127.0.0.1:8504\ncoord-1\n")
         self.assertEqual(self.stub.requests[before:], [])
-        self.assertEqual(git(self.home, self.env, "rev-parse", "HEAD"), head)
+        self.assertEqual(git(Path(self.stream()), self.env, "rev-parse", "HEAD"), head)
 
     def test_new_adopts_a_listed_session_without_spawn(self) -> None:
         stream = self.stream()
@@ -143,7 +144,7 @@ class NewTests(EngineCase):
         self.assert_call(4, "POST", "/api/sessions/coord-1/prompt", {"text": "/skill:stream-kickoff"})
         cells = (self.home / "etl" / "threads.tsv").read_text(encoding="utf-8").splitlines()[1].split("\t")
         self.assertEqual(cells[:2], ["coord-1", "coordinator"])
-        self.assertEqual(git(self.home, self.env, "log", "-1", "--format=%s").strip(), "pi-streams new etl")
+        self.assertEqual(git(Path(self.stream()), self.env, "log", "-1", "--format=%s").strip(), "pi-streams new etl")
 
     def test_status_mismatch_fails_new(self) -> None:
         stream = self.stream()
@@ -163,7 +164,9 @@ class NewTests(EngineCase):
         prompts = [item for item in self.stub.requests if item[1].endswith("/prompt")]
         self.assertEqual(prompts, [])
         self.assertEqual((self.home / "etl" / "threads.tsv").read_text(encoding="utf-8"), HEADER)
-        self.assertEqual(git(self.home, self.env, "rev-list", "--count", "HEAD").strip(), "1")
+        self.assertIn("??", git(Path(self.stream()), self.env, "status", "--porcelain"))
+        with self.assertRaises(AssertionError):
+            git(Path(self.stream()), self.env, "rev-parse", "--verify", "HEAD")
 
 
 if __name__ == "__main__":
