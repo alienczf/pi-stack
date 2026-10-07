@@ -5,6 +5,29 @@ root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
 fail() { printf '%s\n' "$*" >&2; exit 1; }
 
+tree_checksum() {
+	python3 - "$1" <<'PY'
+import hashlib
+import os
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+digest = hashlib.sha256()
+paths = sorted(root.rglob("*"), key=lambda path: path.relative_to(root).as_posix())
+for path in paths:
+	rel = path.relative_to(root).as_posix()
+	if path.is_symlink():
+		digest.update(f"link {rel}\n{os.readlink(path)}\n".encode())
+	elif path.is_file():
+		digest.update(f"file {rel}\n".encode())
+		digest.update(path.read_bytes())
+	elif path.is_dir():
+		digest.update(f"dir {rel}\n".encode())
+sys.stdout.write(digest.hexdigest())
+PY
+}
+
 test -f overlay/APPEND_SYSTEM.md || fail "missing overlay/APPEND_SYSTEM.md"
 test -f overlay/AGENTS.md || fail "missing overlay/AGENTS.md"
 test -f overlay/settings.json || fail "missing overlay/settings.json"
@@ -35,7 +58,6 @@ grep -q 'conform-skills.py' install.sh || fail "install.sh must run conform-skil
 grep -q 'skills-pstack' install.sh || fail "install.sh must write skills-pstack"
 grep -q 'pi-node' install.sh || fail "install.sh must find pi under pi-node"
 grep -q 'inherit' install.sh || fail "install.sh must rewrite cursor subagent models to inherit"
-grep -F -q '.local/bin/jig' install.sh || fail "install.sh must link jig into .local/bin"
 grep -F -q '.local/bin/update-pstack' install.sh || fail "install.sh must link update-pstack into ~/.local/bin"
 grep -q 'without changing project trust' install.sh || fail "install.sh must document project trust preservation"
 grep -q 'maintain-verification-skill' install.sh || fail "install.sh must register maintain-verification-skill"
@@ -65,6 +87,7 @@ printf '%s\n' "$help" | grep -q -- '--print-pstack-skills' || fail "install.sh -
 selected_skills="$(bash install.sh --print-pstack-skills)"
 printf '%s\n' "$selected_skills" | grep -qx poteto-mode || fail "selected pstack skills omit poteto-mode"
 printf '%s\n' "$selected_skills" | grep -qx reflect || fail "selected pstack skills omit reflect"
+printf '%s\n' "$selected_skills" | grep -qx correct || fail "selected pstack skills omit correct"
 printf '%s\n' "$selected_skills" | grep -qx maintain-verification-skill || fail "selected pstack skills omit maintain-verification-skill"
 if bash install.sh -y extra >/dev/null 2>&1; then
 	fail "install.sh accepted an extra argument after -y"
@@ -112,14 +135,147 @@ sed -i 's/^name: poteto-mode$/name: Poteto Mode/' "$tmp/pstack/skills/poteto-mod
 mkdir -p "$tmp/pstack/skills/poteto-mode/playbooks"
 printf 'playbook\n' >"$tmp/pstack/skills/poteto-mode/playbooks/investigation.md"
 stub="$tmp/pstack"
+test -f "$stub/skills/correct/SKILL.md" || fail "pstack stub is missing correct"
 missing_stub="$tmp/missing-pstack"
 cp -a "$stub" "$missing_stub"
 rm "$missing_stub/skills/how/SKILL.md"
 if missing_stub_out="$(HOME="$tmp/missing-home" PI_STACK="$root" PSTACK="$missing_stub" PI_STACK_SKIP_PACKAGES=1 bash "$root/install.sh" 2>&1)"; then
 	fail "install accepted a missing selected pstack skill"
 fi
-printf '%s\n' "$missing_stub_out" | grep -q 'missing selected skill root: how' || fail "missing selected skill error was not useful"
+printf '%s\n' "$missing_stub_out" | grep -q 'predates selected skill how' || fail "missing selected skill error was not useful"
+printf '%s\n' "$missing_stub_out" | grep -q 'update-pstack status' || fail "missing selected skill error did not name update-pstack"
 test ! -e "$tmp/missing-home/.pi/agent" || fail "missing selected skill was detected after installation began"
+missing_correct="$tmp/missing-correct"
+cp -a "$stub" "$missing_correct"
+rm "$missing_correct/skills/correct/SKILL.md"
+if missing_correct_out="$(HOME="$tmp/missing-correct-home" PI_STACK="$root" PSTACK="$missing_correct" PI_STACK_SKIP_PACKAGES=1 bash "$root/install.sh" 2>&1)"; then
+	fail "install accepted a pstack checkout that predates correct"
+fi
+printf '%s\n' "$missing_correct_out" | grep -q 'update-pstack' || fail "outdated pstack checkout did not name update-pstack"
+printf '%s\n' "$missing_correct_out" | grep -q 'predates selected skill correct' || fail "outdated pstack checkout did not name correct"
+test ! -e "$tmp/missing-correct-home/.pi/agent" || fail "outdated pstack checkout was detected after installation began"
+
+legacy_home="$tmp/home-legacy-jig"
+legacy_agent="$legacy_home/.pi/agent"
+mkdir -p "$legacy_agent/jig/bin" "$legacy_agent/bin" "$legacy_agent/prompts" "$legacy_agent/skills-pstack/jig" "$legacy_home/.local/bin"
+printf 'launcher\n' >"$legacy_agent/jig/bin/jig.sh"
+printf 'nested\n' >"$legacy_agent/jig/bin/extra.txt"
+printf 'wrapper\n' >"$legacy_agent/bin/jig"
+printf 'prompt\n' >"$legacy_agent/prompts/jig.md"
+printf 'skill\n' >"$legacy_agent/skills-pstack/jig/SKILL.md"
+ln -s "$legacy_agent/bin/jig" "$legacy_home/.local/bin/jig"
+keep_skill="$tmp/unrelated-skill-keep"
+python3 - "$legacy_agent/settings.json" "$legacy_agent" "$keep_skill" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+dest, agent, keep = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
+dest.write_text(json.dumps({
+	"theme": "keep-theme",
+	"skills": [
+		str(agent / "skills-pstack/jig"),
+		str(agent / "jig/skills/jig"),
+		keep,
+	],
+}, indent=2) + "\n")
+PY
+if ! legacy_out="$(HOME="$legacy_home" PI_STACK="$root" PSTACK="$stub" PI_STACK_SKIP_PACKAGES=1 bash "$root/install.sh" 2>&1)"; then
+	printf '%s\n' "$legacy_out" >&2
+	fail "install did not clean an earlier Jig install"
+fi
+printf '%s\n' "$legacy_out" | grep -q 'Removed earlier Jig install:' || fail "install did not name the removed Jig artifacts"
+for legacy_path in \
+	"$legacy_agent/jig" \
+	"$legacy_agent/bin/jig" \
+	"$legacy_home/.local/bin/jig" \
+	"$legacy_agent/prompts/jig.md" \
+	"$legacy_agent/skills-pstack/jig" \
+	"$legacy_agent/jig/skills/jig"
+do
+	test ! -e "$legacy_path" || fail "legacy Jig artifact remains: $legacy_path"
+	printf '%s\n' "$legacy_out" | grep -F -q "$legacy_path" || fail "removal line omitted $legacy_path"
+done
+if printf '%s\n' "$legacy_out" | grep -F -q "$keep_skill"; then
+	fail "Jig cleanup named an unrelated skill"
+fi
+python3 - "$legacy_agent/settings.json" "$legacy_agent" "$keep_skill" <<'PY' || fail "Jig cleanup dropped an unrelated skill or left a Jig skill"
+import json
+import sys
+from pathlib import Path
+
+settings, agent, keep = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
+data = json.loads(settings.read_text())
+if data.get("theme") != "keep-theme":
+	raise SystemExit("theme was dropped")
+skills = data.get("skills")
+if not isinstance(skills, list) or keep not in skills:
+	raise SystemExit("unrelated skill was dropped")
+jig_root = (agent / "jig").resolve()
+for entry in skills:
+	if not isinstance(entry, str):
+		continue
+	text = entry.rstrip("/")
+	if text.endswith("/skills-pstack/jig"):
+		raise SystemExit("skills-pstack/jig remains")
+	candidate = Path(text)
+	if candidate.is_absolute():
+		resolved = candidate.resolve()
+		if resolved == jig_root or jig_root in resolved.parents:
+			raise SystemExit("skill under the jig tree remains")
+PY
+legacy_settings_sum="$(sha256sum "$legacy_agent/settings.json")"
+legacy_agent_sum="$(tree_checksum "$legacy_agent")"
+if ! legacy_again="$(HOME="$legacy_home" PI_STACK="$root" PSTACK="$stub" PI_STACK_SKIP_PACKAGES=1 bash "$root/install.sh" 2>&1)"; then
+	printf '%s\n' "$legacy_again" >&2
+	fail "second install after Jig cleanup failed"
+fi
+if printf '%s\n' "$legacy_again" | grep -q 'Removed earlier Jig install:'; then
+	fail "second install reported another Jig removal"
+fi
+[[ "$(sha256sum "$legacy_agent/settings.json")" == "$legacy_settings_sum" ]] || fail "second install changed settings.json"
+[[ "$(tree_checksum "$legacy_agent")" == "$legacy_agent_sum" ]] || fail "second install changed the agent tree"
+
+keeper_home="$tmp/home-jig-keeper"
+mkdir -p "$keeper_home/.local/bin"
+printf 'user jig command\n' >"$keeper_home/.local/bin/jig"
+cp "$keeper_home/.local/bin/jig" "$tmp/jig-keeper.before"
+if ! keeper_out="$(HOME="$keeper_home" PI_STACK="$root" PSTACK="$stub" PI_STACK_SKIP_PACKAGES=1 bash "$root/install.sh" 2>&1)"; then
+	printf '%s\n' "$keeper_out" >&2
+	fail "install with an unrelated jig command failed"
+fi
+cmp -s "$keeper_home/.local/bin/jig" "$tmp/jig-keeper.before" || fail "install changed an unrelated jig command"
+test ! -L "$keeper_home/.local/bin/jig" || fail "unrelated jig command became a symlink"
+if printf '%s\n' "$keeper_out" | grep -q 'Removed earlier Jig install:'; then
+	fail "install reported removing an unrelated jig command"
+fi
+
+foreign_home="$tmp/home-jig-foreign-link"
+mkdir -p "$foreign_home/.local/bin"
+ln -s /usr/bin/true "$foreign_home/.local/bin/jig"
+if ! foreign_out="$(HOME="$foreign_home" PI_STACK="$root" PSTACK="$stub" PI_STACK_SKIP_PACKAGES=1 bash "$root/install.sh" 2>&1)"; then
+	printf '%s\n' "$foreign_out" >&2
+	fail "install with an unrelated jig symlink failed"
+fi
+test -L "$foreign_home/.local/bin/jig" || fail "install removed an unrelated jig symlink"
+[[ "$(readlink "$foreign_home/.local/bin/jig")" == /usr/bin/true ]] || fail "install retargeted an unrelated jig symlink"
+if printf '%s\n' "$foreign_out" | grep -q 'Removed earlier Jig install:'; then
+	fail "install reported removing an unrelated jig symlink"
+fi
+
+into_home="$tmp/home-jig-into"
+into_agent="$into_home/.pi/agent"
+mkdir -p "$into_agent/jig/bin" "$into_home/.local/bin"
+printf 'launcher\n' >"$into_agent/jig/bin/jig.sh"
+ln -s "$into_agent/jig/bin/jig.sh" "$into_home/.local/bin/jig"
+if ! into_out="$(HOME="$into_home" PI_STACK="$root" PSTACK="$stub" PI_STACK_SKIP_PACKAGES=1 bash "$root/install.sh" 2>&1)"; then
+	printf '%s\n' "$into_out" >&2
+	fail "install did not remove a symlink into the jig tree"
+fi
+test ! -e "$into_home/.local/bin/jig" || fail "install left a symlink into the jig tree"
+test ! -e "$into_agent/jig" || fail "install left the jig tree"
+printf '%s\n' "$into_out" | grep -F -q "$into_home/.local/bin/jig" || fail "removal line omitted the symlink into the jig tree"
+
 home="$tmp/home"
 mkdir -p "$home/.pi/agent/prompts"
 
@@ -186,6 +342,8 @@ if any("/pstack/skills/poteto-mode" in s for s in skills):
 	raise SystemExit("skills still point at raw pstack")
 if not any("skills-pstack/reflect" in s for s in skills):
 	raise SystemExit("reflect is not installed")
+if not any("skills-pstack/correct" in s for s in skills):
+	raise SystemExit("correct is not installed")
 if not any("skills-pstack/create-verification-skill" in s for s in skills):
 	raise SystemExit("create-verification-skill is not installed")
 if not any("skills-pstack/maintain-verification-skill" in s for s in skills):
@@ -215,13 +373,13 @@ PY
 grep -q '^name: poteto-mode$' "$home/.pi/agent/skills-pstack/poteto-mode/SKILL.md" || fail "install did not slug Poteto Mode"
 grep -q 'name: Poteto Mode' "$stub/skills/poteto-mode/SKILL.md" || fail "install edited upstream pstack"
 test -L "$home/.pi/agent/skills-pstack/poteto-mode/playbooks" || fail "install did not symlink playbooks"
-test -L "$home/.local/bin/jig" || fail "install did not link ~/.local/bin/jig"
-test -x "$home/.local/bin/jig" || fail "linked jig is not executable"
-test -x "$home/.pi/agent/jig/bin/jig.sh" || fail "install did not copy the Jig launcher"
-test -x "$home/.pi/agent/jig/bin/jigctl.py" || fail "install did not copy the Jig controller"
-test -f "$home/.pi/agent/jig/skills/jig/references/public-routes.json" || fail "install did not copy the public route matrix"
-test -f "$home/.pi/agent/skills-pstack/jig/SKILL.md" || fail "install did not register the copied Jig skill"
+test ! -e "$home/.pi/agent/jig" || fail "install created the jig tree"
+test ! -e "$home/.pi/agent/bin/jig" || fail "install created the jig launcher"
+test ! -e "$home/.local/bin/jig" || fail "install linked jig"
+test ! -e "$home/.pi/agent/prompts/jig.md" || fail "install copied the jig prompt"
+test ! -e "$home/.pi/agent/skills-pstack/jig" || fail "install registered jig"
 test -f "$home/.pi/agent/skills-pstack/reflect/SKILL.md" || fail "install did not register reflect"
+test -f "$home/.pi/agent/skills-pstack/correct/SKILL.md" || fail "install did not register correct"
 test -f "$home/.pi/agent/skills-pstack/create-verification-skill/SKILL.md" || fail "install did not register create-verification-skill"
 test -f "$home/.pi/agent/skills-pstack/maintain-verification-skill/SKILL.md" || fail "install did not register maintain-verification-skill"
 test -f "$home/.pi/agent/skills-pstack/update-pstack/SKILL.md" || fail "install did not register update-pstack"
@@ -232,9 +390,6 @@ test -L "$home/.local/bin/update-pstack" || fail "install did not link ~/.local/
 test -x "$home/.local/bin/update-pstack" || fail "linked update-pstack is not executable"
 grep -F -q "$root" "$home/.pi/agent/bin/update-pstack" || fail "installed update-pstack wrapper forgot its pi-stack source"
 "$home/.local/bin/update-pstack" --help | grep -q '^usage: update-pstack' || fail "installed update-pstack command does not run"
-if grep -F -q "$root" "$home/.pi/agent/bin/jig" "$home/.pi/agent/skills-pstack/jig/SKILL.md"; then
-	fail "installed Jig entry points depend on the source checkout"
-fi
 test -f "$home/.pi/agent/agents/poteto-agent.md" || fail "piped install did not write poteto-agent"
 grep -q poteto-mode "$home/.pi/agent/agents/poteto-agent.md" || fail "poteto-agent must read poteto-mode"
 python3 - "$home" <<'PY'
@@ -674,7 +829,7 @@ printf '%s\n' "$missing_upstream_out" | grep -q 'has no upstream' || fail "missi
 test "$(git -C "$home2/.pi-stack" rev-parse HEAD)" = "$missing_upstream_head" || fail "checkout without upstream changed while update was refused"
 git -C "$home2/.pi-stack" branch --set-upstream-to="origin/$managed_branch" >/dev/null
 
-if grep -R -E '/home/[^$]|workspace root' -- install.sh overlay skills/jig skills/cross-repo skills/update-pstack | grep -v '^Binary'; then
+if grep -R -E '/home/[^$]|workspace root' -- install.sh overlay skills/cross-repo skills/update-pstack | grep -v '^Binary'; then
 	fail "hardcoded home path or workspace root in overlay files"
 fi
 
