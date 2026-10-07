@@ -11,7 +11,7 @@ If STREAM.md's first line already holds a `ratified:` marker with a date and ZF'
 ## Scout
 
 Survey these before the first question. This is read-only. Write nothing outside the stream folder and prompt no session.
-- Each repo in `../project.toml` and its `git worktree list`.
+- Each repo in the project file. `stream.toml` names it. The file is `projects/<name>.toml` in the index directory from `$XDG_CONFIG_HOME/pi-streams/homes` whose `streams.tsv` lists this folder. Run `git worktree list` in each repo.
 - Open PRs in those repos with `gh pr list`, if `gh` works.
 - The pi-web sessions in each worktree, from `pi-web-cli list --cwd <worktree>`.
 - Any table or artifact ZF names at any point. Read its metadata only, and never run a query that bills bytes.

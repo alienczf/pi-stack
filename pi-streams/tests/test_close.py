@@ -29,7 +29,7 @@ class CloseTests(EngineCase):
         super().setUp()
         proc = self.run_streams("init", str(self.root), "-y")
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.stream_dir = self.home / "etl"
+        self.stream_dir = self.register_stream("etl")
         (self.stream_dir / "handover").mkdir(parents=True)
         (self.stream_dir / "STREAM.md").write_text("ratified: 2026-10-06 yes\n", encoding="utf-8")
         (self.stream_dir / "threads.tsv").write_text(ROWS, encoding="utf-8")
@@ -58,12 +58,12 @@ class CloseTests(EngineCase):
             ("POST", "/api/sessions/t-2/archive", "", {}),
         ])
         self.assertEqual(self.statuses(), ["coord-1 done", "t-1 archived", "t-2 archived", "t-0 archived"])
-        self.assertEqual(git(self.home, self.env, "log", "-1", "--format=%s").strip(), "pi-streams close etl")
+        self.assertEqual(git(self.stream_dir, self.env, "log", "-1", "--format=%s").strip(), "pi-streams close etl")
         self.assertEqual(
-            git(self.home, self.env, "ls-files", "etl/handover").splitlines(),
-            ["etl/handover/datapull.md", "etl/handover/review.md"],
+            git(self.stream_dir, self.env, "ls-files", "handover").splitlines(),
+            ["handover/datapull.md", "handover/review.md"],
         )
-        self.assertEqual(git(self.home, self.env, "status", "--porcelain"), "")
+        self.assertEqual(git(self.stream_dir, self.env, "status", "--porcelain"), "")
 
     def test_rerun_after_a_busy_thread_archives_only_what_is_left(self) -> None:
         (self.stream_dir / "handover" / "review.md").write_text("intent: review\n", encoding="utf-8")
@@ -79,7 +79,7 @@ class CloseTests(EngineCase):
         self.assertEqual(closed.stdout, "archived t-2 review\ndone coord-1 coordinator\n")
         self.assertEqual(self.stub.requests, [("POST", "/api/sessions/t-2/archive", "", {})])
         self.assertEqual(self.statuses(), ["coord-1 done", "t-1 archived", "t-2 archived", "t-0 archived"])
-        self.assertEqual(git(self.home, self.env, "log", "-1", "--format=%s").strip(), "pi-streams close etl")
+        self.assertEqual(git(self.stream_dir, self.env, "log", "-1", "--format=%s").strip(), "pi-streams close etl")
 
 
 if __name__ == "__main__":

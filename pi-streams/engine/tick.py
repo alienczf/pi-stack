@@ -9,7 +9,17 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from engine import StreamsError, clock, piweb, sessionlog
-from engine.project import Project, commit_home, home_lock, load_project, push_home, stream_dirs
+from engine.project import (
+    Project,
+    StreamRow,
+    commit_repo,
+    index_lock,
+    load_projects,
+    load_stream_config,
+    load_stream_rows,
+    push_repo,
+    stream_locks,
+)
 from engine.subscriptions import SOURCES, Subscription, load_subscriptions
 from engine.threads import Status, Thread, load_threads, rotate_coordinator, save_threads, transition
 
@@ -175,16 +185,19 @@ def _queued(status: dict[str, object]) -> list[tuple[str, str]]:
 class StreamTick:
     def __init__(
         self,
+        index: Path,
         project: Project,
+        stream_id: str,
         stream_dir: Path,
         now: datetime,
         alerts: Alerts,
         claims: list[Claim] | None,
     ) -> None:
+        self.index = index
         self.project = project
         self.caps = project.caps
         self.stream_dir = stream_dir
-        self.stream = stream_dir.name
+        self.stream = stream_id
         self.now = now
         self.at = clock.stamp(now)
         self.alerts = alerts
@@ -442,7 +455,7 @@ class StreamTick:
         # The flag lets the next tick finish it instead of waiting for pi-streams rotate.
         self.state.rotating = True
         self.flush()
-        sid = rotate_coordinator(self.project, self.stream)
+        sid = rotate_coordinator(self.index, self.project, self.stream)
         self.rows = load_threads(self.rows_path)
         return sid, "follow-up"
 
@@ -466,15 +479,15 @@ class StreamTick:
         return modified is not None and self.now - modified < timedelta(hours=self.caps.warm_idle_hours)
 
 
-def find_claims(dirs: list[Path]) -> dict[str, list[Claim]] | None:
+def find_claims(streams: list[tuple[str, Path]]) -> dict[str, list[Claim]] | None:
     held: list[tuple[str, Thread]] = []
-    for stream_dir in dirs:
+    for stream_id, stream_dir in streams:
         try:
             rows = load_threads(stream_dir / "threads.tsv")
         except StreamsError:
             # Without every stream's rows, a claim that is not found may still hold.
             return None
-        held += [(stream_dir.name, row) for row in rows if row.status is not Status.archived]
+        held += [(stream_id, row) for row in rows if row.status is not Status.archived]
     found: dict[str, list[Claim]] = {}
     for index, (a_stream, a) in enumerate(held):
         for b_stream, b in held[index + 1 :]:
@@ -497,37 +510,67 @@ def _shared(a: Thread, b: Thread) -> str:
     return ""
 
 
-def tick_home(home: Path, now: datetime) -> bool:
+def _claims_for(group: list[StreamRow]) -> dict[str, list[Claim] | None]:
+    found = find_claims([(row.id, Path(row.path)) for row in group])
+    if found is None:
+        return {row.id: None for row in group}
+    return {row.id: found.get(row.id, []) for row in group}
+
+
+def tick_index(index: Path, now: datetime) -> bool:
     ok = True
-    with home_lock(home):
-        project = load_project(home)
-        alerts = Alerts(home / "ALERTS")
-        dirs = stream_dirs(home)
-        claims = find_claims(dirs)
-        for stream_dir in dirs:
-            mine = None if claims is None else claims.get(stream_dir.name, [])
-            run = StreamTick(project, stream_dir, now, alerts, mine)
-            run.run()
-            for error in run.errors:
-                ok = False
-                print(f"{stream_dir}: {error}", file=sys.stderr, flush=True)
-            counts = Counter(event.kind for event in run.events)
-            if counts:
-                counted = "\t".join(f"{kind}={counts[kind]}" for kind in sorted(counts))
-                print(f"{stream_dir}\t{counted}", flush=True)
-        alerts.save()
-        commit_home(home, "pi-streams tick")
-        push_home(home, project.info.remote)
+    with index_lock(index):
+        projects = {project.info.name: project for project in load_projects(index)}
+        rows = load_stream_rows(index)
+        ordered = sorted(rows, key=lambda row: str(Path(row.path).resolve()))
+        with stream_locks([Path(row.path) for row in ordered]):
+            alerts = Alerts(index / "ALERTS")
+            grouped: dict[str, list[StreamRow]] = {}
+            for row in ordered:
+                grouped.setdefault(row.project, []).append(row)
+            claims = {stream_id: mine for group in grouped.values() for stream_id, mine in _claims_for(group).items()}
+            runs: list[tuple[StreamRow, StreamTick]] = []
+            for row in ordered:
+                project = projects.get(row.project)
+                if project is None:
+                    ok = False
+                    print(f"{row.path}: stream {row.id} names missing project {row.project}", file=sys.stderr, flush=True)
+                    continue
+                run = StreamTick(index, project, row.id, Path(row.path), now, alerts, claims.get(row.id))
+                run.run()
+                runs.append((row, run))
+                for error in run.errors:
+                    ok = False
+                    print(f"{row.path}: {error}", file=sys.stderr, flush=True)
+                counts = Counter(event.kind for event in run.events)
+                if counts:
+                    counted = "\t".join(f"{kind}={counts[kind]}" for kind in sorted(counts))
+                    print(f"{row.path}\t{counted}", flush=True)
+            for row, _run in runs:
+                repo = Path(row.path)
+                try:
+                    commit_repo(repo, "pi-streams tick")
+                except StreamsError as exc:
+                    ok = False
+                    print(f"{row.path}: {exc}", file=sys.stderr, flush=True)
+            alerts.save()
+            for row, _run in runs:
+                repo = Path(row.path)
+                try:
+                    push_repo(repo, load_stream_config(repo / "stream.toml").remote)
+                except StreamsError as exc:
+                    ok = False
+                    print(f"{row.path}: {exc}", file=sys.stderr, flush=True)
     return ok
 
 
-def run_tick(homes: list[Path]) -> int:
+def run_tick(indexes: list[Path]) -> int:
     now = clock.now()
     ok = True
-    for home in homes:
+    for index in indexes:
         try:
-            ok = tick_home(home, now) and ok
+            ok = tick_index(index, now) and ok
         except (StreamsError, OSError) as exc:
             ok = False
-            print(f"{home}: {exc}", file=sys.stderr, flush=True)
+            print(f"{index}: {exc}", file=sys.stderr, flush=True)
     return 0 if ok else 1

@@ -161,3 +161,36 @@ class EngineCase(unittest.TestCase):
     @property
     def home(self) -> Path:
         return self.root / "streams"
+
+    @property
+    def index(self) -> Path:
+        return self.xdg / "pi-streams"
+
+    @property
+    def project_file(self) -> Path:
+        return self.index / "projects" / f"{self.root.name}.toml"
+
+    def register_stream(
+        self,
+        stream_id: str,
+        stream_dir: Path | None = None,
+        index: Path | None = None,
+        project: str | None = None,
+    ) -> Path:
+        stream_dir = (self.home / stream_id if stream_dir is None else stream_dir).resolve()
+        stream_dir.mkdir(parents=True, exist_ok=True)
+        index = self.index if index is None else index
+        project = self.root.name if project is None else project
+        path = index / "streams.tsv"
+        header = "id\tpath\tproject\n"
+        text = path.read_text(encoding="utf-8") if path.is_file() else header
+        if not text.endswith("\n"):
+            text += "\n"
+        row = f"{stream_id}\t{stream_dir}\t{project}\n"
+        lines = text.splitlines()
+        if row.strip() not in lines:
+            if not lines or lines[0] != "id\tpath\tproject":
+                text = header + text
+            text += row
+            path.write_text(text, encoding="utf-8")
+        return stream_dir

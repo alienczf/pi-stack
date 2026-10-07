@@ -109,13 +109,12 @@ From a checkout, `./install.sh -y --project ~/Projects/alphalab` does the same t
 | Question | Default |
 | --- | --- |
 | Which URL do you open pi-web at? | `host` and `port` from `~/.config/pi-web/config.json`, or `http://127.0.0.1:8504` |
-| Where should the project home's private remote live? | none |
 | Which model should coordinators use? | `openai-codex/gpt-6-astra` |
 | Which thinking level should coordinators use? | `xhigh` |
 
-Pass `--pi-web-url`, `--remote`, `--coordinator-model`, or `--coordinator-thinking` to set an answer without the question.
+Pass `--pi-web-url`, `--coordinator-model`, or `--coordinator-thinking` to set an answer without the question.
 
-The pi-web URL in `project.toml` is the address you open in a browser, which may be a tunnel. `pi-streams` runs on the pi-web host and calls pi-web at `PI_WEB_URL` when it is set, otherwise at the `host` and `port` in `~/.config/pi-web/config.json`, otherwise at `http://127.0.0.1:8504`.
+The pi-web URL in `projects/<name>.toml` is the address you open in a browser, which may be a tunnel. `pi-streams` runs on the pi-web host and calls pi-web at `PI_WEB_URL` when it is set, otherwise at the `host` and `port` in `~/.config/pi-web/config.json`, otherwise at `http://127.0.0.1:8504`.
 
 Every install links `~/.local/bin/pi-streams` to this checkout's `bin/pi-streams` and installs the `stream` and `stream-kickoff` skills and the `stream` prompt. With `--project`, or on a later install once `pi-streams` has a registered home, it also installs:
 

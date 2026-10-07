@@ -1,18 +1,17 @@
-"""Template bytes the engine copies into a project home and a stream."""
+"""Template bytes the engine copies into a stream repo."""
 from __future__ import annotations
 
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-PROJECT = ROOT / "pi-streams" / "templates" / "project"
 STREAM = ROOT / "pi-streams" / "templates" / "stream"
 
 AGENTS = """\
 You are the coordinator of the stream whose folder is your working directory. You never write product code.
 
 On every turn:
-1. Read STREAM.md, STATE.md, the newest lines of log/events.jsonl, and ../context/README.md.
+1. Read STREAM.md, STATE.md, the newest lines of log/events.jsonl, and context/README.md.
 2. Act only within STREAM.md's AUTONOMY section. Anything else, ask ZF with options and a recommended default, and continue on the default.
 3. Delegate with `pi-streams thread spawn` and steer with `pi-web-cli prompt --steer`. Never resume a thread just to check on it; read `pi-web-cli status`.
 4. Accept done only when the matching checks/ script passes. Check that a new thread's first reply restates its brief correctly.
@@ -51,13 +50,10 @@ NO-GO
 
 
 class TemplateTests(unittest.TestCase):
-    def test_project_template(self) -> None:
-        self.assertEqual((PROJECT / "AGENTS.md").read_text(encoding="utf-8"), AGENTS)
-        self.assertEqual((PROJECT / ".gitignore").read_text(encoding="utf-8"), "*/log/\n")
-        self.assertEqual((PROJECT / "ALERTS").read_bytes(), b"")
-        self.assertEqual((PROJECT / "context" / "README.md").read_text(encoding="utf-8"), "# Shared context\n")
-
     def test_stream_template(self) -> None:
+        self.assertEqual((STREAM / "AGENTS.md").read_text(encoding="utf-8"), AGENTS)
+        self.assertEqual((STREAM / ".gitignore").read_text(encoding="utf-8"), "log/\n")
+        self.assertEqual((STREAM / "context" / "README.md").read_text(encoding="utf-8"), "# Shared context\n")
         self.assertEqual((STREAM / "STREAM.md").read_text(encoding="utf-8"), STREAM_MD)
         self.assertEqual((STREAM / "STATE.md").read_text(encoding="utf-8"), "# STATE\n\nplan:\nopen threads:\nwaiting-on:\nnext step:\n")
         self.assertEqual((STREAM / "DECISIONS.md").read_text(encoding="utf-8"), "# DECISIONS\n")

@@ -82,7 +82,8 @@ class FailureTests(TickCase):
             self.state(self.etl),
             {"claims": [], "outages": [], "pending": [], "rotating": False, "sessions": {}, "subscriptions": {}},
         )
-        self.assertEqual(git(self.home, self.env, "status", "--porcelain"), "")
+        self.assertEqual(git(self.etl, self.env, "status", "--porcelain"), "")
+        self.assertEqual(git(ops, self.env, "status", "--porcelain"), "")
 
     def test_a_stream_whose_log_cannot_be_written_does_not_stop_the_others(self) -> None:
         (self.etl / "log" / "events.jsonl").mkdir(parents=True)
@@ -102,7 +103,8 @@ class FailureTests(TickCase):
         self.assertEqual((proc.returncode, proc.stdout), (1, f"{self.etl}\task=1\ttick-error=1\n{ops}\task=1\n"))
         self.assertTrue(proc.stderr.startswith(f"{self.etl}: [Errno 21] Is a directory"), proc.stderr)
         self.assertEqual(self.stub.requests[-1], got_prompt("coord-2", "pi-streams tick 2026-10-06T12:00:00Z:\nask t-2 review Which venue first?"))
-        self.assertEqual(git(self.home, self.env, "status", "--porcelain"), "")
+        self.assertEqual(git(self.etl, self.env, "status", "--porcelain"), "")
+        self.assertEqual(git(ops, self.env, "status", "--porcelain"), "")
 
     def test_a_rotation_that_fails_after_its_archive_is_finished_by_the_next_tick(self) -> None:
         self.stub.set_routes([
@@ -219,7 +221,7 @@ class FailureTests(TickCase):
         self.assertEqual((proc.returncode, proc.stdout, proc.stderr), (
             1,
             "",
-            f"{gone}: [Errno 2] No such file or directory: '{gone}/.git/pi-streams.lock'\n",
+            f"{gone}: [Errno 2] No such file or directory: '{gone}/.pi-streams.lock'\n",
         ))
         self.assertEqual(self.stub.requests, [got_status("t-1"), got_list("/wt/datapull"), got_list(str(self.etl))])
 

@@ -43,9 +43,10 @@ class SpawnTests(EngineCase):
         proc = self.run_streams("init", str(self.root), "-y")
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.stream_dir = (self.home / "etl").resolve()
-        self.stream_dir.mkdir()
+        self.stream_dir.mkdir(parents=True)
         (self.stream_dir / "STREAM.md").write_text("ratified: no\n", encoding="utf-8")
         (self.stream_dir / "threads.tsv").write_text(HEADER, encoding="utf-8")
+        self.register_stream("etl", self.stream_dir)
         self.stub.requests.clear()
 
     def assert_call(self, index: int, method: str, path: str, body: object, cwd: str | None = None) -> None:
@@ -114,14 +115,14 @@ class SpawnTests(EngineCase):
             ],
         )
         self.assertRegex(cells[9], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
-        self.assertEqual(git(self.home, self.env, "log", "-1", "--format=%s").strip(), "pi-streams thread spawn etl datapull")
-        head = git(self.home, self.env, "rev-parse", "HEAD")
+        self.assertEqual(git(self.stream_dir, self.env, "log", "-1", "--format=%s").strip(), "pi-streams thread spawn etl datapull")
+        head = git(self.stream_dir, self.env, "rev-parse", "HEAD")
         before = len(self.stub.requests)
         again = self.spawn_datapull()
         self.assertEqual(again.returncode, 0, again.stderr)
         self.assertEqual(again.stdout, "thread-1\n")
         self.assertEqual(self.stub.requests[before:], [])
-        self.assertEqual(git(self.home, self.env, "rev-parse", "HEAD"), head)
+        self.assertEqual(git(self.stream_dir, self.env, "rev-parse", "HEAD"), head)
 
     def spawn_datapull(self):
         return self.run_streams(

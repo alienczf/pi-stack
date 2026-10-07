@@ -149,7 +149,7 @@ fi
 help="$(bash install.sh --help)"
 printf '%s\n' "$help" | grep -q -- '  -y ' || fail "install.sh --help must document -y"
 printf '%s\n' "$help" | grep -q -- '--print-pstack-skills' || fail "install.sh --help must document its pstack skill query"
-for flag in --project --pi-web-url --remote --coordinator-model --coordinator-thinking; do
+for flag in --project --pi-web-url --coordinator-model --coordinator-thinking; do
 	printf '%s\n' "$help" | grep -q -F -- "$flag" || fail "install.sh --help must document $flag"
 done
 selected_skills="$(bash install.sh --print-pstack-skills)"
@@ -931,7 +931,6 @@ streams_out="$(
 		GIT_COMMITTER_EMAIL="test@example.com" \
 		bash -s -- --project "$streams_proj" -y \
 		--pi-web-url "http://127.0.0.1:9" \
-		--remote "https://example.test/streams.git" \
 		--coordinator-model "acme/widget" \
 		--coordinator-thinking "low" <"$root/install.sh" 2>&1
 )"
@@ -950,17 +949,21 @@ cmp -s "$tmp/old-pi-web-cli" "${pi_web_cli_baks[0]}" || fail "pi-web-cli backup 
 cmp -s "$root/bin/pi-web-cli" "$streams_home/.local/bin/pi-web-cli" || fail "pi-web-cli was not replaced with the checkout copy"
 test ! -e "$streams_home/.config/systemd/user/pi-streams-tick.service" || fail "tick units ignored XDG_CONFIG_HOME"
 test ! -e "$streams_home/.pi/agent/auth.json" || fail "install --project wrote auth.json"
-test -f "$streams_proj/streams/project.toml" || fail "project home was not created"
-test -d "$streams_proj/streams/.git" || fail "project home is not a git repo"
-grep -F -q 'http://127.0.0.1:9' "$streams_proj/streams/project.toml" || fail "pi-web url was not recorded"
-grep -F -q 'https://example.test/streams.git' "$streams_proj/streams/project.toml" || fail "remote was not recorded"
-grep -F -q 'acme/widget' "$streams_proj/streams/project.toml" || fail "coordinator model was not recorded"
-[[ "$(grep -c 'thinking = "low"' "$streams_proj/streams/project.toml")" -eq 2 ]] || fail "coordinator thinking was not recorded"
+streams_index="$streams_xdg/pi-streams"
+streams_toml="$streams_index/projects/proj-root.toml"
+test -f "$streams_toml" || fail "project file was not created"
+test ! -e "$streams_proj/streams/.git" || fail "project streams directory is a git repo"
+test ! -e "$streams_index/.git" || fail "the index is a git repo"
+grep -F -q 'http://127.0.0.1:9' "$streams_toml" || fail "pi-web url was not recorded"
+grep -F -q 'acme/widget' "$streams_toml" || fail "coordinator model was not recorded"
+[[ "$(grep -c 'thinking = "low"' "$streams_toml")" -eq 2 ]] || fail "coordinator thinking was not recorded"
+if grep -F -q 'remote = ' "$streams_toml"; then
+	fail "project file recorded a remote"
+fi
 assert_streams_layout "$streams_home" "$streams_xdg"
 streams_home_sum="$(tree_checksum "$streams_home")"
 streams_xdg_sum="$(tree_checksum "$streams_xdg")"
-streams_toml_sum="$(sha256sum "$streams_proj/streams/project.toml")"
-streams_head="$(git -C "$streams_proj/streams" rev-parse HEAD)"
+streams_toml_sum="$(sha256sum "$streams_toml")"
 set +e
 streams_again="$(
 	HOME="$streams_home" \
@@ -975,7 +978,6 @@ streams_again="$(
 		GIT_COMMITTER_EMAIL="test@example.com" \
 		bash -s -- --project "$streams_proj" -y \
 		--pi-web-url "http://127.0.0.1:9" \
-		--remote "https://example.test/streams.git" \
 		--coordinator-model "acme/widget" \
 		--coordinator-thinking "low" <"$root/install.sh" 2>&1
 )"
@@ -987,9 +989,7 @@ if printf '%s\n' "$streams_again" | grep -F -q 'Backed up '; then
 fi
 [[ "$(tree_checksum "$streams_home")" == "$streams_home_sum" ]] || fail "second install --project changed the home"
 [[ "$(tree_checksum "$streams_xdg")" == "$streams_xdg_sum" ]] || fail "second install --project changed the systemd units"
-[[ "$(sha256sum "$streams_proj/streams/project.toml")" == "$streams_toml_sum" ]] || fail "second install --project changed project.toml"
-[[ "$(git -C "$streams_proj/streams" rev-parse HEAD)" == "$streams_head" ]] || fail "second install --project changed the project home commit"
-[[ -z "$(git -C "$streams_proj/streams" status --porcelain)" ]] || fail "second install --project left the project home dirty"
+[[ "$(sha256sum "$streams_toml")" == "$streams_toml_sum" ]] || fail "second install --project changed the project file"
 [[ "$(find "$streams_home/.local/bin" -maxdepth 1 -name 'pi-web-cli.bak-*' | wc -l)" -eq 1 ]] || fail "second install created another pi-web-cli backup"
 
 same_home="$tmp/home-same-cli"
@@ -1331,14 +1331,16 @@ ask_status=$?
 set -e
 [[ "$ask_status" -eq 1 ]] || fail "install --project without -y exited $ask_status, expected 1"
 printf '%s\n' "$ask_out" | grep -F -q 'Which URL do you open pi-web at? [http://127.0.0.1:9]:' || fail "url question did not show its default"
-printf '%s\n' "$ask_out" | grep -F -q "Where should the project home's private remote live? [none]:" || fail "remote question did not show its default"
 printf '%s\n' "$ask_out" | grep -F -q 'Which model should coordinators use? [openai-codex/gpt-6-astra]:' || fail "model question did not show its default"
 printf '%s\n' "$ask_out" | grep -F -q 'Which thinking level should coordinators use? [xhigh]:' || fail "thinking question did not show its default"
 printf '%s\n' "$ask_out" | grep -F -q 'FAIL pi-web: list failed' || fail "doctor did not fail after the setup questions"
-test -f "$ask_proj/streams/project.toml" || fail "answering the setup questions did not create the project home"
-grep -F -q 'http://127.0.0.1:9' "$ask_proj/streams/project.toml" || fail "accepted url default was not recorded"
-grep -F -q 'remote = ""' "$ask_proj/streams/project.toml" || fail "accepted remote default was not recorded"
-grep -F -q 'openai-codex/gpt-6-astra' "$ask_proj/streams/project.toml" || fail "accepted model default was not recorded"
+ask_toml="$ask_home/.config/pi-streams/projects/ask-proj.toml"
+test -f "$ask_toml" || fail "answering the setup questions did not write the project file"
+grep -F -q 'http://127.0.0.1:9' "$ask_toml" || fail "accepted url default was not recorded"
+if grep -F -q 'remote = ' "$ask_toml"; then
+	fail "accepted setup recorded a remote"
+fi
+grep -F -q 'openai-codex/gpt-6-astra' "$ask_toml" || fail "accepted model default was not recorded"
 cmp -s "$ask_home/.config/pi-web/config.json" "$tmp/pi-web-config.before" || fail "install changed pi-web config.json"
 test ! -e "$ask_home/.pi/agent/auth.json" || fail "install without -y wrote auth.json"
 
