@@ -98,7 +98,7 @@ Use pstack's `correct` for repository principles and for a mistake that keeps co
 
 ## Streams
 
-One command installs the harness and prepares a project home:
+One command installs the harness and prepares a project:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/alienczf/pi-stack/main/install.sh | bash -s -- -y --project ~/Projects/alphalab
