@@ -66,8 +66,8 @@ class TickTests(TickCase):
             "subscriptions": {},
             "sessions": {"t-1": {"asks": [], "busy": True, "context": False, "queued": {}, "replay": []}},
         })
-        self.assertEqual(git(self.home, self.env, "log", "-1", "--format=%s"), "pi-streams tick\n")
-        self.assertEqual(git(self.home, self.env, "status", "--porcelain"), "")
+        self.assertEqual(git(self.etl, self.env, "log", "-1", "--format=%s"), "fixture\n")
+        self.assertEqual(git(self.etl, self.env, "status", "--porcelain"), "")
 
         self.stub.set_routes([
             ("GET", "/api/sessions/t-1/status", 200, status("t-1")),
@@ -94,7 +94,7 @@ class TickTests(TickCase):
             "subscriptions": {},
             "sessions": {"t-1": {"asks": [], "busy": False, "context": False, "queued": {}, "replay": []}},
         })
-        self.assertEqual(git(self.home, self.env, "rev-list", "--count", "HEAD"), "2\n")
+        self.assertEqual(git(self.etl, self.env, "rev-list", "--count", "HEAD"), "1\n")
 
     def test_a_thread_that_finished_before_the_first_tick_wakes_the_coordinator(self) -> None:
         self.stub.set_routes([
@@ -211,7 +211,7 @@ class TickTests(TickCase):
             + f"coord-2\tcoordinator\t\t{self.etl}\t\t\topenai-codex/gpt-6-astra\txhigh\tactive\t2026-10-06T12:00:00Z\n",
         )
         self.assertEqual(self.state(self.etl)["pending"], [])
-        self.assertEqual(git(self.home, self.env, "status", "--porcelain"), "")
+        self.assertEqual(git(self.etl, self.env, "status", "--porcelain"), "")
 
     def test_a_coordinator_idle_for_six_hours_is_rotated(self) -> None:
         self.stub.set_routes([
@@ -254,14 +254,17 @@ class TickTests(TickCase):
 
     def test_tick_runs_every_registered_home_unless_one_is_given(self) -> None:
         other_root = self.tmp / "other"
+        other_index = self.tmp / "other-index"
         other_root.mkdir()
-        proc = self.run_streams("init", str(other_root), "-y")
+        proc = self.run_streams("init", str(other_root), "--home", str(other_index), "-y")
         self.assertEqual(proc.returncode, 0, proc.stderr)
         ops = str((other_root / "streams" / "ops").resolve())
         ops_dir = self.make_stream(
             other_root / "streams",
             "ops",
             row("coord-9", "coordinator", ops) + row("t-9", "review", "/wt/review"),
+            index=other_index,
+            project="other",
         )
         listed = ("GET", "/api/sessions", 200, [
             *self.listed()[3],
@@ -291,7 +294,7 @@ class TickTests(TickCase):
             listed,
             PROMPTS,
         ])
-        one = self.tick("2026-10-06T12:05:00Z", "--home", str(other_root / "streams"))
+        one = self.tick("2026-10-06T12:05:00Z", "--home", str(other_index))
         self.assertEqual((one.returncode, one.stdout, one.stderr), (0, f"{ops_dir}\tidle=1\n", ""))
         self.assertEqual(self.stub.requests, [
             got_status("t-9"),

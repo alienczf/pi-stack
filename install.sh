@@ -20,7 +20,7 @@ pstack_skill_names=(
 
 usage() {
 	cat <<'EOF'
-usage: install.sh [-y] [--project <root>] [--pi-web-url <url>] [--remote <url>]
+usage: install.sh [-y] [--project <root>] [--pi-web-url <url>]
                   [--coordinator-model <provider/id>] [--coordinator-thinking <level>]
                   [--print-pstack-skills]
 
@@ -57,9 +57,7 @@ Options
   --project <root>
                 after install, run pi-streams init on this project root
   --pi-web-url <url>
-                pi-web address to record for the project home
-  --remote <url>
-                private remote for the project home
+                pi-web address to record for the project
   --coordinator-model <provider/id>
                 model coordinators use
   --coordinator-thinking <level>
@@ -130,8 +128,6 @@ have_project=0
 project_root=""
 have_pi_web_url=0
 pi_web_url=""
-have_remote=0
-project_remote=""
 have_coordinator_model=0
 coordinator_model=""
 have_coordinator_thinking=0
@@ -172,12 +168,6 @@ while [[ $# -gt 0 ]]; do
 		have_pi_web_url=1
 		shift 2
 		;;
-	--remote)
-		require_value "$@"
-		project_remote="$2"
-		have_remote=1
-		shift 2
-		;;
 	--coordinator-model)
 		require_value "$@"
 		coordinator_model="$2"
@@ -198,7 +188,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ "$print_skills" == 1 ]]; then
-	if [[ "$assume_yes" == 1 || "$have_project" == 1 || "$have_pi_web_url" == 1 || "$have_remote" == 1 || "$have_coordinator_model" == 1 || "$have_coordinator_thinking" == 1 ]]; then
+	if [[ "$assume_yes" == 1 || "$have_project" == 1 || "$have_pi_web_url" == 1 || "$have_coordinator_model" == 1 || "$have_coordinator_thinking" == 1 ]]; then
 		usage >&2
 		exit 2
 	fi
@@ -503,9 +493,6 @@ run_project_setup() {
 	local cmd=("${HOME}/.local/bin/pi-streams" init "$project_root")
 	if [[ "$have_pi_web_url" == 1 ]]; then
 		cmd+=(--pi-web-url "$pi_web_url")
-	fi
-	if [[ "$have_remote" == 1 ]]; then
-		cmd+=(--remote "$project_remote")
 	fi
 	if [[ "$have_coordinator_model" == 1 ]]; then
 		cmd+=(--coordinator-model "$coordinator_model")

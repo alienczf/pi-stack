@@ -7,7 +7,7 @@ import shutil
 import time
 import urllib.parse
 
-from support import EngineCase, git
+from support import EngineCase, git, pi_stack_revision
 
 SKILLS = (
     "correct",
@@ -59,11 +59,24 @@ class DoctorTests(EngineCase):
         )
 
     def _add_stream(self, name: str = "etl") -> Path:
-        stream = self.home / name
+        stream = self.register_stream(name)
         (stream / "log").mkdir(parents=True, exist_ok=True)
         (stream / "STREAM.md").write_text("ratified: no\n", encoding="utf-8")
-        git(self.home, self.env, "add", "-A")
-        git(self.home, self.env, "commit", "-m", "stream")
+        (stream / ".gitignore").write_text("log/\n", encoding="utf-8")
+        (stream / "stream.toml").write_text(
+            f'project = "{self.root.name}"\npi_stack_revision = "{pi_stack_revision()}"\n',
+            encoding="utf-8",
+        )
+        if not (stream / "threads.tsv").is_file():
+            (stream / "threads.tsv").write_text(
+                "session\trole\trepo\tworktree\tbranch\tbase\tmodel\tthinking\tstatus\tstarted\n",
+                encoding="utf-8",
+            )
+        if not (stream / ".git").exists():
+            git(stream, self.env, "init", "--quiet")
+        git(stream, self.env, "add", "-A")
+        if git(stream, self.env, "status", "--porcelain").strip() != "":
+            git(stream, self.env, "commit", "-m", "stream")
         return stream
 
     def _pi_on_path(self) -> str:
@@ -76,22 +89,24 @@ class DoctorTests(EngineCase):
         self.env["PATH"] = f"{bindir}{os.pathsep}/usr/bin:/bin"
         return str((bindir / "pi").resolve())
 
-    def _report(self, pi: str, pi_web: str, tail: str) -> str:
-        home = str(self.home.resolve())
+    def _report(self, pi: str, pi_web: str, tail: str, streams: str = "") -> str:
+        project = str(self.project_file.resolve())
         return (
             f"PASS pi: found at {pi}\n"
             f"{pi_web}\n"
             "PASS steer: prompt accepts --steer\n"
-            f"PASS home: {home} is a clean git repo and project.toml parses\n"
+            f"PASS project: {project} parses\n"
+            f"{streams}"
             "PASS skills: present\n"
             f"{tail}"
         )
 
-    def _lines(self, pi: str, pi_web: str, extra: str = "") -> str:
+    def _lines(self, pi: str, pi_web: str, extra: str = "", streams: str = "") -> str:
         return self._report(
             pi,
             pi_web,
             extra + "PASS systemd: pi-streams-tick.service and pi-streams-tick.timer are installed\n",
+            streams,
         )
 
     def test_doctor_pass(self) -> None:
@@ -104,7 +119,7 @@ class DoctorTests(EngineCase):
         method, path, query, body = self.stub.requests[0]
         self.assertEqual(method, "GET")
         self.assertEqual(path, "/api/sessions")
-        self.assertEqual(urllib.parse.parse_qs(query), {"cwd": [str(self.home.resolve())]})
+        self.assertEqual(urllib.parse.parse_qs(query), {"cwd": [str(self.index.resolve())]})
         self.assertIsNone(body)
 
     def test_doctor_fail_when_stub_is_down(self) -> None:
@@ -117,7 +132,7 @@ class DoctorTests(EngineCase):
 
     def test_doctor_reaches_pi_web_from_its_config_without_pi_web_url(self) -> None:
         pi = self._pi_on_path()
-        self.assertIn('pi_web_url = "http://127.0.0.1:8504"\n', (self.home / "project.toml").read_text(encoding="utf-8"))
+        self.assertIn('pi_web_url = "http://127.0.0.1:8504"\n', self.project_file.read_text(encoding="utf-8"))
         del self.env["PI_WEB_URL"]
         config = self.user_home / ".config" / "pi-web" / "config.json"
         config.parent.mkdir(parents=True)
@@ -210,7 +225,11 @@ class DoctorTests(EngineCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(
             proc.stdout,
-            self._lines(pi, "PASS pi-web: list ok")
+            self._lines(
+                pi,
+                "PASS pi-web: list ok",
+                streams=f"PASS revision: etl records {pi_stack_revision()}\n",
+            )
             + "WARN tick: no tick-state.json under any home is newer than 15 minutes\n",
         )
 
@@ -225,7 +244,11 @@ class DoctorTests(EngineCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(
             proc.stdout,
-            self._lines(pi, "PASS pi-web: list ok")
+            self._lines(
+                pi,
+                "PASS pi-web: list ok",
+                streams=f"PASS revision: etl records {pi_stack_revision()}\n",
+            )
             + "WARN tick: no tick-state.json under any home is newer than 15 minutes\n",
         )
 
@@ -236,7 +259,10 @@ class DoctorTests(EngineCase):
         self.stub.set_routes([("GET", "/api/sessions", 200, [])])
         proc = self.run_streams("doctor")
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertEqual(proc.stdout, self._lines(pi, "PASS pi-web: list ok"))
+        self.assertEqual(
+            proc.stdout,
+            self._lines(pi, "PASS pi-web: list ok", streams=f"PASS revision: etl records {pi_stack_revision()}\n"),
+        )
 
     def test_doctor_warns_when_home_is_outside_pi_web_projects(self) -> None:
         pi = self._pi_on_path()
@@ -246,11 +272,11 @@ class DoctorTests(EngineCase):
         self.stub.set_routes([("GET", "/api/sessions", 200, [])])
         proc = self.run_streams("doctor")
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        home = str(self.home.resolve())
+        root = str(self.root.resolve())
         self.assertEqual(
             proc.stdout,
             self._lines(pi, "PASS pi-web: list ok")
-            + f"WARN pi-web-project: {home} is not inside a directory listed in ~/.pi-web/projects.json\n",
+            + f"WARN pi-web-project: {root} is not inside a directory listed in ~/.pi-web/projects.json\n",
         )
         self.assertEqual(path.read_bytes(), before)
 
@@ -261,17 +287,17 @@ class DoctorTests(EngineCase):
         self.stub.set_routes([("GET", "/api/sessions", 200, [])])
         proc = self.run_streams("doctor")
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        home = str(self.home.resolve())
+        root = str(self.root.resolve())
         self.assertEqual(
             proc.stdout,
             self._lines(pi, "PASS pi-web: list ok")
-            + f"WARN pi-web-project: {home} is not inside a directory listed in ~/.pi-web/projects.json\n",
+            + f"WARN pi-web-project: {root} is not inside a directory listed in ~/.pi-web/projects.json\n",
         )
         self.assertFalse(path.exists())
 
-    def test_doctor_accepts_a_home_registered_as_its_own_pi_web_project(self) -> None:
+    def test_doctor_accepts_a_project_root_inside_a_listed_directory(self) -> None:
         pi = self._pi_on_path()
-        self._write_projects([str(self.home.resolve())])
+        self._write_projects([str(self.tmp)])
         self.stub.set_routes([("GET", "/api/sessions", 200, [])])
         proc = self.run_streams("doctor")
         self.assertEqual(proc.returncode, 0, proc.stderr)

@@ -79,7 +79,7 @@ class OutageTests(TickCase):
             + row("t-1", "datapull", "/wt/datapull", status="waiting_quota"),
         )
         self.assertEqual(self.alerts(), f"2026-10-06T12:00:00Z etl t-1 datapull {SHOWN}\n")
-        self.assertEqual(git(self.home, self.env, "status", "--porcelain"), "")
+        self.assertEqual(git(self.etl, self.env, "status", "--porcelain"), "")
 
         still = self.tick("2026-10-06T12:05:00Z")
         self.assertEqual((still.returncode, still.stdout), (0, ""))
@@ -115,7 +115,7 @@ class OutageTests(TickCase):
             '{"at": "2026-10-06T12:10:00Z", "kind": "recovered", "session": "t-1", "role": "datapull", '
             '"detail": ""}\n',
         )
-        self.assertEqual(git(self.home, self.env, "status", "--porcelain"), "")
+        self.assertEqual(git(self.etl, self.env, "status", "--porcelain"), "")
 
     def test_a_log_with_no_reply_does_not_end_an_outage(self) -> None:
         self.write_log("t-1", "/wt/datapull", user("Pull the 1m bars."), failure(LIMIT))

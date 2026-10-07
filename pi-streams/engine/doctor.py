@@ -10,7 +10,16 @@ from pathlib import Path
 
 from engine import StreamsError
 from engine import piweb
-from engine.project import git, load_project, read_homes, stream_dirs
+from engine.project import (
+    StreamRow,
+    git,
+    load_project,
+    load_projects,
+    load_stream_config,
+    load_stream_rows,
+    pi_stack_revision,
+    read_homes,
+)
 
 PSTACK_SKILLS = (
     "correct",
@@ -77,26 +86,54 @@ def check_steer() -> list[Finding]:
     return [Finding("FAIL", "steer", "prompt --help does not offer --steer")]
 
 
-def check_homes() -> list[Finding]:
+def _check_stream(row: StreamRow, harness: str) -> list[Finding]:
+    repo = Path(row.path)
+    if not (repo / ".git").exists():
+        return [Finding("FAIL", "stream", f"{repo} is not a git repo")]
+    try:
+        status = git(repo, "status", "--porcelain")
+    except StreamsError as exc:
+        return [Finding("FAIL", "stream", f"{repo} is not a git repo: {exc}")]
     findings: list[Finding] = []
-    for home in read_homes():
-        if not (home / ".git").exists():
-            findings.append(Finding("FAIL", "home", f"{home} is not a git repo"))
+    if status.strip() != "":
+        findings.append(Finding("FAIL", "stream", f"{repo} has uncommitted changes"))
+    try:
+        recorded = load_stream_config(repo / "stream.toml").pi_stack_revision
+    except StreamsError as exc:
+        findings.append(Finding("FAIL", "revision", f"{row.id} {exc}"))
+        return findings
+    if recorded == harness:
+        findings.append(Finding("PASS", "revision", f"{row.id} records {harness}"))
+    else:
+        findings.append(Finding("WARN", "revision", f"{row.id} records {recorded}, harness is {harness}"))
+    return findings
+
+
+def check_index() -> list[Finding]:
+    findings: list[Finding] = []
+    harness = pi_stack_revision()
+    for index in read_homes():
+        if not index.is_dir():
+            findings.append(Finding("FAIL", "index", f"{index} is not a directory"))
             continue
+        files = sorted((index / "projects").glob("*.toml")) if (index / "projects").is_dir() else []
+        if not files:
+            findings.append(Finding("FAIL", "index", f"{index} has no project file"))
+            continue
+        for path in files:
+            try:
+                load_project(path)
+            except StreamsError as exc:
+                findings.append(Finding("FAIL", "project", f"{path} does not parse: {exc}"))
+                continue
+            findings.append(Finding("PASS", "project", f"{path} parses"))
         try:
-            status = git(home, "status", "--porcelain")
+            rows = load_stream_rows(index)
         except StreamsError as exc:
-            findings.append(Finding("FAIL", "home", f"{home} is not a git repo: {exc}"))
+            findings.append(Finding("FAIL", "index", str(exc)))
             continue
-        if status.strip() != "":
-            findings.append(Finding("FAIL", "home", f"{home} has uncommitted changes"))
-            continue
-        try:
-            load_project(home)
-        except StreamsError as exc:
-            findings.append(Finding("FAIL", "home", f"{home} project.toml does not parse: {exc}"))
-            continue
-        findings.append(Finding("PASS", "home", f"{home} is a clean git repo and project.toml parses"))
+        for row in rows:
+            findings.extend(_check_stream(row, harness))
     return findings
 
 
@@ -142,13 +179,16 @@ def _tick_state_fresh(path: Path, now: float) -> bool:
 def check_tick() -> list[Finding]:
     now = time.time()
     considered = False
-    for home in read_homes():
-        streams = stream_dirs(home)
-        if not streams:
+    for index in read_homes():
+        try:
+            rows = load_stream_rows(index)
+        except StreamsError:
+            continue
+        if not rows:
             continue
         considered = True
-        for stream in streams:
-            if _tick_state_fresh(stream / "log" / "tick-state.json", now):
+        for row in rows:
+            if _tick_state_fresh(Path(row.path) / "log" / "tick-state.json", now):
                 return []
     if not considered:
         return []
@@ -187,25 +227,36 @@ def _inside(child: Path, parent: Path) -> bool:
 def check_pi_web_projects() -> list[Finding]:
     directories = pi_web_project_dirs()
     findings: list[Finding] = []
-    for home in read_homes():
-        if any(_inside(home, directory) for directory in directories):
+    for index in read_homes():
+        try:
+            projects = load_projects(index)
+        except StreamsError:
             continue
-        findings.append(
-            Finding("WARN", "pi-web-project", f"{home} is not inside a directory listed in ~/.pi-web/projects.json")
-        )
+        for project in projects:
+            root = Path(project.info.root)
+            if any(_inside(root, directory) for directory in directories):
+                continue
+            findings.append(
+                Finding(
+                    "WARN",
+                    "pi-web-project",
+                    f"{root} is not inside a directory listed in ~/.pi-web/projects.json",
+                )
+            )
     return findings
 
 
 def check_jig() -> list[Finding]:
     findings: list[Finding] = []
-    for home in read_homes():
+    for index in read_homes():
         try:
-            project = load_project(home)
+            projects = load_projects(index)
         except StreamsError:
             continue
-        for repo in project.repos:
-            if (Path(repo.path) / ".pi" / "jig").exists():
-                findings.append(Finding("WARN", "jig", f"{repo.name} still holds .pi/jig/ (left alone)"))
+        for project in projects:
+            for repo in project.repos:
+                if (Path(repo.path) / ".pi" / "jig").exists():
+                    findings.append(Finding("WARN", "jig", f"{repo.name} still holds .pi/jig/ (left alone)"))
     return findings
 
 
@@ -213,7 +264,7 @@ CHECK_FNS: list[Callable[[], list[Finding]]] = [
     check_pi,
     check_pi_web,
     check_steer,
-    check_homes,
+    check_index,
     check_skills,
     check_jig,
     check_systemd_units,

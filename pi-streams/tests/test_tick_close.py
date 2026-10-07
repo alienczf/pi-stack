@@ -47,7 +47,7 @@ class ClosedStreamTests(TickCase):
             '{"at": "2026-10-06T12:10:00Z", "kind": "archived", "session": "coord-1", "role": "coordinator", '
             '"detail": ""}\n',
         )
-        self.assertEqual(git(self.home, self.env, "status", "--porcelain"), "")
+        self.assertEqual(git(self.etl, self.env, "status", "--porcelain"), "")
 
         after = self.tick("2026-10-06T12:15:00Z")
         self.assertEqual((after.returncode, after.stdout), (0, ""))

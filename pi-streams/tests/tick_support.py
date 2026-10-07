@@ -10,7 +10,7 @@ import subprocess
 import urllib.parse
 from pathlib import Path
 
-from support import EngineCase
+from support import EngineCase, git, pi_stack_revision
 
 HEADER = "session\trole\trepo\tworktree\tbranch\tbase\tmodel\tthinking\tstatus\tstarted\n"
 SUBSCRIPTIONS = "id\tsource\ttarget\twhen\taction\n"
@@ -152,12 +152,29 @@ class TickCase(EngineCase):
         self.logs.mkdir()
         self.stub.requests.clear()
 
-    def make_stream(self, home: Path, name: str, rows: str) -> Path:
-        stream_dir = (home / name).resolve()
-        stream_dir.mkdir()
+    def make_stream(
+        self,
+        home: Path,
+        name: str,
+        rows: str,
+        index: Path | None = None,
+        project: str | None = None,
+    ) -> Path:
+        project_name = self.root.name if project is None else project
+        stream_dir = self.register_stream(name, (home / name).resolve(), index, project_name)
         (stream_dir / "STREAM.md").write_text("ratified: 2026-10-06\n", encoding="utf-8")
         (stream_dir / "threads.tsv").write_text(HEADER + rows, encoding="utf-8")
         (stream_dir / "subscriptions.tsv").write_text(SUBSCRIPTIONS, encoding="utf-8")
+        (stream_dir / ".gitignore").write_text("log/\n", encoding="utf-8")
+        (stream_dir / "stream.toml").write_text(
+            f'project = "{project_name}"\npi_stack_revision = "{pi_stack_revision()}"\n',
+            encoding="utf-8",
+        )
+        if not (stream_dir / ".git").exists():
+            git(stream_dir, self.env, "init", "--quiet")
+        git(stream_dir, self.env, "add", "-A")
+        if git(stream_dir, self.env, "status", "--porcelain").strip() != "":
+            git(stream_dir, self.env, "commit", "-m", "fixture")
         return stream_dir
 
     def subscribe(self, stream_dir: Path, *rows: str) -> None:
@@ -181,7 +198,7 @@ class TickCase(EngineCase):
         Path(self.log_path(sid)).write_text(text, encoding="utf-8")
 
     def alerts(self) -> str:
-        return (self.home / "ALERTS").read_text(encoding="utf-8")
+        return (self.index / "ALERTS").read_text(encoding="utf-8")
 
     def tick(self, at: str, *args: str) -> subprocess.CompletedProcess[str]:
         self.stub.requests.clear()
