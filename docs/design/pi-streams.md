@@ -103,21 +103,27 @@ There are two places, and only two.
 - the `/stream` skills;
 - the tick timer.
 
-**Project home: one private git repo per project.** It sits next to the project's code repos and holds everything specific to that project: its repos, its shared context, and its streams. For alphalab it is `~/Projects/alphalab/streams/`. `~/Projects/alphalab` is a plain directory holding 21 code repos and 23 sibling worktree folders, and is not itself a git repo. The project home sits beside them, inside none of them.
+**Index, plus one private git repo per stream.** The index is a directory on the machine, not a git repo. With one project it is `$XDG_CONFIG_HOME/pi-streams`, or `~/.config/pi-streams` when that variable is unset. `homes` in that directory lists the index directories the tick reads. The index holds `projects/<name>.toml`, `streams.tsv`, and `ALERTS`. `projects/<name>.toml` holds the project root, the pi-web URL, `worktrees_dir`, the pi-stack revision recorded at init, the coordinator and thread model and thinking level, the caps, and the discovered repos and worktrees. It has no remote. `streams.tsv` columns are `id`, `path`, and `project`. `ALERTS` is the single file a Grok Bot reads. The tick writes outage and claim lines there.
+
+Each stream is its own git repo. The default path is `<project-root>/streams/<id>/`. For alphalab that is `~/Projects/alphalab/streams/qmd-etl/`. The parent `streams/` directory is not a git repo. `~/Projects/alphalab` stays a plain directory of code repos and sibling worktree folders. The stream repo holds `AGENTS.md`, `STREAM.md`, `STATE.md`, `DECISIONS.md`, `context/`, `threads.tsv`, `subscriptions.tsv`, `checks/`, `handover/`, and `log/` (gitignored). `AGENTS.md` is copied from the template. Its first step reads `context/README.md` in this repo. `stream.toml` names the project and records the pi-stack revision. A `remote` line is added only when that stream should be pushed. The default is empty, so nothing is pushed.
 
 ```text
-pi-stack (harness, public)                     ~/Projects/alphalab/streams/   (project home, private)
-  install.sh            quickstart, --project    AGENTS.md          coordinator role, from the template
-  bin/pi-web-cli        moved in, Q12            project.toml       repos, worktrees, pi-web URL, coordinator, caps
-  bin/pi-streams        init, new, thread,       context/           shared by every stream in the project:
-                        tick, rotate, close,                        how to test each repo, gotchas, preferences
-                        status, doctor           ALERTS             outage lines for the Grok Bot
-  pi-streams/engine/    the code behind it       qmd-etl/           one folder per stream:
-  pi-streams/templates/ project/, stream/          STREAM.md        from the kickoff; only ZF changes it
-  pi-streams/systemd/   tick service and timer     STATE.md         coordinator's working state, kept short
-  skills/stream/        /stream new|status|close   DECISIONS.md     ZF's rulings, append-only
-  skills/stream-kickoff/  the interview            threads.tsv      session, role, repo, worktree, branch, model, status
-  prompts/thread-brief.md                          subscriptions.tsv  what to watch, and what to do when it fires
+pi-stack (harness, public)                     $XDG_CONFIG_HOME/pi-streams/   (index, not a git repo)
+  install.sh            quickstart, --project    homes              index directories the tick reads
+  bin/pi-web-cli        moved in, Q12            projects/<name>.toml
+  bin/pi-streams        init, new, thread,         root, pi-web URL, worktrees, models, caps, repos
+                        tick, rotate, close,     streams.tsv        id, path, project
+                        status, doctor, upgrade  ALERTS             outage and claim lines for the Grok Bot
+  pi-streams/engine/    the code behind it
+  pi-streams/templates/ stream/                  ~/Projects/alphalab/streams/qmd-etl/   (one git repo)
+  pi-streams/systemd/   tick service and timer     AGENTS.md        coordinator role, from the template
+  skills/stream/        /stream new|status|close   stream.toml      project name and pi-stack revision
+  skills/stream-kickoff/  the interview            STREAM.md        from the kickoff; only ZF changes it
+  prompts/thread-brief.md                          STATE.md         coordinator's working state, kept short
+                                                   DECISIONS.md     ZF's rulings, append-only
+                                                   context/         how to test, gotchas, preferences
+                                                   threads.tsv      session, role, repo, worktree, branch, model, status
+                                                   subscriptions.tsv  what to watch, and what to do when it fires
                                                    checks/          acceptance and cost scripts
                                                    handover/        one file per finished or rotated session
                                                    log/             tick events and steer log (not committed)
@@ -128,16 +134,14 @@ pi-stack (harness, public)                     ~/Projects/alphalab/streams/   (p
 - **One version.** The engine reads the template's layout, so they change together. Each stream records the pi-stack revision that created it.
 - **Splitting later is easy.** If someone wants streams without ZF's overlay, the engine already sits in its own `pi-streams/` directory, so moving it into a pi-spring repo then is a move, not a rewrite.
 
-**Why project state stays out of pi-stack.** pi-stack is public (`gh repo view alienczf/pi-stack`: `"visibility":"PUBLIC"`). Project homes name BigQuery tables, the firm's signal definitions and ZF's rulings. They are private repos; ZF picks the remote, or keeps them local.
+**Why project state stays out of pi-stack.** pi-stack is public (`gh repo view alienczf/pi-stack`: `"visibility":"PUBLIC"`). Stream repos name BigQuery tables, the firm's signal definitions and ZF's rulings. They stay private. Stream files never go into the pi-stack repo.
 
-**Why one project home holds all of a project's streams.** This revises the earlier "one repo per stream" answer:
-- **Shared context.** Projects' shared context exists so "If one agent figures out how to test a service, every future agent can use those instructions". In a project spanning 21 repos, that knowledge belongs to the project, not to one stream. `context/` sits at the project level, and every stream reads it.
-- **Fewer repos.** One repo per project instead of one per stream.
-- **One writer for git.** Several coordinators editing one repo is safe because each writes only its own stream folder. Only the `pi-streams` command commits, under a lock, on each tick and on `close`. This follows poteto's rule: "Give each actor its own owned file, key, branch, or state directory, and merge only at the read/reporting boundary" (inner-loop-steering §1.6). Volatile logs are not committed.
-- **One coordinator role.** pi loads `AGENTS.md` from the working directory and its parents (pi-coding-agent README, "Context files"). So the project home's `AGENTS.md` is the role for every coordinator in that project, and every coordinator's prompt starts identically (§4.3).
+**Why each stream is its own repo.** A commit in one stream does not change another. `new`, `thread spawn`, `thread adopt`, `rotate`, and `close` commit that stream repo only. The tick commits each stream repo it changed, then writes `ALERTS` in the index. The lock is `.git/pi-streams.lock` in that repo. The index has `.pi-streams.lock`, taken before any stream lock, so `streams.tsv` and `ALERTS` have one writer. The tick takes stream locks in path order. `log/` is gitignored. `pi-streams upgrade` copies template files the stream has not edited and refreshes that stream's `pi_stack_revision`. It never copies `STREAM.md`, `STATE.md`, `DECISIONS.md`, `context/`, or `threads.tsv`.
+- **Context lives in the stream repo.** `context/` is stream state. `AGENTS.md` in the stream folder is the coordinator role, so every coordinator still starts from the same template (§4.3).
+- **Claims stay cross-stream.** The tick loads every row in `streams.tsv` for that project and compares `threads.tsv`. Two non-archived rows that share a worktree path, or share a repo name and a branch, write one `ALERTS` line and a claim event on each stream.
 
-**Q17: the project home is the workspace repo.**
-- `pi-streams init` fills `project.toml` by finding the git repos under the project directory and running `git worktree list` in each. Folder names can't be trusted: alphalab keeps worktrees as sibling folders, under `.worktrees/`, inside repos and in `/tmp`.
+**Q17: the index lists the repos, and each stream repo holds the stream.**
+- `pi-streams init` fills `projects/<name>.toml` by finding the git repos under the project directory and running `git worktree list` in each. Folder names can't be trusted: alphalab keeps worktrees as sibling folders, under `.worktrees/`, inside repos and in `/tmp`.
 - Streams name repos from this list.
 - Each thread records the base ref it started from. A version-pinning manifest can wait until two streams need the same pins.
 - Acceptance checks live with each stream (`checks/`).
@@ -379,34 +383,32 @@ The installer works through these in order. Each step checks before it changes a
 3. **`pi-web-cli`.** It backs up the existing file and installs pi-stack's version. The old subcommands and their JSON output stay identical, so the Grok Bot's routine keeps working; the new verbs are additions.
 4. **The `pi-streams` command,** the `/stream` and `stream-kickoff` skills, and the tick timer, enabled.
 5. **Jig.** It removes Jig's installed copies, and reports that alc-penv and alc-penv-jig still hold `.pi/jig/`, which it leaves alone.
-6. **The project home.** Because of `--project`, it runs `pi-streams init ~/Projects/alphalab`:
-   - creates `~/Projects/alphalab/streams/` as a git repo, with the template `AGENTS.md`;
-   - writes `project.toml` from the 21 repos and their `git worktree list`;
-   - seeds `context/README.md` with one line per repo pointing to its `AGENTS.md` and test command, where they exist;
-   - asks the setup questions below and writes the answers to `project.toml`;
-   - registers the project home with the tick.
+6. **The index.** Because of `--project`, it runs `pi-streams init ~/Projects/alphalab`:
+   - registers `$XDG_CONFIG_HOME/pi-streams` (the index) with the tick, and does not create a git repo at `~/Projects/alphalab/streams/`;
+   - writes `projects/alphalab.toml` from the 21 repos and their `git worktree list`;
+   - writes `streams.tsv` and an empty `ALERTS` in the index;
+   - asks the setup questions below and writes the answers to `projects/alphalab.toml`;
 
    It reads the code repos and never writes to them.
 
-   The setup questions each show a default, and `-y` accepts all of them. ZF can change any answer later in `project.toml`.
+   The setup questions each show a default, and `-y` accepts all of them. ZF can change any answer later in `projects/alphalab.toml`. There is no project-remote question. A stream is pushed only when its own `stream.toml` sets `remote`.
 
    | Question | Default | Used for |
    | --- | --- | --- |
    | Which URL do you open pi-web at? | The address in `~/.config/pi-web/config.json`. On `pistack` that is `http://127.0.0.1:8504`, which another machine reaches only through a tunnel. | Links that `pi-streams new` prints and the Grok Bot relays |
-   | Where should the project home's private remote live? | None; the project home stays a local git repo | The tick pushes after each commit when a remote is set |
    | Which model and thinking level should coordinators use? | Astra at `xhigh` (§4.1) | `coordinator_model` and `coordinator_thinking`; each stream can override them |
 
 7. **`pi-streams doctor`.** It checks:
    - pi and pi-web health;
    - that `pi-web-cli` can list sessions;
    - that the timer is active;
-   - that the project home is a clean git repo;
+   - that each project file parses, and compares each stream's recorded `pi_stack_revision` with the harness checkout;
    - that `correct`, `reflect` and both verification skills are installed.
 
    It ends by printing the next command.
 
 **Step 2: start the stream.** Run `pi-streams new qmd-etl --project ~/Projects/alphalab`, or type `/stream new qmd-etl` in any pi session, or ask the Grok Bot to start a stream. The command:
-- creates `streams/qmd-etl/`;
+- creates `streams/qmd-etl/` as its own git repo, with `AGENTS.md` and `context/README.md` inside it;
 - starts the coordinator on Astra;
 - sends the kickoff;
 - prints the coordinator's pi-web link.
@@ -426,12 +428,12 @@ It proposes to adopt both worktrees and to archive the idle sessions instead of 
 - When T3 needs to prove behaviour in alc-cefi-sim-runner, which has no verification skill, the coordinator starts a thread there with `/create-verification-skill`. ZF reviews that PR like any other.
 
 **Step 5: an outage at 03:37.**
-- The tick sees usage-limit errors, marks the threads "waiting on quota" and writes `ALERTS`.
+- The tick sees usage-limit errors, marks the threads "waiting on quota" and writes a line in the index `ALERTS`.
 - The Grok Bot messages ZF.
 - When calls succeed again, the tick wakes the coordinator, which picks up from `STATE.md`.
 
 **Step 6: close.** After A1–A3 pass, `pi-streams close qmd-etl`:
-- harvests the threads' handovers into the project's `context/`;
+- harvests the threads' handovers into the stream's `context/`;
 - archives the threads in pi-web;
 - writes a final summary;
 - commits.
@@ -441,7 +443,7 @@ The next alphalab stream starts knowing how to run the datapull, how to push to 
 **Upgrades.**
 - Re-running the quickstart updates the harness without touching project homes.
 - `update-pstack` still updates pstack on its own reviewed path.
-- `pi-streams doctor` lists streams created by an older template; nothing migrates silently.
+- `pi-streams doctor` compares each stream's recorded `pi_stack_revision` with the harness checkout. `pi-streams upgrade` copies template files the stream has not edited. It does not copy `STREAM.md`, `STATE.md`, `DECISIONS.md`, `context/`, or `threads.tsv`. Nothing migrates silently.
 
 **What it never does in a brownfield project:**
 - It writes nothing inside a code repo except untracked `.stream` files in worktrees it creates or adopts.
