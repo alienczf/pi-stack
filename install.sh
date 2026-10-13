@@ -814,7 +814,13 @@ for name in os.environ["PI_STACK_RETIRED_PACKAGES"].split():
 PY
 )"
 		for spec in $retired_installed; do
-			PI_CODING_AGENT_DIR="$agent" "$pi_bin" remove "npm:${spec}"
+			if ! PI_CODING_AGENT_DIR="$agent" "$pi_bin" remove "npm:${spec}"; then
+				# pi remove exits non-zero for packages present in node_modules but
+				# not registered in settings.json; finish the npm side directly.
+				printf 'pi remove npm:%s failed; uninstalling from %s directly\n' "$spec" "${npm_root%/node_modules}" >&2
+				npm --prefix "${npm_root%/node_modules}" uninstall "$spec" >/dev/null 2>&1 || true
+				rm -rf "${npm_root:?}/${spec}"
+			fi
 			python3 - "$npm_root" "$spec" <<'PY'
 import json
 import sys
