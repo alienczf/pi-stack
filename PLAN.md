@@ -45,6 +45,10 @@ The three complete replacement routing skills link to pi-async-wait. `grokbot/RE
 - The parent independently reran all 26 CLI tests without skips and all seven documented root commands, including 105 pi-streams tests. Manual review found no actionable issues or new phase-narrating comments.
 - A separate scope check confirmed that removed commands fail as invalid choices, all four skills have valid metadata and links, and the routine template includes every required signal and retirement condition.
 
+## Publication
+
+The parent pushed the cron-only scope update through the explicit HTTPS repository URL. The existing PR title and description now reflect only scheduled routines and bounded wait. GitHub reports https://github.com/alienczf/pi-stack/pull/31 open, ready, and unmerged. The installed GitHub CLI's edit command hit a deprecated Projects API, so the parent updated the same PR through `gh api` instead. No merge or force-push occurred.
+
 ## Current limitations
 
 Snapshot checks can miss short transitions and daemon-only errors. Idle does not prove that the repository goal passed. Live scheduling and routine deletion or disabling remain unverified because this task forbids live routine creation. An authorized rollout must verify those permissions. The parent completed independent code and documentation review. No merge is authorized.

@@ -7,9 +7,9 @@
 - [x] 3. Write the throughput checkpoint as four todo items.
 - [x] 4. Delegate code-writing to a subagent with a specific scope and named data shape. One writer retained `AssistantOutcome` and `SessionObservation`; the parent independently reviewed the result.
 - [x] 5. Verify on the matching surface. Actual CLI subprocess tests and all documented root checks passed.
-- [ ] 6. Rebase into small, ordered commits. Stack follow-ups. Publish ordinary follow-up commits on the existing branch. No force-push.
+- [x] 6. Rebase into small, ordered commits. Stack follow-ups. Published an ordinary follow-up commit on the existing branch without a force-push.
 - [x] 7. If the design is contested, `interrogate` before shipping. skip: ZF supplied an explicit scope and there is no contested design.
-- [ ] 8. Run **Opening a PR**. Update https://github.com/alienczf/pi-stack/pull/31 to the current scope and confirm it remains open and unmerged.
+- [x] 8. Run **Opening a PR**. Updated https://github.com/alienczf/pi-stack/pull/31 to the current scope. GitHub reports OPEN, ready, and unmerged.
 
 ## Throughput checkpoint
 
@@ -36,7 +36,7 @@
 
 - [x] The parent independently reviewed code, tests, all four skills, and rollout instructions. It reran all 26 CLI tests without skips and all root checks, including 105 pi-streams tests. No actionable findings.
 - [x] Current-file scope, skill metadata, links, routine template, and CLI command-set checks passed.
-- [ ] Commit, push over HTTPS, and update the existing PR description. Live routine permissions still need an authorized rollout check.
+- [x] Commit, push over HTTPS, and update the existing PR title and description. Live routine permissions still need an authorized rollout check.
 
 ## Constraints
 
