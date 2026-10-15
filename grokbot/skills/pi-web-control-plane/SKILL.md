@@ -9,7 +9,7 @@ description: >-
 
 Use PI WEB to create, prompt, inspect, and steer pi sessions. For a multi-thread campaign, prefer the host's pi-streams `/stream` workflow through its owning coordinator. Do not invent `pi exec` or `pi rpc`. Do not run `pi -p`, use intercom or `broker.sock`, or substitute Jig for streams.
 
-Use whatever authorized pi-web-cli access this deployment provides. Run the commands on the PI host or through its existing access wrapper. Do not assume a host name, network route, wrapper path, or local access to the host's loopback API. This skill does not grant host authority.
+Use the deployment's authorized pi-web-cli access. Run the commands on the PI host through that authorized route. Do not assume a host name, network route, or local access to the host's loopback API. This skill does not grant host authority.
 
 ## Commands
 
@@ -36,12 +36,12 @@ pi-web-cli prompt <sid> "<focused correction>" --steer
 1. For a campaign, hand the full brief to the authorized stream coordinator. For a single unit, have pi create an isolated worktree and create or adopt its session.
 2. Do not create code worktrees on the bot's disk. Do not share a dirty tree across units.
 3. For a single session, send `/poteto`, then the work goal. Respect this deployment's prompt and host-authority gates.
-4. After the accepted work prompt or steer, follow [Pi async wait](sand-workflow:pi-async-wait). Prefer a webhook routine. Use a deadline-bound, self-deleting cron routine if a webhook is unavailable. Never replace this handoff with a background worker, executor, AwaitShell, or sleep loop.
-5. If a session is already live, target its sid rather than create a duplicate. Cancel an obsolete watcher before you rearm after a steer.
-6. Have pi produce and open the PR within its brief. Do not merge. The operator authorizes merges.
+4. After the accepted work prompt or steer, follow [Pi async wait](sand-workflow:pi-async-wait). Copy its full prompt template into one short self-deleting Grok Bot scheduled cron routine with an explicit done condition and absolute UTC deadline. Do not use OS cron or bot-side polling.
+5. If a session is already live, target its sid rather than create a duplicate. Retire an obsolete routine before a separately authorized replacement.
+6. Pi owns code, worktrees, checks, commits, pushes, and PRs within its brief. The operator owns merges.
 
 A one-off status or transcript check can verify evidence. It is not a durable wake mechanism. A short check may use `pi-web-cli wait` once with a timeout of at most 300 seconds, per pi-async-wait.
 
-Compact before 70% context. On a usage limit, stop and report without a provider change.
+Compact before 70 percent context. On a usage limit, stop and report without a provider change.
 
 Policy is in [Hand off the unit](sand-workflow:principle-hand-off-the-unit). The routing recipe is in [Orchestrate with pi](sand-workflow:orchestrate-with-pi).

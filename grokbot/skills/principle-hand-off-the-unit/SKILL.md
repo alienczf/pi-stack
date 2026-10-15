@@ -24,7 +24,7 @@ Use [Orchestrate with pi](sand-workflow:orchestrate-with-pi) for the routing rec
 - Select a bounded unit and provide its full brief, completion predicate, and evidence requirements.
 - Request session creation or adoption through the deployment's authorized route.
 - Send focused prompts and steers by sid when host-authority policy permits them.
-- Read one status or transcript result to inspect handoff evidence. Use [Pi async wait](sand-workflow:pi-async-wait) for the actual wait. Prefer a webhook routine or use a deadline-bound self-deleting cron routine that reads durable state.
+- Read one status or transcript result to inspect handoff evidence. For the actual wait, copy the full template in [Pi async wait](sand-workflow:pi-async-wait) into a short self-deleting Grok Bot scheduled cron routine, not OS cron. Require an explicit done condition and absolute UTC deadline.
 - Check a PR URL or a short availability result without doing the repository unit yourself.
 - Perform host stack maintenance only when the operator authorizes that operation.
 
@@ -38,4 +38,4 @@ A bot may maintain its own profile, skills, and routines, draft human messages, 
 
 ## Context and limits
 
-Compact before 70% context. Preserve the sid, worktree, expected artifact, routine or watcher identifier, deadline, and next action. On a usage limit, stop and report. Do not switch provider. Never merge without the operator's explicit authorization.
+Compact before 70 percent context. Preserve the sid, authorized host access, worktree, expected artifact, optional stream path, done condition, absolute UTC deadline, routine id, and durable last-state record. On a usage limit, stop and report. Do not switch provider. Never merge without the operator's explicit authorization.

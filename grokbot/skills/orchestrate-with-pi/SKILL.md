@@ -20,21 +20,23 @@ A stream has a coordinator, pi sessions for bounded units, and a private stream 
 
 Jig is not the stream workflow. Do not start a new stream with `jig init`, `/jig`, or `/skill:jig`. Leave old Jig data alone unless the operator asks for cleanup.
 
-For a long campaign, establish a routine wake with [Pi async wait](sand-workflow:pi-async-wait). The cron fallback reads durable stream state once per invocation and has an explicit deadline. A webhook for one coordinator turn does not prove that every stream thread is complete.
+For a campaign, use the full scheduled cron routine template in [Pi async wait](sand-workflow:pi-async-wait). Each short invocation reads `STATE.md`, `ALERTS.md`, and `STREAM.md` once and returns. Verify the campaign's explicit done condition before its absolute UTC deadline. One idle coordinator turn does not prove that every stream thread is complete.
 
 ## Single-session path
 
 1. Have pi create one isolated worktree per unit on the authorized PI host. Do not create it on the bot's disk or reuse a dirty tree across units.
 2. Use `pi-web-cli list --cwd <worktree>` to find an existing session. Adopt its sid if appropriate. Otherwise use `pi-web-cli spawn <worktree>`.
 3. Send `/poteto`, then `/goal <checkable predicate>` or the complete authorized work brief.
-4. After the work prompt returns accepted, follow [Pi async wait](sand-workflow:pi-async-wait). Run host-side `pi-web-cli notify` for the webhook routine, preferably, or create a short self-deleting cron routine with a UTC deadline. Do not poll status or the transcript in a bot-side loop.
-5. For a focused steer, use `pi-web-cli prompt <sid> "<correction>" --steer`. Cancel an obsolete watcher, then arm a new watcher after acceptance. Do not arm notification merely for an empty new session.
-6. On a routine wake, inspect the expected artifact and session evidence. `idle` and `done` are not verification that the goal passed. Have pi open the PR. Do not perform the session's commit, push, or PR creation from the bot chat.
+4. After the work prompt returns accepted, follow [Pi async wait](sand-workflow:pi-async-wait). Create one short self-deleting Grok Bot scheduled cron routine from its full template, not an OS cron job. Do not poll status or the transcript in a bot-side loop.
+5. For a focused steer, use `pi-web-cli prompt <sid> "<correction>" --steer`. Retire an obsolete routine before a separately authorized replacement. Do not create a routine merely for an empty new session.
+6. On a routine wake, verify the expected artifact against the explicit done condition. Idle is not proof that the goal passed. Pi owns code, worktrees, checks, commits, pushes, and PR creation. Do not perform that repository work from the bot chat.
 7. Do not merge. The operator owns merge authorization.
 
 ## Close the promise loop
 
-After a work prompt, steer, or stream handoff, record the sid, artifact path, routine or watcher identifier, deadline, and next action. Return control after the routine is armed. Do not promise a later confirmation without a durable wake.
+After a work prompt, steer, or stream handoff, record the sid, authorized host access, expected artifact, optional stream path, done condition, absolute UTC deadline, routine id, and durable last-state record. Return control after the routine is scheduled. Do not promise a later confirmation without a durable wake.
+
+Each invocation checks cancellation and deadline first, reads status once, verifies the artifact, reports only meaningful changes, and returns. Follow pi-async-wait to delete the routine on verified done, terminal error, usage limit, cancellation, or deadline. If deletion fails, disable it and report. Never extend its deadline or spawn a replacement routine.
 
 NEVER use a background worker, executor, AwaitShell or sleep loop to wait on a pi session or stream. For a genuinely short check, `pi-web-cli wait <sid> --timeout 240` may run once. Do not chain short waits into a long one.
 
@@ -46,4 +48,4 @@ An explicit `dowork` request permits local work only when this deployment's poli
 
 Point pi at the installed `/poteto`, `/goal`, `/stream`, `correct`, `reflect`, and verification skills. Do not reimplement them in the bot.
 
-Compact before 70% context. Preserve the durable routing record across compaction. On a usage limit, stop and report. Do not switch provider.
+Compact before 70 percent context. Preserve the durable routing record across compaction. On a usage limit, stop and report. Do not switch provider.

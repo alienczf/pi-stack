@@ -5,8 +5,6 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
-import shutil
-import stat
 import subprocess
 import sys
 import tempfile
@@ -39,17 +37,13 @@ class FakeAPI:
         self.message_code = 200
         self.message_override = None
         self.trickle = False
-        self.delay = 0
+        self.trickle_headers = False
         self.requests = []
         self.posts = []
-        self.codes = [204]
-        self.location = None
-        self.drop_response = False
-        self.webhook_trickle = False
-        self.response_body = b""
+        self.responses = {}
+        self.raw_response = None
         self.malformed_http = False
         self.lock = threading.Lock()
-        self.received = threading.Event()
 
     @contextmanager
     def server(self):
@@ -65,8 +59,9 @@ class FakeAPI:
                     return
                 with state.lock:
                     state.requests.append(self.path)
-                    is_status = self.path.endswith("/status")
-                    if is_status:
+                    if ("GET", self.path) in state.responses:
+                        code, data = state.responses["GET", self.path]
+                    elif self.path.endswith("/status"):
                         data = state.statuses.pop(0) if state.statuses else state.status
                         code = state.status_code
                     else:
@@ -74,12 +69,19 @@ class FakeAPI:
                             "messages": deepcopy(state.messages), "start": 0, "total": len(state.messages),
                         }
                         code = state.message_code
-                raw = json.dumps(data).encode()
-                time.sleep(state.delay)
+                raw = state.raw_response if state.raw_response is not None else json.dumps(data).encode()
                 try:
+                    if state.trickle_headers:
+                        for byte in b"HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n\r\n":
+                            self.wfile.write(bytes([byte]))
+                            self.wfile.flush()
+                            time.sleep(0.025)
+                        return
                     self.send_response(code)
                     self.send_header("Content-Type", "application/json")
                     self.send_header("Content-Length", str(len(raw)))
+                    if code == 302:
+                        self.send_header("Location", "/redirect-target")
                     self.end_headers()
                     if state.trickle:
                         for byte in raw:
@@ -88,33 +90,20 @@ class FakeAPI:
                             time.sleep(0.025)
                     else:
                         self.wfile.write(raw)
-                except (OSError, BrokenPipeError):
+                except OSError:
                     pass
 
             def do_POST(self):
-                body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+                body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                 with state.lock:
-                    state.posts.append((self.path, dict(self.headers), body))
-                    code = state.codes.pop(0) if len(state.codes) > 1 else state.codes[0]
-                state.received.set()
-                if state.drop_response:
-                    self.connection.close()
-                    return
-                try:
-                    if state.webhook_trickle:
-                        for byte in b"HTTP/1.0 204 No Content\r\n\r\n":
-                            self.wfile.write(bytes([byte]))
-                            self.wfile.flush()
-                            time.sleep(0.1)
-                        return
-                    self.send_response(code)
-                    if state.location:
-                        self.send_header("Location", state.location)
-                    self.send_header("Content-Length", str(len(state.response_body)))
-                    self.end_headers()
-                    self.wfile.write(state.response_body)
-                except OSError:
-                    pass
+                    state.posts.append((self.path, body))
+                    code, data = state.responses.get(("POST", self.path), (200, {"accepted": True}))
+                raw = json.dumps(data).encode()
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
 
         server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -135,7 +124,7 @@ class CommandCase(unittest.TestCase):
         self.api = FakeAPI()
         self.api_url = self.enterContext(self.api.server())
         self.env = {**os.environ, "PI_WEB_URL": self.api_url,
-                    "PI_WEB_SESSIONS_DIR": str(self.root / "sessions"), "XDG_STATE_HOME": str(self.root / "state")}
+                    "PI_WEB_SESSIONS_DIR": str(self.root / "sessions")}
 
     def run_cli(self, *args, timeout=8):
         return subprocess.run([sys.executable, str(CLI), *args], env=self.env, capture_output=True, text=True, timeout=timeout)
@@ -173,6 +162,23 @@ class CLIBehavior(CommandCase):
         self.header(cwd="/second", name="two")
         self.assertIsNone(json.loads(self.wait().stdout)["cwd"])
 
+    def test_cwd_metadata_rejects_unsafe_or_invalid_headers(self):
+        path = self.header(cwd="relative")
+        for raw in (path.read_text(), "not json\n", "x" * 8193):
+            path.write_text(raw)
+            self.assertIsNone(json.loads(self.wait().stdout)["cwd"])
+        path.unlink()
+        os.mkfifo(path)
+        self.assertIsNone(json.loads(self.wait().stdout)["cwd"])
+        path.unlink()
+        target = self.root / "header.jsonl"
+        target.write_text(json.dumps({"type": "session", "id": SID, "cwd": "/untrusted"}))
+        path.symlink_to(target)
+        self.assertIsNone(json.loads(self.wait().stdout)["cwd"])
+        path.unlink()
+        path.write_text(json.dumps({"type": "session", "id": SID, "cwd": "/verified"}) + "\n")
+        self.assertEqual(json.loads(self.wait().stdout)["cwd"], "/verified")
+
     def test_each_busy_flag_and_queue_keeps_waiting(self):
         for field, value in (("isStreaming", True), ("isCompacting", True), ("isBashRunning", True), ("pendingMessageCount", 1)):
             with self.subTest(field=field):
@@ -184,7 +190,9 @@ class CLIBehavior(CommandCase):
     def test_busy_to_idle_and_reconciliation(self):
         busy = {**idle(), "isStreaming": True}
         self.api.statuses = [busy, idle()]
-        self.assertEqual(self.wait("1").returncode, 0)
+        result = self.wait("1")
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(json.loads(result.stdout)["event"], "idle")
         self.assertEqual(len(self.api.requests), 6)
 
     def test_context_can_be_unknown(self):
@@ -226,9 +234,23 @@ class CLIBehavior(CommandCase):
             self.api.messages = messages
             self.assertEqual(self.wait().returncode, 0)
 
+    def test_quiescent_turns_are_idle_and_text_excludes_thinking(self):
+        for reason in ("stop", "length", "toolUse"):
+            self.api.messages = [assistant(reason, text="first\n\n" + "z" * 400 + "\n")]
+            result = self.wait()
+            self.assertEqual(result.returncode, 0)
+            payload = json.loads(result.stdout)
+            self.assertEqual(payload["event"], "idle")
+            self.assertEqual(payload["last_assistant_line"], "z" * 280)
+        self.api.messages = []
+        result = self.wait()
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(json.loads(result.stdout)["last_assistant_line"], "")
+
     def test_invalid_schema_and_wrong_sid_are_api_failures(self):
-        cases = [{**idle(), "sessionId": "other"}, {**idle(), "isStreaming": 0},
-                 {**idle(), "pendingMessageCount": True}, {**idle(), "messageCount": -1},
+        cases = [[], {**idle(), "sessionId": "other"}, {**idle(), "isStreaming": 0},
+                 {**idle(), "isBashRunning": None}, {**idle(), "pendingMessageCount": True},
+                 {**idle(), "messageCount": -1}, {**idle(), "contextUsage": []},
                  {key: value for key, value in idle().items() if key != "isCompacting"},
                  {**idle(), "contextUsage": {"percent": float("nan")}},
                  {**idle(), "contextUsage": {"percent": 10 ** 500}}]
@@ -247,6 +269,21 @@ class CLIBehavior(CommandCase):
             self.assertEqual(result.returncode, 1)
             self.assertEqual(result.stderr, "")
 
+    def test_invalid_assistant_content_and_page_are_api_failures(self):
+        for message in (None, {**assistant(), "stopReason": "unknown"},
+                        {**assistant(), "errorMessage": []}, {**assistant(), "content": "text"},
+                        {**assistant(), "content": [{"type": "text", "text": 1}]},
+                        {**assistant(), "timestamp": True}):
+            with self.subTest(message=message):
+                self.api.messages = [message]
+                result = self.wait()
+                self.assertEqual(result.returncode, 1)
+                self.assertFalse(json.loads(result.stdout)["ok"])
+                self.assertEqual(result.stderr, "")
+        for page in ({"messages": [], "total": 0}, {"messages": [], "start": 0, "total": -1}):
+            self.api.message_override = page
+            self.assertEqual(self.wait().returncode, 1)
+
     def test_http_failure_and_independent_message_byte_cap(self):
         self.api.status_code = 404
         self.assertEqual(self.wait().returncode, 1)
@@ -255,13 +292,29 @@ class CLIBehavior(CommandCase):
         self.assertEqual(self.wait().returncode, 1)
         self.api.message_code = 200
         self.api.messages = [assistant(text="x" * (4 * 1024 * 1024 + 1))]
-        self.assertEqual(self.wait("2").returncode, 1)
+        result = self.wait("2")
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(json.loads(result.stdout)["error"], "response_too_large")
+
+    def test_status_byte_cap_is_independent(self):
+        self.api.status["extra"] = "x" * 262144
+        result = self.wait("2")
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(json.loads(result.stdout), {"ok": False, "error": "response_too_large"})
 
     def test_hard_deadline_interrupts_trickled_response(self):
         self.api.trickle = True
         start = time.monotonic()
         result = self.wait("0.12")
         self.assertEqual(result.returncode, 124, result.stderr)
+        self.assertLess(time.monotonic() - start, 1)
+
+    def test_hard_deadline_interrupts_trickled_headers(self):
+        self.api.trickle_headers = True
+        start = time.monotonic()
+        result = self.wait("0.12")
+        self.assertEqual(result.returncode, 124, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["event"], "timeout")
         self.assertLess(time.monotonic() - start, 1)
 
     def test_unavailable_transport_is_an_api_failure(self):
@@ -278,11 +331,30 @@ class CLIBehavior(CommandCase):
         self.assertEqual(json.loads(result.stdout), {"ok": False, "error": "api_unavailable_or_invalid"})
         self.assertEqual(result.stderr, "")
 
+    def test_redirects_html_and_invalid_json_are_api_failures(self):
+        self.api.status_code = 302
+        result = self.wait()
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(self.api.requests, [f"/api/sessions/{SID}/status"])
+        self.api.status_code = 200
+        for raw in (b"<!doctype html><html>not an API</html>", b"{broken json", b""):
+            self.api.raw_response = raw
+            result = self.wait()
+            self.assertEqual(result.returncode, 1)
+            self.assertEqual(json.loads(result.stdout), {"ok": False, "error": "api_unavailable_or_invalid"})
+
     def test_timeout_argument_validation(self):
         for value in ("0", "-1", "301", "nan", "inf", "nope"):
             result = self.run_cli("wait", SID, "--timeout", value)
             self.assertEqual(result.returncode, 2)
         self.assertEqual(self.wait("300").returncode, 0)
+
+    def test_wait_requires_timeout_valid_sid_and_finite_interval(self):
+        self.assertEqual(self.run_cli("wait", SID).returncode, 2)
+        for sid in ("../other", "", "x" * 129):
+            self.assertEqual(self.run_cli("wait", sid, "--timeout", "1").returncode, 2)
+        for value in ("0", "-1", "61", "nan", "inf", "nope"):
+            self.assertEqual(self.run_cli("wait", SID, "--timeout", "1", "--poll-interval", value).returncode, 2)
 
     def test_existing_status_and_prompt_contracts_unchanged(self):
         result = self.run_cli("status", SID)
@@ -292,229 +364,46 @@ class CLIBehavior(CommandCase):
         self.assertEqual(result.returncode, 1)
         self.assertEqual(json.loads(result.stdout)["error"], "empty prompt")
 
+    def test_original_get_commands_remain_compatible(self):
+        for args, path, data, field in (
+            (("list", "--cwd", "/work/repo"), "/api/sessions?cwd=%2Fwork%2Frepo", [{"id": SID}], "sessions"),
+            (("commands", SID), f"/api/sessions/{SID}/commands", [{"name": "compact"}], "commands"),
+            (("messages", SID), f"/api/sessions/{SID}/messages", {"messages": []}, "result"),
+        ):
+            self.api.responses["GET", path] = (200, data)
+            result = self.run_cli(*args)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(result.stdout), {"ok": True, "status": 200, field: data})
+            self.assertEqual(self.api.requests[-1], path)
+        self.assertEqual(self.run_cli("list").returncode, 2)
 
-@unittest.skipUnless(shutil.which("systemd-run") and subprocess.run(
-    ["systemctl", "--user", "show-environment"], capture_output=True).returncode == 0,
-    "detached integration requires an active systemd user manager")
-class NotifyBehavior(CommandCase):
-    def setUp(self):
-        super().setUp()
-        self.hook = FakeAPI()
-        self.hook_url = self.enterContext(self.hook.server()) + "/private-webhook-url"
-        self.url_file = self.root / "webhook-url"
-        self.key_file = self.root / "sender-key"
-        self.key = "Bearer private-sender-key"
-        self.url_file.write_text(self.hook_url + "\n")
-        self.key_file.write_text(self.key + "\n")
-        self.url_file.chmod(0o600)
-        self.key_file.chmod(0o600)
-        self.units = []
-        self.addCleanup(self.stop_units)
+    def test_original_post_commands_remain_compatible(self):
+        cases = [
+            (("spawn", "/work/repo"), "/api/sessions", {"cwd": "/work/repo"}, {"id": SID}, 201, "session"),
+            (("prompt", SID, "work"), f"/api/sessions/{SID}/prompt", {"text": "work"}, {"accepted": True}, 200, "result"),
+            (("prompt", SID, "fix", "--steer"), f"/api/sessions/{SID}/prompt", {"text": "fix", "streamingBehavior": "steer"}, {"accepted": True}, 200, "result"),
+            (("prompt", SID, "next", "--follow-up"), f"/api/sessions/{SID}/prompt", {"text": "next", "streamingBehavior": "followUp"}, {"accepted": True}, 200, "result"),
+            (("model", SID, "provider/model-id"), f"/api/sessions/{SID}/model", {"provider": "provider", "modelId": "model-id"}, {}, 200, "result"),
+            (("thinking-level", SID, "high"), f"/api/sessions/{SID}/thinking-level", {"level": "high"}, {}, 200, "result"),
+            (("answer", SID, "ask", "question", "answer text"), f"/api/sessions/{SID}/ask/submit", {"askId": "ask", "answers": [{"id": "question", "values": [], "otherText": "answer text"}]}, {}, 200, "result"),
+        ]
+        for verb, suffix in (("stop", "stop"), ("abort", "abort"), ("queue-clear", "queue/clear"), ("archive", "archive")):
+            cases.append(((verb, SID), f"/api/sessions/{SID}/{suffix}", {}, {}, 200, "result"))
+        for args, path, body, response, code, field in cases:
+            with self.subTest(args=args):
+                self.api.responses["POST", path] = (code, response)
+                result = self.run_cli(*args)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(self.api.posts[-1], (path, body))
+                self.assertEqual(json.loads(result.stdout), {"ok": True, "status": code, field: response})
+        result = self.run_cli("model", SID, "invalid")
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(json.loads(result.stdout), {"ok": False, "error": "model must be provider/modelId"})
 
-    def stop_units(self):
-        for unit in self.units:
-            subprocess.run(["systemctl", "--user", "stop", unit], capture_output=True)
-            subprocess.run(["systemctl", "--user", "reset-failed", unit], capture_output=True)
-
-    def notify(self, *extra):
-        result = self.run_cli("notify", SID, "--webhook-url-file", str(self.url_file),
-                              "--key-file", str(self.key_file), "--watch-timeout", "3",
-                              "--delivery-timeout", "20", "--poll-interval", "0.02", *extra)
-        if result.returncode == 0:
-            self.units.append(json.loads(result.stdout)["unit"])
-        return result
-
-    def finished(self, result, marker, timeout=6):
-        info = json.loads(result.stdout)
-        log = Path(info["log_file"])
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            text = log.read_text()
-            if marker in text:
-                break
-            time.sleep(0.025)
-        else:
-            self.fail(f"missing log outcome {marker!r}: {log.read_text()}")
-        while time.monotonic() < deadline:
-            state = subprocess.run(["systemctl", "--user", "show", info["unit"], "--property=ActiveState", "--value"], capture_output=True, text=True)
-            if state.stdout.strip() not in {"active", "activating", "deactivating"}:
-                break
-            time.sleep(0.025)
-        else:
-            self.fail("detached watcher did not exit")
-        output = result.stdout + result.stderr + log.read_text()
-        self.assertNotIn(self.key, output)
-        self.assertNotIn(self.hook_url, output)
-        self.assertNotIn("Finished.", log.read_text())
-        self.assertEqual(stat.S_IMODE(log.stat().st_mode), 0o600)
-        self.assertEqual(stat.S_IMODE(log.parent.stat().st_mode), 0o700)
-        return log.read_text()
-
-    def test_real_detach_survives_launcher_and_private_argv(self):
-        self.api.status["isStreaming"] = True
-        result = self.notify("--once", "--header-name", "X-Sender-Key")
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        info = json.loads(result.stdout)
-        pid = subprocess.check_output(["systemctl", "--user", "show", info["unit"], "--property=MainPID", "--value"], text=True).strip()
-        argv = Path(f"/proc/{pid}/cmdline").read_bytes().decode().replace("\x00", " ")
-        self.assertNotIn(self.key, argv)
-        self.assertNotIn(self.hook_url, argv)
-        self.assertIn(str(self.key_file), argv)
-        self.assertFalse(self.hook.received.is_set())
-        self.api.status = idle()
-        self.assertTrue(self.hook.received.wait(3))
-        self.finished(result, "delivered")
-        self.assertEqual(len(self.hook.posts), 1)
-        path, headers, raw = self.hook.posts[0]
-        self.assertEqual(path, "/private-webhook-url")
-        self.assertEqual(headers["X-Sender-Key"], self.key)
-        self.assertEqual(json.loads(raw)["event"], "done")
-
-    def test_cancel_stops_the_detached_watcher(self):
-        self.api.status["isStreaming"] = True
-        result = self.notify()
+    def test_help_lists_only_original_commands_and_wait(self):
+        result = self.run_cli("--help")
         self.assertEqual(result.returncode, 0)
-        info = json.loads(result.stdout)
-        stopped = subprocess.run(["systemctl", "--user", "stop", info["unit"]], capture_output=True)
-        self.assertEqual(stopped.returncode, 0)
-        state = subprocess.run(["systemctl", "--user", "show", info["unit"], "--property=ActiveState", "--value"], capture_output=True, text=True)
-        self.assertNotIn(state.stdout.strip(), {"active", "activating", "deactivating"})
-        self.assertEqual(self.hook.posts, [])
-
-    def test_initial_done_payload_is_small_and_done_beats_idle(self):
-        self.header()
-        self.api.messages = [assistant(text="first\n" + "z" * 400 + "\n")]
-        result = self.notify()
-        self.assertEqual(result.returncode, 0, result.stdout)
-        self.finished(result, "delivered")
-        raw = self.hook.posts[0][2]
-        payload = json.loads(raw)
-        self.assertEqual(set(payload), {"sid", "cwd", "event", "context_percent", "last_assistant_line", "ts"})
-        self.assertEqual(payload["event"], "done")
-        self.assertEqual(payload["cwd"], "/work/repo")
-        self.assertEqual(payload["last_assistant_line"], "z" * 280)
-        self.assertLess(len(raw), 1024)
-
-    def test_done_requires_stop_and_idle_selection(self):
-        for reason in ("length", "toolUse"):
-            self.api.messages = [assistant(reason)]
-            result = self.notify("--events", "done", "--watch-timeout", "0.15")
-            self.finished(result, "watch_timeout")
-            self.assertEqual(self.hook.posts, [])
-        self.api.messages = []
-        result = self.notify("--events", "idle")
-        self.finished(result, "delivered")
-        self.assertEqual(json.loads(self.hook.posts[0][2])["event"], "idle")
-
-    def test_retry_429_and_server_error_uses_identical_payload(self):
-        self.hook.codes = [429, 503, 204]
-        result = self.notify()
-        log = self.finished(result, "delivered", timeout=7)
-        self.assertEqual(len(self.hook.posts), 3)
-        self.assertEqual(self.hook.posts[0][2], self.hook.posts[1][2])
-        self.assertEqual(self.hook.posts[1][2], self.hook.posts[2][2])
-        self.assertIn("delivery_attempt_3", log)
-
-    def test_five_attempts_then_exit(self):
-        self.hook.codes = [500]
-        result = self.notify()
-        self.finished(result, "delivery_exhausted", timeout=19)
-        self.assertEqual(len(self.hook.posts), 5)
-        self.assertEqual(len({post[2] for post in self.hook.posts}), 1)
-
-    def test_transport_failure_retries_and_deadline_bounds_delivery(self):
-        self.hook.drop_response = True
-        result = self.notify("--delivery-timeout", "1.5")
-        self.finished(result, "delivery_timeout", timeout=4)
-        self.assertEqual(len(self.hook.posts), 2)
-        self.assertEqual(self.hook.posts[0][2], self.hook.posts[1][2])
-
-    def test_delivery_hard_deadline_interrupts_trickled_headers(self):
-        self.hook.webhook_trickle = True
-        result = self.notify("--delivery-timeout", "0.2")
-        self.finished(result, "delivery_timeout", timeout=2)
-        self.assertEqual(len(self.hook.posts), 1)
-
-    def test_redirect_and_permanent_4xx_do_not_retry_or_forward(self):
-        target = FakeAPI()
-        url = self.enterContext(target.server()) + "/redirect-target"
-        self.hook.location = url
-        self.hook.response_body = (self.key + " " + self.hook_url).encode()
-        for code in (302, 401):
-            self.hook.posts.clear()
-            self.hook.codes = [code]
-            result = self.notify()
-            self.finished(result, f"delivery_rejected_http_{code}")
-            self.assertEqual(len(self.hook.posts), 1)
-            self.assertEqual(target.posts, [])
-            self.assertEqual(target.requests, [])
-
-    def test_usage_limit_and_error_notifications(self):
-        for error, event in (("usage_limit_reached", "usage_limit"), ("ordinary failure", "error")):
-            self.hook.posts.clear()
-            self.api.messages = [assistant("error", error=error)]
-            result = self.notify()
-            self.finished(result, "delivered")
-            self.assertEqual(json.loads(self.hook.posts[0][2])["event"], event)
-        self.api.status["isStreaming"] = True
-        self.api.messages = [assistant("error", error="usage limit reached")]
-        self.hook.posts.clear()
-        result = self.notify("--events", "done")
-        self.finished(result, "terminal_event_not_selected")
-        self.assertEqual(self.hook.posts, [])
-
-    def test_api_failure_is_not_completion(self):
-        self.api.status_code = 503
-        self.api.status = {"error": self.key + " " + self.hook_url}
-        result = self.notify()
-        self.finished(result, "watch_failed")
-        self.assertEqual(self.hook.posts, [])
-
-    def test_private_file_modes_symlinks_fifo_oversize_and_multiline(self):
-        for field in (self.url_file, self.key_file):
-            original = field.read_text()
-            for mode in (0o644, 0o400, 0o660, 0o1600):
-                field.chmod(mode)
-                result = self.notify()
-                self.assertEqual(result.returncode, 1)
-                self.assertNotIn(self.key, result.stdout + result.stderr)
-                self.assertNotIn(self.hook_url, result.stdout + result.stderr)
-            field.chmod(0o600)
-            field.write_text(original + "second line\n")
-            self.assertEqual(self.notify().returncode, 1)
-            field.write_text("x" * 8193)
-            self.assertEqual(self.notify().returncode, 1)
-            field.unlink()
-            os.mkfifo(field, 0o600)
-            self.assertEqual(self.notify().returncode, 1)
-            field.unlink()
-            target = field.with_suffix(".real")
-            target.write_text(original)
-            target.chmod(0o600)
-            field.symlink_to(target)
-            self.assertEqual(self.notify().returncode, 1)
-            field.unlink()
-            field.write_text(original)
-            field.chmod(0o600)
-        self.assertEqual(self.hook.posts, [])
-        result = self.notify()
-        self.finished(result, "delivered")
-        self.assertEqual(len(self.hook.posts), 1)
-
-    def test_header_url_and_event_validation(self):
-        for header in ("Content-Length", "HOST", "Transfer-Encoding", "X-Bad\r\nAuthorization", ""):
-            self.assertEqual(self.notify("--header-name", header).returncode, 2)
-        for events in ("done,bogus", "", "Idle"):
-            self.assertEqual(self.notify("--events", events).returncode, 2)
-        original = self.url_file.read_text()
-        for url in ("http://public.example/hook", "file:///tmp/hook", "https://user:pass@example.test", "https://example.test/#fragment"):
-            self.url_file.write_text(url)
-            self.assertEqual(self.notify().returncode, 1)
-        self.url_file.write_text(original)
-        self.key_file.write_text("RawSenderKey")
-        result = self.notify("--header-name", "X-Routine-Key")
-        self.finished(result, "delivered")
-        self.assertEqual(self.hook.posts[0][1]["X-Routine-Key"], "RawSenderKey")
+        self.assertIn("{list,spawn,prompt,status,commands,wait,stop,abort,queue-clear,archive,messages,model,thinking-level,answer}", result.stdout)
 
 
 if __name__ == "__main__":
