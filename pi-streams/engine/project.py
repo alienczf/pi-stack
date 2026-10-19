@@ -519,9 +519,51 @@ def stream_locks(repos: list[Path]) -> Iterator[None]:
             handle.close()
 
 
+COMMIT_ALLOW_SUFFIXES = (
+    ".py", ".sh", ".ts", ".js", ".go", ".rs", ".cs", ".cpp", ".h", ".sql", ".toml",
+    ".yaml", ".yml", ".json", ".cfg", ".ini",
+    ".md",
+)
+COMMIT_ALLOW_NAMES = ("threads.tsv", ".gitignore")
+COMMIT_MAX_BYTES = 5 * 1024 * 1024
+
+
+def _commit_allowed(path: str) -> bool:
+    name = path.rsplit("/", 1)[-1]
+    return name in COMMIT_ALLOW_NAMES or name.endswith(COMMIT_ALLOW_SUFFIXES)
+
+
 def commit_repo(repo: Path, message: str) -> bool:
-    git(repo, "add", "-A")
-    if git(repo, "status", "--porcelain").strip() == "":
+    # Data never goes in git (ZF 2026-10-19): stage only allowlisted code/config/report
+    # files, respect .gitignore, skip files over 5 MB, and still stage deletions.
+    listed = git(repo, "ls-files", "-z", "--others", "--modified", "--deleted", "--exclude-standard")
+    # Tracked gitlink/submodule pointers (mode 160000): stage the pointer only.
+    gitlinks = {
+        line.split("\t", 1)[1]
+        for line in git(repo, "ls-files", "-s", "-z").split("\0")
+        if line.startswith("160000 ")
+    }
+    paths: list[str] = []
+    for path in dict.fromkeys(p for p in listed.split("\0") if p):
+        if path in gitlinks:
+            paths.append(path)
+            continue
+        if not _commit_allowed(path):
+            continue
+        full = repo / path
+        if full.is_file() and full.stat().st_size > COMMIT_MAX_BYTES:
+            print(f"{repo}: pi-streams commit skipped {path} (over 5 MB)", file=sys.stderr, flush=True)
+            continue
+        paths.append(path)
+    if paths:
+        proc = subprocess.run(
+            ["git", "-C", os.fspath(repo), "add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul"],
+            input="\0".join(paths), capture_output=True, text=True, encoding="utf-8",
+            env=_git_env(), check=False,
+        )
+        if proc.returncode != 0:
+            raise StreamsError(proc.stderr.strip() or "git add failed")
+    if git(repo, "diff", "--cached", "--name-only").strip() == "":
         return False
     git(repo, "commit", "-m", message)
     return True
