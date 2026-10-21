@@ -1,47 +1,50 @@
 ---
-name: pi-web-control-plane
+name: PI WEB control plane
 description: >-
-  Controls pi sessions through pi-web-cli using the bot's authorized PI host
-  access. Use for session spawn, prompt, status inspection, steer, and routine
-  handoff. Use pi-async-wait for waits instead of bot-side status polling.
+  Use when spawning, prompting, or checking pi sessions on options-01. PI WEB
+  (127.0.0.1:8504 via pi-web-cli over Twingate SSH) is the control plane;
+  pi-streams /stream is the campaign harness.
 ---
 # PI WEB control plane
 
-Use PI WEB to create, prompt, inspect, and steer pi sessions. For a multi-thread campaign, prefer the host's pi-streams `/stream` workflow through its owning coordinator. Do not invent `pi exec` or `pi rpc`. Do not run `pi -p`, use intercom or `broker.sock`, or substitute Jig for streams.
+Use this whenever a Grok Bot must spawn, prompt, or poll a pi coding session on `hpc180-options-01`. PI WEB is the session control plane (spawn, prompt, status, steer). For multi-thread campaigns prefer **pi-streams** `/stream` ([Orchestrate with pi](sand-workflow:orchestrate-with-pi)). Do not invent `pi exec` / `pi rpc`. Do not `pi -p`. Do not use intercom / `broker.sock`. Do not use Jig.
 
-Use the deployment's authorized pi-web-cli access. Run the commands on the PI host through that authorized route. Do not assume a host name, network route, or local access to the host's loopback API. This skill does not grant host authority.
+SSH first over **Twingate userspace**: `/home/box/.local/bin/options-01-ssh` or `pi-web-cli-remote`. Then run commands **on the host**. `http://127.0.0.1:8504` is loopback only. Reach recipe: [Alphalab access](sand-workflow:alphalab-access).
 
-## Commands
+## Lever
+
+Remote: `/home/alphalab/.local/bin/pi-web-cli`  
+Box wrapper: `/home/box/.local/bin/pi-web-cli-remote` (SSH via Twingate)
 
 ```bash
-pi-web-cli list --cwd /absolute/worktree
-pi-web-cli spawn /absolute/worktree
-pi-web-cli prompt <sid> /poteto
-pi-web-cli prompt <sid> "/goal <checkable predicate>"
-pi-web-cli status <sid>
-pi-web-cli prompt <sid> "<focused correction>" --steer
+pi-web-cli-remote list --cwd /abs/worktree
+pi-web-cli-remote spawn /abs/worktree
+pi-web-cli-remote prompt <sid> /poteto
+pi-web-cli-remote prompt <sid> "/goal <checkable predicate>"
+pi-web-cli-remote status <sid>
+options-01-ssh '/home/alphalab/.local/bin/pi-web-cli list --cwd /abs/worktree'
+options-01-ssh 'PATH="$HOME/.local/share/pi-node/current/bin:$PATH" pi-streams doctor'
 ```
 
-`prompt` reads stdin when the text argument is absent. `list` requires `--cwd`. `PI_WEB_URL` selects the API endpoint, defaulting to `http://127.0.0.1:8504` on the PI host. Do not call a browser SPA route and treat its HTML as an API response.
+`prompt` accepts stdin if the text arg is omitted. `list` without `--cwd` fails: the API requires cwd.
 
-## Host records
+Do not `POST /api/local/sessions` (SPA HTML). Do not curl 8504 from this computer.
 
-- PI WEB owns the session API and session host.
-- Session transcripts normally live under `~/.pi/agent/sessions/` on the PI host.
-- `pi-streams` owns its registered project index and stream repositories.
-- A stream repository's `STATE.md`, `ALERTS.md`, and `STREAM.md` carry campaign state. An empty global alert index alone does not prove health.
+## Host processes
+
+- PI WEB UI/API: `127.0.0.1:8504`
+- Session host: `pi-web-sessiond`
+- Binaries: `/home/alphalab/.local/share/pi-node/current/bin/{pi,pi-web,pi-web-server,pi-web-sessiond}` (put on PATH for non-interactive shells)
+- Session jsonl: `~/.pi/agent/sessions/--escaped-cwd--/<timestamp>_<id>.jsonl`
+- Streams: `~/.local/bin/pi-streams`, index `~/.config/pi-streams`, timer `pi-streams-tick.timer`
 
 ## Default orchestration
 
-1. For a campaign, hand the full brief to the authorized stream coordinator. For a single unit, have pi create an isolated worktree and create or adopt its session.
-2. Do not create code worktrees on the bot's disk. Do not share a dirty tree across units.
-3. For a single session, send `/poteto`, then the work goal. Respect this deployment's prompt and host-authority gates.
-4. After the accepted work prompt or steer, follow [Pi async wait](sand-workflow:pi-async-wait). Copy its full prompt template into one short self-deleting Grok Bot scheduled cron routine with an explicit done condition and absolute UTC deadline. Do not use OS cron or bot-side polling.
-5. If a session is already live, target its sid rather than create a duplicate. Retire an obsolete routine before a separately authorized replacement.
-6. Pi owns code, worktrees, checks, commits, pushes, and PRs within its brief. The operator owns merges.
+1. Campaigns: `/stream` via pi-streams (coordinator + threads). Single units: one git worktree + `pi-web-cli spawn`.
+2. Never create worktrees on this computer's disk. Have pi create them.
+3. Single session: `prompt` `/poteto`, then `/goal <checkable predicate>`.
+4. Check `status` once. To wait, use [Close the promise loop](sand-workflow:close-the-promise-loop) (self-deleting routine), never a background worker / AwaitShell / sleep loop. For streams, the routine reads the stream repo's `STATE.md` / `ALERTS.md`.
+5. If already live, `prompt` again by session id. Do not use intercom.
+6. Do not merge. `@claude` on a PR only when GitHub is usable.
 
-A one-off status or transcript check can verify evidence. It is not a durable wake mechanism. A short check may use `pi-web-cli wait` once with a timeout of at most 300 seconds, per pi-async-wait.
-
-Compact before 70 percent context. On a usage limit, stop and report without a provider change.
-
-Policy is in [Hand off the unit](sand-workflow:principle-hand-off-the-unit). The routing recipe is in [Orchestrate with pi](sand-workflow:orchestrate-with-pi).
+Policy: [Hand Off the Unit](sand-workflow:principle-hand-off-the-unit). Flow: [Orchestrate with pi](sand-workflow:orchestrate-with-pi).
