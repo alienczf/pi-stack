@@ -8,7 +8,7 @@ Keep `pi-web-cli wait <sid> --timeout <seconds>` for one short bounded check. Th
 
 ## Worktree and authorization
 
-Use `/home/alphalab/Projects/worktrees/pi-stack-grokbot-async` on `feat/grokbot-async-watch`. The existing PR is https://github.com/alienczf/pi-stack/pull/31.
+Use an isolated worktree on `feat/grokbot-async-watch`. The existing PR is https://github.com/alienczf/pi-stack/pull/31.
 
 The delegated writer changed repository files without commit or publication authority. The parent reviews, commits, pushes through the explicit HTTPS URL and host credential helper, and updates the existing PR. Do not force-push, change the installed CLI, create live routines, or read real secrets. Keep provider and model unchanged. Preserve generic deployment authorization restrictions. Pi owns code, worktrees, checks, commits, pushes, and PRs within its brief. The operator owns merges.
 
