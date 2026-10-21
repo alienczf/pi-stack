@@ -22,11 +22,11 @@ Wait retains all activity flags, queued-work handling, current-assistant parsing
 
 The durable record contains the sid, authorized host access, expected artifact, optional stream directory, explicit done condition, absolute UTC deadline, routine id, and last reported state. Session idle is not the done condition.
 
-The full copyable prompt is in `grokbot/skills/pi-async-wait/SKILL.md`. Each invocation checks cancellation and deadline first, reads `pi-web-cli status` once, and reads relevant stream `STATE.md`, `ALERTS.md`, and `STREAM.md` once. It verifies the artifact, reports meaningful changes only, saves state, and returns. Failed API is unknown, not idle.
+The full copyable prompt is in `grokbot/skills/close-the-promise-loop/SKILL.md`. Each invocation checks cancellation and deadline first, reads `pi-web-cli status` once, and reads relevant stream `STATE.md`, `ALERTS.md`, and `STREAM.md` once. It verifies the artifact, reports meaningful changes only, saves state, and returns. Failed API is unknown, not idle.
 
 Delete the routine on verified done, terminal error, usage limit, cancellation, or deadline expiry. If deletion fails, disable it and report. Never extend the deadline or spawn a replacement routine. Use Grok Bot scheduling, not OS cron. Compact before 70 percent context. Stop and report usage limits without provider switching.
 
-The three complete replacement routing skills link to pi-async-wait. `grokbot/README.md` covers copying all four skills, reloading, scheduling, and short wait exit codes.
+The three complete replacement routing skills link to close-the-promise-loop. `grokbot/README.md` covers copying all four skills, reloading, scheduling, and short wait exit codes.
 
 ## Throughput checkpoint
 

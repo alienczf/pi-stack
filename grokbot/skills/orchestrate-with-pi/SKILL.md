@@ -1,49 +1,51 @@
 ---
-name: Orchestrate with pi
+name: orchestrate-with-pi
 description: >-
-  Use when handing an Alphalab / options-01 unit to pi after Hand Off the Unit
-  applies. Prefer pi-streams (/stream) for multi-thread campaigns; PI WEB
-  spawn/prompt for a single session. Not for deciding whether to hand off.
+  Routes a repository unit to pi after Hand off the unit applies. Prefer
+  pi-streams for campaigns and PI WEB for single sessions. Uses close-the-promise-loop
+  to resume through routines after a work prompt or steer.
 ---
 # Orchestrate with pi
 
-Recipe only. Decide with [Hand Off the Unit](sand-workflow:principle-hand-off-the-unit) first.
-
-Drive work on `hpc180-options-01` over Twingate userspace (`options-01-ssh` / `pi-web-cli-remote`). Reach: [Alphalab access](sand-workflow:alphalab-access). Control plane details: [PI WEB control plane](sand-workflow:pi-web-control-plane).
+This is a recipe. Decide whether to hand off with [Hand off the unit](sand-workflow:principle-hand-off-the-unit) first. Use the bot's authorized PI host access and the commands in [PI WEB control plane](sand-workflow:pi-web-control-plane). Existing deployment and host-authority gates still apply.
 
 ## Prefer pi-streams for campaigns
 
-**pi-streams** is the harness (pi-stack main ≥ `5c0e41e`). A stream is a Cursor Project whose threads are pi-web sessions: one coordinator plans and delegates into code worktrees; it does not write product code itself.
+A stream has a coordinator, pi sessions for bounded units, and a private stream repository with durable state. Use the installed `/stream` and `stream-kickoff` workflows rather than invent alternate stream CLIs.
 
-- Index: `~/.config/pi-streams` (`projects/<name>.toml`, `streams.tsv`, `ALERTS`). Read `ALERTS` for outages and for two streams claiming the same worktree or branch.
-- Each stream has a private git repo at `<project-root>/streams/<id>/`.
-- Skills: `/stream` (new, status, close) and `stream-kickoff`. A five-minute `pi-streams tick` timer runs with no model tokens. `pi-streams upgrade` refreshes unedited template files.
-- Design: `docs/design/pi-streams.md` in `~/.pi-stack`.
-- Doctor: `pi-streams doctor` on the host after stack updates.
+- Read the registered pi-streams project index to find the stream repository.
+- Read that repository's `STATE.md`, `ALERTS.md`, and `STREAM.md` for decisions, outages, and conflicting ownership. Do not rely on an empty global alert index.
+- Run the authorized `pi-streams doctor` check after stack updates. Do not prompt live sessions until the deployed host build matches the intended stack version.
+- Hand the full campaign brief to its authorized coordinator. Do not become a second planner or sequence implementation workers from the bot chat.
 
-**Jig is removed** from pi-stack. Do not start streams with `jig init`, `/jig`, or `/skill:jig`. Leftover `.pi/jig/` trees may still exist in old worktrees — leave them alone unless asked to clean up.
+Jig is not the stream workflow. Do not start a new stream with `jig init`, `/jig`, or `/skill:jig`. Leave old Jig data alone unless the operator asks for cleanup.
 
-For multi-thread / long-running desk campaigns (ETL, migrations, multi-PR features): have the owning desk bot (or a live pi session that already has streams skills) run `/stream` and hand full context to the coordinator. Grok Bots do not invent alternate stream CLIs.
+For a campaign, use the full scheduled cron routine template in [Close the promise loop](sand-workflow:close-the-promise-loop). Each short invocation reads `STATE.md`, `ALERTS.md`, and `STREAM.md` once and returns. Verify the campaign's explicit done condition before its absolute UTC deadline. One idle coordinator turn does not prove that every stream thread is complete.
 
-Hard rule: do not prompt any live session until the host `pi-streams` build matches the intended pi-stack main (verify with `pi-streams doctor` / `~/.pi-stack` HEAD).
+## Single-session path
 
-## Single-session path (still valid)
+1. Have pi create one isolated worktree per unit on the authorized PI host. Do not create it on the bot's disk or reuse a dirty tree across units.
+2. Use `pi-web-cli list --cwd <worktree>` to find an existing session. Adopt its sid if appropriate. Otherwise use `pi-web-cli spawn <worktree>`.
+3. Send `/poteto`, then `/goal <checkable predicate>` or the complete authorized work brief.
+4. After the work prompt returns accepted, follow [Close the promise loop](sand-workflow:close-the-promise-loop). Create one short self-deleting Grok Bot scheduled cron routine from its full template, not an OS cron job. Do not poll status or the transcript in a bot-side loop.
+5. For a focused steer, use `pi-web-cli prompt <sid> "<correction>" --steer`. Retire an obsolete routine before a separately authorized replacement. Do not create a routine merely for an empty new session.
+6. On a routine wake, verify the expected artifact against the explicit done condition. Idle is not proof that the goal passed. Pi owns code, worktrees, checks, commits, pushes, and PR creation. Do not perform that repository work from the bot chat.
+7. Do not merge. The operator owns merge authorization.
 
-1. One isolated git worktree per unit on options-01. Never this computer's disk. Never share one dirty tree across units. Have **pi** create the worktree — do not `git worktree` yourself.
-2. Via `pi-web-cli-remote` (or `options-01-ssh`): `pi-web-cli spawn <cwd>`, then `prompt` `/poteto`, then `prompt` `/goal <checkable predicate>`. If a session is already live in that cwd, `list --cwd` and `prompt` it instead of spawning another.
-3. Do not wait on it in this turn. Create a self-deleting watch routine per [Close the promise loop](sand-workflow:close-the-promise-loop), then end the turn. Never a background worker or sleep loop.
-4. Live steer: `pi-web-cli-remote prompt <sid> …`. Target by session id.
-5. When a unit has a GitHub PR, have pi open it (or comment `@claude` if GitHub is usable). Do not commit, push, or `gh pr create` yourself.
-6. Do not merge. The operator owns merge.
+## Close the promise loop
 
-## Outer-loop delivery
+After a work prompt, steer, or stream handoff, record the sid, authorized host access, expected artifact, optional stream path, done condition, absolute UTC deadline, routine id, and durable last-state record. Return control after the routine is scheduled. Do not promise a later confirmation without a durable wake.
 
-After a spawn, steer, or stream handoff, close the promise loop with [Close the promise loop](sand-workflow:close-the-promise-loop). Do not end on "I'll confirm once…". For long campaigns, watch the stream repo's `ALERTS.md` / `STATE.md` / `STREAM.md`, not the empty index `~/.config/pi-streams/ALERTS` alone.
+Each invocation checks cancellation and deadline first, reads status once, verifies the artifact, reports only meaningful changes, and returns. Follow close-the-promise-loop to delete the routine on verified done, terminal error, usage limit, cancellation, or deadline. If deletion fails, disable it and report. Never extend its deadline or spawn a replacement routine.
 
-## `dowork` exception
+NEVER use a background worker, executor, AwaitShell or sleep loop to wait on a pi session or stream. For a genuinely short check, `pi-web-cli wait <sid> --timeout 240` may run once. Do not chain short waits into a long one.
 
-Only when [Hand Off the Unit](sand-workflow:principle-hand-off-the-unit) allows it: user clearly said do the work here, and it does not need `hpc180-options-01`, `10.0.60.45`, or other gated hosts. Alphalab repo edits never qualify.
+## Local-work exception
 
-## pstack
+An explicit `dowork` request permits local work only when this deployment's policy allows it. It does not override network restrictions, repository restrictions, host-authority gates, or the assigned stream owner.
 
-Pi loads the live allowlist in [pstack on pi](sand-workflow:pstack-on-pi). Point pi at `/poteto`, `/goal`, `/stream`, `correct`, `reflect`, and verification skills. Do not reimplement them here.
+## Pi skills and context
+
+Point pi at the installed `/poteto`, `/goal`, `/stream`, `correct`, `reflect`, and verification skills. Do not reimplement them in the bot.
+
+Compact before 70 percent context. Preserve the durable routing record across compaction. On a usage limit, stop and report. Do not switch provider.

@@ -23,9 +23,9 @@
 - [x] Expose only the original CLI commands plus short bounded wait.
 - [x] Retain idle, error, and usage_limit classification without event selection or unused assistant timestamp storage.
 - [x] Preserve strict API validation, all busy flags and queued work, current and stale errors, usage limits, byte caps, hard deadlines, and verified-or-null cwd.
-- [x] Put the full copyable scheduled routine prompt in pi-async-wait with all required placeholders.
+- [x] Put the full copyable scheduled routine prompt in close-the-promise-loop with all required placeholders.
 - [x] Include cancellation and deadline checks first, one status read, all three stream files, artifact verification, meaningful-change reports, and terminal self-deletion with disable-on-failure.
-- [x] Link all three complete replacement routing skills to pi-async-wait and document copying all four skills and reloading.
+- [x] Link all three complete replacement routing skills to close-the-promise-loop and document copying all four skills and reloading.
 - [x] Preserve deployment authorization restrictions, pi's repository ownership, and operator merge ownership.
 - [x] Inspect current files for scope compliance and tracked filenames for key or URL files. No matches found.
 - [x] Run `python3 -m unittest discover -s grokbot/tests -v`. All 26 tests passed with no skips, including 10 added tests.
