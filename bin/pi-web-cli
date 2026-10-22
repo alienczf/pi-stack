@@ -3,9 +3,19 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from http.client import HTTPException
 import json
+import math
 import os
+from pathlib import Path
+import re
+import signal
+import stat
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -110,6 +120,228 @@ VERBS: dict[str, tuple[str, str, tuple[str, ...], VerbBuilder]] = {
 }
 
 
+EXIT_CODES = {"idle": 0, "error": 3, "usage_limit": 4, "timeout": 124}
+USAGE_LIMIT = re.compile(
+    r"usage[_ -](?:limit|not[_ -]included)|GoUsageLimitError|FreeUsageLimitError|insufficient_quota|"
+    r"quota exceeded|out of budget|monthly usage limit reached|available balance|"
+    r"billing|exceeded.*(?:quota|budget)", re.IGNORECASE,
+)
+
+
+class ObservationError(Exception):
+    pass
+
+
+class DeadlineExpired(Exception):
+    pass
+
+
+@dataclass(frozen=True)
+class AssistantOutcome:
+    stop_reason: str
+    error_text: str
+    last_text_line: str
+
+
+@dataclass(frozen=True)
+class SessionObservation:
+    sid: str
+    cwd: str | None
+    is_streaming: bool
+    is_compacting: bool
+    is_bash_running: bool
+    pending_count: int
+    context_percent: float | None
+    assistant: AssistantOutcome | None
+
+    def event(self) -> str | None:
+        if self.assistant and USAGE_LIMIT.search(self.assistant.error_text):
+            return "usage_limit"
+        if self.is_streaming or self.is_compacting or self.is_bash_running or self.pending_count:
+            return None
+        if self.assistant and self.assistant.stop_reason in {"error", "aborted"}:
+            return "error"
+        return "idle"
+
+    def payload(self, event: str) -> dict:
+        return {
+            "sid": self.sid, "cwd": self.cwd, "event": event,
+            "context_percent": self.context_percent,
+            "last_assistant_line": self.assistant.last_text_line[:280] if self.assistant else "",
+            "ts": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        }
+
+
+@contextmanager
+def hard_deadline(seconds: float):
+    def expire(_signum, _frame):
+        raise DeadlineExpired()
+
+    previous = signal.signal(signal.SIGALRM, expire)
+    signal.setitimer(signal.ITIMER_REAL, seconds)
+    try:
+        yield time.monotonic() + seconds
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, _req, _fp, _code, _msg, _headers, _newurl):
+        return None
+
+
+HTTP = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+
+
+def bounded_json(path: str, deadline: float, cap: int) -> object:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise DeadlineExpired()
+    try:
+        with HTTP.open(BASE + path, timeout=min(10, remaining)) as response:
+            if response.status != 200:
+                raise ObservationError("api_status")
+            raw = response.read(cap + 1)
+        if len(raw) > cap:
+            raise ObservationError("response_too_large")
+        return json.loads(raw)
+    except urllib.error.HTTPError as exc:
+        exc.close()
+        raise ObservationError("api_unavailable_or_invalid") from exc
+    except (OSError, ValueError, RecursionError, HTTPException, urllib.error.URLError) as exc:
+        raise ObservationError("api_unavailable_or_invalid") from exc
+
+
+def parse_status(data: object, sid: str) -> tuple[bool, bool, bool, int, int, float | None]:
+    if not isinstance(data, dict) or data.get("sessionId") != sid or data.get("error"):
+        raise ObservationError("invalid_status")
+    flags = tuple(data.get(key) for key in ("isStreaming", "isCompacting", "isBashRunning"))
+    if any(type(value) is not bool for value in flags):
+        raise ObservationError("invalid_activity")
+    pending, count = data.get("pendingMessageCount"), data.get("messageCount")
+    if any(type(value) is not int or value < 0 for value in (pending, count)):
+        raise ObservationError("invalid_message_count")
+    context = data.get("contextUsage")
+    if context is not None and not isinstance(context, dict):
+        raise ObservationError("invalid_context")
+    percent = context.get("percent") if context else None
+    if percent is not None:
+        try:
+            valid = type(percent) in (int, float) and math.isfinite(percent) and percent >= 0
+        except OverflowError:
+            valid = False
+        if not valid:
+            raise ObservationError("invalid_context")
+    return (*flags, pending, count, percent)
+
+
+def parse_assistant(data: object) -> AssistantOutcome | None:
+    if not isinstance(data, dict) or not isinstance(data.get("messages"), list):
+        raise ObservationError("invalid_messages")
+    if any(type(data.get(key)) is not int or data[key] < 0 for key in ("start", "total")):
+        raise ObservationError("invalid_messages_page")
+    latest = None
+    for message in data["messages"]:
+        if not isinstance(message, dict):
+            raise ObservationError("invalid_message")
+        if message.get("role") == "user":
+            latest = None
+        elif message.get("role") == "assistant":
+            latest = message
+    if latest is None:
+        return None
+    reason, error, content = latest.get("stopReason"), latest.get("errorMessage", ""), latest.get("content")
+    if not isinstance(reason, str) or reason not in {"stop", "length", "toolUse", "error", "aborted"} or not isinstance(error, str):
+        raise ObservationError("invalid_assistant_outcome")
+    if not isinstance(content, list):
+        raise ObservationError("invalid_assistant_content")
+    lines = []
+    for block in content:
+        if isinstance(block, dict) and block.get("type") == "text":
+            if not isinstance(block.get("text"), str):
+                raise ObservationError("invalid_assistant_text")
+            lines.extend(line.strip() for line in block["text"].splitlines() if line.strip())
+    timestamp = latest.get("timestamp")
+    if timestamp is not None and type(timestamp) not in (str, int, float):
+        raise ObservationError("invalid_assistant_timestamp")
+    return AssistantOutcome(reason, error, lines[-1] if lines else "")
+
+
+def session_cwd(sid: str) -> str | None:
+    root = Path(os.environ.get("PI_WEB_SESSIONS_DIR", str(Path.home() / ".pi/agent/sessions")))
+    matches = set()
+    for path in root.glob(f"*/*_{sid}.jsonl"):
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            with os.fdopen(fd, "rb") as source:
+                if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
+                    continue
+                raw = source.readline(8193)
+                if len(raw) > 8192:
+                    continue
+                header = json.loads(raw)
+            if (isinstance(header, dict) and header.get("type") == "session" and header.get("id") == sid
+                    and isinstance(header.get("cwd"), str) and header["cwd"].startswith("/")):
+                matches.add(header["cwd"])
+        except (OSError, ValueError, RecursionError):
+            continue
+    return matches.pop() if len(matches) == 1 else None
+
+
+def observe(sid: str, deadline: float, cwd: str | None) -> SessionObservation | None:
+    path = f"/api/sessions/{sid}"
+    first = parse_status(bounded_json(path + "/status", deadline, 262144), sid)
+    assistant = parse_assistant(bounded_json(path + "/messages?limit=50", deadline, 4 * 1024 * 1024))
+    second = parse_status(bounded_json(path + "/status", deadline, 262144), sid)
+    if first[:5] != second[:5]:
+        return None
+    streaming, compacting, bash, pending, _count, percent = second
+    return SessionObservation(sid, cwd, streaming, compacting, bash, pending, percent, assistant)
+
+
+def wait_for_outcome(sid: str, timeout: float, interval: float) -> tuple[SessionObservation, str]:
+    with hard_deadline(timeout) as deadline:
+        cwd = session_cwd(sid)
+        while True:
+            observation = observe(sid, deadline, cwd)
+            if observation is not None:
+                event = observation.event()
+                if event is not None:
+                    return observation, event
+            time.sleep(min(interval, max(0, deadline - time.monotonic())))
+
+
+def cmd_wait(args: argparse.Namespace) -> int:
+    try:
+        observation, event = wait_for_outcome(args.sid, args.timeout, args.poll_interval)
+        print(json.dumps({"ok": event == "idle", **observation.payload(event)}))
+        return EXIT_CODES[event]
+    except DeadlineExpired:
+        print(json.dumps({"ok": False, "sid": args.sid, "event": "timeout"}))
+        return 124
+    except ObservationError as exc:
+        return out({"ok": False, "error": str(exc)}, False)
+
+
+def bounded_seconds(maximum: float):
+    def parse(value: str) -> float:
+        try:
+            seconds = float(value)
+        except ValueError as exc:
+            raise argparse.ArgumentTypeError("expected a finite positive number") from exc
+        if not math.isfinite(seconds) or not 0 < seconds <= maximum:
+            raise argparse.ArgumentTypeError(f"expected 0 < seconds <= {maximum:g}")
+        return seconds
+    return parse
+
+
+def session_id(value: str) -> str:
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}", value):
+        raise argparse.ArgumentTypeError("expected a session id")
+    return value
+
+
 def main(argv: list[str]) -> int:
     p = argparse.ArgumentParser(description="PI WEB control plane (127.0.0.1:8504)")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -127,6 +359,10 @@ def main(argv: list[str]) -> int:
     st.add_argument("sid")
     cm = sub.add_parser("commands")
     cm.add_argument("sid")
+    wt = sub.add_parser("wait", help="one bounded check, exits 0 idle, 3 error, 4 usage limit, 124 timeout, 1 API failure")
+    wt.add_argument("sid", type=session_id)
+    wt.add_argument("--timeout", required=True, type=bounded_seconds(300))
+    wt.add_argument("--poll-interval", type=bounded_seconds(60), default=2.0)
     for name, (_method, _suffix, positionals, _build) in VERBS.items():
         verb = sub.add_parser(name)
         verb.add_argument("sid")
@@ -147,6 +383,8 @@ def main(argv: list[str]) -> int:
         return cmd_status(args.sid)
     if args.cmd == "commands":
         return cmd_commands(args.sid)
+    if args.cmd == "wait":
+        return cmd_wait(args)
     method, suffix, _positionals, build = VERBS[args.cmd]
     try:
         body = build(args)
