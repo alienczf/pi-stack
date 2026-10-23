@@ -123,6 +123,9 @@ class StubPiWeb:
             self.requests.append((handler.command, parsed.path, parsed.query, body))
             routes = list(self.routes)
         status, payload = _match(handler.command, parsed.path, routes)
+        cwd = urllib.parse.parse_qs(parsed.query).get("cwd", [None])[0]
+        if handler.command == "GET" and parsed.path == "/api/sessions" and isinstance(payload, list) and cwd:
+            payload = [item for item in payload if not isinstance(item, dict) or item.get("cwd", cwd) == cwd]
         encoded = json.dumps(payload).encode("utf-8")
         handler.send_response(status)
         handler.send_header("Content-Type", "application/json")

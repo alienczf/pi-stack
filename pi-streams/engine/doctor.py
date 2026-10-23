@@ -10,6 +10,7 @@ from pathlib import Path
 
 from engine import StreamsError
 from engine import piweb
+from engine.threads import resolve_coordinator
 from engine.project import (
     StreamRow,
     git,
@@ -102,6 +103,14 @@ def _check_stream(row: StreamRow, harness: str) -> list[Finding]:
     except StreamsError as exc:
         findings.append(Finding("FAIL", "revision", f"{row.id} {exc}"))
         return findings
+    try:
+        coordinator = resolve_coordinator(repo)
+        if coordinator is None:
+            findings.append(Finding("FAIL", "coordinator", f"{row.id} has no designated active coordinator"))
+        else:
+            findings.append(Finding("PASS", "coordinator", f"{row.id} exact native identity {coordinator.row.session}"))
+    except StreamsError as exc:
+        findings.append(Finding("FAIL", "coordinator", f"{row.id} {exc}"))
     if recorded == harness:
         findings.append(Finding("PASS", "revision", f"{row.id} records {harness}"))
     else:

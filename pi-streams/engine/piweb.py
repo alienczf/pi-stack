@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 from engine import StreamsError, repo_root
 from engine.project import default_pi_web_url
@@ -25,6 +26,10 @@ def _run(args: list[str], stdin: str | None = None) -> subprocess.CompletedProce
     )
 
 
+class PromptRejected(StreamsError):
+    pass
+
+
 def call(args: list[str], stdin: str | None = None) -> dict[str, object]:
     proc = _run(args, stdin)
     try:
@@ -36,7 +41,8 @@ def call(args: list[str], stdin: str | None = None) -> dict[str, object]:
         raise StreamsError(f"pi-web-cli {' '.join(args)} returned {type(data).__name__}")
     if proc.returncode != 0 or data.get("ok") is False:
         detail = proc.stderr.strip() or proc.stdout.strip()
-        raise StreamsError(f"pi-web-cli {' '.join(args)} failed: {detail}")
+        error = PromptRejected if args[0] == "prompt" and data.get("status") == 409 else StreamsError
+        raise error(f"pi-web-cli {' '.join(args)} failed: {detail}")
     return data
 
 
@@ -51,8 +57,11 @@ def list_sessions(cwd: str) -> list[dict[str, object]]:
 def spawn(cwd: str) -> str:
     data = call(["spawn", cwd])
     session = data.get("session")
-    if not isinstance(session, dict) or not isinstance(session.get("id"), str):
+    if not isinstance(session, dict) or not isinstance(session.get("id"), str) or not session["id"]:
         raise StreamsError("pi-web-cli spawn returned no session id")
+    returned_cwd = session.get("cwd")
+    if not isinstance(returned_cwd, str) or Path(returned_cwd).resolve() != Path(cwd).resolve():
+        raise StreamsError("spawn identity has no matching native cwd")
     return str(session["id"])
 
 
@@ -98,6 +107,11 @@ def split_model(model: str) -> tuple[str, str]:
     return provider, model_id
 
 
+def require_identity(session: dict[str, object], session_id: str) -> None:
+    if session.get("sessionId") != session_id:
+        raise StreamsError(f"native status identity does not match exact session {session_id}")
+
+
 def require_settings(session: dict[str, object], model: str, thinking: str) -> None:
     provider, model_id = split_model(model)
     raw = session.get("model")
@@ -113,8 +127,10 @@ def require_settings(session: dict[str, object], model: str, thinking: str) -> N
 
 
 def configure_session(sid: str, model: str, thinking: str) -> dict[str, object]:
+    require_identity(session_status(sid), sid)
     set_model(sid, model)
     set_thinking(sid, thinking)
     session = session_status(sid)
+    require_identity(session, sid)
     require_settings(session, model, thinking)
     return session

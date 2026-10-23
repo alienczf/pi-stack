@@ -65,7 +65,11 @@ class FailureTests(TickCase):
             f"{self.etl}: pi-web-cli status t-1 failed: {RESTARTING}\n",
         ))
         self.assertEqual(self.stub.requests, [
+            got_list(str(self.etl)),
+            got_status("coord-1"),
             got_status("t-1"),
+            got_list(str(ops)),
+            got_status("coord-2"),
             got_status("t-2"),
             got_list("/wt/review"),
             got_list(str(ops)),
@@ -121,8 +125,12 @@ class FailureTests(TickCase):
             f"{self.etl}: pi-web-cli spawn {self.etl} failed: {SPAWN_FAILED}\n",
         ))
         self.assertEqual(self.stub.requests, [
+            got_list(str(self.etl)),
+            got_status("coord-1"),
             got_status("t-1"),
             got_list("/wt/datapull"),
+            got_list(str(self.etl)),
+            got_status("coord-1"),
             got_list(str(self.etl)),
             got_status("coord-1"),
             got_post("coord-1", "archive"),
@@ -148,10 +156,11 @@ class FailureTests(TickCase):
             got_list("/wt/datapull"),
             got_list(str(self.etl)),
             ("POST", "/api/sessions", "", {"cwd": str(self.etl)}),
+            got_status("coord-2"),
             got_post("coord-2", "model", {"provider": "openai-codex", "modelId": "gpt-6-astra"}),
             got_post("coord-2", "thinking-level", {"level": "xhigh"}),
             got_status("coord-2"),
-            got_prompt("coord-2", rotation("etl")),
+            got_prompt("coord-2", rotation("etl", self.etl)),
             got_prompt("coord-2", "pi-streams tick 2026-10-06T12:05:00Z:\nask t-1 datapull Which venue first?", "followUp"),
         ])
         self.assertEqual(
@@ -161,7 +170,7 @@ class FailureTests(TickCase):
         )
         self.assertEqual((self.state(self.etl)["rotating"], self.state(self.etl)["pending"]), (False, []))
 
-    def test_a_rotation_that_stopped_after_pi_web_archived_the_coordinator_is_finished(self) -> None:
+    def test_a_rotation_that_stopped_after_pi_web_archived_the_coordinator_requires_reconciliation(self) -> None:
         state = {"outages": [], "pending": [ASKED], "rotating": True, "sessions": {}}
         (self.etl / "log").mkdir()
         (self.etl / "log" / "tick-state.json").write_text(json.dumps(state), encoding="utf-8")
@@ -176,30 +185,18 @@ class FailureTests(TickCase):
             ]),
             PROMPTS,
         ])
+        rows = self.rows(self.etl)
+        pending = self.state(self.etl)["pending"]
         proc = self.tick("2026-10-06T12:05:00Z")
-        self.assertEqual((proc.returncode, proc.stdout, proc.stderr), (0, "", ""))
-        self.assertEqual(self.stub.requests, [
-            got_status("t-1"),
-            got_list("/wt/datapull"),
-            got_list(str(self.etl)),
-            got_list(str(self.etl)),
-            ("POST", "/api/sessions", "", {"cwd": str(self.etl)}),
-            got_post("coord-2", "model", {"provider": "openai-codex", "modelId": "gpt-6-astra"}),
-            got_post("coord-2", "thinking-level", {"level": "xhigh"}),
-            got_status("coord-2"),
-            got_prompt("coord-2", rotation("etl")),
-            got_prompt("coord-2", "pi-streams tick 2026-10-06T12:05:00Z:\nask t-1 datapull Which venue first?", "followUp"),
-        ])
-        self.assertEqual(
-            self.rows(self.etl),
-            HEADER
-            + row("coord-1", "coordinator", str(self.etl), status="archived")
-            + row("t-1", "datapull", "/wt/datapull")
-            + f"coord-2\tcoordinator\t\t{self.etl}\t\t\topenai-codex/gpt-6-astra\txhigh\tactive\t2026-10-06T12:05:00Z\n",
-        )
-        self.assertEqual((self.state(self.etl)["rotating"], self.state(self.etl)["pending"]), (False, []))
+        self.assertEqual(proc.returncode, 1, proc.stdout)
+        self.assertIn("session coord-1 is archived", proc.stderr)
+        self.assertEqual(self.stub.requests, [got_list(str(self.etl))])
+        self.assertEqual(self.rows(self.etl), rows)
+        self.assertEqual(self.state(self.etl)["pending"], pending)
 
     def test_a_state_file_that_does_not_parse_is_left_alone(self) -> None:
+        config = self.etl / "stream.toml"
+        config.write_text(config.read_text().replace("state_schema = 1\n", ""))
         state = self.etl / "log" / "tick-state.json"
         state.parent.mkdir()
         state.write_text('{"sessions": {', encoding="utf-8")
@@ -223,7 +220,12 @@ class FailureTests(TickCase):
             "",
             f"{gone}: [Errno 2] No such file or directory: '{gone}/.pi-streams.lock'\n",
         ))
-        self.assertEqual(self.stub.requests, [got_status("t-1"), got_list("/wt/datapull"), got_list(str(self.etl))])
+        self.assertEqual(self.stub.requests, [
+            got_list(str(self.etl)),
+            got_status("coord-1"),
+            got_status("t-1"),
+            got_list("/wt/datapull"),
+        ])
 
 
 if __name__ == "__main__":

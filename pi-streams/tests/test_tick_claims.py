@@ -37,7 +37,8 @@ def observed(stream_dir: Path, *sessions: str) -> list[tuple[str, str, str, obje
     found: list[tuple[str, str, str, object]] = []
     for sid in sessions:
         found += [got_status(sid), got_list(WORKTREES[sid])]
-    return [*found, got_list(str(stream_dir))]
+    coordinator = "coord-d" if stream_dir.name == "datapull" else "coord-e"
+    return [got_list(str(stream_dir)), got_status(coordinator), *found]
 
 
 class ClaimTests(TickCase):
@@ -80,6 +81,7 @@ class ClaimTests(TickCase):
         )
         self.assertEqual(self.stub.requests, [
             *observed(self.datapull, "r-2", "t-4"),
+            got_list(str(self.datapull)),
             got_status("coord-d"),
             got_prompt(
                 "coord-d",
@@ -89,6 +91,7 @@ class ClaimTests(TickCase):
                 "followUp",
             ),
             *observed(self.etl, "w-1"),
+            got_list(str(self.etl)),
             got_status("coord-e"),
             got_prompt(
                 "coord-e",

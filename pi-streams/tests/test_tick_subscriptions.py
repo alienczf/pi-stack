@@ -121,6 +121,8 @@ class SubscriptionTests(TickCase):
         self.assertEqual(self.stub.requests, [
             got_list(str(self.etl)),
             got_status("coord-1"),
+            got_list(str(self.etl)),
+            got_status("coord-1"),
             got_prompt(
                 "coord-1",
                 "pi-streams tick 2026-10-06T09:00:00Z:\nsubscription daily: Post the daily status to ZF.",
@@ -131,7 +133,10 @@ class SubscriptionTests(TickCase):
         for at in ("2026-10-06T09:05:00Z", "2026-10-07T08:59:59Z"):
             quiet = self.tick(at)
             self.assertEqual((quiet.returncode, quiet.stdout), (0, ""))
-            self.assertEqual(self.stub.requests, [got_list(str(self.etl))])
+            self.assertEqual(self.stub.requests, [
+            got_list(str(self.etl)),
+            got_status("coord-1"),
+        ])
 
         next_day = self.tick("2026-10-07T09:03:00Z")
         self.assertEqual((next_day.returncode, next_day.stdout), (0, f"{self.etl}\tsubscription=1\n"))
@@ -269,6 +274,8 @@ class SubscriptionTests(TickCase):
         self.assertEqual(self.stub.requests, [
             got_list(str(self.etl)),
             got_status("coord-1"),
+            got_list(str(self.etl)),
+            got_status("coord-1"),
             got_prompt(
                 "coord-1",
                 f"pi-streams tick 2026-10-06T12:10:00Z:\n{PR_ACTION} / state=OPEN reviewDecision=REVIEW_REQUIRED "
@@ -347,7 +354,10 @@ class SubscriptionTests(TickCase):
         self.subscribe(self.etl, "hello\tcmd\ttouch ran\t\tSay hello.")
         proc = self.tick("2026-10-06T12:00:00Z")
         self.assertEqual((proc.returncode, proc.stdout, proc.stderr), (0, "", ""))
-        self.assertEqual(self.stub.requests, [got_status("coord-1")])
+        self.assertEqual(self.stub.requests, [
+            got_list(str(self.etl)),
+            got_status("coord-1"),
+        ])
         self.assertFalse((self.etl / "ran").exists())
         self.assertEqual(self.state(self.etl)["subscriptions"], {})
 

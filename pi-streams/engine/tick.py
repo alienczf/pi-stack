@@ -21,7 +21,7 @@ from engine.project import (
     stream_locks,
 )
 from engine.subscriptions import SOURCES, Subscription, load_subscriptions
-from engine.threads import Status, Thread, load_threads, rotate_coordinator, save_threads, transition
+from engine.threads import Coordinator, Status, Thread, _native_session, load_threads, require_ratified, resolve_coordinator, rotate_coordinator, save_threads, transition
 
 WAKE_KINDS = frozenset({"idle", "ask", "context", "stale-steer", "outage", "recovered", "subscription", "claim"})
 QUEUE_FLAGS = {"steer": "steer", "followUp": "follow-up"}
@@ -209,12 +209,17 @@ class StreamTick:
         self.listings: dict[str, dict[str, dict[str, object]]] = {}
         self.loaded = False
         self.errors: list[str] = []
+        self.coordinator_resolution: Coordinator | None = None
 
     def run(self) -> None:
         try:
             self.state = load_state(self.state_path)
             self.loaded = True
             self.rows = load_threads(self.rows_path)
+            self.coordinator_resolution = resolve_coordinator(self.stream_dir, self.rows)
+            if self.coordinator_resolution is not None:
+                resolved = self.coordinator_resolution
+                self.listings[resolved.row.worktree] = {resolved.row.session: resolved.native.info}
             self.check_claims()
             self.observe()
             self.check_subscriptions()
@@ -305,10 +310,8 @@ class StreamTick:
         return self.listings[cwd]
 
     def coordinator(self) -> Thread | None:
-        for row in self.rows:
-            if row.role == "coordinator" and row.status is Status.active:
-                return row
-        return None
+        resolved = self.coordinator_resolution
+        return resolved.row if resolved is not None and resolved.row.status is Status.active else None
 
     def observe(self) -> None:
         observed: set[str] = set()
@@ -318,14 +321,6 @@ class StreamTick:
                 observed.add(row.session)
         self.state.sessions = {sid: seen for sid, seen in self.state.sessions.items() if sid in observed}
         coord = self.coordinator()
-        if coord is not None and self.listing(coord.worktree).get(coord.session, {}).get("archived") is True:
-            # A rotation that stopped after its archive call, or a person in pi-web, can
-            # archive the coordinator and leave its row active. pi-web still reopens an
-            # archived session to answer status or a prompt, so only the listing shows it.
-            transition(coord, Status.archived)
-            self.rows_dirty = True
-            self.state.rotating = True
-            coord = None
         self.state.outages = [sid for sid in self.state.outages if coord is not None and sid == coord.session]
         if coord is not None:
             self.check_outage(coord)
@@ -365,6 +360,7 @@ class StreamTick:
 
     def observe_thread(self, row: Thread) -> None:
         status = piweb.session_status(row.session)
+        piweb.require_identity(status, row.session)
         # A spawned thread starts on a prompt, so one first seen idle has finished it,
         # even when it did so between two ticks. An adopted thread that is already
         # idle reports idle once too, which tells its coordinator that it waits.
@@ -401,6 +397,7 @@ class StreamTick:
         ))
         if not stale:
             return
+        require_ratified(self.stream_dir)
         for text in stale:
             self.emit("stale-steer", row, text)
         new.replay = [[text, "steer" if text in stale else QUEUE_FLAGS[kind]] for text, kind in queued]
@@ -412,6 +409,8 @@ class StreamTick:
             new.queued[text] = self.at
 
     def replay(self, row: Thread, seen: Seen, waiting: Counter[str]) -> bool:
+        if seen.replay:
+            require_ratified(self.stream_dir)
         sent = False
         while seen.replay:
             text, behavior = seen.replay[0]
@@ -434,6 +433,7 @@ class StreamTick:
             return
         if coord is not None and self.out(coord):
             return
+        require_ratified(self.stream_dir)
         text = "\n".join([f"pi-streams tick {self.at}:", *(event.line() for event in self.state.pending)])
         sid, behavior = self.wake_target(coord)
         piweb.prompt(sid, text, behavior)
@@ -442,7 +442,10 @@ class StreamTick:
 
     def wake_target(self, coord: Thread | None) -> tuple[str, str | None]:
         if coord is not None:
-            status = piweb.session_status(coord.session)
+            resolved = resolve_coordinator(self.stream_dir, self.rows)
+            if resolved is None or resolved.row.session != coord.session:
+                raise StreamsError("coordinator designation changed before dispatch")
+            status = resolved.native.status
             if status.get("isStreaming") is True:
                 return coord.session, "follow-up"
             if self.warm(coord, status):
@@ -459,8 +462,16 @@ class StreamTick:
         for row in self.rows:
             if row.role != "coordinator" or row.status is not Status.done:
                 continue
-            if _working(piweb.session_status(row.session)):
+            listing = self.listing(row.worktree)
+            info = listing.get(row.session)
+            if info is not None and info.get("archived") is True:
+                transition(row, Status.archived)
+                self.rows_dirty = True
                 continue
+            status = _native_session(row.session, Path(row.worktree), list(listing.values())).status
+            if _working(status):
+                continue
+            require_ratified(self.stream_dir)
             piweb.archive(row.session)
             transition(row, Status.archived)
             self.rows_dirty = True

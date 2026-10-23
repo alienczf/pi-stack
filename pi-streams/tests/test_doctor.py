@@ -8,6 +8,7 @@ import time
 import urllib.parse
 
 from support import EngineCase, git, pi_stack_revision
+from test_new import status_body
 
 SKILLS = (
     "correct",
@@ -69,7 +70,8 @@ class DoctorTests(EngineCase):
         )
         if not (stream / "threads.tsv").is_file():
             (stream / "threads.tsv").write_text(
-                "session\trole\trepo\tworktree\tbranch\tbase\tmodel\tthinking\tstatus\tstarted\n",
+                "session\trole\trepo\tworktree\tbranch\tbase\tmodel\tthinking\tstatus\tstarted\n"
+                f"coord-1\tcoordinator\t\t{stream}\t\t\topenai-codex/gpt-6-astra\txhigh\tactive\t2026-10-23T00:00:00Z\n",
                 encoding="utf-8",
             )
         if not (stream / ".git").exists():
@@ -78,6 +80,12 @@ class DoctorTests(EngineCase):
         if git(stream, self.env, "status", "--porcelain").strip() != "":
             git(stream, self.env, "commit", "-m", "stream")
         return stream
+
+    def _stream_routes(self) -> list[tuple]:
+        return [
+            ("GET", "/api/sessions", 200, [{"id": "coord-1", "cwd": str(self.home / "etl")}]),
+            ("GET", "/api/sessions/coord-1/status", 200, status_body("coord-1")),
+        ]
 
     def _pi_on_path(self) -> str:
         bindir = self.tmp / "bin"
@@ -102,6 +110,8 @@ class DoctorTests(EngineCase):
         )
 
     def _lines(self, pi: str, pi_web: str, extra: str = "", streams: str = "") -> str:
+        if streams:
+            streams = "PASS coordinator: etl exact native identity coord-1\n" + streams
         return self._report(
             pi,
             pi_web,
@@ -220,7 +230,7 @@ class DoctorTests(EngineCase):
     def test_doctor_warns_when_a_stream_has_no_tick_state(self) -> None:
         pi = self._pi_on_path()
         self._add_stream()
-        self.stub.set_routes([("GET", "/api/sessions", 200, [])])
+        self.stub.set_routes(self._stream_routes())
         proc = self.run_streams("doctor")
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(
@@ -239,7 +249,7 @@ class DoctorTests(EngineCase):
         state.write_text("{}\n", encoding="utf-8")
         old = time.time() - (16 * 60)
         os.utime(state, (old, old))
-        self.stub.set_routes([("GET", "/api/sessions", 200, [])])
+        self.stub.set_routes(self._stream_routes())
         proc = self.run_streams("doctor")
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(
@@ -256,7 +266,7 @@ class DoctorTests(EngineCase):
         pi = self._pi_on_path()
         state = self._add_stream() / "log" / "tick-state.json"
         state.write_text("{}\n", encoding="utf-8")
-        self.stub.set_routes([("GET", "/api/sessions", 200, [])])
+        self.stub.set_routes(self._stream_routes())
         proc = self.run_streams("doctor")
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(

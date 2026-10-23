@@ -25,10 +25,10 @@ class PerStreamTests(EngineCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.stub.requests.clear()
 
-    def _routes(self, sid: str) -> list[tuple[str, str, int, object]]:
+    def _routes(self, sid: str, stream_id: str) -> list[tuple[str, str, int, object]]:
         return [
             ("GET", "/api/sessions", 200, []),
-            ("POST", "/api/sessions", 200, {"id": sid}),
+            ("POST", "/api/sessions", 200, {"id": sid, "cwd": str(self.home / stream_id)}),
             ("POST", f"/api/sessions/{sid}/model", 200, {}),
             ("POST", f"/api/sessions/{sid}/thinking-level", 200, {}),
             ("GET", f"/api/sessions/{sid}/status", 200, status_body(sid)),
@@ -36,7 +36,7 @@ class PerStreamTests(EngineCase):
         ]
 
     def _new(self, stream_id: str, sid: str) -> Path:
-        self.stub.set_routes(self._routes(sid))
+        self.stub.set_routes(self._routes(sid, stream_id))
         proc = self.run_streams("new", stream_id)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(proc.stdout, f"http://127.0.0.1:8504\n{sid}\n")
@@ -75,6 +75,9 @@ class PerStreamTests(EngineCase):
     def test_a_shared_worktree_writes_one_claim_line_in_the_index(self) -> None:
         one = self._new("one", "coord-1")
         two = self._new("two", "coord-2")
+        for stream in (one, two):
+            state = stream / "STATE.md"
+            state.write_text(state.read_text().replace("ratified: no", "ratified: 2026-10-23 fixture human confirmation", 1))
         shared = "/wt/shared"
         (one / "threads.tsv").write_text(
             (one / "threads.tsv").read_text(encoding="utf-8") + row("t-1", "worker", shared),
@@ -120,7 +123,7 @@ class PerStreamTests(EngineCase):
     def test_log_is_uncommitted(self) -> None:
         one = self._new("one", "coord-1")
         log = one / "log" / "events.jsonl"
-        log.parent.mkdir()
+        log.parent.mkdir(exist_ok=True)
         log.write_text("{}\n", encoding="utf-8")
         self.assertEqual(git(one, self.env, "status", "--porcelain"), "")
         self.assertEqual(git(one, self.env, "check-ignore", "log/events.jsonl"), "log/events.jsonl\n")

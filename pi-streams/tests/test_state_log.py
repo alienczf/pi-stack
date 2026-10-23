@@ -382,8 +382,6 @@ class LogCliTickTests(TickCase):
     def setUp(self) -> None:
         super().setUp()
         self.stream = self.make_stream(self.home, "canonical", "")
-        with (self.stream / "stream.toml").open("a") as handle:
-            handle.write("state_schema = 1\n")
         (self.stream / "STATE.md").write_bytes(PREFIX)
 
     def test_append_cli_records_actual_body_and_request_receipt(self) -> None:

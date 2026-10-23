@@ -55,11 +55,12 @@ class StatusTests(EngineCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         etl = self.register_stream("etl")
         (etl / "STREAM.md").write_text("ratified: no\n", encoding="utf-8")
-        (etl / "threads.tsv").write_text(HEADER + COORD + THREAD_ACTIVE + THREAD_ARCHIVED, encoding="utf-8")
+        (etl / "threads.tsv").write_text(HEADER + COORD.replace("/wt\t", f"{etl}\t") + THREAD_ACTIVE + THREAD_ARCHIVED, encoding="utf-8")
         other = self.register_stream("other")
         (other / "STREAM.md").write_text("ratified: yes\n", encoding="utf-8")
-        (other / "threads.tsv").write_text(HEADER + OTHER, encoding="utf-8")
+        (other / "threads.tsv").write_text(HEADER + OTHER.replace("/wt\t", f"{other}\t"), encoding="utf-8")
         self.stub.set_routes([
+            ("GET", "/api/sessions", 200, [{"id": "coord-1", "cwd": str(etl)}]),
             ("GET", "/api/sessions/coord-1/status", 200, live("coord-1", 2, tokens=1200)),
             ("GET", "/api/sessions/thread-1/status", 200, live("thread-1", 4)),
             ("GET", "/api/sessions/thread-2/status", 200, live("thread-2", 1)),
@@ -69,7 +70,7 @@ class StatusTests(EngineCase):
         self.assertEqual(got.stdout, STATUS_JSON)
         self.assertEqual(
             [path for _method, path, _query, _body in self.stub.requests],
-            ["/api/sessions/coord-1/status", "/api/sessions/thread-1/status"],
+            ["/api/sessions", "/api/sessions/coord-1/status", "/api/sessions/thread-1/status"],
         )
         text = self.run_streams("status", "etl")
         self.assertEqual(text.returncode, 0, text.stderr)

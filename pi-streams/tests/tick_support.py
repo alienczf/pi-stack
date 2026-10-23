@@ -10,7 +10,7 @@ import subprocess
 import urllib.parse
 from pathlib import Path
 
-from support import EngineCase, git, pi_stack_revision
+from support import EngineCase, ROOT, git, pi_stack_revision
 
 HEADER = "session\trole\trepo\tworktree\tbranch\tbase\tmodel\tthinking\tstatus\tstarted\n"
 SUBSCRIPTIONS = "id\tsource\ttarget\twhen\taction\n"
@@ -136,10 +136,13 @@ def got_post(sid: str, verb: str, body: object = None) -> tuple[str, str, str, o
     return ("POST", f"/api/sessions/{sid}/{verb}", "", {} if body is None else body)
 
 
-def rotation(stream: str) -> str:
+def rotation(stream: str, path: Path) -> str:
     return (
         f"You are the new coordinator for stream {stream}. "
-        "Your memory is the files in this folder. Read STATE.md, then continue."
+        f"Read {path}/AGENTS.md and {path}/STATE.md before acting. "
+        "Use Goals' current objective, falling back to North Star. Current Goals and Rules take precedence. "
+        "Open history/, context/, checks/, and handover/ only on demand. "
+        "Goal at pickup:\n<the single human-authorized outcome>"
     )
 
 
@@ -148,6 +151,7 @@ class TickCase(EngineCase):
         super().setUp()
         proc = self.run_streams("init", str(self.root), "-y")
         self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.fixture_streams: list[Path] = []
         self.logs = self.tmp / "sessions"
         self.logs.mkdir()
         self.stub.requests.clear()
@@ -162,12 +166,14 @@ class TickCase(EngineCase):
     ) -> Path:
         project_name = self.root.name if project is None else project
         stream_dir = self.register_stream(name, (home / name).resolve(), index, project_name)
-        (stream_dir / "STREAM.md").write_text("ratified: 2026-10-06\n", encoding="utf-8")
+        self.fixture_streams.append(stream_dir)
+        state = (ROOT / "pi-streams/templates/stream/STATE.md").read_text()
+        (stream_dir / "STATE.md").write_text(state.replace("ratified: no", "ratified: 2026-10-23 fixture human confirmation", 1))
         (stream_dir / "threads.tsv").write_text(HEADER + rows, encoding="utf-8")
         (stream_dir / "subscriptions.tsv").write_text(SUBSCRIPTIONS, encoding="utf-8")
         (stream_dir / ".gitignore").write_text("log/\n", encoding="utf-8")
         (stream_dir / "stream.toml").write_text(
-            f'project = "{project_name}"\npi_stack_revision = "{pi_stack_revision()}"\n',
+            f'project = "{project_name}"\npi_stack_revision = "{pi_stack_revision()}"\nstate_schema = 1\n',
             encoding="utf-8",
         )
         if not (stream_dir / ".git").exists():
@@ -201,6 +207,21 @@ class TickCase(EngineCase):
         return (self.index / "ALERTS").read_text(encoding="utf-8")
 
     def tick(self, at: str, *args: str) -> subprocess.CompletedProcess[str]:
+        routes = list(self.stub.routes)
+        native = []
+        for stream in self.fixture_streams:
+            table = stream / "threads.tsv"
+            for line in table.read_text().splitlines()[1:]:
+                cells = line.split("\t")
+                if len(cells) != 10:
+                    continue
+                sid, role, _, cwd = cells[:4]
+                native.append(info(sid, cwd, self.log_path(sid)))
+                if role == "coordinator" and not any(method == "GET" and path == f"/api/sessions/{sid}/status" for method, path, _, _ in routes):
+                    routes.append(("GET", f"/api/sessions/{sid}/status", 200, status(sid)))
+        if not any(method == "GET" and path == "/api/sessions" for method, path, _, _ in routes):
+            routes.append(("GET", "/api/sessions", 200, native))
+        self.stub.set_routes(routes)
         self.stub.requests.clear()
         self.env["PI_STREAMS_NOW"] = at
         return self.run_streams("tick", *args)

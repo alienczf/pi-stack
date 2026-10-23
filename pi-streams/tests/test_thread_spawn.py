@@ -71,26 +71,27 @@ class SpawnTests(EngineCase):
         worktree = (self.root / ".worktrees" / "alpha" / "etl-datapull").resolve()
         self.stub.set_routes([
             ("GET", "/api/sessions", 200, []),
-            ("POST", "/api/sessions", 200, {"id": "thread-1"}),
+            ("POST", "/api/sessions", 200, {"id": "thread-1", "cwd": str(worktree)}),
             ("GET", "/api/sessions/thread-1/status", 200, status_body("thread-1")),
             ("POST", "/api/sessions/thread-1/prompt", 200, {"accepted": True}),
         ])
         proc = self.spawn_datapull()
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(proc.stdout, "thread-1\n")
-        self.assertEqual(len(self.stub.requests), 6)
+        self.assertEqual(len(self.stub.requests), 7)
         self.assert_call(0, "GET", "/api/sessions", None, cwd=str(worktree))
         self.assert_call(1, "POST", "/api/sessions", {"cwd": str(worktree)})
         self.assert_call(
-            2,
+            3,
             "POST",
             "/api/sessions/thread-1/model",
             {"provider": "openai-codex", "modelId": "gpt-6-astra"},
         )
-        self.assert_call(3, "POST", "/api/sessions/thread-1/thinking-level", {"level": "xhigh"})
-        self.assert_call(4, "GET", "/api/sessions/thread-1/status", None)
+        self.assert_call(2, "GET", "/api/sessions/thread-1/status", None)
+        self.assert_call(4, "POST", "/api/sessions/thread-1/thinking-level", {"level": "xhigh"})
+        self.assert_call(5, "GET", "/api/sessions/thread-1/status", None)
         self.assert_call(
-            5,
+            6,
             "POST",
             "/api/sessions/thread-1/prompt",
             {"text": expected_brief(str(self.stream_dir), str(worktree), base)},
@@ -149,9 +150,9 @@ class SpawnTests(EngineCase):
         worktree = (self.root / ".worktrees" / "alpha" / "etl-datapull").resolve()
         self.stub.set_routes([
             ("GET", "/api/sessions", 200, []),
-            ("POST", "/api/sessions", 200, {"id": "thread-1"}),
+            ("POST", "/api/sessions", 200, {"id": "thread-1", "cwd": str(worktree)}),
             ("GET", "/api/sessions/thread-1/status", 200, status_body("thread-1")),
-            ("POST", "/api/sessions/thread-1/prompt", 503, {"error": "busy"}),
+            ("POST", "/api/sessions/thread-1/prompt", 409, {"error": "busy"}),
         ])
         failed = self.spawn_datapull()
         self.assertEqual(failed.returncode, 1)
@@ -172,6 +173,8 @@ class SpawnTests(EngineCase):
             [(method, path) for method, path, _query, _body in self.stub.requests],
             [
                 ("GET", "/api/sessions"),
+                ("GET", "/api/sessions/thread-1/status"),
+                ("GET", "/api/sessions/thread-1/status"),
                 ("POST", "/api/sessions/thread-1/model"),
                 ("POST", "/api/sessions/thread-1/thinking-level"),
                 ("GET", "/api/sessions/thread-1/status"),
@@ -179,7 +182,7 @@ class SpawnTests(EngineCase):
             ],
         )
         self.assert_call(
-            4,
+            6,
             "POST",
             "/api/sessions/thread-1/prompt",
             {"text": expected_brief(str(self.stream_dir), str(worktree), base)},
@@ -192,7 +195,7 @@ class SpawnTests(EngineCase):
         worktree = (self.root / ".worktrees" / "alpha" / "etl-datapull").resolve()
         self.stub.set_routes([
             ("GET", "/api/sessions", 200, []),
-            ("POST", "/api/sessions", 200, {"id": "thread-1"}),
+            ("POST", "/api/sessions", 200, {"id": "thread-1", "cwd": str(worktree)}),
             ("GET", "/api/sessions/thread-1/status", 200, status_body("thread-1")),
             ("POST", "/api/sessions/thread-1/prompt", 200, {"accepted": True}),
         ])
@@ -207,7 +210,7 @@ class SpawnTests(EngineCase):
             ("GET", "/api/sessions", 200, [
                 {"id": "thread-1", "cwd": str(worktree), "messageCount": 80, "archived": True},
             ]),
-            ("POST", "/api/sessions", 200, {"id": "thread-2"}),
+            ("POST", "/api/sessions", 200, {"id": "thread-2", "cwd": str(worktree)}),
             ("GET", "/api/sessions/thread-2/status", 200, status_body("thread-2")),
             ("POST", "/api/sessions/thread-2/prompt", 200, {"accepted": True}),
         ])
@@ -215,7 +218,7 @@ class SpawnTests(EngineCase):
         self.assertEqual(successor.returncode, 0, successor.stderr)
         self.assertEqual(successor.stdout, "thread-2\n")
         self.assert_call(
-            5,
+            6,
             "POST",
             "/api/sessions/thread-2/prompt",
             {"text": expected_brief(str(self.stream_dir), str(worktree), base, "thread-2")},

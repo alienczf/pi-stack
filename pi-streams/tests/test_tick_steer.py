@@ -39,7 +39,12 @@ class SteerTests(TickCase):
         self.stub.set_routes(self.thread(("followUp", BARS), ("followUp", RERUN)))
         early = self.tick("2026-10-06T12:09:59Z")
         self.assertEqual((early.returncode, early.stdout), (0, ""))
-        self.assertEqual(self.stub.requests, [got_status("t-1"), got_list("/wt/datapull"), got_list(str(self.etl))])
+        self.assertEqual(self.stub.requests, [
+            got_list(str(self.etl)),
+            got_status("coord-1"),
+            got_status("t-1"),
+            got_list("/wt/datapull"),
+        ])
         self.assertEqual(self.state(self.etl)["sessions"]["t-1"]["queued"], {
             BARS: "2026-10-06T12:00:00Z",
             RERUN: "2026-10-06T12:09:59Z",
@@ -48,6 +53,8 @@ class SteerTests(TickCase):
         due = self.tick("2026-10-06T12:10:00Z")
         self.assertEqual((due.returncode, due.stdout, due.stderr), (0, f"{self.etl}\tstale-steer=1\n", ""))
         self.assertEqual(self.stub.requests, [
+            got_list(str(self.etl)),
+            got_status("coord-1"),
             got_status("t-1"),
             got_list("/wt/datapull"),
             got_post("t-1", "queue/clear"),
@@ -79,7 +86,12 @@ class SteerTests(TickCase):
         self.assertEqual(self.tick("2026-10-06T12:00:00Z").returncode, 0)
         late = self.tick("2026-10-06T12:30:00Z")
         self.assertEqual((late.returncode, late.stdout), (0, ""))
-        self.assertEqual(self.stub.requests, [got_status("t-1"), got_list("/wt/datapull"), got_list(str(self.etl))])
+        self.assertEqual(self.stub.requests, [
+            got_list(str(self.etl)),
+            got_status("coord-1"),
+            got_status("t-1"),
+            got_list("/wt/datapull"),
+        ])
         self.assertEqual(self.state(self.etl)["sessions"]["t-1"]["queued"], {BARS: "2026-10-06T12:00:00Z"})
 
     def test_every_copy_of_a_repeated_message_is_resent(self) -> None:
@@ -87,7 +99,9 @@ class SteerTests(TickCase):
         self.assertEqual(self.tick("2026-10-06T12:00:00Z").returncode, 0)
         due = self.tick("2026-10-06T12:10:00Z")
         self.assertEqual((due.returncode, due.stdout), (0, f"{self.etl}\tstale-steer=1\n"))
-        self.assertEqual(self.stub.requests[:5], [
+        self.assertEqual(self.stub.requests[:7], [
+            got_list(str(self.etl)),
+            got_status("coord-1"),
             got_status("t-1"),
             got_list("/wt/datapull"),
             got_post("t-1", "queue/clear"),
@@ -102,13 +116,15 @@ class SteerTests(TickCase):
         self.stub.set_routes([refused, *self.thread(("followUp", BARS), ("followUp", RERUN))])
         due = self.tick("2026-10-06T12:10:00Z")
         self.assertEqual(due.returncode, 1)
-        self.assertEqual(self.stub.requests[2:], [got_post("t-1", "queue/clear"), got_prompt("t-1", BARS, "steer")])
+        self.assertEqual(self.stub.requests[4:], [got_post("t-1", "queue/clear"), got_prompt("t-1", BARS, "steer")])
         self.assertEqual(self.state(self.etl)["sessions"]["t-1"]["replay"], [[BARS, "steer"], [RERUN, "follow-up"]])
 
         self.stub.set_routes(self.thread())
         again = self.tick("2026-10-06T12:15:00Z")
         self.assertEqual(again.returncode, 0, again.stderr)
-        self.assertEqual(self.stub.requests[:3], [
+        self.assertEqual(self.stub.requests[:5], [
+            got_list(str(self.etl)),
+            got_status("coord-1"),
             got_status("t-1"),
             got_prompt("t-1", BARS, "steer"),
             got_prompt("t-1", RERUN, "followUp"),
@@ -126,6 +142,8 @@ class SteerTests(TickCase):
         again = self.tick("2026-10-06T12:15:00Z")
         self.assertEqual((again.returncode, again.stdout, again.stderr), (0, "", ""))
         self.assertEqual(self.stub.requests, [
+            got_list(str(self.etl)),
+            got_status("coord-1"),
             got_status("t-1"),
             got_prompt("t-1", BARS, "steer"),
             got_list("/wt/datapull"),
@@ -145,7 +163,9 @@ class SteerTests(TickCase):
         self.stub.set_routes(self.thread(("followUp", BARS), ("followUp", RERUN)))
         again = self.tick("2026-10-06T12:15:00Z")
         self.assertEqual(again.returncode, 0, again.stderr)
-        self.assertEqual(self.stub.requests[:5], [
+        self.assertEqual(self.stub.requests[:7], [
+            got_list(str(self.etl)),
+            got_status("coord-1"),
             got_status("t-1"),
             got_list("/wt/datapull"),
             got_post("t-1", "queue/clear"),
@@ -163,7 +183,12 @@ class SteerTests(TickCase):
         self.stub.set_routes(self.thread(("steer", BARS)))
         back = self.tick("2026-10-06T12:10:00Z")
         self.assertEqual((back.returncode, back.stdout), (0, ""))
-        self.assertEqual(self.stub.requests, [got_status("t-1"), got_list("/wt/datapull"), got_list(str(self.etl))])
+        self.assertEqual(self.stub.requests, [
+            got_list(str(self.etl)),
+            got_status("coord-1"),
+            got_status("t-1"),
+            got_list("/wt/datapull"),
+        ])
         self.assertEqual(self.state(self.etl)["sessions"]["t-1"]["queued"], {BARS: "2026-10-06T12:10:00Z"})
 
 

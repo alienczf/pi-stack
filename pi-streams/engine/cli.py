@@ -52,6 +52,7 @@ def _parser() -> argparse.ArgumentParser:
     new = sub.add_parser("new")
     new.add_argument("stream_id", metavar="id")
     new.add_argument("--home")
+    new.add_argument("--coordinator-session", help="explicitly adopt this exact owned native session; never chosen by directory")
 
     status = sub.add_parser("status")
     status.add_argument("stream_id", metavar="id", nargs="?")
@@ -137,7 +138,7 @@ def cmd_new(args: argparse.Namespace) -> int:
         project = resolve_project(index)
         stream_dir = create_stream(index, project, args.stream_id)
         with stream_lock(stream_dir):
-            sid = ensure_coordinator(project, stream_dir)
+            sid = ensure_coordinator(project, stream_dir, coordinator_session=args.coordinator_session)
             commit_repo(stream_dir, f"pi-streams new {args.stream_id}")
     print(project.info.pi_web_url)
     print(sid)

@@ -85,7 +85,7 @@ class HandoverIdentityTests(EngineCase):
         for sid in (OLD, CURRENT):
             self.stub.set_routes([
                 ("GET", "/api/sessions", 200, []),
-                ("POST", "/api/sessions", 200, {"id": sid}),
+                ("POST", "/api/sessions", 200, {"id": sid, "cwd": str(self.root / ".worktrees/alpha/etl-worker")}),
                 ("GET", f"/api/sessions/{sid}/status", 200, status(sid)),
                 ("POST", f"/api/sessions/{sid}/prompt", 200, {"accepted": True}),
             ])
@@ -181,7 +181,7 @@ class HandoverIdentityTests(EngineCase):
         self.table.write_text(HEADER + self.row(CURRENT, "worker", "active") + self.row(CURRENT, "review", "done"))
         self.write_handover(CURRENT, legacy=True)
         self.write_handover(CURRENT, "review", legacy=True)
-        self.assert_refused("ambiguous recorded session identity")
+        self.assert_refused("duplicate session IDs")
 
     def test_unsafe_session_cannot_escape_handover_directory(self) -> None:
         self.table.write_text(HEADER + self.row("../escape", "worker", "active"))

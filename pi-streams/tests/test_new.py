@@ -27,6 +27,9 @@ class NewTests(EngineCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.stub.requests.clear()
 
+    def spawn_info(self) -> dict[str, str]:
+        return {"id": "coord-1", "cwd": self.stream()}
+
     def stream(self) -> str:
         return str((self.home / "etl").resolve())
 
@@ -43,7 +46,7 @@ class NewTests(EngineCase):
     def test_new_spawns_then_second_new_spawns_nothing(self) -> None:
         self.stub.set_routes([
             ("GET", "/api/sessions", 200, []),
-            ("POST", "/api/sessions", 200, {"id": "coord-1"}),
+            ("POST", "/api/sessions", 200, self.spawn_info()),
             ("GET", "/api/sessions/coord-1/status", 200, status_body("coord-1")),
             ("POST", "/api/sessions/coord-1/prompt", 200, {"accepted": True}),
         ])
@@ -51,18 +54,19 @@ class NewTests(EngineCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(proc.stdout, "http://127.0.0.1:8504\ncoord-1\n")
         stream = self.stream()
-        self.assertEqual(len(self.stub.requests), 6)
+        self.assertEqual(len(self.stub.requests), 7)
         self.assert_call(0, "GET", "/api/sessions", None, cwd=stream)
         self.assert_call(1, "POST", "/api/sessions", {"cwd": stream})
         self.assert_call(
-            2,
+            3,
             "POST",
             "/api/sessions/coord-1/model",
             {"provider": "openai-codex", "modelId": "gpt-6-astra"},
         )
-        self.assert_call(3, "POST", "/api/sessions/coord-1/thinking-level", {"level": "xhigh"})
-        self.assert_call(4, "GET", "/api/sessions/coord-1/status", None)
-        self.assert_call(5, "POST", "/api/sessions/coord-1/prompt", {"text": "/skill:stream-kickoff"})
+        self.assert_call(2, "GET", "/api/sessions/coord-1/status", None)
+        self.assert_call(4, "POST", "/api/sessions/coord-1/thinking-level", {"level": "xhigh"})
+        self.assert_call(5, "GET", "/api/sessions/coord-1/status", None)
+        self.assert_call(6, "POST", "/api/sessions/coord-1/prompt", {"text": "/skill:stream-kickoff"})
         rows = (self.home / "etl" / "threads.tsv").read_text(encoding="utf-8").splitlines()
         self.assertEqual(rows[0], HEADER.rstrip("\n"))
         cells = rows[1].split("\t")
@@ -78,10 +82,14 @@ class NewTests(EngineCase):
         self.assertEqual(git(Path(self.stream()), self.env, "rev-list", "--count", "HEAD").strip(), "1")
         head = git(Path(self.stream()), self.env, "rev-parse", "HEAD")
         before = len(self.stub.requests)
+        self.stub.set_routes([
+            ("GET", "/api/sessions", 200, [self.spawn_info()]),
+            ("GET", "/api/sessions/coord-1/status", 200, status_body("coord-1")),
+        ])
         again = self.run_streams("new", "etl")
         self.assertEqual(again.returncode, 0, again.stderr)
         self.assertEqual(again.stdout, "http://127.0.0.1:8504\ncoord-1\n")
-        self.assertEqual(self.stub.requests[before:], [])
+        self.assertEqual([(method, path) for method, path, _, _ in self.stub.requests[before:]], [("GET", "/api/sessions"), ("GET", "/api/sessions/coord-1/status")])
         self.assertEqual(git(Path(self.stream()), self.env, "rev-parse", "HEAD"), head)
 
     def test_new_adopts_a_listed_session_without_spawn(self) -> None:
@@ -91,19 +99,12 @@ class NewTests(EngineCase):
             ("GET", "/api/sessions/coord-existing/status", 200, status_body("coord-existing")),
             ("POST", "/api/sessions/coord-existing/prompt", 200, {"accepted": True}),
         ])
-        proc = self.run_streams("new", "etl")
+        proc = self.run_streams("new", "etl", "--coordinator-session", "coord-existing")
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(proc.stdout, "http://127.0.0.1:8504\ncoord-existing\n")
-        self.assertEqual(len(self.stub.requests), 4)
+        self.assertEqual(len(self.stub.requests), 2)
         self.assert_call(0, "GET", "/api/sessions", None, cwd=stream)
-        self.assert_call(
-            1,
-            "POST",
-            "/api/sessions/coord-existing/model",
-            {"provider": "openai-codex", "modelId": "gpt-6-astra"},
-        )
-        self.assert_call(2, "POST", "/api/sessions/coord-existing/thinking-level", {"level": "xhigh"})
-        self.assert_call(3, "GET", "/api/sessions/coord-existing/status", None)
+        self.assert_call(1, "GET", "/api/sessions/coord-existing/status", None)
         paths = [item[1] for item in self.stub.requests]
         self.assertNotIn("/api/sessions/coord-existing/prompt", paths)
         posted = [item for item in self.stub.requests if item[0] == "POST" and item[1] == "/api/sessions"]
@@ -113,9 +114,9 @@ class NewTests(EngineCase):
         stream = self.stream()
         self.stub.set_routes([
             ("GET", "/api/sessions", 200, []),
-            ("POST", "/api/sessions", 200, {"id": "coord-1"}),
+            ("POST", "/api/sessions", 200, self.spawn_info()),
             ("GET", "/api/sessions/coord-1/status", 200, status_body("coord-1")),
-            ("POST", "/api/sessions/coord-1/prompt", 503, {"error": "busy"}),
+            ("POST", "/api/sessions/coord-1/prompt", 409, {"error": "busy"}),
         ])
         failed = self.run_streams("new", "etl")
         self.assertEqual(failed.returncode, 1)
@@ -136,13 +137,15 @@ class NewTests(EngineCase):
             [(method, path) for method, path, _query, _body in self.stub.requests],
             [
                 ("GET", "/api/sessions"),
+                ("GET", "/api/sessions/coord-1/status"),
+                ("GET", "/api/sessions/coord-1/status"),
                 ("POST", "/api/sessions/coord-1/model"),
                 ("POST", "/api/sessions/coord-1/thinking-level"),
                 ("GET", "/api/sessions/coord-1/status"),
                 ("POST", "/api/sessions/coord-1/prompt"),
             ],
         )
-        self.assert_call(4, "POST", "/api/sessions/coord-1/prompt", {"text": "/skill:stream-kickoff"})
+        self.assert_call(6, "POST", "/api/sessions/coord-1/prompt", {"text": "/skill:stream-kickoff"})
         cells = (self.home / "etl" / "threads.tsv").read_text(encoding="utf-8").splitlines()[1].split("\t")
         self.assertEqual(cells[:2], ["coord-1", "coordinator"])
         self.assertEqual(git(Path(self.stream()), self.env, "log", "-1", "--format=%s").strip(), "pi-streams new etl")
@@ -151,17 +154,18 @@ class NewTests(EngineCase):
         stream = self.stream()
         self.stub.set_routes([
             ("GET", "/api/sessions", 200, []),
-            ("POST", "/api/sessions", 200, {"id": "coord-1"}),
+            ("POST", "/api/sessions", 200, self.spawn_info()),
             ("GET", "/api/sessions/coord-1/status", 200, status_body("coord-1", model_id="gpt-6-luna")),
         ])
         proc = self.run_streams("new", "etl")
         self.assertEqual(proc.returncode, 1)
         self.assertIn("gpt-6-luna", proc.stderr)
         self.assertIn("gpt-6-astra", proc.stderr)
-        self.assertEqual(len(self.stub.requests), 5)
+        self.assertEqual(len(self.stub.requests), 6)
         self.assert_call(0, "GET", "/api/sessions", None, cwd=stream)
         self.assert_call(1, "POST", "/api/sessions", {"cwd": stream})
-        self.assert_call(4, "GET", "/api/sessions/coord-1/status", None)
+        self.assert_call(2, "GET", "/api/sessions/coord-1/status", None)
+        self.assert_call(5, "GET", "/api/sessions/coord-1/status", None)
         prompts = [item for item in self.stub.requests if item[1].endswith("/prompt")]
         self.assertEqual(prompts, [])
         self.assertEqual((self.home / "etl" / "threads.tsv").read_text(encoding="utf-8"), HEADER)

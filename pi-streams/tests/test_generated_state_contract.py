@@ -23,13 +23,17 @@ class GeneratedStateContractTests(EngineCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.stub.set_routes([
             ("GET", "/api/sessions", 200, []),
-            ("POST", "/api/sessions", 200, {"id": "coord-contract"}),
+            ("POST", "/api/sessions", 200, {"id": "coord-contract", "cwd": str(self.home / "contract")}),
             ("GET", "/api/sessions/coord-contract/status", 200, status_body("coord-contract")),
             ("POST", "/api/sessions/coord-contract/prompt", 200, {"accepted": True}),
         ])
         result = self.run_streams("new", "contract")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.stream = self.home / "contract"
+        self.stub.set_routes([
+            ("GET", "/api/sessions", 200, [{"id": "coord-contract", "cwd": str(self.stream)}]),
+            ("GET", "/api/sessions/coord-contract/status", 200, status_body("coord-contract")),
+        ])
 
     def test_new_stream_has_only_current_state_seeds_and_is_explicitly_unratified(self) -> None:
         state = artifacts.parse_state((self.stream / "STATE.md").read_bytes())
@@ -107,8 +111,9 @@ class GeneratedStateContractTests(EngineCase):
         artifacts.update_current_objective(self.stream, "Resume the canonical fixture objective.")
         self.stub.requests.clear()
         self.stub.set_routes([
-            ("GET", "/api/sessions", 200, []),
-            ("POST", "/api/sessions", 200, {"id": "coord-next"}),
+            ("GET", "/api/sessions", 200, [{"id": "coord-contract", "cwd": str(self.stream)}]),
+            ("GET", "/api/sessions/coord-contract/status", 200, status_body("coord-contract")),
+            ("POST", "/api/sessions", 200, {"id": "coord-next", "cwd": str(self.stream)}),
             ("GET", "/api/sessions/coord-next/status", 200, status_body("coord-next")),
             ("POST", "/api/sessions/coord-next/prompt", 200, {"accepted": True}),
         ])

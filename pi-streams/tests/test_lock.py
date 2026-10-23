@@ -16,7 +16,7 @@ class LockTests(EngineCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.stub.set_routes([
             ("GET", "/api/sessions", 200, []),
-            ("POST", "/api/sessions", 200, {"id": "coord-1"}),
+            ("POST", "/api/sessions", 200, {"id": "coord-1", "cwd": str(self.home / "etl")}),
             (
                 "GET",
                 "/api/sessions/coord-1/status",

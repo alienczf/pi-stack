@@ -115,6 +115,7 @@ class ScenarioTests(EngineCase):
 
         self.stub.requests.clear()
         self.stub.set_routes([
+            ("GET", "/api/sessions", 200, [session_info(COORD_1, stream, message_count=40)]),
             ("GET", f"/api/sessions/{COORD_1}/status", 200, session_status(COORD_1, cost=0.5, tokens=None)),
             ("GET", f"/api/sessions/{THREAD}/status", 200, session_status(THREAD, cost=2.0, tokens=91000)),
         ])
@@ -149,7 +150,8 @@ class ScenarioTests(EngineCase):
         self.stub.requests.clear()
         self.stub.set_routes([
             ("POST", f"/api/sessions/{COORD_1}/archive", 200, {"archived": True}),
-            ("GET", "/api/sessions", 200, [session_info(COORD_1, stream, message_count=40, archived=True)]),
+            ("GET", "/api/sessions", 200, [session_info(COORD_1, stream, message_count=40)]),
+            ("GET", f"/api/sessions/{COORD_1}/status", 200, session_status(COORD_1, cost=0.5, tokens=None)),
             ("POST", "/api/sessions", 200, spawned(COORD_2, stream)),
             *configured(COORD_2, session_status(COORD_2, cost=0, tokens=None)),
         ])
@@ -157,9 +159,12 @@ class ScenarioTests(EngineCase):
         self.assertEqual(rotate.returncode, 0, rotate.stderr)
         self.assertEqual(rotate.stdout, f"http://127.0.0.1:8504\n{COORD_2}\n")
         self.assertEqual(self.calls(), [
+            ("GET", "/api/sessions"),
+            ("GET", f"/api/sessions/{COORD_1}/status"),
             ("POST", f"/api/sessions/{COORD_1}/archive"),
             ("GET", "/api/sessions"),
             ("POST", "/api/sessions"),
+            ("GET", f"/api/sessions/{COORD_2}/status"),
             ("POST", f"/api/sessions/{COORD_2}/model"),
             ("POST", f"/api/sessions/{COORD_2}/thinking-level"),
             ("GET", f"/api/sessions/{COORD_2}/status"),

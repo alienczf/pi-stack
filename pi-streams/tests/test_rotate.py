@@ -32,31 +32,33 @@ class RotateTests(EngineCase):
         stream_dir.mkdir(parents=True)
         (stream_dir / "STREAM.md").write_text("ratified: no\n", encoding="utf-8")
         (stream_dir / "STATE.md").write_text("# STATE\n", encoding="utf-8")
-        (stream_dir / "threads.tsv").write_text(HEADER + OLD, encoding="utf-8")
+        (stream_dir / "threads.tsv").write_text(HEADER + OLD.replace("/wt\t", f"{stream_dir}\t"), encoding="utf-8")
         self.register_stream("etl", stream_dir)
         self.stub.requests.clear()
         self.stub.set_routes([
             ("GET", "/api/sessions", 200, [{"id": "coord-1", "cwd": str(stream_dir)}]),
-            ("POST", "/api/sessions", 200, {"id": "coord-2"}),
+            ("GET", "/api/sessions/coord-1/status", 200, status_body("coord-1")),
+            ("POST", "/api/sessions", 200, {"id": "coord-2", "cwd": str(stream_dir)}),
             ("GET", "/api/sessions/coord-2/status", 200, status_body("coord-2")),
             ("POST", "/api/sessions/coord-2/prompt", 200, {"accepted": True}),
         ])
         rotated = self.run_streams("rotate", "etl")
         self.assertEqual(rotated.returncode, 0, rotated.stderr)
         self.assertEqual(rotated.stdout, "http://127.0.0.1:8504\ncoord-2\n")
-        self.assertEqual(len(self.stub.requests), 7)
+        self.assertEqual(len(self.stub.requests), 10)
+        self.assertEqual(self.stub.requests[1], ("GET", "/api/sessions/coord-1/status", "", None))
         self.assertEqual(
-            self.stub.requests[0],
+            self.stub.requests[2],
             ("POST", "/api/sessions/coord-1/archive", "", {}),
         )
-        method, path, query, body = self.stub.requests[1]
+        method, path, query, body = self.stub.requests[3]
         self.assertEqual(method, "GET")
         self.assertEqual(path, "/api/sessions")
         self.assertEqual(urllib.parse.parse_qs(query), {"cwd": [str(stream_dir)]})
         self.assertIsNone(body)
-        self.assertEqual(self.stub.requests[2], ("POST", "/api/sessions", "", {"cwd": str(stream_dir)}))
+        self.assertEqual(self.stub.requests[4], ("POST", "/api/sessions", "", {"cwd": str(stream_dir)}))
         self.assertEqual(
-            self.stub.requests[3],
+            self.stub.requests[6],
             (
                 "POST",
                 "/api/sessions/coord-2/model",
@@ -65,12 +67,13 @@ class RotateTests(EngineCase):
             ),
         )
         self.assertEqual(
-            self.stub.requests[4],
+            self.stub.requests[7],
             ("POST", "/api/sessions/coord-2/thinking-level", "", {"level": "xhigh"}),
         )
         self.assertEqual(self.stub.requests[5], ("GET", "/api/sessions/coord-2/status", "", None))
+        self.assertEqual(self.stub.requests[8], ("GET", "/api/sessions/coord-2/status", "", None))
         self.assertEqual(
-            self.stub.requests[6],
+            self.stub.requests[9],
             ("POST", "/api/sessions/coord-2/prompt", "", {"text": ROTATION}),
         )
         prompted = [item[1] for item in self.stub.requests if item[1].endswith("/prompt")]
@@ -89,24 +92,25 @@ class RotateTests(EngineCase):
         stream_dir = (self.home / "etl").resolve()
         stream_dir.mkdir(parents=True)
         (stream_dir / "STREAM.md").write_text("ratified: no\n", encoding="utf-8")
-        (stream_dir / "threads.tsv").write_text(HEADER + OLD, encoding="utf-8")
+        (stream_dir / "threads.tsv").write_text(HEADER + OLD.replace("/wt\t", f"{stream_dir}\t"), encoding="utf-8")
         self.register_stream("etl", stream_dir)
         self.stub.set_routes([
             ("GET", "/api/sessions", 200, [{"id": "coord-1", "cwd": str(stream_dir), "messageCount": 50}]),
+            ("GET", "/api/sessions/coord-1/status", 200, status_body("coord-1")),
             ("POST", "/api/sessions", 500, {"error": "spawn failed"}),
         ])
         failed = self.run_streams("rotate", "etl")
         self.assertEqual(failed.returncode, 1)
         self.assertEqual(
             (stream_dir / "threads.tsv").read_text(encoding="utf-8"),
-            HEADER + OLD.replace("\tactive\t", "\tarchived\t"),
+            HEADER + OLD.replace("/wt\t", f"{stream_dir}\t").replace("\tactive\t", "\tarchived\t"),
         )
         self.stub.requests.clear()
         self.stub.set_routes([
             ("GET", "/api/sessions", 200, [
                 {"id": "coord-1", "cwd": str(stream_dir), "messageCount": 50, "archived": True},
             ]),
-            ("POST", "/api/sessions", 200, {"id": "coord-2"}),
+            ("POST", "/api/sessions", 200, {"id": "coord-2", "cwd": str(stream_dir)}),
             ("GET", "/api/sessions/coord-2/status", 200, status_body("coord-2")),
             ("POST", "/api/sessions/coord-2/prompt", 200, {"accepted": True}),
         ])

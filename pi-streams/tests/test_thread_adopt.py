@@ -107,7 +107,7 @@ class AdoptTests(EngineCase):
             "thread", "adopt", "etl", "sess-old", "--worktree", str(worktree), "--role", "review"
         )
         self.assertEqual(refused.returncode, 1)
-        self.assertEqual(refused.stderr, "session sess-old is archived\n")
+        self.assertEqual(refused.stderr, "session sess-old is archived; refusing to reopen it through status\n")
         self.assertEqual((stream_dir / "threads.tsv").read_text(encoding="utf-8"), HEADER)
         self.assertFalse((worktree / ".stream").exists())
 

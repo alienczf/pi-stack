@@ -66,6 +66,8 @@ class OutageTests(TickCase):
         down = self.tick("2026-10-06T12:00:00Z")
         self.assertEqual((down.returncode, down.stdout, down.stderr), (0, f"{self.etl}\tidle=1\toutage=1\n", ""))
         self.assertEqual(self.stub.requests, [
+            got_list(str(self.etl)),
+            got_status("coord-1"),
             got_status("t-1"),
             got_list("/wt/datapull"),
             got_list(str(self.etl)),
@@ -83,7 +85,12 @@ class OutageTests(TickCase):
 
         still = self.tick("2026-10-06T12:05:00Z")
         self.assertEqual((still.returncode, still.stdout), (0, ""))
-        self.assertEqual(self.stub.requests, [got_status("t-1"), got_list("/wt/datapull"), got_list(str(self.etl))])
+        self.assertEqual(self.stub.requests, [
+            got_list(str(self.etl)),
+            got_status("coord-1"),
+            got_status("t-1"),
+            got_list("/wt/datapull"),
+        ])
         self.assertEqual(self.alerts(), f"2026-10-06T12:00:00Z etl t-1 datapull {SHOWN}\n")
 
         long_reply = "Pulled the 1m bars. " + "ok " * 40000
@@ -137,7 +144,12 @@ class OutageTests(TickCase):
         self.stub.set_routes(self.routes(status("t-1", streaming=True, ask=ASK)))
         down = self.tick("2026-10-06T12:00:00Z")
         self.assertEqual((down.returncode, down.stdout, down.stderr), (0, f"{self.etl}\task=1\toutage=1\n", ""))
-        self.assertEqual(self.stub.requests, [got_status("t-1"), got_list("/wt/datapull"), got_list(str(self.etl))])
+        self.assertEqual(self.stub.requests, [
+            got_list(str(self.etl)),
+            got_status("coord-1"),
+            got_status("t-1"),
+            got_list("/wt/datapull"),
+        ])
         self.assertEqual(
             self.rows(self.etl),
             HEADER + row("coord-1", "coordinator", str(self.etl)) + row("t-1", "datapull", "/wt/datapull"),
@@ -163,7 +175,12 @@ class OutageTests(TickCase):
 
         still = self.tick("2026-10-06T12:05:00Z")
         self.assertEqual((still.returncode, still.stdout), (0, ""))
-        self.assertEqual(self.stub.requests, [got_status("t-1"), got_list("/wt/datapull"), got_list(str(self.etl))])
+        self.assertEqual(self.stub.requests, [
+            got_list(str(self.etl)),
+            got_status("coord-1"),
+            got_status("t-1"),
+            got_list("/wt/datapull"),
+        ])
 
         self.write_log(
             "coord-1", str(self.etl), user("/skill:stream-kickoff"), failure(LIMIT), user("Continue."), reply("Back.")
@@ -171,6 +188,8 @@ class OutageTests(TickCase):
         back = self.tick("2026-10-06T12:10:00Z")
         self.assertEqual((back.returncode, back.stdout, back.stderr), (0, f"{self.etl}\trecovered=1\n", ""))
         self.assertEqual(self.stub.requests, [
+            got_list(str(self.etl)),
+            got_status("coord-1"),
             got_status("t-1"),
             got_list("/wt/datapull"),
             got_list(str(self.etl)),
@@ -186,7 +205,7 @@ class OutageTests(TickCase):
         self.assertEqual(self.alerts(), "")
         self.assertEqual((self.state(self.etl)["outages"], self.state(self.etl)["pending"]), ([], []))
 
-    def test_a_coordinator_archived_during_its_outage_is_replaced(self) -> None:
+    def test_a_coordinator_archived_during_its_outage_requires_reconciliation(self) -> None:
         self.write_log("coord-1", str(self.etl), user("/skill:stream-kickoff"), failure(LIMIT))
         self.stub.set_routes(self.routes(status("t-1", streaming=True, ask=ASK)))
         self.assertEqual(self.tick("2026-10-06T12:00:00Z").stdout, f"{self.etl}\task=1\toutage=1\n")
@@ -201,35 +220,14 @@ class OutageTests(TickCase):
             ]),
             PROMPTS,
         ])
+        rows = self.rows(self.etl)
+        pending = self.state(self.etl)["pending"]
         later = self.tick("2026-10-06T12:05:00Z")
-        self.assertEqual((later.returncode, later.stdout, later.stderr), (0, "", ""))
-        self.assertEqual(self.stub.requests, [
-            got_status("t-1"),
-            got_list("/wt/datapull"),
-            got_list(str(self.etl)),
-            got_list(str(self.etl)),
-            ("POST", "/api/sessions", "", {"cwd": str(self.etl)}),
-            got_post("coord-2", "model", {"provider": "openai-codex", "modelId": "gpt-6-astra"}),
-            got_post("coord-2", "thinking-level", {"level": "xhigh"}),
-            got_status("coord-2"),
-            got_prompt("coord-2", rotation("etl")),
-            got_prompt(
-                "coord-2",
-                "pi-streams tick 2026-10-06T12:05:00Z:\n"
-                "ask t-1 datapull Which venue first?\n"
-                f"outage coord-1 coordinator {SHOWN}",
-                "followUp",
-            ),
-        ])
-        self.assertEqual(
-            self.rows(self.etl),
-            HEADER
-            + row("coord-1", "coordinator", str(self.etl), status="archived")
-            + row("t-1", "datapull", "/wt/datapull")
-            + f"coord-2\tcoordinator\t\t{self.etl}\t\t\topenai-codex/gpt-6-astra\txhigh\tactive\t2026-10-06T12:05:00Z\n",
-        )
-        self.assertEqual(self.alerts(), "")
-        self.assertEqual((self.state(self.etl)["outages"], self.state(self.etl)["pending"]), ([], []))
+        self.assertEqual(later.returncode, 1, later.stdout)
+        self.assertIn("session coord-1 is archived", later.stderr)
+        self.assertEqual(self.stub.requests, [got_list(str(self.etl))])
+        self.assertEqual(self.rows(self.etl), rows)
+        self.assertEqual(self.state(self.etl)["pending"], pending)
 
     def test_an_alert_goes_once_its_thread_is_archived(self) -> None:
         self.write_log("t-1", "/wt/datapull", user("Pull the 1m bars."), failure(LIMIT))
@@ -245,7 +243,10 @@ class OutageTests(TickCase):
         )
         later = self.tick("2026-10-06T12:05:00Z")
         self.assertEqual((later.returncode, later.stdout), (0, ""))
-        self.assertEqual(self.stub.requests, [got_list(str(self.etl))])
+        self.assertEqual(self.stub.requests, [
+            got_list(str(self.etl)),
+            got_status("coord-1"),
+        ])
         self.assertEqual(self.alerts(), "")
 
 
