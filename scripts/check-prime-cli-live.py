@@ -124,6 +124,8 @@ class VerificationRuntime:
     timeout: float
     definition: ModelDefinition
     model_identity: tuple[int, int] | None = field(default=None, init=False)
+    settings_snapshot: bytes | None = field(default=None, init=False, repr=False)
+    settings_mode: int = field(default=0o600, init=False)
     process: subprocess.Popen | None = field(default=None, init=False)
     lock_fd: int | None = field(default=None, init=False)
     socket_identity: tuple[int, int] | None = field(default=None, init=False)
@@ -139,6 +141,7 @@ class VerificationRuntime:
         except FileExistsError as exc:
             raise CliError("runtime_collision", "Verification root is already locked", 409) from exc
         if os.path.lexists(self.socket):
+            self.evidence["socketRemoved"] = False
             raise CliError("runtime_collision", "Dedicated daemon socket already exists; no daemon was contacted", 409)
         try:
             model_fd = os.open(self.root / "agent/models.json", os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
@@ -149,6 +152,9 @@ class VerificationRuntime:
             self.model_identity = (info.st_dev, info.st_ino)
             json.dump(self.definition.native_config(), config, allow_nan=False)
             config.write("\n")
+        settings = self.root / "agent/settings.json"
+        self.settings_snapshot = settings.read_bytes()
+        self.settings_mode = stat.S_IMODE(settings.stat().st_mode)
         self.process = subprocess.Popen(
             [str(self.executable), "--mode", "daemon", "--daemon-socket", str(self.socket)],
             env={**os.environ, "PRIME_AGENT_CODING_AGENT_DIR": str(self.root / "agent"),
@@ -209,6 +215,20 @@ class VerificationRuntime:
                 elif self.evidence["stopped"]:
                     self.evidence["socketRemoved"] = not os.path.lexists(self.socket)
         finally:
+            if self.evidence["stopped"] and self.settings_snapshot is not None:
+                settings = self.root / "agent/settings.json"
+                info = settings.lstat()
+                if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
+                    raise OSError("Settings ownership changed during verification")
+                with tempfile.NamedTemporaryFile(dir=settings.parent, prefix=".verification-settings-", delete=False) as saved:
+                    temporary = Path(saved.name)
+                    try:
+                        saved.write(self.settings_snapshot)
+                        saved.flush()
+                        os.fchmod(saved.fileno(), self.settings_mode)
+                        os.replace(temporary, settings)
+                    finally:
+                        temporary.unlink(missing_ok=True)
             if self.evidence["stopped"] and self.model_identity is not None:
                 path = self.root / "agent/models.json"
                 try:
@@ -442,7 +462,8 @@ def main() -> int:
             try:
                 runtime.close()
             except (OSError, subprocess.SubprocessError):
-                result["error"] = CliError("runtime_cleanup_failed", "Owned runtime cleanup failed").output
+                result["cleanupError"] = CliError("runtime_cleanup_failed", "Owned runtime cleanup failed").output
+                result.setdefault("error", result["cleanupError"])
                 result["ok"] = False
             result["runtime"] = runtime.evidence
             if not runtime.evidence["stopped"] or not runtime.evidence["socketRemoved"]:
