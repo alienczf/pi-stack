@@ -124,6 +124,53 @@ Every install links `~/.local/bin/pi-streams` to this checkout's `bin/pi-streams
 
 The timer runs without a login session only when systemd lingering is on for your user. Without `systemctl`, the installer copies the units, prints a note, and leaves scheduling `pi-streams tick` to you. The installer does not change pi-web's config. After `--project`, it runs `pi-streams doctor` and exits 1 on FAIL without removing what it wrote.
 
+## Isolated stock Prime merged PoC
+
+Use the `feat/merged-poc` branch on Linux with Python 3.11 or newer, Git, a C build toolchain, Cargo/Rust and uv. This mode does not install the Pi overlay, change global links, register a timer, read credentials or start a session. It installs unchanged Prime v0.10.1 at `8aac8692456c00c01d4e53e60e6d3347a3506559`, including its matching runtime sidecar. It requires explicit model, thinking and compaction percentage values. The percentage must be finite, greater than zero and at most 100.
+
+Set `POC_MODEL`, `POC_THINKING` and `POC_PERCENT` yourself. Use a fresh user-owned HOME for an isolated test. Then select the branch and prefix.
+
+<!-- merged-poc:start -->
+```bash
+set -eu
+git clone --branch feat/merged-poc --single-branch https://github.com/alienczf/pi-stack.git pi-stack-merged-poc
+cd pi-stack-merged-poc
+export POC_ROOT="$HOME/pi-stack-merged-poc-test"
+test -n "${POC_MODEL-}"
+test -n "${POC_THINKING-}"
+test -n "${POC_PERCENT-}"
+```
+<!-- merged-poc:end -->
+
+If Cargo/Rust are absent, install them privately with these explicit prerequisite commands. They do not change shell profiles or global paths. Missing C build prerequisites or uv remain a reported blocker; this installer never uses sudo.
+
+```bash
+export CARGO_HOME="$POC_ROOT/build/cargo"
+export RUSTUP_HOME="$POC_ROOT/build/rustup"
+mkdir -p "$POC_ROOT/build"
+curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs -o "$POC_ROOT/build/rustup-init.sh"
+sh "$POC_ROOT/build/rustup-init.sh" -y --no-modify-path --profile minimal --default-toolchain stable
+export PATH="$CARGO_HOME/bin:$PATH"
+```
+
+Run the install and prepare the stream. The prefix owns source clones, binary and runtime, kernel venv, UV caches and Python installations, XDG roots, registries and reports. The wrapper discards inherited credentials and kernel-Python overrides. It points to this selected checkout, not main. Rerunning identical installation inputs preserves bytes; conflicting owned files fail rather than being adopted or overwritten.
+
+```bash
+./install.sh --merged-poc --prefix "$POC_ROOT" --project "$POC_ROOT/project" \
+  --coordinator-model "$POC_MODEL" --coordinator-thinking "$POC_THINKING" \
+  --compaction-percent "$POC_PERCENT"
+"$POC_ROOT/bin/pi-streams" poc init --root "$POC_ROOT" --stream weekend-poc
+"$POC_ROOT/bin/pi-streams" poc doctor --root "$POC_ROOT" --stream weekend-poc
+```
+
+Only the operator performs login. Start the bare TUI with `"$POC_ROOT/bin/prime-agent"`, then enter `/login`. Installation and verification do not copy or automate authentication. After the operator step, run the verifier.
+
+```bash
+"$POC_ROOT/bin/pi-streams" poc verify --root "$POC_ROOT" --stream weekend-poc
+```
+
+The same driver is `python3 scripts/check-merged-poc.py --root "$POC_ROOT" --stream weekend-poc`. It owns a new daemon on a dedicated socket and never adopts an existing session or socket. Native PASS requires actual steer, clean worker handover/kickoff, stale refusal, stream self-review, percentage crossing, checked save, direct compact, persisted native readback, one continuation and computed close. Offline fixtures cannot establish native PASS. Missing authentication is BLOCKED. An uncrossed percentage is INCONCLUSIVE. Reports and native transcripts remain under the prefix. Do not change the threshold or substitute explicit DCR to pass the percentage test.
+
 ## Verify the repository
 
 Run these commands from the pi-stack Git root. None starts a nested Pi process.
