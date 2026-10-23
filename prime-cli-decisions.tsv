@@ -1,0 +1,8 @@
+id	decision	reason
+T2-1	Use direct supervisor JSONL protocol 7 with correlated replies.	Artifact 20 chose this over another HTTP service; no worker framing or implicit daemon startup.
+T2-2	Preserve requested spawn provider/model and verify effective selection after create.	Unknown IDs can use the native provider-template path; catalog-only model switching can still reject them. Report mismatch with retained session identity.
+T2-3	Read status from connection state, queue arrays, and session stats.	Streaming/model/thinking, pending previews, and numeric cost have different authoritative native getters. Null context is unknown, not zero.
+T2-4	Map Pi abort to abort_and_clear_queue; stop uses the same command with runtimeClosed false.	Parent traced actual Pi Web server semantics. Prime lacks a public nonarchiving root-session runtime-close command.
+T2-5	Acquire native connection-scoped input pause before archive preflight and kill.	Pauses queued delivery, not all producers or in-flight work. Reject observed activity and expose preflightAtomic false; no local mutex or private close marker.
+T2-6	Return interactive answer unsupported 501; label all queue text as previews and replay unsafe.	Prime has no correlated ask registry; internal queue preview labels need not be replayable prompt text.
+T2-7	Keep parent as live-verification owner and this worker as the sole code writer.	No shared docs/worktree writes, real daemon/model calls, credential access, or provider switching by this worker.
