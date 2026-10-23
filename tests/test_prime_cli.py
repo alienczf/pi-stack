@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import socket
+import struct
 import subprocess
 import tempfile
 import threading
@@ -17,7 +18,7 @@ PROTOCOL = {"name": "prime-agent.daemon", "version": 7}
 
 
 class Fixture:
-    def __init__(self, replies=(), *, hello=None, raw=None):
+    def __init__(self, replies=(), *, hello=None, raw=None, disconnect_at=None, reset=False):
         self.temp = tempfile.TemporaryDirectory(prefix="prime-cli-test-")
         self.path = str(Path(self.temp.name) / "daemon.sock")
         self.server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -29,6 +30,8 @@ class Fixture:
         self.errors = []
         self.hello = hello if hello is not None else {"type": "daemon_hello", "protocol": PROTOCOL, "schemaRevision": 30}
         self.raw = raw
+        self.disconnect_at = disconnect_at
+        self.reset = reset
         self.thread = threading.Thread(target=self.serve)
 
     def __enter__(self):
@@ -58,12 +61,17 @@ class Fixture:
                 if self.hello.get("protocol") != PROTOCOL:
                     return
                 reader = stream.makefile("rb")
-                for reply in self.replies:
+                for index, reply in enumerate(self.replies):
                     line = reader.readline()
                     if not line:
                         return
                     request = json.loads(line)
                     self.requests.append(request)
+                    if index == self.disconnect_at:
+                        if self.reset:
+                            stream.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+                        reader.close()
+                        return
                     if self.raw is not None:
                         stream.sendall(self.raw)
                         return
@@ -149,6 +157,23 @@ class PrimeCliTests(unittest.TestCase):
         data = json.loads(proc.stdout)
         self.assertEqual((proc.returncode, data["error"], data["session"]["id"]), (1, "cwd_mismatch", "s1"))
         self.assertEqual(len(fixture.requests), 1)
+
+    def test_spawn_readback_transport_failures_preserve_known_session(self):
+        def delayed(_):
+            time.sleep(0.15)
+            return {}
+        created = {"id": "active-1", "activeSessionId": "active-1", "sessionId": "durable-1", "cwd": "/work"}
+        for fault, code in [("timeout", "timeout"), ("reset", "transport_error"), ("eof", "transport_closed")]:
+            with self.subTest(fault=fault):
+                with Fixture([created, delayed if fault == "timeout" else None],
+                        disconnect_at=None if fault == "timeout" else 1, reset=fault == "reset") as fixture:
+                    proc = run_cli("spawn", "/work", fixture=fixture,
+                                   env={"PRIME_CLI_MODEL": "openai-codex/gpt-6.1-sol", "PRIME_CLI_TIMEOUT": "0.05"})
+                self.assertEqual(proc.returncode, 1, proc.stdout)
+                data = json.loads(proc.stdout)
+                self.assertEqual(data["error"], code)
+                self.assertEqual(data.get("session"), {**created, "archived": False})
+                self.assertEqual([request["command"]["type"] for request in fixture.requests], ["create", "get_connection_state"])
 
     def test_spawn_fallback_is_error_with_retained_session(self):
         with Fixture([{"id": "s1", "cwd": "/work"}, self.state(model={"provider": "other", "id": "wrong"})]) as fixture:
