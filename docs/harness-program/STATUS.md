@@ -9,7 +9,7 @@ tracking_issue: https://github.com/alienczf/pi-stack/issues/38
 box_mirror: /workspace/harness-program
 host_docs_worktree: /home/alphalab/Projects/worktrees/pi-stack-harness-program
 host_input_copy: /home/alphalab/Projects/pi-stack/streams/pi-streams-harness/context/harness-program
-updated: "2026-10-24T02:55+08:00 (driver run: T1 streaming 27.3%, S2 rotation commits through ae32edd; T6 streaming 30.7%, units through checks 4d5dfc3, feat/merged-poc 4d5dfc3 pushed; T2 idle 31.9%, Prime login not recorded)"
+updated: "2026-10-24T03:20+08:00 (driver run: T1 streaming 31.4%, S2 at ae32edd; T6 streaming 30.7% waiting on its own worker, install commit 35bcb64 pushed, end-to-end check remaining; T2 idle 31.9%, Prime login not recorded)"
 tracks:
   - id: 1
     name: pi-streams must-fix catalog
@@ -106,9 +106,9 @@ tracks:
     session: 01a169cc-9519-7411-bf2f-51073758fc53
     host: options-01
     model: openai-codex/gpt-6.1-sol@xhigh
-    phase: "building - committed state writer, prime transport, messages/wake/stop, clean poteto workers, own percentage compaction, checks (4d5dfc3); install and end-to-end check remaining; streaming 30.7% at 02:55"
+    phase: "building - units through install committed (35bcb64); end-to-end PoC check (poc.py, uncommitted) in progress via its own worker; streaming 30.7% at 03:20"
     started: 2026-10-24T01:26+08:00
-    pushed: feat/merged-poc 4d5dfc3 (2026-10-24 02:55, driver; through checks commit)
+    pushed: feat/merged-poc 35bcb64 (2026-10-24 03:20, driver; through install commit)
     code_branch: feat/merged-poc (session creates worktree /home/alphalab/Projects/worktrees/pi-stack-merged-poc off local main + feat/prime-cli)
     deadline: 2026-10-26T09:00+08:00
     brief: docs/harness-program/briefs/track-6.md (final sha256 4ec99908, aligned to revised 51 section 8)
