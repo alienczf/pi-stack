@@ -9,7 +9,7 @@ tracking_issue: https://github.com/alienczf/pi-stack/issues/38
 box_mirror: /workspace/harness-program
 host_docs_worktree: /home/alphalab/Projects/worktrees/pi-stack-harness-program
 host_input_copy: /home/alphalab/Projects/pi-stack/streams/pi-streams-harness/context/harness-program
-updated: 2026-10-23T11:56+08:00
+updated: 2026-10-23T11:58+08:00
 tracks:
   - id: 1
     name: pi-streams must-fix catalog
@@ -46,11 +46,11 @@ tracks:
     code_worktree: /home/alphalab/Projects/worktrees/pi-stack-prime-cli
     brief: docs/harness-program/briefs/track-2.md
     steers: [docs/harness-program/briefs/track-2-steer-1.md, docs/harness-program/briefs/track-2-reentry-1.md]
-    steer_note: 11:31 context 84.5% (~422k) -> aborted, /compact via commands/run (G21), now 19.1%; session auto-continued its in-flight verification. reentry-1 queued 11:39 (pending 1) - next run confirm consumed, re-send if lost.
+    steer_note: 11:31 context 84.5% (~422k) -> aborted, /compact via commands/run (G21), now 19.1%; session auto-continued its in-flight verification. reentry-1 consumed (11:52); session idle at ~3% context, 71 offline tests pass, reports TRACK 2 STATUS blocked on ZF Prime login.
     brief_sha256_verified: true
     blocked_on: ZF interactive openai-codex login for Prime on options-01 (blocker note sent once, 11:01)
     open_questions: [caladan (pi-bot caladan bb39dc0; no pi-stack branch), non-blocking]
-    pushed: feat/prime-cli 29ff206 (2026-10-23 11:39)
+    pushed: feat/prime-cli 6bc1242 (2026-10-23 11:58, driver)
     next_action: When idle, collect, push feat/prime-cli again. After ZF logs Prime in, run the inference verification script from the design doc and the off-host wrapper check from the box, then send the track-2-working milestone. Streams-on-prime port waits for track 1 to merge.
   - id: 3
     name: problem-state research + three designs
@@ -93,7 +93,7 @@ tracks:
 | Track | Session | Phase | Artifact | Next |
 |---|---|---|---|---|
 | 1 fix catalog | `01a16655` | implementing (ZF go 11:35, steer consumed 11:39) | `10-pi-streams-fix-catalog.md` + `feat/streams-must-fix` | S1-S6 done, then driver merges |
-| 2 prime CLI | `01a16656` | blocked on Prime codex login; non-inference gaps in progress | `20-prime-cli-design.md` + `feat/prime-cli` (`29ff206` pushed) | ZF logs Prime in, then inference verification |
+| 2 prime CLI | `01a16656` | blocked on Prime codex login; non-inference gaps in progress | `20-prime-cli-design.md` + `feat/prime-cli` (`6bc1242` pushed) | ZF logs Prime in, then inference verification |
 | 3 research | `01a16658` | design-A-detailed (Z19 steer consumed 11:55) | `30-research-designs.md`, `31-design-a-detailed.md` | 31 done, then 50-a-vs-b with track 4 |
 | 4 B over prime | `01a166e0` | feasibility, then design-B-detailed (Z19 steer consumed 11:52) | `40-b-over-prime.md`, `41-design-b-prime-detailed.md` + `spike/b-over-prime` | 40 and 41 done, then 50-a-vs-b with track 3 |
 

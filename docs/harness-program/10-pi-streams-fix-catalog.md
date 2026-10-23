@@ -29,7 +29,7 @@ Stable item numbers let ZF amend a row without renumbering the plan. Each item b
 | 10 | Resolve STATE Goals' current objective, falling back to its one mutable North Star. | Charter amendments bury the goal. F12 rows 27, 30, 38, 75; Z7/Z15. | LAYER 3 | **Low to med.** One goal resolver and narrow Goals updates. | No. Z15. | S1. |
 | 12 | Load only AGENTS and STATE; replace stream TODO/PLAN with Goals plus Log. | Overlay and mandatory index/history reads bloat pickup. Artifact map; Z13-Z15. | LAYER 2 | **Low.** Tier regression tests, stream template/brief and conditional overlay. Invented files are untouched. | No. Z13/Z15. | S1. |
 | 13 | Stop automatic Git capture of binaries/data. | Tick committed scratch. F11, row 29. | LAYER 3 | **Low.** Exact-path staging and ignore layout. | No. | S1. |
-| 16 | Add idempotent per-stream migration with one commit and no worker-worktree writes. | New templates alone cannot repair existing STATE/charter/history piles. Map, A/B, Z9/G17. | LAYER 3 | **Med.** `migrate` CLI, stream-owned artifacts and migration tests. | No. Required rollout step. | S2a. |
+| 16 | Add idempotent per-stream migration with one commit and no worker-worktree writes. | New templates alone cannot repair existing STATE/charter/history piles. Map, A/B, Z9/Z15. | LAYER 3 | **Med.** `migrate` CLI, stream-owned artifacts and migration tests. | No. Required rollout step. | S2a. |
 
 ## Scope and evidence
 
@@ -44,6 +44,51 @@ Installed dependency observations are separate from that Git pin. `W/` means `/h
 The bar is a small correction or a change required for the dictated MVP. Items 1, 2, 3, 6, 7, 16, and 18 meet the second bar even where integration crosses repositories. Item 18 is honestly high blast radius because it deletes original sessions; it is included because Z11 requires it, not because deletion is a small patch. They are not represented as one-line fixes. The remaining items remove concrete contradictory defaults or repair existing boundaries.
 
 Historical claims are not assumed current. A's verified `c146285:STATE.md` was 10,195,068 bytes and 165,597 lines. The newer `11-artifact-map.md` reports 654 STATE at 19 KB. Its larger current pickup problem is TODO 465 KB, PLAN 255 KB, context/README 212 KB, STREAM 66 KB, and STATE 19 KB, about 1 MB if read in full. These are map observations, not a new live measurement or proof that 250k tokens entered a request. The map also reports invented ALERTS.md at 294 KB, log/ at 34 GB, and analysis/ at 47 GB.
+
+### Current artifact contract under Z15
+
+This is the implementation target, not a claim about deployed streams. The 17 current fixes comprise 11 mechanical fixes and 6 artifact fixes. Historical reviews below retain their original counts.
+
+| Tier | Name | Sole concept and access |
+|---|---|---|
+| Every turn | `AGENTS.md` | Role and operating instructions. Read with STATE, not an additional planning ledger. |
+| Every turn | `STATE.md` | Current Goals, active Rules, and recent Log in that order. The only always-loaded stream state. |
+| On demand | `history/<UTC ts>-<slug>.md` | One cold entry per file. Rotated Log entries, retired rules, historical decisions, and migration provenance. |
+| On demand | `context/` and `context/README.md` | Reference material and its index. The README is not a diary or a required turn read. |
+| On demand | `checks/` | Acceptance checks and their small source-bound reports. |
+| On demand | `handover/<role>/<full-session-id>.md` | One session's exit evidence. Never a role-reusable current-state file. |
+| Engine-only | Index `streams.tsv`, `projects/<name>.toml`, and `homes` | Stream/project registration and discovery. Never read by agents. |
+| Engine-only | `threads.tsv` | Session designation and runtime lifecycle. Never an agent-maintained task plan. |
+| Engine-only | `subscriptions.tsv` | Tick watch definitions. Agent interaction uses the existing command boundary. |
+| Engine-only | `stream.toml` | Stream identity, schema, and engine metadata. |
+| Engine-only | `log/events.jsonl` and `log/tick-state.json` | Engine events and durable delivery/maintenance/recovery progress. This grants no ownership of other `log/` contents. |
+| Engine-only | Index `ALERTS` | Typed off-host notification intake, not stream-local ALERTS.md. |
+| Engine-only | Index and stream locks | Short writer exclusion. No network/Git wait under an all-stream lock. |
+| Engine-only | `failures/<full-session-id>.lastgood` | Parking marker containing only that session's last completely persisted good-turn entry ID. |
+
+Every turn reads only AGENTS.md and STATE.md. Everything else is engine-only or opened on demand. GOAL.md, STREAM.md, DECISIONS.md, and ACTIONS.md are retired. There is no separate CURRENT section. Stream instructions disable overlay TODO.md/PLAN.md planning and use Goals plus Log instead. Non-stream overlay behavior is unchanged. Existing TODO/PLAN and invented ALERTS.md, decisions.tsv, ad-hoc log/ and analysis directories are not migration, import, retention, or ownership targets. Fix 12 only stops referencing invented artifacts.
+
+The STATE shape is explicit:
+
+```markdown
+## Goals
+ratified: <authority reference, empty until ratified>
+### North Star
+<one mutable, human-authorized goal>
+### Current objective
+<coordinator-editable immediate objective, possibly empty>
+### Charter
+<remaining ratified scope, acceptance, WRITES, and NO-GO terms>
+## Rules
+<only human rulings still in force>
+## Log
+### <UTC timestamp> <subject>
+<free body>
+```
+
+The marker is the first line of the Goals body. It is not a marker found by searching historical prose. A single section parser recognizes headers outside code fences, rejects duplicate required sections, and validates Goals before Rules before Log. It preserves an extra level-two section between Rules and Log byte-for-byte. Future Asks is tolerated, not created or implemented. Goals has exactly one North Star and one Current objective. The shared goal resolver returns the nonempty current objective, otherwise North Star. No goal-completion flag exists.
+
+The parsed shape retains exact byte spans for Goals, Rules, Log entries, and intervening sections. The goal resolver and narrow section mutations share that shape. Accepted Log occurrence boundaries and rotation progress live in existing engine metadata, not a second agent-facing stream file. Helpers stay specific to STATE, scoped staging, or migration rather than becoming a general document/workflow engine.
 
 ### Implementation boundaries
 
@@ -69,7 +114,7 @@ Track 3 now has verdicts in `30-research-designs.md:344-364`. Proposal A is its 
 | Z6 | Item 1. Always construct/coalesce the current-goal injection while driven and stalled. | A rejects the blanket-safety claim; B/C modify admission. Skill text cannot grant authority. MVP retains cause-independent reinjection, with explicit stop and Z11 receiving-side boundaries, not A's proposed open-set scheduler. |
 | Z7 | Item 10; shared by items 1/3. STATE Goals' North Star/current objective, then workers. | Adopt. Finite objectives may end without completing the North Star. |
 | Z8 | Item 3; reused by item 18. Fixed read-path/current-goal renderer. | Modify. Keep fixed same-session DCR but expose retryable phases; calling it one action does not make it atomic. |
-| Z9 | Items 6/12/16. STATE Log, 30 entries, every-tick history rotation and migration, with Z15's layout. | Modify. Keep G17 names/selective chronological history. Recent activity is neither the full open-work set nor a token bound. |
+| Z9 | Items 6/12/16. STATE Log, 30 entries, every-tick history rotation and migration, with Z15's layout. | Historical verdict on G17. Z15 replaces those names. Recent activity is neither the full open-work set nor a token bound. |
 | Z10 | Two review classes. Z13 removes bulk artifact ownership from this catalog. | Adopt. These are review lenses, not an exhaustive causal model or another engine. |
 | Z11 | Item 18; narrows item 2 and adds failures/ to item 16. | A modifies with no default fork; B modifies with qualified fork; C rejects automatic fork/wipe. All retain human repair and reject streaming alone as deletion safety. MVP still implements ratified F-DCR, with evidence/input/ownership prerequisites before narrowly scoped deletion. |
 
@@ -83,7 +128,7 @@ The earlier verdicts above are historical annotations, not authority to retain s
 
 **Root cause.** `tick.py:317-339` does not observe the coordinator's own stalled/settled state. `:435-445` requires pending events and suppresses an out coordinator. The five-minute timer already exists at `systemd/pi-streams-tick.timer:4-6`. `prompts/poteto.md:1-5` loads process but does not implement the requested goal-bearing command contract.
 
-**Fix.** Code the rule first. While the explicit stream drive switch is on, whenever the tick observes a stalled session or stream, re-inject exactly `/poteto-mode <current goal>` into the designated stream coordinator. Resolve current goal from STREAM's CURRENT, falling back to GOAL, through item 10's single parser. Worker stalls are reported to that coordinator for stream-level remedy, not repaired by blindly replaying a worker's old command.
+**Fix.** Code the rule first. While the explicit stream drive switch is on, whenever the tick observes a stalled session or stream, re-inject exactly `/poteto-mode <current goal>` into the designated stream coordinator. Resolve current goal from STATE Goals' Current objective, falling back to North Star, through item 10's single parser. Worker stalls are reported to that coordinator for stream-level remedy, not repaired by blindly replaying a worker's old command.
 
 A settled/idle runtime or an explicit runtime stall indication is an observable trigger, not a diagnosis. Do not infer death from file mtime or kill a running tool because its output is unchanged. Reuse the actual busy flags. Once a stall is observed, do not branch on quota, auth, disk, missing disposition, pending-event count, or a claimed completion of the North Star. Always re-inject while driven. Do not require the coordinator to produce a new control record before receiving the prompt. G5 remains a separate stream-level recovery policy, never an `out()` veto on this branch.
 
@@ -91,15 +136,15 @@ Reassert one correlated outstanding injection per stream/current-goal revision r
 
 Implement the literal `/poteto-mode <goal>` command in the harness adapter. Do not assume `/poteto` or a silently ignored slash command forwards arguments. Its thin alias must load the installed poteto-mode skill and preserve the full goal, including multiline content and punctuation. Test the expanded model input, not just the submitted string. Native Pi expands leading commands only; a slash invocation after the DCR read-path instructions must be explicitly expanded/invoked by the engine adapter without dropping either those instructions or the goal. Use a control-input path that does not treat the injected goal as a human answer or void `pendingAsk`; the current ordinary prompt path does void open asks. The coordinator keeps genuine task prohibitions. The injected stream instructions also say to park and log environment failures, not self-remedy them; the human repairs those under Z11.
 
-Turning drive off or an explicit native stop invalidates stale automatic admissions at the receiver. This is a drive switch/delivery generation, not stall-cause detection. A completed current objective can end that drive run or select another CURRENT; it never marks GOAL completed. Fresh explicit user input remains allowed. Preserve the prior stop-versus-in-flight-prompt race test.
+Turning drive off or an explicit native stop invalidates stale automatic admissions at the receiver. This is a drive switch/delivery generation, not stall-cause detection. A completed current objective can end that drive run or select another current objective. It never marks North Star completed. Fresh explicit user input remains allowed. Preserve the prior stop-versus-in-flight-prompt race test.
 
-Isolate worker/status failures so one unavailable observation cannot skip another stream's reinjection or ACTIONS rotation. Bound boundary I/O and avoid all-stream locks through network/Git waits. An unknown owner is not permission to start another writer. Correct doctor's any-fresh-stream shortcut at `doctor.py:179-195`. Report requested progress and new blockers, not a DM per tick.
+Isolate worker/status failures so one unavailable observation cannot skip another stream's reinjection or STATE Log rotation. Bound boundary I/O and avoid all-stream locks through network/Git waits. An unknown owner is not permission to start another writer. Correct doctor's any-fresh-stream shortcut at `doctor.py:179-195`. Report requested progress and new blockers, not a DM per tick.
 
 **Layer.** LAYER 3 owns drive observation, the prompt renderer, and automatic admission. LAYER 2 tests the literal rule and expanded goal. Stronger static layers cannot run a future coordinator turn. Implement those code paths first, then name them in LAYER 4 AGENTS and LAYER 5 skills. Those texts cannot supply a clock or fix the event-only return.
 
 **Blast radius.** Medium. `engine/{tick,project,cli,piweb,doctor}.py`, a small command alias/control-input adapter, and tests, followed by templates/skills. No stall classifier, remedy engine, or per-ask lifecycle.
 
-**Verification.** Baseline produces no prompt for an idle coordinator with empty pending. Candidate emits the same goal-bearing injection for idle, quota, auth, disk-error, and missing-disposition fixtures while driven. Assert no cause-specific branch changes the payload. A stalled worker targets its coordinator. Verify CURRENT fallback, runtime skill expansion, pending-ask preservation, unchanged North Star after objective completion, off-drive suppression, coalesced retries, and a stop racing admission. In the disposable stream, finish two tiny work steps across a stall without a human nudge. Observation errors must not mask another ready stream.
+**Verification.** Baseline produces no prompt for an idle coordinator with empty pending. Candidate emits the same goal-bearing injection for idle, quota, auth, disk-error, and missing-disposition fixtures while driven. Assert no cause-specific branch changes the payload. A stalled worker targets its coordinator. Verify current-objective fallback to North Star, runtime skill expansion, pending-ask preservation, unchanged North Star after objective completion, off-drive suppression, coalesced retries, and a stop racing admission. In the disposable stream, finish two tiny work steps across a stall without a human nudge. Observation errors must not mask another ready stream.
 
 **Dependencies.** Items 7, 8, 10, 11, and 15. Item 3 coalesces DCR with ordinary reinjection. Items 2/18 do not classify a stall before Z6 constructs its goal injection. At the receiver, a published Z11 marker parks the original: retain/coalesce the goal intent without another failed-session turn until ratified F-DCR. That later Z11 safety boundary is not an `out()` veto or a change to Z6's cause-independent payload. Test both facts together.
 
@@ -147,28 +192,27 @@ The installed integration provides the needed primitives, with two important gap
 
 **Fix.** Implement Z8 as one fixed engine operation. Tick-observed coordinator context of at least 150,000 during a turn triggers DCR, irrespective of whether a browser, CLI, bot, or tick started the turn. Coalesce repeated observations into the same operation.
 
-1. **SYNC/DUMP.** At a native safe steering boundary, the coordinator synchronizes stream state into STREAM's CURRENT, ACTIONS, TODO/PLAN when present, relevant progress artifacts, and the short context index. It does not author a resume prompt. It appends completed work/failure summaries through item 6's engine append command, never prunes ACTIONS itself. A ready receipt identifies the operation and artifact revisions. After the coordinator yields normally, bind the receipt to its actual terminal leaf, not a guessed future final-response ID. Run the ACTIONS overflow operation before the resumed read.
-2. **COMPACT.** Compact the same idle session through the command API. Retain the atomic idle/expected-leaf precondition so a direct prompt racing this step is not aborted. An HTTP command-start receipt is not compaction completion. Failed compaction leaves the synced artifacts and phase intact; it does not authorize forced rotation or provider switching.
-3. **RESUME.** After a successful native compaction entry, the engine renders the fixed template below using absolute paths and CURRENT, falling back to GOAL. Re-read the goal at admission so a CURRENT change during compaction is not replaced by a stale cached string. Compare the current drive generation and admitted-input sequence. A new stop disables that automatic admission. Preserve and reconcile newer direct input before admitting an obsolete objective. The coordinator resumes in the same session with code-owned instructions, not an agent-written free-form prompt.
+1. **SYNC/DUMP.** At a native safe steering boundary, the coordinator reads and safely synchronizes STATE. Replace the current objective in Goals only within its grant. Preserve the ratified North Star, charter, and active Rules. Append completed-work/failure summaries to Log through item 6's engine append command. A failure does not authorize a rule change. The agent never prunes or rotates Log and never authors a resume prompt. A ready receipt identifies the operation and STATE revision. After the coordinator yields normally, bind the receipt to its actual terminal leaf, not a guessed future final-response ID. Run Log overflow rotation before the resumed read.
+2. **COMPACT.** Compact the same idle session through the command API. Retain the atomic idle/expected-leaf precondition so a direct prompt racing this step is not aborted. An HTTP command-start receipt is not compaction completion. Failed compaction leaves the synced artifacts and phase intact. It does not authorize forced rotation or provider switching.
+3. **RESUME.** After a successful native compaction entry, the engine renders the fixed template below using absolute paths and the shared STATE goal resolver. Re-read Goals at admission so an objective change during compaction is not replaced by a stale cached string. Compare the current drive generation and admitted-input sequence. A new stop disables that automatic admission. Preserve and reconcile newer direct input before admitting an obsolete objective. The coordinator resumes in the same session with code-owned instructions, not an agent-written free-form prompt.
 
-The fixed template belongs in `engine/tick.py` or a small imported engine prompt renderer. Optional-file lines are included only when those paths exist. This is the rendered contract, not a new skill:
+The fixed template belongs in `engine/tick.py` or a small imported engine prompt renderer. This is the rendered contract, not a new skill:
 
 ```text
 Read the current stream artifacts before acting:
-- {stream_dir}/STREAM.md
-- {stream_dir}/ACTIONS.md
-- {stream_dir}/TODO.md
-- {stream_dir}/PLAN.md
-- {stream_dir}/context/README.md
-Open a DECISIONS or history file only when current artifacts reference it.
-Historical work/failure entries do not override the current charter.
+- {stream_dir}/AGENTS.md
+- {stream_dir}/STATE.md
+Resolve the current objective in STATE Goals, falling back to its North Star.
+Open history/, context/ and its README index, checks/, or handover/ only on demand.
+Historical entries do not override current Goals or Rules.
 Do not self-remedy environment/auth/resource failures or write new rules, skills,
-or memory because of them. Park and log via the engine; the human repairs them.
+or memory because of them. Park and append a Log entry via the engine;
+the human repairs them.
 {explicit_human_ratified_instructions_if_present}
 /poteto-mode {current_goal}
 ```
 
-Do not load the history directory wholesale or the old STATE. Do not render full TODO/PLAN history back into this template. Item 12 repairs those files at their source. Free-length ACTIONS bodies mean the 30-entry policy is not a token ceiling; measure the resulting read load rather than add an unrequested body budget.
+Do not load history wholesale or revive any retired file or separate CURRENT section. Do not read TODO/PLAN in a stream. Item 12 disables those stream-specific overlay demands. Free-length Log bodies mean the 30-entry policy is not a token ceiling. Measure actual reads rather than add an unrequested body budget.
 
 Keep the prior intake safety corrections. The compaction-time queue is an in-memory Map at `W/dist/server/sessions/piSessionService.js:317,1371-1376`, drains independently at `:2483-2525`, and is cleared at `:502`. Accepted input needs recoverable identity, exact body, order/kind, and attachment references in the narrow receiving-side maintenance record. Do not race its drain with a separate stale RESUME. Tick state references that operation ID rather than owning another input queue.
 
@@ -178,11 +222,11 @@ Advance ready phases through the existing `agent_end`/`compaction_end` path at `
 
 **Native hook decision.** No new native Pi request-boundary hook is needed for Z8's tick-triggered DCR. Reuse safe-point message admission and idle native `compact()`. A small pi-web command precondition and an observable compaction result are needed to close the direct-prompt race. They belong in pi-web source, not a monkeypatch of Pi core, a global model override, or an extension that calls aborting compaction inside an active tool loop. The existing installer returns early when pi-web is already present at `install.sh:466-468`. A normal pi-stack reinstall therefore does not deploy this dependency fix. Install the explicitly tested pi-web artifact for verification, expose its maintenance capability, and have doctor refuse automatic compaction until that capability is present.
 
-**Layer.** LAYER 3 owns the trigger, ordering, fixed resume renderer, and native admission. Implement and test that code first, then update LAYER 4 AGENTS and LAYER 5 skills to name ACTIONS and the implemented sync step. LAYER 1 supplies the actual current-artifact layout. LAYER 2 can reject regressions but cannot compact a live runtime. No stronger static layer can guarantee the runtime ordering, and an agent-authored prompt would defeat Z8's fixed harness contract.
+**Layer.** LAYER 3 owns the trigger, ordering, fixed resume renderer, and native admission. Implement and test that code first, then update LAYER 4 AGENTS and LAYER 5 skills to name STATE and the implemented sync step. LAYER 1 supplies the actual current-artifact layout. LAYER 2 can reject regressions but cannot compact a live runtime. No stronger static layer can guarantee the runtime ordering, and an agent-authored prompt would defeat Z8's fixed harness contract.
 
 **Blast radius.** Medium. `engine/{tick,piweb,sessionlog,doctor}.py`, `bin/pi-web-cli`, coordinator templates, tick maintenance tests, and the small pi-web command boundary. Routine DCR leaves thread policy unchanged. It creates no fresh coordinator and performs no provider switch, global reserve change, or transcript deletion. Item 18 separately runs this same DCR on an explicitly ratified recovery fork.
 
-**Verification.** Baseline has no 150k DCR or fixed artifact-loading resume. In the disposable stream, cross 150k during a direct turn while a benign tool spans a tick. Observe no tool abort, successful artifact sync, ACTIONS rotation, one native compaction, and the engine-rendered fixed prompt in the same SID. The prompt must contain absolute STREAM/ACTIONS/TODO paths, conditional PLAN/index paths, no STATE or agent-generated resume text, and the correctly expanded `/poteto-mode` goal. Test 149,999/150,000, CURRENT fallback and mutation during compaction, repeated ticks, a stop racing admission, failed summarization, accepted input surviving a restart during compaction, and crash after native success before observation. Check actual artifact reads and resumed task effects, not just the HTTP payload.
+**Verification.** Baseline has no 150k DCR or fixed artifact-loading resume. In the disposable stream, cross 150k during a direct turn while a benign tool spans a tick. Observe no tool abort, successful STATE sync, Log rotation, one native compaction, and the engine-rendered fixed prompt in the same SID. The prompt must contain absolute AGENTS/STATE paths, no mandatory history/index/TODO/PLAN or retired-file reads, no agent-generated resume text, and the correctly expanded `/poteto-mode` goal. Test 149,999/150,000, current-objective fallback and mutation during compaction, repeated ticks, a stop racing admission, failed summarization, accepted input surviving a restart during compaction, and crash after native success before observation. Check actual artifact reads and resumed task effects, not just the HTTP payload.
 
 **Dependencies.** Items 6, 7, 8, 10, 11, 12, 15, and 16 for existing-stream rollout. Receiving-side admission safety precedes automatic RESUME. G5 may retain a failed maintenance operation without losing its phase, but does not become Z6 stall-cause detection.
 
@@ -224,34 +268,36 @@ The old publication gate was also unnecessary bookkeeping. A documents the autho
 
 **Dependencies.** None for the adapter. Item 11 uses it at retirement. Migration of a real product-stream checker is a separately authorized rollout action, not part of this artifact.
 
-### 6. Retire STATE for ACTIONS plus tick-rotated history
+### 6. Keep current Goals and Rules, append Log, and tick-rotate its overflow
 
-**Symptom and evidence.** A rank 3, F6 rows 11, 16, 32, and 71, and the new artifact map. The frozen 654 STATE reached 10,195,068 bytes, with 71 preserved-checkpoint headings. The map's current 19 KB STATE does not remove the every-turn history pattern or the separate TODO/PLAN/index load. Z9/G17 now choose an action log rather than this catalog's earlier rewritten current-view STATE.
+**Symptom and evidence.** A rank 3, F6 rows 11, 16, 32, and 71, and the artifact map. The frozen 654 STATE reached 10,195,068 bytes, with 71 preserved-checkpoint headings. The map's later 19 KB STATE does not remove the history-pile pattern or TODO/PLAN/index load. Z15 now specifies one STATE with current Goals, active Rules, and a recent Log.
 
-**Root cause.** `templates/stream/AGENTS.md:4,8` reads STATE every turn and asks for a rewrite. `templates/stream/STATE.md:1-6` does not distinguish history. `threads.py:459-461` explicitly loads it at pickup. `project.py:24,703-749` protects the old artifact and normal upgrade cannot migrate its contents.
+**Root cause.** At the historical base, `templates/stream/AGENTS.md:4,8` reads STATE every turn and asks for a rewrite. `templates/stream/STATE.md:1-6` does not distinguish history. `threads.py:459-461` explicitly loads it at pickup. `project.py:24,703-749` protects the old artifact and normal upgrade cannot migrate its contents.
 
-**Fix.** Implement the ACTIONS append/parser/rotation code first, in a small engine artifact helper called by the existing tick. Add an engine append command that takes the stream lock and writes one complete work/failure entry atomically. The contract is:
+**Fix.** Implement the shared section-aware STATE parser and mutations before templates. Goals and Rules are rewritten in place. Only Log is append-only and capped. An engine append command takes the short stream lock and atomically writes one complete entry into Log:
 
 ```text
 ### <UTC timestamp> <one-line commit-style subject>
 <free body with the relevant context>
 ```
 
-Append one entry for each completed piece of work or encountered failure mode. The agent never rewrites or prunes prior entries. Bodies are free length. The canonical append operation records accepted entry spans and disambiguates a body line that looks exactly like a timestamped entry delimiter. Do not guess boundaries from arbitrary headings or examples inside code fences. Keep only the 30 newest appended entries. This is G17's explicit record-count policy, not a default token/CPU/RAM/disk budget.
+Append completed-work/failure entries through that command. Log each new ZF steer when it arrives. Ordinary Log rotation later carries that steer to history. A new human ruling both updates Rules and appends Log. A superseded ruling is removed from Rules only after its exact old text is durably retained as `history/<UTC ts>-rule-retired-<slug>.md`. Preserve its source authority. Do not add a tag field. The agent never prunes, rotates, or rewrites prior Log entries. Goals and Rules have no entry cap. Rules stay short without silently dropping active constraints.
 
-On every tick, before the pending-event/drive/outage gates, move the oldest overflow to `history/<YYYYMMDDTHHMMZ>-<slug>.md`, one file per entry. Convert entry timestamps to UTC for chronological names. Put a stable source-occurrence/hash suffix inside the slug so same-minute/same-subject entries do not overwrite each other. Two legitimate entries with identical content are still two occurrences, not a content-deduplication opportunity. Preserve exact entry bytes and append order. Do not use history_full, history_index, another Git repository, or empty Git commits as the history store.
+The canonical append operation records accepted occurrence spans in engine metadata. It distinguishes literal delimiter-like body text and examples inside code fences from entry boundaries. Bodies are free length. A malformed structure is reported without dropping bytes. The shared parser preserves an extra level-two section between Rules and Log. This neither creates nor implements Asks.
 
-Serialize append and overflow removal through the same short stream lock. Journal the planned source prefix and destinations in existing engine state, write/verify and synchronize destination bytes before trimming the prefix, then atomically publish and synchronize the 30-entry tail and directory metadata before acknowledging completion. Preserve a concurrently appended tail. Retry after a crash recognizes already-written files instead of duplicating them. Never overwrite a different history file or drop an incomplete/malformed entry to satisfy the count. Report that structural fault for stream-level repair. Do not claim this protects arbitrary bypass writes that ignore the canonical append API.
+On every tick, before pending-event, drive, or outage gates, move the oldest Log overflow to `history/<UTC ts>-<slug>.md`, one file per entry. Retain the 30 newest Log entries. Convert timestamps to UTC. A stable source-occurrence/hash suffix in the slug prevents collisions between identical subjects or even identical entries. Preserve exact entry bytes and append order. Goals, Rules, and intervening sections remain byte-identical during Log rotation. No history_full, history_index, second Git repository, or empty-commit history store is added. The 30-entry rule is Z15's explicit record-count policy, not a token or resource budget.
 
-Only after code/tests exist, replace the STATE template with ACTIONS and a history directory. Change AGENTS steps 1/5 to read ACTIONS and append through the engine helper. Change `rotate_coordinator`'s opening to load STREAM/ACTIONS/current artifacts and resolve CURRENT/GOAL. Update every kickoff STATE reference, including Interview storage and the Plan step. Replace STATE with ACTIONS in `PROTECTED_STREAM_FILES`, protect the history prefix as stream-owned, and ensure ordinary new/upgrade never recreates retired STATE or overwrites ACTIONS/history. Existing STATE is retired only through item 16's explicit migration. Gate legacy create retries and ordinary upgrade on the artifact schema so they cannot seed an empty ACTIONS next to an unmigrated STATE.
+Serialize append, rule retirement, section updates, and rotation through the same short stream lock. Record the source spans and destinations in existing engine state. Write, verify, and synchronize history before removing source text. Atomically publish and synchronize the remaining STATE and containing directory before acknowledging completion. Revalidate source revisions and preserve concurrent changes. Restart reconciliation recognizes existing matching destinations and never overwrites different bytes or duplicates an occurrence. A partially written entry stays intact with a structural error rather than being discarded to satisfy the count.
 
-**Layer.** LAYER 3 first enforces append serialization, the 30-entry count, every-tick movement, and crash-safe publication. LAYER 1 is the resulting ACTIONS/history layout. LAYER 2 checks byte preservation and counts. LAYER 4/5 instructions are downstream callers, not the rotation mechanism. Stronger static structure alone cannot rotate a deployed file on each tick or arbitrate concurrent appends.
+After code/tests exist, replace the old STATE template's meaning with this three-section shape and history/. AGENTS steps read only AGENTS and STATE every turn. Agents append via the engine, update the current objective through item 10, and never rotate. Kickoff Interview/Ratify/Plan and `rotate_coordinator` pickup use STATE Goals and the shared resolver. `PROTECTED_STREAM_FILES` retains STATE and protects history/ and failures/. Retired GOAL/STREAM/DECISIONS/ACTIONS files remain protected from ordinary upgrade until explicit item 16 migration. New/upgrade and create retries respect the schema marker. They never overwrite owned STATE/history or seed a mixed legacy/current layout.
 
-**Blast radius.** Medium. `engine/{tick,project,threads,cli}.py`, a small proposed `engine/artifacts.py`, ACTIONS/history templates, coordinator instructions, stream/kickoff skills, and new artifact tests. No live worktree changes, transcript deletion, or generic log-retention engine.
+**Layer.** LAYER 3 enforces section mutations, rule retirement, append serialization, every-tick rotation, and crash-safe publication. LAYER 1 is STATE/history. LAYER 2 checks byte preservation and counts. LAYER 4/5 instructions are callers, not the rotation mechanism. Static layout cannot run rotation or arbitrate concurrent writes.
 
-**Verification.** Baseline has no ACTIONS cap/rotation. Test 0, 29, 30, 31, and many entries. Candidate retains the last 30 and one exact history file for every overflow entry, including same-minute duplicate subjects, Unicode, multiline bodies, and fenced fake headers. Test paused/outage/eventless ticks, concurrent append, destination collision, malformed final entry, and crash after history write but before tail publication. A retry produces identical bytes/names, not duplicate history. New stream, rotation pickup, kickoff and upgrade must contain ACTIONS and no live STATE read. Real disposable DCR must read ACTIONS only after overflow rotation.
+**Blast radius.** Medium. `engine/{tick,project,threads,cli}.py`, a narrow proposed `engine/artifacts.py`, STATE/history templates, coordinator instructions, stream/kickoff skills, and artifact tests. No live worktree changes, transcript deletion, or generic log-retention engine.
 
-**Dependencies.** Item 15's atomic writer and item 13's scoped commits. This code precedes templates/skills and item 3. Item 16 handles existing repositories.
+**Verification.** Baseline has no section-aware STATE Log cap/rotation. Test 0, 29, 30, 31, and many Log entries. Preserve Goals, Rules, an intervening unknown section, Unicode, multiline bodies, fenced fake headers, duplicate subjects, and identical occurrences. Test paused/outage/eventless ticks, concurrent updates, collisions, malformed entries, and crashes after history sync before STATE publication. Retry yields identical history names/bytes. Test exact retired-rule text, new-ruling Log entries, and steer arrival followed by ordinary rotation. New stream, kickoff, upgrade, and replacement pickup read AGENTS/STATE only. Disposable DCR reads STATE after overflow rotation and does not load cold history.
+
+**Dependencies.** Item 15's atomic writer and item 13's scoped commits. This code precedes templates/skills and item 3. Item 10 shares the parser. Item 16 handles existing repositories.
 
 ### 7. Acknowledge consumed and applied steers
 
@@ -285,7 +331,7 @@ The bot must retain a message it has not sent and show it as undelivered. A host
 
 **Fix.** Make `threads.tsv`'s explicit coordinator designation authoritative and validate it against live and archived identity before dispatch. Require exactly one designated active coordinator. Status and doctor must show missing, archived, duplicate, or unregistered candidates as mismatches. They must not return a falsely healthy old ID.
 
-All normal coordinator creation, adoption, replacement, tick targeting, and status use the same resolver. Adopt an existing nonempty session only by an explicit adoption operation. Recover a crash-created session only from the exact saved spawn attempt identity, not list order or newest timestamp. Save registry updates atomically through item 15. Reject duplicate session IDs and reserve the `coordinator` role from worker spawn/adopt, which currently accepts it at `threads.py:361-363,391,502`. Also enforce the actual first-line ratification marker before worker spawn/adopt side effects; `threads.py:127-137` currently scans historical prose and dispatch does not consult it. Keep unratified kickoff available. Do not convert idle workers to done. Registry lifecycle is not task acceptance.
+All normal coordinator creation, adoption, replacement, tick targeting, and status use the same resolver. Adopt an existing nonempty session only by an explicit adoption operation. Recover a crash-created session only from the exact saved spawn attempt identity, not list order or newest timestamp. Save registry updates atomically through item 15. Reject duplicate session IDs and reserve the `coordinator` role from worker spawn/adopt, which currently accepts it at `threads.py:361-363,391,502`. Also enforce the actual first-line `ratified:` marker in STATE Goals, with nonempty source-backed authority, before worker spawn/adopt side effects. The historical `threads.py:127-137` scans old charter prose and dispatch does not consult it. The new parser accepts the marker only on Goals' first line, not in Log/history or another body. Keep unratified kickoff available. Do not convert idle workers to done. Registry lifecycle is not task acceptance.
 
 For deployed fcf, first read the explicit replacement evidence and verify predecessor quiescence. Updating a row is not permission to resume its frozen work. Do not operate it as part of the disposable verification.
 
@@ -315,25 +361,25 @@ Only retry a read-only request automatically after reconnect. For a mutating req
 
 **Dependencies.** None. Required before real off-host checks for items 1, 2, and 7.
 
-### 10. One North Star and one coordinator-editable CURRENT
+### 10. One STATE goal resolver and a narrow current-objective update
 
-**Symptom and evidence.** F12 rows 27, 30, 38, and 75, B rank 1/3, and the artifact map's 66 KB 654 charter. STREAM amendments bury the actual goal. Z7/G17 now define the separation rather than a new ask ledger.
+**Symptom and evidence.** F12 rows 27, 30, 38, and 75, B rank 1/3, and the artifact map's historical 66 KB 654 charter. STREAM amendments bury the goal. Z7/Z15 now place the one mutable North Star and immediate objective together in STATE Goals, not another ask ledger.
 
-**Root cause.** `templates/stream/STREAM.md:1-25` has a GOAL but no CURRENT section. `skills/stream-kickoff/SKILL.md:40` makes the entire ratified file ZF-only. `threads.py:285-310` renders briefs from pointers without a shared current-objective reader. `templates/stream/AGENTS.md:5,7` also permits out-of-grant defaults and mandates matching new check scripts.
+**Root cause.** At the source base, `templates/stream/STREAM.md:1-25` has a bare GOAL label but no current-objective field. `skills/stream-kickoff/SKILL.md:40` makes the entire ratified file ZF-only. `threads.py:285-310` renders briefs from pointers without a shared resolver. `templates/stream/AGENTS.md:5,7` also permits out-of-grant defaults and mandates new check scripts.
 
-**Fix.** Implement one charter parser and a narrow CURRENT-update operation first. Support the real bare-uppercase section labels, not only Markdown headings. Exactly one GOAL is the mutable North Star. Exactly one CURRENT is a single paragraph describing the immediate objective. Missing/empty CURRENT on a legacy charter uses GOAL until migration, rather than creating a second goal source. The coordinator may replace only CURRENT in place; everything else, including GOAL and the ratification marker, remains ZF-only. The goal resolver returns nonempty CURRENT, otherwise GOAL. Reject duplicate/ambiguous sections rather than selecting an arbitrary last paragraph or a TODO item.
+**Fix.** Use item 6's STATE parser. Goals contains exactly one `### North Star` and one `### Current objective`. The first Goals line carries `ratified:` authority. `### Charter` retains the remaining ratified terms. The sole goal resolver selects the nonempty current objective, otherwise North Star. Reject duplicate or ambiguous sections and an empty North Star. Never select a TODO item or historical paragraph. Legacy bare-label parsing belongs only to explicit migration, not a second live goal source.
 
-Both tick reinjection and DCR call this same resolver and bind the selected charter revision to admission. Do not mark GOAL completed/uncompleted. A current objective can finish, be replaced, or leave the stream paused while the North Star remains. Preserve explicit stops and NO-GO constraints. Re-injection is not permission to override them.
+Provide a current-objective-only engine update that rewrites that Goals subsection in place. Preserve exact North Star, charter/ratification, Rules, Log, and intervening-section bytes. Human-authorized changes may replace North Star or charter through the authorized boundary, not through this coordinator edit. Both reinjection and DCR use the same resolver and bind the STATE revision to admission. No completion flag is added. Completing an objective may replace it or end driving, but never completes the North Star or overrides a stop or NO-GO.
 
-Only then update STREAM's template, AGENTS, worker brief, and kickoff Interview/Ratify/Plan wording. Move accreted amendment paragraphs into sourced DECISIONS records through item 16, while retaining their still-binding effect in the clean current charter. Do not merely hide an active freeze in cold history. Remove the out-of-authority "continue on the default" permission and requirement to invent a new check script for every small/artifact-only ask. Keep explicitly requested acceptance. This is not an independent-review policy.
+Only after code exists, update STATE/coordinator/brief templates and every kickoff Interview/Ratify/Plan reference. Ratify records authority in Goals. Planning uses Goals plus Log, not TODO/PLAN or a separate CURRENT section. Item 16 splits old STREAM and DECISIONS into current Goals, active Rules, and cold history with a source-backed map. Never hide an active freeze in history. Remove the out-of-authority "continue on the default" permission and the demand for a new check script for every small/artifact-only ask. Keep explicitly requested acceptance. This is not a new independent-review policy.
 
-**Layer.** LAYER 3 first provides a single parser, a CURRENT-only mutation boundary, and shared prompt construction. LAYER 1 is the charter's actual GOAL/CURRENT shape. LAYER 2 checks exact untouched section bytes. LAYER 4/5 wording follows the implemented interface. Stronger static structure alone cannot stop two runtime callers selecting different goals or validate a CURRENT-only update. Arbitrary semantic authorization remains a rule, not a claimed theorem.
+**Layer.** LAYER 3 provides the shared resolver and narrow objective mutation. LAYER 1 is the explicit Goals shape. LAYER 2 proves untouched section bytes. LAYER 4/5 wording follows the implemented interface. Static structure cannot reconcile runtime goal selection or prove arbitrary semantic authorization.
 
-**Blast radius.** Low to medium. `engine/{project,threads,tick,cli}.py`, a small shared artifact/goal reader, STREAM/coordinator/brief templates, kickoff/stream skills, and tests. Runtime ratification enforcement is retained in mechanical item 8, not counted twice here.
+**Blast radius.** Low to medium. `engine/{project,threads,tick,cli}.py`, the shared STATE helper, STATE/coordinator/brief templates, kickoff/stream skills, and tests. Runtime ratification enforcement remains mechanical item 8, not a second counted fix.
 
-**Verification.** Baseline lacks CURRENT and the edit boundary. Candidate selects CURRENT, falls back for absent/empty CURRENT, rejects duplicate labels, preserves multiline/quoted goal bytes, and rejects a CURRENT update that changes GOAL, NO-GO, or ratification. Current-objective completion must not mutate the North Star into STOPPED/done. Kickoff respects the sole coordinator-editable exception and creates no unsolicited proof campaign. Real disposable tick and DCR must use the same CURRENT value. Migration preserves a live freeze while relocating old amendments.
+**Verification.** Baseline lacks the STATE Goals shape and objective edit boundary. Candidate selects current objective, falls back when it is empty, rejects missing/duplicate subsections, preserves multiline/quoted goal bytes, and refuses an objective edit that changes North Star, charter, ratification, or Rules. An unknown section between Rules and Log survives. Objective completion never writes STOPPED/done onto North Star. Kickoff follows the edit grant and creates no unsolicited proof campaign. Disposable tick and DCR resolve the same value. Migration preserves a binding freeze while archiving its superseded source text.
 
-**Dependencies.** Item 15's snapshot writer. This code precedes its template/skill callers, items 1/3, and item 16 migration. Per-ask lifecycle stays in track 3.
+**Dependencies.** Items 6 and 15's snapshot writer. This code precedes template/skill callers, items 1/3, and item 16 migration. Per-ask lifecycle stays in track 3.
 
 ### 11. Remove routine rotation and refuse unsafe manual replacement
 
@@ -345,7 +391,7 @@ Only then update STREAM's template, AGENTS, worker brief, and kickoff Interview/
 
 Mark `docs/design/pi-streams-handover.md:3,20,26,92` as historical rather than an authoritative current pickup guide. It still says nothing is built and recommends fresh coordinators when large. Keep the original historical evidence, but do not seed that policy into new implementation sessions.
 
-Manual rotation must not abort first to make archive possible. Retain native busy/queue refusal. Require a current coordinator-authored checkpoint and stable references to unfinished work before retirement. If queues or session-local native child callbacks still need the old owner, refuse rotation and explain the unresolved boundary. Do not build a general native-child adoption or queue migration subsystem in track 1. After successful retirement, create or explicitly adopt the successor using item 8, then load STREAM/ACTIONS/current artifacts with the shared CURRENT/GOAL resolver before calling rotation complete. No active pickup instruction may still request STATE. Persist enough existing rotation phase to recover archive-then-spawn failure.
+Manual rotation must not abort first to make archive possible. Retain native busy/queue refusal. Require a current coordinator-authored checkpoint and stable references to unfinished work before retirement. If queues or session-local native child callbacks still need the old owner, refuse rotation and explain the unresolved boundary. Do not build a general native-child adoption or queue migration subsystem in track 1. After successful retirement, create or explicitly adopt the successor using item 8, then load only AGENTS and STATE with the shared current-objective/North-Star resolver before calling rotation complete. No pickup instruction may request retired files or mandatory cold-history/index reads. Persist enough existing rotation phase to recover archive-then-spawn failure.
 
 **Layer.** LAYER 3 owns replacement and native refusal. LAYER 1 supplies the checkpoint. LAYER 2 checks crash boundaries but cannot prevent a deployed abort/archive. A handover skill cannot enforce the archive precondition.
 
@@ -355,36 +401,25 @@ Manual rotation must not abort first to make archive possible. Retain native bus
 
 **Dependencies.** Items 5, 8, 14, and 15. Removal of routine rotation precedes items 1 and 3. General callback migration belongs to track 3 if it cannot remain a refusal.
 
-### 12. Repair the other loaded artifacts and retire duplicate ledgers
+### 12. Load only AGENTS and STATE, without importing invented artifacts
 
-**Symptom and evidence.** D7, Z10b, A rank 3, B rank 3, and the new artifact map. The map reports TODO 465 KB, PLAN 255 KB, context/README 212 KB, plus invented ALERTS.md 294 KB. ACTIONS alone cannot repair the roughly 1 MB full-read pickup load. These are byte observations, not measured input tokens.
+**Symptom and evidence.** D7, Z10b, A rank 3, B rank 3, and the baseline artifact map. Historical observations include TODO 465 KB, PLAN 255 KB, context/README 212 KB, and invented ALERTS.md 294 KB. Z13 excludes invented artifacts. Z15 removes competing stream planning files. These byte counts are not measured request tokens.
 
-**Root cause.** TODO and PLAN belong to `overlay/AGENTS.md:17-19`; their required reads are in `overlay/APPEND_SYSTEM.md:6-8`. They are not pi-streams templates. `templates/stream/AGENTS.md:4` makes context/README an every-turn read, while `project.py:417-429` seeds it as a short index. `templates/stream/DECISIONS.md:1` has no navigation structure. Per-stream ALERTS.md and decisions.tsv are not part of the shipped stream contract. Index `ALERTS` is real at `project.py:551-553`; the repository's historical root decisions.tsv is a different file and stays untouched.
+**Root cause.** TODO and PLAN come from `overlay/AGENTS.md:17-19`. `overlay/APPEND_SYSTEM.md:6-8` requires their reads. `templates/stream/AGENTS.md:4` also requires context/README every turn, despite `project.py:417-429` seeding it as an index. `templates/stream/DECISIONS.md:1` ships a separate decision file. Invented ALERTS.md and decisions.tsv have no pi-stack source. Index `ALERTS` at `project.py:551-553` is real and separate. The repository's historical root decisions.tsv stays untouched.
 
-**Fix.** Give each artifact one job, using item 6's history layout and item 3's SYNC trigger:
+**Fix.** Follow the explicit tier/name table above and in `11-artifact-map.md`. Stream template/brief instructions disable overlay TODO/PLAN planning. A stream-only overlay exception makes Goals plus Log the planning record. Non-stream behavior is unchanged. Every turn reads only AGENTS.md and STATE.md. Reference history/, context/ and its README index, checks/, and session-bound handover/ only on demand. Never direct agents to registries, threads.tsv, subscriptions.tsv, stream.toml, events, tick-state, locks, or failures/. Runtime operations use implemented CLI boundaries rather than mandatory raw metadata reads.
 
-| Artifact | Current role and rotation decision |
-|---|---|
-| TODO.md | Overlay-owned current checklist, open owners/blockers, and pointers. Move completed narrative/checked-off history to one history file per identified completed section. Keep every unresolved task represented. |
-| PLAN.md | Overlay-owned current execution plan only. Rotate explicitly superseded plans to history and retain the current plan and unresolved dependencies. |
-| context/README.md | Entry-point index, not a diary or pasted reports. Move detail into named context/topic files and keep short descriptive paths. Topic indexes are read on demand, not recursively on every turn. |
-| DECISIONS.md | Sourced rulings and the charter amendments moved here. Add section navigation and current-source links, not a second action log. Read relevant rulings on demand. Do not silently expire or revoke rules. |
-| stream-local ALERTS.md | Migrate useful past failure notes into ACTIONS/history, and map live notification facts to the existing index ALERTS/episode route. Do not keep a competing active alert ledger. |
-| stream-local decisions.tsv | Preserve imported source rows in cold owned history and carry current rulings into DECISIONS. Stop creating a second per-stream ledger. Do not touch identically named files outside the stream root. |
+Stop referencing invented ALERTS.md, decisions.tsv, ad-hoc log/, and analysis directories. Do not import, migrate, archive, delete, assign owners to, inventory, or repair them. TODO/PLAN are also not migration targets. Existing files remain unchanged and are not silently repurposed. Do not add an archive/rebuild helper for these excluded artifacts. Only item 16's specified legacy stream artifacts migrate.
 
-Implement a stream-scoped archive/rebuild helper with explicit source spans, exact-byte preservation, and current-file checks before changing overlay instructions. Closed TODO items and explicitly replaced plan sections are movable facts. Unmarked or mixed-status prose is not mechanically proved obsolete. A source-backed migration mapping supplies the current view; ambiguous blocks remain retained and reported for coordinator review, never silently dropped. No numeric byte/token/line or retention-age cap is introduced. Genuine open work can still be large; do not claim a hard context bound.
+DCR and kickoff use current STATE, not short excerpts from still-mandatory blobs. The context README remains an index by contract, but this fix does not rewrite existing index contents or transfer their ownership. Rule changes use item 6's human-ruling lifecycle. General constraint expiry and independent reviewer policy stay in track 3. A Z11 failure never authorizes new rules, skills, or memory policy.
 
-After that code exists, make the overlay's stream-specific behavior use current TODO/PLAN and ACTIONS for completed-work summaries. Keep ordinary non-stream progress/plan behavior unchanged. During DCR SYNC, update those actual files, rebuild the context entry index, and record reviewed artifact revisions. The fixed resume then reads those current files by path. Do not solve the problem with a small excerpt while leaving mandatory readers pointed at the same historical blobs.
+**Layer.** LAYER 2 tests the actual generated read instructions and conditional overlay behavior. LAYER 4 templates/overlay and LAYER 5 skills name the implemented STATE contract after items 6/10. This fix removes reader obligations. It does not claim a new runtime cleanup mechanism or hard context bound.
 
-Rule review is organizational maintenance, not failure-driven self-remediation. Under Z11 a failure must not cause new rules, skills, or memory policy. Explicit human-authorized rule changes belong in the ratified continuation. Constraint lifetimes and independent reviewer policy remain track 3.
+**Blast radius.** Low. Stream template/brief, `overlay/{AGENTS,APPEND_SYSTEM}.md` with a stream-only exception, related skills, and literal/read-contract tests. No invented-file ownership work, worker-file edits, or ad-hoc directory maintenance.
 
-**Layer.** LAYER 3 owns the stream-scoped archive/update command and DCR trigger. LAYER 1 makes the loaded files actual current views and moves historical detail out of mandatory reads. LAYER 2 proves open-task/source preservation and non-stream isolation. LAYER 4 overlay and LAYER 5 skill changes come after the code. Static layout alone cannot periodically reconcile a running stream's completed sections, while code cannot decide arbitrary prose is obsolete.
+**Verification.** Baseline requires TODO/PLAN and the context index. Candidate stream instructions require only AGENTS/STATE, while non-stream overlay behavior remains identical. Supply long TODO/PLAN, invented files/directories, and a large context index as private fixtures. Their hashes remain unchanged. Assert no migration/import/inventory call or engine-only agent read. Inspect disposable DCR's actual reads, not an HTTP payload or bytes/4 estimate.
 
-**Blast radius.** Medium. Stream artifact helper, DCR sync template, `overlay/{AGENTS,APPEND_SYSTEM}.md` with a stream-only exception, context template/seed, and tests. Migration touches only the stream folder, not any worker's TODO/PLAN or product repository.
-
-**Verification.** Use a synthetic map-shaped fixture with long completed TODO/PLAN history and a diary-like context index. Baseline loads all retained history. Candidate preserves exact archived bytes, all open checklist items and current plan constraints, and current context links, while historical text is no longer a mandatory read. Test ambiguous mixed sections, both real index ALERTS and invented ALERTS.md, duplicate rulings, repeated maintenance, and unchanged non-stream overlay behavior. Inspect actual reads during disposable DCR rather than claim bytes/4 are tokens.
-
-**Dependencies.** Items 6, 10, 15, and 16 for migration. Implement the helper before overlay/skill instructions. No new general ledger or default resource cap.
+**Dependencies.** Items 6 and 10 provide the STATE operations before template/skill callers. Item 16 migrates only its explicit legacy files. No general ledger, resource cap, or cleanup helper is added.
 
 ### 13. Stop automatic Git capture of binaries and data
 
@@ -400,7 +435,7 @@ Do not add a file-size budget. Git is for code, docs, and small reports, never d
 
 **Blast radius.** Low. `project.py`, `.gitignore`, and Git fixture tests in new/tick/upgrade suites. No production history rewrite, data deletion, branch pruning, or forced push.
 
-**Verification.** Put a tiny fake DLL, package, and CSV in a disposable stream beside an updated ACTIONS and a deliberately staged Markdown report. Baseline commits all unignored files. Candidate commits only approved records/report and leaves data out. Also test an already-staged binary and an already-tracked binary update. Neither may slip through the automatic commit. Preserve bytes and the caller's index on refusal.
+**Verification.** Put a tiny fake DLL, package, and CSV in a disposable stream beside an updated STATE and a deliberately staged Markdown report. Baseline commits all unignored files. Candidate commits only approved records/report and leaves data out. Also test an already-staged binary and an already-tracked binary update. Neither may slip through the automatic commit. Preserve bytes and the caller's index on refusal.
 
 **Dependencies.** None. Land before enabling more autonomous tick turns.
 
@@ -436,53 +471,34 @@ Do not add a file-size budget. Git is for code, docs, and small reports, never d
 
 **Dependencies.** None. Land before item 8 and all new runtime operation receipts.
 
-### 16. Migrate existing stream artifacts once, without worker-worktree writes
+### 16. Losslessly migrate to STATE Goals, Rules, and Log once per stream
 
-**Symptom and evidence.** The artifact map shows active STATE/charter/TODO/index piles that new templates cannot repair. A's historical 10 MB STATE and B's accreted charters are concrete precursors. Z9/G17 require an explicit existing-stream migration.
+**Symptom and evidence.** The baseline artifact map shows STATE/charter/decisions piles that new templates cannot repair. A's historical 10 MB STATE and B's accreted charters are concrete precursors. Z15 requires explicit migration into one STATE, superseding Z9/G17's intermediate names.
 
-**Root cause.** `project.py:682-700` calls `copy_missing()` on create, and `:703-749` deliberately protects owned STATE/STREAM/DECISIONS/context during upgrade. It cannot transform content or delete retired STATE. Seeding an empty ACTIONS beside an old STATE would create two competing current artifacts. `cli.py:204-217` already enumerates registered stream roots, which is the correct migration selection boundary.
+**Root cause.** At the source base, `project.py:682-700` calls `copy_missing()` on create, and `:703-749` protects owned STATE/STREAM/DECISIONS/context during upgrade. It cannot split legacy authority or transform STATE. Creating a new schema alongside an unmigrated legacy charter would leave competing current truth. `cli.py:204-217` enumerates registered stream roots, the migration selection boundary.
 
-**Fix.** Add explicit `pi-streams migrate <id> --home <index>` with a plan/dry-run view, not a silent change to every ordinary upgrade. It operates on that registered stream root only. It does not follow thread worktree paths, repo lists, `.stream` pointers, or symlinks outside the root. No worker prompt, fork, worktree write, cleanup, or publication is part of migration.
+**Fix.** Add explicit `pi-streams migrate <id> --home <index>` with a plan/dry-run view. It operates only on the selected registered stream root. It never follows thread worktrees, repo lists, `.stream` pointers, or symlinks outside the root. No worker prompt, live lifecycle change, fork, cleanup, or remote publication is included.
 
-Use one persisted migration identity and UTC start time, source file hashes, and a destination/write plan. Under the stream lock and artifact-writer barrier:
+Persist a migration identity, UTC start time, exact source hashes, and a source-backed extraction/write map. The map identifies original byte spans, source authority/provenance, and destinations in Goals, active Rules, or history. Legacy bare-uppercase charter labels must be supported. Do not automatically classify ambiguous active authority. If the map cannot establish current authority, refuse that stream's apply and report exact unresolved spans. Grok Bot can resolve them from evidence without inventing an authority decision.
 
-1. Split the original STATE at real level-two `##` headings outside code fences. Preserve the preamble, repeated headings, empty sections, and a no-heading file. Create one history file per section. Reconstructing section bytes in original order must match the source hash.
-2. Use that section's identifiable Git introduction timestamp for the history prefix. A header's blame commit and its Git log timestamp can supply it. If section attribution is ambiguous, untracked, or unavailable, use the persisted migration time and mark the fallback. Do not use the newest whole-file commit or filesystem mtime as a fake section timestamp. Slug occurrence identities prevent collisions and make retries stable.
-3. Verify all section files, seed ACTIONS with exactly one migration entry, and only then delete STATE. The entry links to retained provenance and gives counts, not a pasted STATE or full history index. Record the artifact schema/migration identity in engine-owned stream metadata so create/upgrade cannot later seed a misleading legacy layout.
-4. Move identified STREAM amendment paragraphs into sourced DECISIONS entries, preserve the current ratified marker and all still-binding charter terms, and add exactly one CURRENT paragraph. GOAL remains the one North Star. Use a source-backed per-stream extraction map for messy charters. Do not guess that arbitrary text below `ratified:` is obsolete. If current authority cannot be recovered, refuse that stream's apply with a concrete report; Grok Bot resolves it from evidence, without a new ZF interview.
-5. Create/protect the stream-local `failures/` directory for Z11 and preserve any existing `<full-session-id>.lastgood` files byte-for-byte. Do not fabricate a last-good ID from STATE or clear a parked episode during migration. Protect any existing recovery-operation state as well. For an empty directory, use the shipped layout marker rather than inventing a failure entry.
-6. Apply item 12's rotation/rebuild mapping to stream-local TODO/PLAN and context/README, preserving all open work and current constraints. Archive clearly completed/superseded detail; retain ambiguous sections with an explicit review pointer. Preserve useful invented ALERTS.md/decisions.tsv content in the canonical destinations, then retire those duplicate stream-local files. Never apply this mapping to worker worktrees or the source repository's root decisions.tsv.
-7. Make one scoped migration commit containing only approved stream paths, including the STATE deletion, ACTIONS/history, charter/decisions changes, `failures/` layout/protection, and migration marker. Preserve unrelated staged changes. A second invocation makes no duplicate seed, amendment copy, history file, or commit. Resume interruptions from the recorded inputs/destinations, including a crash after commit but before local completion acknowledgement.
+Under the short stream lock and artifact-writer barrier:
 
-No TODO/PLAN byte cap or indiscriminate truncation is added. The chosen remedy is rotation of proven history plus preservation of all open work. Ambiguous semantic cleanup is reported, not treated as completed. Log data deletion is outside this migration, per item 17.
+1. Retain exact original STREAM.md and DECISIONS.md bytes in stable history snapshots with source path, hash, and Git provenance recorded in engine migration metadata. Archive old STATE into history before publishing fresh STATE. Its real level-two sections outside fences may become individual entries. Preserve preambles, repeated/empty headings, and no-heading files. Ordered reconstruction must match the old STATE hash. Archive destinations contain original bytes, not reformatted Markdown.
+2. Use identifiable section/entry Git introduction timestamps when available. Otherwise use the persisted migration start time and label the fallback in provenance, never filesystem mtime or the latest whole-file commit as a fake section time. Stable occurrence/hash slugs prevent collision and make retry destinations identical.
+3. Split STREAM through the explicit map into Goals, active Rules, and historical material. Retain its ratified authority on the first line of Goals, its one mutable North Star, its current objective if source-backed, and remaining charter terms. No separate CURRENT section survives. Move still-in-force DECISIONS entries into Rules and the rest into history. Keep every active freeze/ruling visible in Rules or the ratified charter. Never treat all text below an old ratified marker as obsolete.
+4. Verify and synchronize retained history before atomically publishing a fresh STATE with Goals, Rules, Log. Seed Log with exactly one migration entry linking provenance and counts, not a pasted old STATE or a full history index. Retire the migrated STREAM.md and DECISIONS.md only after verification. Record schema/migration identity in protected engine metadata. Do not create GOAL.md or ACTIONS.md.
+5. Create and protect failures/. Preserve existing `<full-session-id>.lastgood` files and recovery-operation state byte-for-byte. Never fabricate checkpoint IDs or clear parked episodes. Use the shipped empty-directory marker without inventing a failure entry.
+6. Make exactly one scoped commit per stream for approved migration paths, fresh STATE, history, legacy retirements, failures/ layout/protection, and schema metadata. Preserve unrelated staged content and all worker-worktree bytes. A retry creates no duplicate seed, archive, rule, or commit, including after a crash following commit but before acknowledgement.
 
-**Layer.** LAYER 3 owns explicit scope, lossless transformations, commit boundary, and idempotent retry. LAYER 1 is the new stream layout, with LAYER 2 reconstruction and path-fence tests. A template or skill cannot safely transform existing owned content or coordinate a crash halfway through migration. Code lands before instructions recommend running it.
+TODO.md, PLAN.md, invented ALERTS.md/decisions.tsv, ad-hoc log/ and analysis directories, and existing context contents are not migration targets. Do not import, classify, assign ownership, or clean them. Existing GOAL.md/ACTIONS.md from an unknown intermediate schema require an explicit source-backed plan or refusal, not silent adoption. No arbitrary prose truncation, byte cap, or automatic lifecycle action is added.
 
-**Blast radius.** Medium, stream-root only. `engine/{cli,project}.py`, the artifact helper, protected-file/schema handling, scoped Git helper, and proposed `test_artifact_migration.py`. No live threads' worktrees, provider configuration, auth, or existing session lifecycle is touched.
+**Layer.** LAYER 3 owns explicit scope, lossless mapping, commit boundary, and restart reconciliation. LAYER 1 is the final STATE/history layout. LAYER 2 proves exact source retention, reconstruction, and path fences. Templates/skills cannot transform existing owned content or resolve interrupted commits. Code precedes rollout instructions.
 
-**Verification.** Baseline upgrade leaves STATE and never creates the requested history/current layout. Candidate migration preserves a synthetic large STATE byte-for-byte across sections, uses known section Git timestamps or a stable fallback, seeds one ACTIONS entry, deletes STATE only after verification, and extracts amendments without losing a freeze. Test preambles, duplicate/fenced headings, no headings, existing ACTIONS/history, simultaneous existing failure markers, unratified/ambiguous charters, unrelated staged files, path escapes, and crashes before/after deletion and commit. Failure markers and recovery state must stay unchanged, and migration must issue zero session operations. A second run adds zero commits. Hash every worker worktree fixture before/after and require equality. Run on the disposable stream before production rollout, not on any existing stream in this investigation.
+**Blast radius.** Medium, stream-root only. `engine/{cli,project}.py`, the narrow STATE/migration helper, protected-file/schema handling, scoped Git helper, and proposed `test_artifact_migration.py`. No worker-worktree, provider/auth, or existing session lifecycle writes.
 
-**Dependencies.** Items 6, 10, 12, 13, and 15. All must exist before migration is offered. Ordinary upgrade continues protecting stream-owned artifacts.
+**Verification.** Baseline upgrade leaves the old layout. Candidate archives original bytes/provenance, reconstructs old STATE exactly, and builds fresh Goals/Rules/Log from an explicit STREAM/DECISIONS map. Test known section times and stable fallbacks, preambles, duplicate/fenced headings, no headings, existing history, simultaneous failure markers, active freezes, ambiguous authority refusal, unratified sources, unrelated staged files, path escapes, and crashes before/after archive, STATE publication, legacy retirement, and commit. A second run adds zero commits. Failure/recovery bytes and all worker-worktree fixture hashes remain identical. Assert zero session operations and unchanged excluded-file hashes. Run only on a new disposable legacy-layout fixture before separately authorized rollout.
 
-### 17. Give large logs and outputs an owner without inventing cleanup authority
-
-**Symptom and evidence.** `11-artifact-map.md` reports 654 log/ at 34 GB, analysis/ at 47 GB, and repeated message dumps around 19 MB, while native tick events remain at or below about 216 KB. F11 rows 17, 29, and 47 show the disk/Git consequences. The directory sizes are map observations, not measurements made by this amendment.
-
-**Root cause.** `templates/stream/.gitignore:1` ignores log/ but defines no ownership or retrieval policy. `templates/thread-brief.md:7-11` constrains worker ownership but not ad hoc duplicate capture. `tick.py:290-302` owns events/tick-state; it does not own every file an agent puts under log/. Gitignore cannot prevent disk growth.
-
-**Fix.** Add a stream-root artifact inventory that records metadata, owner, purpose, current references, and disposition candidates. Separate tick-state/events and active receipt/migration/rotation records from bulk worker outputs and copied transcripts. Normal health maintenance uses metadata only, not whole 34 GB reads, and does not walk or mutate worker worktrees through symlinks.
-
-Do not seed a new default full-message/transcript capture. For the observed ad hoc copies, locate the owning producer and replace duplicate bulk capture with stable source references or selected exact evidence records where sufficient; do not claim an engine-wide copy loop was found. Put future bulk job data in a named private, stream/worker-owned output area outside mandatory reads and Git, with handover pointers. Keep small source-bound reports and exact required evidence retrievable under D6 and item 5. Do not mistake an unreferenced file for safe-to-delete data.
-
-For existing log/ and analysis/ growth, produce a source-backed ownership and proposed archive/cleanup list. Actual deletion, compression with evidence implications, retention ages, byte caps, and host cleanup are deferred pending explicit authorization. This is a stated limit, not a claim that inventory bounds disk usage. Z11 leaves physical environment repair to the human. Its explicit deletion of recovered original sessions is a separate narrowly scoped operation, not blanket permission to clean stream outputs.
-
-**Layer.** LAYER 3 runs the inventory through existing health maintenance. LAYER 1 separates current reports, evidence and bulk output. LAYER 2 checks path safety and zero deletion without authorization. CI or a directory name alone cannot identify deployed output ownership. Capture changes belong at the located producer; ad hoc agent-output placement also needs template guidance. No engine-wide bulk-copy path is asserted. Do not build a retention service.
-
-**Blast radius.** Low to medium. Artifact inventory/helper, output/handover guidance, ignore/layout documentation, and tests. No resource guards, automatic data deletion, transcript purge, or new daemon.
-
-**Verification.** A disposable sparse/metadata fixture represents large output trees, active control files, exact evidence, symlinks, and unknown ownership. Candidate inventories without reading payloads or deleting anything, identifies protected live state, and reports unknowns honestly. A new small job records an owned output reference without committing data or duplicating its whole transcript. Original evidence hashes still resolve. Baseline has no such ownership/current-read separation.
-
-**Dependencies.** Items 5, 12, 13, and 15. Destructive cleanup is not an implementation prerequisite for Z6, DCR, or migration.
+**Dependencies.** Items 6, 10, 12, 13, and 15. Ordinary upgrade remains protective. S2a follows S2 and precedes S3.
 
 ### 18. Park environment failures, then run ratified F-DCR
 
@@ -495,7 +511,7 @@ Pi exposes persisted entry IDs, not a durable display turn number. `N/session-ma
 **Fix.** Implement and test the following engine/receiving-side operation before changing templates or skills:
 
 1. **Record and park.** During healthy execution retain the exact inclusive end-entry ID of each fully successful persisted turn, including every tool result. On a stream failure, atomically publish `failures/<full-original-session-id>.lastgood` for the coordinator and each affected spawned worker. Content is only that session's last-good entry ID. Several files coexist. File existence means parked on failure. Bind native ID, full SID, cwd, file/branch identity and episode in existing engine-owned operation state. Never advance a parked marker into error-handling turns. Leave unaffected worker lanes alone.
-2. **Do not self-remedy.** Park at the owning runtime admission/retry boundary, not only in tick memory. Native retries at `N/agent-session.js:2079-2140` must not bypass classes 2-5 parking. Do not call settings-writing repair methods such as `setAutoRetryEnabled()` at `:2181-2182`. No credential changes, cleanup, provider/model switch, or new rules, skills, memory lessons, or persistent harness configuration. Required marker/ACTIONS/operation bookkeeping is permitted, not a license to write remedial policy. The fixed Z6/Z8 instructions carry this prohibition after the code exists.
+2. **Do not self-remedy.** Park at the owning runtime admission/retry boundary, not only in tick memory. Native retries at `N/agent-session.js:2079-2140` must not bypass classes 2-5 parking. Do not call settings-writing repair methods such as `setAutoRetryEnabled()` at `:2181-2182`. No credential changes, cleanup, provider/model switch, or new rules, skills, memory lessons, or persistent harness configuration. Required marker/STATE Log/operation bookkeeping is permitted, not a license to write remedial policy. The fixed Z6/Z8 instructions carry this prohibition after the code exists.
 3. **Alert and await ratification.** Send one Z4 episode through the existing off-host bot route to ZF only, in exact `<stream-id>:: <message>` format. The human repairs the environment. Sign-in probes, a writable disk, or an ordinary assistant/user-role "fixed" string do not release parking. Preserve the authenticated ratified notice and any explicit exceptional instructions through O4 below.
 4. **Fork the exact good prefix.** Once ratified and quiescent, fork inclusively at the saved entry, checking branch membership and complete tool-call/result pairs. Bind the new full SID to this operation and preserve the authorized provider, model, thinking, cwd and file identity. No abort to force quiescence, newest-session adoption, or tree navigation in the old file. Check inherited logical entries through the checkpoint and exclude failure descendants. Genuine later user input must be preserved and reconciled in order outside the discarded error noise.
 5. **DCR on that fork.** Update the explicit registry to the verified replacement while holding ordinary admissions for this recovery operation. Before syncing, read the current owned artifacts so inherited pre-failure context cannot overwrite newer work facts. Run item 3's sync, successful native compaction, and fixed path-loading/current-goal resume on the returned fork SID. F-DCR is explicit recovery and does not wait for the routine 150k trigger. DCR itself does not change the fork SID. Include only additional instructions explicitly authorized in the ratified human notice. A generic repair notice grants no rules/skills/memory change. Preserve uncertain submitted-job identities and reconcile them before further task effects.
@@ -530,7 +546,7 @@ Missing/unsafe checkpoints, unsupported capabilities, cancelled hooks, ENOSPC ma
 
 ## Needs a ZF call
 
-None for the listed fixes. Z1-Z11, G17/G18, D1, and narrowed G5 settle the policy choices. P7 assigns remaining reversible engineering decisions to Grok Bot. The program's first-pass go-ahead remains the implementation gate.
+None for the listed fixes. Z1-Z15, GO, G25, G18, D1, and narrowed G5 settle the policy and execution boundaries. P7 assigns remaining reversible engineering decisions to Grok Bot. GO is granted. Unsupported source/capability or genuinely ambiguous authority remains a reportable blocker, not permission to guess.
 
 Four Z11 engineering items remain open, all with chosen defaults O1-O4 in item 18. They cover detection/checkpointing, Pi/Prime fork capability, correlated RESUME streaming, and authenticated ratified-notice intake. Unsupported or uncertain recovery remains parked without deletion. Routine DCR stays in the same session; ratified F-DCR first creates its one verified fork. Apply no new budgets, retain explicit stops, refuse unsafe rotation, and use ZF-only Slack DM. Missing box-wrapper source and dependency source pins are discovery prerequisites, not ZF questions.
 
@@ -538,7 +554,7 @@ Four Z11 engineering items remain open, all with chosen defaults O1-O4 in item 1
 
 - **Per-ask lifecycle and ask ledgers.** The stream can lose an obligation when plans or priorities change. Z2 moves the lifecycle design out of this stack.
 - **The coordinator grading its own homework.** A brief and its checker can share the same wrong paraphrase, and context decay may amplify that error. Z2 defers the oracle and fidelity design.
-- **Constraint lifetimes.** Obsolete policies can survive beside later corrections. Z2 defers expiry, supersession, and general rule-lifecycle machinery.
+- **General constraint lifetimes.** Z15's specific active-Rule replacement and exact retirement are in scope. Z2 still defers general expiry and broader constraint-lifecycle machinery.
 - **General control record or engine.** The research proposal combines authority, asks, ownership, and transactions. Its broader contract is not required for these bounded tick operations.
 - **Workflow definitions and reviewer policy.** D9 requires a workflow shape before choosing costly independent-review boundaries.
 - **General native-child adoption and callback migration.** A replacement coordinator can read an old run ID without owning its completion subscription. Track 1 refuses unsafe replacement rather than invent a second worker backend.
@@ -550,17 +566,21 @@ These are problem statements, not commitments to a framework. D6 excludes a cont
 
 ## Stacked implementation plan
 
-All work below is future work after the catalog's first-pass go-ahead. Start fresh branches above pi-stack main `3acf0f0`. Keep each implementation commit small and its regression test in the same commit. Show each new regression failing against the base before accepting its fix. Do not merge a partial liveness stack that depends on an unlanded safety boundary. Rows labelled pi-web or bot are companion PRs in their owning repositories, not commits mixed into a pi-stack PR. Their tested API/capability is a dependency of the corresponding pi-stack stack.
+GO authorizes the local run in order S1, S2, S2a, S3, S4, S5, S6. Create pi-stack `feat/streams-must-fix` at `/home/alphalab/Projects/worktrees/pi-stack-streams-must-fix` from exact base `3acf0f01e6084a317b89cef3a86f4781e60877cf`. All code/test/local-commit writes occur there. Keep concise TODO.md and PLAN.md there as process artifacts, not stream files or commit noise. Pin matching pi-web source first and use its same-named isolated local branch. Never deliver installed dist edits.
+
+Each code commit includes a new regression actually run on its immediate parent before implementation, then focused green and the full offline suite. Record commands/results in its commit body and one progress row per commit. Do not manufacture historical red evidence or call old-candidate tests a baseline. Inspect/deslop each diff before committing. Do not enable a partial liveness stack whose safety boundary is absent. Pi-web/bot rows are companion source changes, not pi-stack commits. If bot owning source is unavailable on options-01, retain exact add-file adapter contract patches under this docs folder without claiming deployment. Do not invent edits to unknown owning paths.
+
+After amended docs plus baseline checks, and after each local code commit, report the exact status line, SHA, red/green commands and results, full-suite count/result, disposable result, and progress-file update to the parent. Wait for acknowledgement before the next commit. This is a reporting checkpoint, not a product gate. If the reporting tool is unavailable, emit the status and return a clear checkpoint rather than silently batching commits. No push, PR, merge, other-branch rebase, live lifecycle action, or docs-worktree commit is authorized for this writer.
 
 ### Verification setup on options-01
 
-Use a new disposable project, source fixture repo, stream directory, explicit private index, and disposable `XDG_CONFIG_HOME`. Set the private XDG environment for every verification CLI process and its private systemd unit. Pass the private index through `--home` on every command, including the real tick. Set `PI_WEB_URL` explicitly to the dedicated verification instance. Do not borrow an existing coordinator or product-stream worktree.
+Use a new disposable project, source fixture repo, stream directory, explicit private index, and private `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, and `XDG_STATE_HOME`. The isolated pi-web uses dedicated config/data/session paths and a port other than 8504. Set all three XDG variables for every verification process and any dedicated user unit. Pass the private index through `--home` on every command, including the real tick. Set `PI_WEB_URL` explicitly. Never borrow an existing stream/session or touch live8504, the production systemd tick, `~/.pi-stack`, or `~/.local/bin`.
 
-`--home` alone is not isolation. `init_project()` registers that index in the homes file under XDG at `project.py:341-348,370-386,610-611`. The production service runs the global tick at `systemd/pi-streams-tick.service:6` and would discover a test index registered under shared XDG. Assert that the production homes file's bytes remain unchanged and its global selection excludes the test index. Do not stop or edit the production timer to compensate.
+`--home` alone is not isolation. `init_project()` registers that index in the homes file under XDG at `project.py:341-348,370-386,610-611`. The production service runs the global tick at `systemd/pi-streams-tick.service:6` and would discover a test index registered under shared XDG. Prove the production/test selection separation with private fixtures. Do not run production discovery or write its homes file. Never stop or edit the production timer to compensate.
 
 LAYER 1 gives verification configuration a separate filesystem identity. LAYER 2 checks the boundary. Add an offline production/test-XDG fixture before any real-stream test. With shared XDG, baseline global selection includes the new test index. With private XDG, production selection excludes it and the private unit carries the same isolated environment.
 
-Use the real pi-web/native Pi integration in a dedicated verification instance and the same configured provider/model. Use supported instance configuration, not guessed flags. Do not copy or rewrite credentials to provision it. If an authorized isolated instance is unavailable, report the real-stream check blocked instead of falling back to a production destination. Drive only newly created disposable sessions. Use a separately named user-level systemd unit that executes `pi-streams tick --home <private-index>`, so timer behavior is exercised without editing or restarting the production unit. Keep generated context and fault fixtures outside Git.
+Use the real pi-web/native Pi integration in a dedicated verification instance and only `openai-codex/gpt-6.1-sol`. Use supported instance configuration, not guessed flags. Read existing auth in place only. Never copy, print, modify, or replace credentials and never log in. If isolation needs copied credentials or new login, stop that check and report blocked. Never fall back to production. Usage/quota errors stop this implementation run without a model switch. Drive only new disposable sessions. Run a long-lived verification server in tmux, never a background bash process. If needed, use a dedicated user unit executing `pi-streams tick --home <private-index>` with the same private XDG paths. Keep generated context and fault fixtures outside Git.
 
 Run baseline and candidate with the same small task and controlled clock/error observations. Name and retain both results under the disposable stream's evidence folder. Fault injection occurs at the external boundary of that stream only. Do not exhaust real quota, expire real auth, modify credentials, fill the host disk, or send production alerts for a test. A real notification test uses the existing authorized ZF DM route once and labels itself as verification. Mocks alone cannot certify that route.
 
@@ -579,13 +599,12 @@ This companion change does not go into the pi-stack PR or generic host CLI.
 | Commit title | Files | Test and real-stream check |
 |---|---|---|
 | `streams: publish snapshots and scope automatic commits` | `engine/{project,threads}.py`, create/persistence/Git tests. | Items 13/15. Short-write, retry, unrelated staged files, binary/data exclusion. |
-| `streams: parse the charter and update CURRENT only` | Proposed `engine/artifacts.py`, `project.py`, charter tests. | Item 10. Real bare-label format, CURRENT/GOAL fallback, duplicate rejection, unchanged protected section bytes. |
-| `streams: append and rotate ACTIONS under the stream lock` | Artifact helper, `engine/{cli,tick,project}.py`, protected-file/schema changes, proposed `test_action_rotation.py`. | Item 6. 30/31, identical occurrences, collisions, append races, crash durability, rotation on paused/outage/eventless ticks. |
-| `streams: archive completed views and inventory bulk outputs` | Artifact helper, proposed artifact-health tests. | Items 12/17. Open-task preservation, index-only README, duplicate-ledger import, zero unauthorized data deletion. |
-| `streams: teach the new artifact contract and remove bad defaults` | ACTIONS/history/STREAM templates, remove STATE template, AGENTS steps 1/5, kickoff Interview/Ratify/Plan, stream skill, stream-scoped overlay, design docs, literal tests. | Code already exists. New kickoff has no caps, CURRENT-only exception, real append command, no active STATE read, and unchanged non-stream overlay behavior. |
+| `streams: parse STATE Goals and update the current objective only` | Proposed `engine/artifacts.py`, `project.py`, STATE section/goal tests. | Item 10. Explicit North Star/current-objective shape, fallback, duplicate rejection, exact untouched bytes and intervening-section preservation. |
+| `streams: append STATE Log and rotate overflow under the stream lock` | STATE helper, `engine/{cli,tick,project}.py`, protected-file/schema changes, proposed `test_state_rotation.py`. | Item 6. Only Log capped at 30, occurrence identities, collisions, append races, durability, paused/outage/eventless ticks, exact rule retirement and steer logging. |
+| `streams: teach STATE tiers and remove conflicting stream defaults` | STATE/history templates, retire STREAM/DECISIONS templates, AGENTS steps, kickoff Interview/Ratify/Plan, stream skill/brief, conditional overlay, design docs, literal tests. | Items 4/12 after code exists. No caps, objective-only edit grant, real append operation, AGENTS/STATE-only reads, no TODO/PLAN or invented-file imports, unchanged non-stream overlay behavior. |
 | `streams: bind handovers to full session identity` | Brief/rendering, close checks, stream skill, brief/close tests. | Item 14's predecessor/successor case and owned report reference. |
 
-The ACTIONS/charter/health code precedes the template/skill commit. Do not activate legacy streams with a mixed STATE/ACTIONS layout. On the disposable new stream, verify kickoff's CURRENT/no-cap contract, append 31 entries, tick to 30 plus one exact history file, and inspect current reads and Git contents. This stack does not itself migrate or resume an existing stream.
+STATE parsing/mutation code precedes template/skill callers. Do not activate a legacy stream with mixed old/new schemas. On the new disposable stream, verify Goals/Rules/Log and kickoff's objective/no-cap contract. Append 31 Log entries, tick to 30 plus one exact history file, preserve Goals/Rules/an intervening test section, and inspect actual reads and Git contents. No bulk-output inventory commit remains. This stack does not migrate or resume an existing stream.
 
 ### Stack S2. Correct identity, receipts, archive reads, and rotation
 
@@ -603,10 +622,10 @@ Update the bot relay's receipt handling in its owning deployment source alongsid
 
 | Commit title | Files | Test and real-stream check |
 |---|---|---|
-| `streams: plan a lossless stream-root artifact migration` | `engine/{cli,project}.py`, artifact helper, proposed `test_artifact_migration.py`. | Item 16. Exact STATE reconstruction, section timestamps/fallback, charter map, path fence, failures/ setup and unchanged existing markers. |
-| `streams: apply migration once with one scoped commit` | Migration journal/schema marker, scoped Git helper, tests. | Crash before/after delete/commit, one seed, second-run zero commits, no duplicate amendments/history, unchanged worker-worktree hashes. |
+| `streams: plan a lossless stream-root artifact migration` | `engine/{cli,project}.py`, artifact helper, proposed `test_artifact_migration.py`. | Item 16. Exact legacy STATE reconstruction and raw STREAM/DECISIONS provenance, stable timestamps/fallback, explicit Goals/active-Rules/history map, ambiguity refusal, path fence, failures/ and unchanged markers. |
+| `streams: apply migration once with one scoped commit` | Migration journal/schema marker, scoped Git helper, tests. | Crash before/after history/STATE/legacy-retirement/commit, one migration Log seed, second-run zero commits, unchanged excluded-file and worker-worktree hashes, no session operations. |
 
-Run this on the disposable stream before enabling DCR there. Real existing-stream migration is explicit after the first-pass go-ahead, per-stream evidence review, and tested code deployment. It never writes worker worktrees.
+Run this on a new disposable legacy-layout stream before enabling DCR there. Real existing-stream migration requires separate rollout by the lead after per-stream evidence review and tested deployment. This writer never migrates an existing stream or writes worker worktrees.
 
 ### Stack S3. Fixed-template DCR, code before instructions
 
@@ -615,8 +634,8 @@ Run this on the disposable stream before enabling DCR there. Real existing-strea
 | `pi-web: compact only at the expected idle checkpoint and retain maintenance input` | `jmfederico/pi-web` source `src/server/sessions/{sessionCommandService,piSessionService}.ts`, narrow persisted maintenance record, capability/result fields, and focused tests. No installed `dist` edits. | Busy/direct-input races, accepted input across a restart during compaction, and newer input before saved RESUME. A command-start reply must not pass as compaction completion. |
 | `streams: add native command-run and compaction-result observation` | `bin/pi-web-cli`, `engine/{piweb,sessionlog,doctor}.py`, CLI/doctor tests. | Call the real command endpoint and identify one successful compaction entry. |
 | `streams: implement argument-preserving poteto-mode invocation` | Engine/receiving adapter and installer capability checks, actual prompt-expansion tests. | Exact goal punctuation/newlines and loaded skill; fixed DCR read-path prefix survives the non-leading invocation. |
-| `streams: sync compact and resume with the fixed 150k DCR template` | `engine/tick.py`, small code-owned prompt renderer, maintenance state/adapter tests. | Item 3. CURRENT/GOAL resolution, real artifact reads, no agent-written resume, same SID, no active-tool abort, changed CURRENT/stop/input races. |
-| `streams: describe the implemented DCR sync in coordinator instructions` | AGENTS/skills and literal tests only after code is present. | SYNC updates CURRENT/ACTIONS/TODO/PLAN/index; no new failure-driven rules or skills. |
+| `streams: sync compact and resume with the fixed 150k DCR template` | `engine/tick.py`, small code-owned prompt renderer, maintenance state/adapter tests. | Item 3. Shared STATE goal resolution, AGENTS/STATE reads, no agent-written resume, same SID, no active-tool abort, changed objective/stop/input races. |
+| `streams: describe the implemented DCR sync in coordinator instructions` | AGENTS/skills and literal tests only after code is present. | SYNC safely updates STATE Goals and appends Log, preserves active Rules, and tick-rotates only Log. No TODO/PLAN/index read mandate or failure-driven rule/skill change. |
 
 Build and install the exact tested pi-web artifact before enabling this stack, then require its maintenance capability in doctor. The current installer skips an existing pi-web, so merely reinstalling pi-stack is not this deployment step. Do not revive the superseded 252k native-hook work. Real verification must show no interruption of the running tool and actual resumed task progress.
 
@@ -624,8 +643,8 @@ Build and install the exact tested pi-web artifact before enabling this stack, t
 
 | Commit title | Files | Test and real-stream check |
 |---|---|---|
-| `streams: re-inject the current goal whenever driven and stalled` | `engine/{project,cli,tick,piweb}.py`, shared goal/prompt renderer, tick tests. | Item 1. Identical injection across stall reasons and missing dispositions; no `out()`/pending-event veto; CURRENT fallback, worker-to-stream routing, preserved human ask. |
-| `streams: isolate observations and report per-stream tick health` | `engine/{tick,doctor,piweb}.py`, failure/doctor tests, systemd pass reporting if needed. | One unavailable worker does not skip another reinjection or ACTIONS rotation. One healthy stream cannot hide a failed pass. |
+| `streams: re-inject the current goal whenever driven and stalled` | `engine/{project,cli,tick,piweb}.py`, shared goal/prompt renderer, tick tests. | Item 1. Identical injection across stall reasons and missing dispositions; no `out()`/pending-event veto; STATE objective/North-Star fallback, worker-to-stream routing, preserved human ask. |
+| `streams: isolate observations and report per-stream tick health` | `engine/{tick,doctor,piweb}.py`, failure/doctor tests, systemd pass reporting if needed. | One unavailable worker does not skip another reinjection or STATE Log rotation. One healthy stream cannot hide a failed pass. |
 | `streams: align generated drive instructions with the coded rule` | Coordinator/skill wording and literal tests after the reinjection code. | No next-action/disposition requirement, no session-level stall-remedy classifier, no North Star done flag. |
 
 Reuse S2's receiving-side generation check for all driver admissions. Native stop/cancel invalidation is already present before S3, not postponed until this stack. Test the sender-check/stop/receiver-admission race before enabling automatic execution wakes. Tick receipt, maintenance, and registry prerequisites must already be present.
@@ -654,24 +673,24 @@ No automatic retries are enabled until both the retained recovery state and off-
 
 ### Rollout and rebase
 
-After each stack, run the focused red/green cases, the full offline suite, and its named real disposable-stream check. Retain exact source and dependency revisions with the observations. A test that does not reproduce on baseline is not evidence that a regression was fixed.
+For every code commit, run its new regression on the immediate parent, then focused green and the full offline suite on the implementation. Run each stack's named real disposable-stream check after that stack. Retain exact source/dependency revisions and results. Fixtures alone or HTTP 200 are not real task-effect evidence. Blocked checks stay labelled blocked and capabilities stay gated. S6 requires the actual isolated ratified F-DCR round trip before any S1-S6 completion claim.
 
 Production activation requires the integrated S1-S6 capabilities, the off-host route, and explicit migration of that stream. Earlier stack checks use only disposable sessions. Do not enable a production driver or DCR path before S6 supplies the receiver's Z11 parking boundary, or let an unsupported classes 2-5 handoff fall through to an ordinary prompt. This gate orders deployment without delaying Pi work for Prime or track 3.
 
-After ZF's first-pass go-ahead and the verified stack lands on main, rebase all program and open feature branches onto the new main before streams-on-prime work. Do not port today's broken tick or template defaults. Existing-stream migration is explicit, source-backed, and separate from template upgrade. G14's harness-stream goal reset belongs to that authorized rollout, not this investigation.
+The parent/driver owns merging the verified stack and rebasing other branches before streams-on-prime work. This writer makes local commits only. Existing-stream migration remains explicit, source-backed, and separate from template upgrade. G14's harness-stream goal reset belongs to lead-owned rollout, never this isolated implementation run.
 
 ## Decisions
 
 | Decision | Reason and evidence |
 |---|---|
-| Apply Z1-Z11, G17/G18, and both steers over superseded brief text. | Later calls refine liveness, replace free-form resume and STATE, and narrow G5. Do not preserve the old design beside them. |
+| Apply Z13-Z15, GO, and G25 over older layouts; retain other Z1-Z11 safety calls. | Z15's single STATE supersedes G17/G21/G22. GO authorizes this isolated local run. It does not authorize this writer to touch live streams or merge. |
 | Keep liveness and recovery as separate catalog items. | Z1 requires forward driving even with no new event. C rank 2 shows a different recovery predicate. |
 | Use tick-observed 150k with Z8's fixed engine read-state/goal resume. | Z8 replaces the agent-written resume. Preserve Z3's no-interruption/same-session maintenance and do not revive 252k. |
 | Reuse safe-point steering, then compact only when idle. | The installed agent loop admits steering after tool batches. Native manual compaction aborts active work. |
 | Add a small pi-web idle/checkpoint guard, not a native Pi core hook. | A status-then-compact race can interrupt a direct prompt. Z3 does not require per-request compaction. |
 | Land receiving-side stop invalidation before any automatic RESUME. | The adversarial review demonstrated that stopping a runtime does not prevent a later prompt reopening it. Sender-side checks alone leave a race. |
 | Persist accepted maintenance-time input and reconcile it before old RESUME. | The existing compaction Map is volatile and drains independently. Its acceptance does not establish durability or stop ordering. |
-| Give verification a private XDG home as well as an explicit index. | `init --home` registers the index under XDG. Shared XDG would let the production global timer discover the test stream. |
+| Isolate all three XDG homes, the index, session/config/data paths, and verification port. | G25 and the stop/compaction review require separation from production discovery and port 8504. Auth is read in place only. |
 | Store only current drive, recovery, delivery, and maintenance facts. | Tick state retains dispatch progress and operation IDs. Pi-web owns accepted maintenance input and native outcomes. Z2 and P3 reject a general control engine or competing input queues. |
 | Keep applied-steer receipts, but no per-ask completion ledger. | Z5 requires actual application. Z2 separately defers product lifecycle and self-grading. |
 | Use ZF-only Slack DM and episode-based suppression. | Z4 chooses the destination and quiet behavior. Full-disk notices must originate off-host under G5. |
@@ -679,21 +698,26 @@ After ZF's first-pass go-ahead and the verified stack lands on main, rebase all 
 | Retain archived raw evidence without restoring retired coordinators. | Both exact row-37 receipt hashes survive. The failing component is the live-path binding. |
 | Refuse unsafe manual rotation instead of building queue/callback migration. | A demonstrates native busy protection and successful manual replay. Z3 removes routine replacement pressure. |
 | Bind handovers to session identity and reuse atomic snapshot writes. | Both are low-blast-radius source-proven defects, independent of the deferred lifecycle design. |
-| Retire STATE, append ACTIONS, and rotate to history on every tick. | Z9/G17 select names and 30 free-length entries. Code handles serialization/crashes before templates/skills use it. This is not a token budget. |
-| Use one CURRENT/GOAL resolver and CURRENT-only coordinator edits. | G17 keeps a single mutable North Star and a bounded edit grant. Neither a completed objective nor a failure rewrites the ratified charter. |
-| Rotate proven TODO/PLAN history and rebuild the actual loaded context index. | The overlay, not pi-streams, owns TODO/PLAN. Fix mandatory readers at source without dropping open work or setting size caps. |
-| Migrate explicitly, once per stream, with one scoped commit. | G17 requires existing-stream conversion. Preserve exact history, active authority, failures/ markers and worker-worktree bytes. Ordinary upgrade stays protective. |
+| Keep one STATE with ordered Goals, Rules, Log. | Z15 supersedes all older names. Only Log is capped at 30 and tick-rotated. Goals/Rules are rewritten in place, and an intervening level-two section is preserved without building Asks. |
+| Use explicit North Star/current-objective subsections and one resolver. | Goals' first line carries ratified authority and its Charter subsection retains remaining terms. The coordinator may update only the objective. No goal completion flag or separate CURRENT section exists. |
+| Retain exact retired rules, log new rulings and ZF steers. | Z15 moves superseded rule text to timestamped rule-retired history. Steers enter Log on arrival and later rotate normally. No tag field or automatic authority classification. |
+| Disable stream TODO/PLAN planning; leave non-stream behavior unchanged. | Goals plus Log replace the global-overlay plan inside streams. History/context/checks/handover are on demand, never extra mandatory turn reads. |
+| Exclude invented artifacts and remove item 17 without renumbering. | Z13 permits only stopping references to invented files. There is no import/migration/ownership work or bulk-output inventory commit. Current count is 17, split 11 mechanical and 6 artifact fixes. |
+| Migrate only explicit legacy stream artifacts, once, with one scoped commit. | Z15 maps STREAM into Goals/active Rules/history, DECISIONS into active Rules/history, and old STATE into history before fresh STATE. Retain exact bytes/provenance, failures/ markers, and worker hashes. Ambiguous authority refuses apply. TODO/PLAN and invented files are excluded. |
 | Only usage-limit recovery stays automatic. | Z11 narrows G5 classes 2-5 to park, human repair/ratification, F-DCR and original wipe. Readiness alone cannot release them. |
 | Choose O1-O4 defaults and fail visibly on unsupported capability. | Last-good IDs, exact Pi/Prime fork semantics, correlated RESUME streaming and notice provenance are implementation facts, not ZF policy cards. |
 | Preserve required evidence and ownership before singular original deletion. | Native fork is not a byte archive or callback transfer. Streaming is Z11's timing condition, not the only safety prerequisite. No archive-tree or general cleanup. |
 | Carry track 3 verdicts without waiting for or silently adopting its alternatives. | G18 keeps the dictated MVP independent. The available verdicts and reasons are included in the Z coverage table. |
 | Keep Twingate repair in the box deployment, not pi-stack. | G15 names the faulty wrappers. They are not tracked host-CLI files at the base revision. |
 | Treat claimed coverage as hypotheses, not prevented-row counts. | A corrects row 37 and row 72. C qualifies rows 54 and 75. No controlled treatment replay exists yet. |
-| Write only this artifact and do not commit. | This is the requested handoff. Progress and decisions are retained here, and Grok Bot collects the file. |
+| Keep doc edits within catalog, artifact map, and progress; no docs-worktree commits. | The parent collects these artifacts. Exact companion adapter patches are allowed here only when bot owning source is unavailable. Source commits belong only in the named isolated checkouts. |
+| Keep per-commit red/green/full-suite evidence and report before the next commit. | The parent owns review/reporting. Without the supervisor tool, return an explicit checkpoint instead of batching commits or interpreting silence as acknowledgement. |
 
-### Investigation and interrogation record
+### Historical investigation and interrogation record
 
-Throughput checkpoint: n/a, read-only investigation.
+This record predates Z13-Z15. Its source findings remain evidence, but old layouts, counts, review readiness, and read-only status below do not describe the authorized implementation run. Current amendments and actual checks are in `12-track-1-progress.md`.
+
+Historical throughput checkpoint was n/a for the read-only investigation. Current throughput is one verified local code commit per parent reporting checkpoint, with a disposable check after each stack.
 
 The corpus, A, B, C, deep research, issue snapshots #33 through #36, the harness DECISIONS and ZF brief, and program documents 00 through 03 were read. Main was verified at `3acf0f0`. No production stream was prompted, steered, stopped, rotated, archived, or spawned.
 
@@ -703,7 +727,7 @@ The proposed post-fix tests and real-stream checks have not run because no fixes
 
 Laziness Protocol changed the design to deletion-first defaults, existing tick phases, and refusal at unsafe rotation rather than a transfer subsystem. Fix Root Causes kept the continuation predicate, recovery circularity, evidence locator, and Git staging operation separate. Guard the Context Window split the source audit into read-only slices. Sequence Work into Verifiable Units shaped the small commit stacks. Prove It Works prevented accepting transport responses, file-size changes, or workflow dispatch receipts as completion.
 
-### Adversarial review and lead judgment
+### Historical adversarial review and lead judgment
 
 **Historical review, before this amendment.** A single `poteto-agent` reviewer on `openai-codex/gpt-6.1-sol` reviewed the original 15 items against the source and binding calls. This is same-model adversarial review, not multi-model consensus. The first review attempt could not obtain a readiness handshake and was not counted. After an explicit readiness reply, retained review run `f9d54e5a-962f-487c-b752-98c43a98c7ac` returned a substantive review. The workflow wrapper had returned launch receipts before its children finished, so the parent consumed each actual terminal report instead.
 
@@ -719,10 +743,10 @@ No warning was dismissed as style. No critical finding was established. Focused 
 
 Those historical artifact checks covered the original 15 rows only, not this amendment. The steer-2 input audit and its Z11 native-capability follow-up were consumed from the actual managed report, not a workflow launch receipt. They established source gaps and safety prerequisites, not approval of this later draft. The follow-up inspected native entry IDs, tool-batch ordering, inclusive fork, singular deletion versus archive-tree, correlated streaming and callback ownership with read-only source and mock-only probes. No live fork/delete or Prime test was run.
 
-**Amendment interrogation.** Actual child run `b96a2f70-5e5d-4dfd-bff2-e84f5138895f` completed and its terminal report was consumed. It found no concrete critical or warning findings and judged the 18-item catalog ready for first-pass review. It checked every layer/bar, Z1-Z11/G17/G18 coverage, the four Z11 defaults, migration and failure-marker preservation, receipt/stop safety, exact fork and deletion scope, and code-before-template ordering. This was one same-model review on `openai-codex/gpt-6.1-sol`, not multi-model agreement. There are no Act On, Consider, Noted or Dismissed findings from this pass.
+**Historical pre-Z13 amendment interrogation.** Actual child run `b96a2f70-5e5d-4dfd-bff2-e84f5138895f` completed and its terminal report was consumed. It found no concrete critical or warning findings and judged the 18-item catalog ready for first-pass review. It checked every layer/bar, Z1-Z11/G17/G18 coverage, the four Z11 defaults, migration and failure-marker preservation, receipt/stop safety, exact fork and deletion scope, and code-before-template ordering. This was one same-model review on `openai-codex/gpt-6.1-sol`, not multi-model agreement. There are no Act On, Consider, Noted or Dismissed findings from this pass.
 
 The reviewed draft hash was `c3771f5e1fb426647cc49649295643215290c4c9ad57c514fd6b3c3487083bda`. Afterward the parent added only source-cited Prime capability/default clarification, the explicit integrated-production-activation gate, and this record. Those narrow clarifications were parent-checked; no second independent review of them is claimed.
 
-Final direct artifact assertions pass for 18 unique review rows and matching details, the disjoint 11-mechanical/7-artifact partition, all seven detail fields, Z1-Z11 verdict annotations, O1-O4, failures/ migration, and the F-DCR round-trip plan. Whitespace and stale-design checks pass. Active STATE reads, agent-authored resume, and disposition-gated reinjection are not retained. Remaining STATE references describe the baseline or migration, not a second live artifact.
+Historical direct artifact assertions passed for the then-current 18 unique review rows and matching details, the disjoint 11-mechanical/7-artifact partition, all seven detail fields, Z1-Z11 verdict annotations, O1-O4, failures/ migration, and the F-DCR round-trip plan. Whitespace and stale-design checks pass. Active STATE reads, agent-authored resume, and disposition-gated reinjection are not retained. That superseded draft treated STATE references as baseline or migration. Z15 now requires active STATE reads and replaces its artifact contract.
 
-Prove It Works required checking the actual catalog and terminal child report. Guard the Context Window kept re-entry and capability checks targeted. Sequence Work into Verifiable Units kept code ahead of template callers and made integrated recovery a production gate. Progress remains in this artifact only. Source stays at clean `3acf0f0`, both indexes are empty, and no other project file was edited, staged or committed by this amendment. No implementation, full-suite, deployment, live recovery, or Prime-server verification is claimed. The four open engineering items retain chosen defaults and parked fallbacks; none requires a new ZF policy decision.
+Prove It Works required checking the actual catalog and terminal child report. Guard the Context Window kept re-entry and capability checks targeted. Sequence Work into Verifiable Units kept code ahead of template callers and made integrated recovery a production gate. At that historical checkpoint, progress remained in this artifact only, source was clean at `3acf0f0`, and no other project file had been edited, staged, or committed by that amendment. Current progress now belongs in `12-track-1-progress.md`. No implementation, full-suite, deployment, live recovery, or Prime-server verification is claimed. The four open engineering items retain chosen defaults and parked fallbacks; none requires a new ZF policy decision.
