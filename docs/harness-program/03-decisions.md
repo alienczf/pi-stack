@@ -192,3 +192,53 @@ ZF's decisions, restated. His words are in `00b-zf-messages-verbatim.md`, sectio
 - **G27. Tracks 3 and 4 done; comparison goes to a fresh session.** Grok Bot decision, 12:55 SGT. 31 and 41 both pass the driver gate (all 8 Z19 headings, no placeholder prompts, STREAM/ACTIONS appear only in 41 as "there is no ..."). Pushed `spike/b-over-prime` `8811a7a` from a host bundle. Spawned track 5 `01a1671a-01d1-7f51-b240-533efc527a61` (gpt-6.1-sol, xhigh) with `briefs/track-5.md` to write `50-a-vs-b.md`, no recommendation and open questions without defaults (Z17). Z16's "not steered yet" note is moot: Z19 withdrew G24 and track 3 was steered on Z19 at 11:55. *Reason:* a fresh session reads both designs without either author's bias, and its 500k context fits both 80k docs; the comparison is sent to ZF only after its gate passes.
 
 - **G28. A vs B comparison sent.** Grok Bot decision, 13:25 SGT. Track 5 reported done; `50-a-vs-b.md` passes the driver gate (core difference, per-component side-by-side for headings/records/hooks/prompts/artifacts/lifecycle, pros/cons, effort and risk, corpus coverage, 13 open questions with no defaults, no recommendation, retired names only as "neither creates"). Docs branch and `spike/b-over-prime` `8811a7a` already pushed. Comparison handed to the main chat for ZF once; STATUS `comparison_sent` set. *Reason:* Z19 deliverable is complete and passes the gate; design stays unlocked (Z17).
+
+## Z20 (ZF t226u, 2026-10-23 14:54 SGT): design A over Prime, not pi
+- ZF: "For A the ask is to design it over prime not pi". Design A must be redone with **Prime as the runtime** instead of pi-web/pi. Proposal A's substance stays: obligations and evidence are repo-owned and the checked `STATE.md` is the authority.
+- The 13:25 A vs B comparison (`50-a-vs-b.md` v1, G28) is **superseded**: it compared A-over-pi-web with B-over-Prime. A v2 comparison, A-over-Prime vs B-over-Prime, follows once the rewritten 31 passes the driver gate.
+- Track 3 rewrites `31-design-a-detailed.md` (same 8 Z19 headings, top line "Runtime: Prime (Z20)"), using track 4's 40/41 for what Prime v0.10.1 supports; hooks name Prime extension points, and anything Prime lacks is listed as a native Prime change. Track 5 stands by to write 50 v2.
+- Design stays unlocked (Z17). No defaults; open questions stay questions.
+- **Steer delivered, not yet worked (Grok Bot, 15:06 SGT).** `briefs/track-3-steer-4.md` (sha256 8f82b860) sent to track 3 `01a16658` while it was idle at 45.5%, no compact needed. It's the last user message in the session jsonl at 14:58:50 SGT (sha match). But every model call since then has failed with `fetch failed`: options-01 has had no outbound internet since about 14:50 SGT. Track 5 got `briefs/track-5-standby.md` at 14:59:16. Once the network returns, Z20 counts as steered when track 3 resumes and works the steer.
+
+## Z21 (ZF t228u, 2026-10-23 14:57 SGT): clean up nomenclature, justify every new concept
+- ZF: "Clean up the nomenclature. We spent time to reduce the abstraction bloat and here you just created another set. Clean all of this up and really justify the need of a new concept". This comes before ZF engages with the A vs B substance.
+- Rule for both designs (31 A-over-Prime and 41 B-over-Prime, plus 40 where its terms are cited):
+  - The baseline vocabulary is only the Z15 artifacts (AGENTS.md role file; STATE.md with Goals, Rules, Log; history/) plus existing pi-stack and Prime terms (stream, session, worker, tick, DCR, F-DCR, compaction, fork).
+  - Every other concept is removed, merged into an existing artifact, or kept only with a row in a short "New concepts" table at the top of the doc: plain name, one-line meaning, the corpus failure it fixes, and why no existing artifact or term can carry it. The fewer the better; zero is best.
+  - Examples now in the docs that must go through this test: the Asks section, sources/, evidence/, handover/, facts journal / InputFact, owner epoch / generation, adoption, maintenance records, settlement, quiescence, disposition, projection/view, receipts, H-numbered hooks and P-numbered prompts used as names.
+  - Plain words and no coined labels. No two names that blur together (Z14) and no near-synonyms for one thing. Hooks and prompts get descriptive names (for example "save-incoming-message hook"), not codes.
+  - A and B share one vocabulary so the v2 comparison lines up.
+- Design stays unlocked (Z17).
+- **Steer delivered, not yet worked (Grok Bot, 15:06 SGT).** Folded into `briefs/track-3-steer-4.md` (sha 8f82b860, 14:58:50) and sent to track 4 `01a166e0` as `briefs/track-4-steer-2.md` (sha 911ec9ee, 14:58:51). Both sha-match as the last user message, but both turns failed with `fetch failed` (host network outage).
+
+## Z22 (ZF t229u, 2026-10-23 14:59 SGT): a version of B that needs no Prime changes
+- ZF: "Yes let's do a no prime change version", replying to Grok Bot's offer to have the B session sketch a version of B that needs no changes to Prime.
+- Track 4 writes `docs/harness-program/42-design-b-prime-unchanged.md`: design B on stock Prime v0.10.1 only. No native Prime changes, no Prime fork, no modified build; only what pi-stack can add from outside (client-side code, its own files and checks, the tick, Prime's existing commands and extension points). This is in addition to the Z21 cleanup of 41.
+  - First line: "Runtime: stock Prime, no Prime changes (Z22)".
+  - Same 8 Z19 headings, the same Z21 vocabulary rules and New concepts table, and exact hooks, prompts and storage.
+  - It must say plainly whether it covers, works around, or leaves open each of the four gaps:
+    1. the message save that ignores write errors and returns no id;
+    2. results that are not stored durably;
+    3. no evidence check before an ask closes;
+    4. no way to move child workers to a new parent.
+  - For each gap it must also give the cost: anything that bypasses the design, and any recovery that stays manual.
+- The v2 comparison (50) will then cover three designs: A over Prime, B over Prime with Prime changes (41), and B over stock Prime (42).
+- Design stays unlocked (Z17).
+- **Steer delivered, not yet worked (Grok Bot, 15:06 SGT).** `briefs/track-4-steer-3.md` (sha bc7bba87) recorded in track 4 at 15:00:09 SGT (sha match). The turn failed with `fetch failed` (host network outage).
+
+## Z23 (ZF t230u, 2026-10-23 15:01 SGT): the A/B differences feel artificial; a merged candidate
+- ZF: "Tbh so far the differences feels artificial? Feels like we can easily arrive at a merged solution where most of the deterministic behaviour goes into hooking prime, ignore corner cases like login and fringe failure. Less deterministic stuff stays in repo?"
+- Treated as a candidate: not golden, held to the same rigor, design still unlocked (Z17).
+- The candidate:
+  - Deterministic behaviour goes into hooks on stock Prime: saving incoming messages, fresh STATE each turn, the stall wake, compaction at the threshold, the stale-action guard, and closing checks that can be computed.
+  - Judgement work stays in repo files under the Z15 layout: goals, rules, log entries, what counts as done, and reviews.
+  - Login/auth failures and rare failure modes are out of scope, listed in one short "Not handled" section that says what happens today.
+
+- **G29. Process for Z23.** Grok Bot decision, 2026-10-23 15:03 SGT.
+  - The Z21 rename pass on 41 (B with Prime changes) is dropped beyond what's already done. 41 stays as **reference only**.
+  - 31 (A over Prime, Z20) and 42 (B over stock Prime, Z22) continue. A merged design needs both: 42 shows what stock Prime hooks can carry, and 31 shows what the repo carries.
+  - Track 5 is briefed now (`briefs/track-5-steer-1.md`) but starts only on the driver's go, after 31 and 42 pass the gate. It then does two things:
+    1. Writes `51-design-merged.md` with the same 8 headings and the Z21 vocabulary rules, aiming for zero new concepts.
+    2. Rewrites `50-a-vs-b.md` as v2: a short check of 51 against 31 and 42 covering what the merge loses from each, which corpus failures are no longer covered, where the A/B difference was real versus artificial, and open questions with no defaults.
+  - *Reason:* the merged candidate depends on both inputs. Running it before they finish would rebuild the bias the v1 comparison had.
+- **Steer delivered, not yet worked (Grok Bot, 15:06 SGT).** `briefs/track-4-steer-4.md` (sha f4d861d3) recorded in track 4 at 15:02:49 SGT, and `briefs/track-5-steer-1.md` (sha 17846bc9) recorded in track 5 at 15:02:49 SGT (wait-for-go). Both sha-match, and both turns failed with `fetch failed` (host network outage).

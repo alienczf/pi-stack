@@ -72,3 +72,19 @@ For B, kick off independent session to see how it can be implemented over prime.
 In this case that's drop C and also do detailed design/planning for A. With exactly hooks, prompts and artifact storage details and any obvious important notes. Justify all of the components. Ask the B session to the the same. 
 
 When both are done, collect output and do a side by side comparison
+
+## t226u (2026-10-23 14:54 SGT)
+
+For A the ask is to design it over prime not pi
+
+## t228u (2026-10-23 14:57 SGT, reply to the A vs B pros/cons and open questions)
+
+One ask before addressing this seriously. Clean up the nomenclature. We spent time to reduce the abstraction bloat and here you just created another set. Clean all of this up and really justify the need of a new concept
+
+## t229u (2026-10-23 14:59 SGT, reply to Grok Bot's offer of a B version needing no Prime changes)
+
+Yes let's do a no prime change version
+
+## t230u (2026-10-23 15:01 SGT)
+
+Tbh so far the differences feels artificial? Feels like we can easily arrive at a merged solution where most of the deterministic behaviour goes into hooking prime, ignore corner cases like login and fringe failure. Less deterministic stuff stays in repo?
