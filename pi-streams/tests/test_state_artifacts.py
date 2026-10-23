@@ -249,7 +249,7 @@ class ObjectiveFileTests(unittest.TestCase):
             with self.assertRaisesRegex(OSError, "injected publication failure"):
                 update_current_objective(self.tmp, "Next δ")
         self.assertEqual(self.path.read_bytes(), STATE)
-        self.assertEqual(list(self.tmp.glob(".STATE.md.*tmp")), [])
+        self.assertEqual(list(self.tmp.glob(".pi-streams-*.tmp")), [])
 
 
 if __name__ == "__main__":

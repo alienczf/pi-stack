@@ -1,44 +1,51 @@
 ---
 name: stream-kickoff
-description: First-turn interview for a new pi-streams coordinator. Scouts the project read-only, asks ten questions one at a time with a recommended answer for each, restates the goal, and writes STREAM.md for ZF to ratify. Use only for /skill:stream-kickoff, which pi-streams new sends.
+description: First-turn interview for a pi-streams coordinator. Scouts read-only, asks for human decisions, and records the ratified charter in STATE Goals. Use only for /skill:stream-kickoff, which pi-streams new sends.
 disable-model-invocation: true
 ---
 
 # Stream kickoff
 
-If STREAM.md's first line already holds a `ratified:` marker with a date and ZF's words, say so and stop. Find facts yourself. Ask ZF only for decisions, and never answer one for ZF. Start no thread and adopt no session until ZF ratifies STREAM.md.
+Read AGENTS.md and STATE.md. Goals' first line is `ratified: no` until ZF explicitly confirms the charter. If it already records ZF's dated confirmation, report that and stop the interview. Start no thread and adopt no session before ratification. Do not use TODO.md or PLAN.md; plan in Goals and record completed work in Log.
 
 ## Scout
 
-Survey these before the first question. This is read-only. Write nothing outside the stream folder and prompt no session.
-- Each repo in the project file. `stream.toml` names it. The file is `projects/<name>.toml` in the index directory from `$XDG_CONFIG_HOME/pi-streams/homes` whose `streams.tsv` lists this folder. Run `git worktree list` in each repo.
-- Open PRs in those repos with `gh pr list`, if `gh` works.
-- The pi-web sessions in each worktree, from `pi-web-cli list --cwd <worktree>`.
-- Any table or artifact ZF names at any point. Read its metadata only, and never run a query that bills bytes.
+Discover facts before asking for decisions. This phase is read-only and prompts no session.
 
-Report what you found in a short list. If work is already in flight, propose each of these on its own for ZF to confirm:
-- A worktree and its session to adopt, as an exact `pi-streams thread adopt <stream> <session-id> --worktree PATH --role ROLE` command.
-- A past ruling found in notes, to append to DECISIONS.md with its source.
+- Open context/README.md on demand for its project repo index. Run `git worktree list` in the referenced repos.
+- Inspect open PRs with `gh pr list` when available.
+- List sessions in relevant worktrees with `pi-web-cli list --cwd <worktree>`.
+- Inspect only the metadata of tables or artifacts ZF names. Do not run billed data queries without authorization.
+
+Do not read raw engine registries or configuration. Use `pi-streams status <stream-id> --json` for the stream path and thread session view. If the index lacks a required reference, report the missing fact instead of guessing ownership.
+
+Report sourced findings briefly. Propose any existing session adoption as an exact `pi-streams thread adopt <stream> <session-id> --worktree PATH --role ROLE` command for ZF to confirm. Present historical rulings for confirmation; do not automatically classify them as current authority.
 
 ## Interview
 
-Ask one question at a time, with your recommended answer from the scout. ZF accepts or corrects it. The label in capitals names the STREAM.md section the answer fills. Keep each settled answer and confirmed adopt command in STATE.md as you go, and resume from there if STATE.md already holds some.
+Ask one question at a time with a recommendation grounded in the scout. Never answer for ZF. Rewrite settled draft answers in Goals, preserving the three exact subsections `### North Star`, `### Current objective`, and `### Charter`. Keep the marker unratified. Resume from those draft answers rather than a second planning file.
 
-1. GOAL. What outcome do you want, and who uses it?
-2. TARGET. Is there an artifact already agreed on that defines the output? Pin it by path and sha.
-3. ACCEPTANCE. How will we know it's right? What is the oracle, and which mismatches are acceptable? Name a script in `checks/` for each check. Record each accepted mismatch in DECISIONS.md.
-4. E2E PATH. What is the smallest-blast-radius way to test end to end, as far as possible?
-5. WRITES. Where may it write, and how much may it spend? Get each cap as a number.
-6. END STATE. What must the end state be, including cleanup?
-7. Which repos, branches, PRs and sessions are in play? The answer goes into the plan, not STREAM.md.
-8. AUTONOMY. What may the coordinator decide alone, and what must come to you?
-9. NO-GO. What must not happen?
-10. Restate the whole goal in one plain paragraph and ask ZF to correct it. Repeat until ZF confirms it.
+1. North Star. What outcome is wanted, and who uses it?
+2. Target. Which agreed artifact defines the output? Record its path and pin in Charter.
+3. Acceptance. What oracle establishes success, and which mismatches are acceptable? Reuse existing checks. Create a script only when the task explicitly requires it or the agreed verification needs one.
+4. E2E path. What authorized path verifies the real artifact with the smallest blast radius?
+5. Writes. Which locations and effects are authorized? Do not invent resource caps, spend limits, or a mandatory budget interview. Record a limit only when the incoming task explicitly supplies it.
+6. End state. What result is required? Which cleanup, if any, is explicitly authorized?
+7. Existing work. Which repos, branches, PRs, and sessions are in play? Keep current references in the objective and sourced work entries in Log.
+8. Autonomy. Which decisions are within the grant? Stop before actions outside it. A recommendation is not permission to continue without an answer.
+9. No-go. What must not happen? Preserve every active prohibition.
+10. Restate the outcome and Charter in one plain paragraph. Ask ZF to correct it until ZF confirms it.
 
 ## Ratify
 
-Write the answers into STREAM.md's sections. Only after ZF confirms the restatement, set its first line to `ratified: <UTC date> <ZF's confirming words, verbatim>`, with the date from `date -u +%F`. The date comes first because pi-streams reads the first word after `ratified:`, and `no` means unratified. From then on only ZF changes STREAM.md.
+Only after ZF's explicit confirmation, rewrite Goals in place and set its first line to `ratified: <UTC date> <ZF's confirming words, verbatim>`. Keep North Star, Current objective, and Charter distinct. Goals and Rules are current text, never an appended history pile.
+
+Record each new human ruling through `pi-streams state ruling <stream> --subject SUBJECT --body-file - --notice-id NOTICE`. Rules contains only rulings still in force. The engine also appends Log. Retire a superseded ruling with its exact old source text; the engine preserves it in history before removal. Notice provenance is not an authentication receipt. Never create rules, skills, or memory to self-remedy a failure.
 
 ## Plan
 
-Rewrite STATE.md with the first plan: each thread to start, with its repo, its role and the `checks/` script that must pass for it to be done. Add a row to `subscriptions.tsv` only when ZF asks for a watch. Then run the confirmed adopt commands and start the first threads with `pi-streams thread spawn`.
+Set the immediate authorized objective through `pi-streams state objective <stream> --body-file -`. The single resolver uses this objective, falling back to North Star. There is no North Star completion flag.
+
+Append interview outcomes, work, failures, and ZF steers through `pi-streams state append <stream> --subject SUBJECT --body-file - --request-id ID`. Keep each request ID stable across retries. Only Log is capped at 30; the engine rotates overflow every tick. Never prune or rotate entries yourself. Open cold history only on demand.
+
+Run only confirmed adoption commands and start authorized threads with `pi-streams thread spawn`. A worker's acceptance follows the actual ask, not an automatic demand for a new check script. Do not edit engine-owned subscription files. If ZF requests a watch and no engine command supports it, report the missing capability. Do not start new task effects to repair environment/auth/resource failures. Log and report them for human repair.

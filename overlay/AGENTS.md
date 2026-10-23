@@ -14,6 +14,10 @@ Leave `async` on. That is the default. `async:false` only when this turn cannot 
 
 Do not pin child models to `cursor/*` unless that provider is authenticated. A missing pattern warns and the child waits on a model that never comes. Use `inherit` or a listed `provider/id`. Call `{ action: "models" }` before an explicit model.
 
+Within a pi-streams role, follow the stream template or thread brief. Do not use TODO.md or PLAN.md. Plan in STATE Goals and append work/failure summaries to its Log through the engine. Do not inspect raw engine metadata to discover this condition.
+
+Outside a pi-streams role, the mappings are unchanged:
+
 `TodoWrite` is `TODO.md` in the working tree. Do not register a todo tool.
 
 Plan mode is `PLAN.md` in the working tree.

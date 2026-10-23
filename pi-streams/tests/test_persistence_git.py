@@ -51,7 +51,7 @@ class SnapshotTests(unittest.TestCase):
                     with self.assertRaisesRegex(OSError, "injected short write"):
                         save()
                 self.assertEqual(path.read_bytes(), b"previous complete snapshot\n")
-                self.assertEqual(list(path.parent.glob(f".{path.name}.*tmp")), [])
+                self.assertEqual(list(path.parent.glob(".pi-streams-*.tmp")), [])
                 save()
                 self.assertNotEqual(path.read_bytes(), b"previous complete snapshot\n")
 
@@ -65,7 +65,7 @@ class SnapshotTests(unittest.TestCase):
                         with self.assertRaisesRegex(OSError, "injected publication failure"):
                             save()
                     self.assertEqual(path.read_bytes(), b"old complete bytes\n")
-                    self.assertEqual(list(path.parent.glob(f".{path.name}.*tmp")), [])
+                    self.assertEqual(list(path.parent.glob(".pi-streams-*.tmp")), [])
 
     def test_readers_see_old_bytes_until_the_complete_replacement(self) -> None:
         original = Path.write_text
@@ -95,7 +95,7 @@ class RegistrationTests(EngineCase):
             stream = project.create_stream(self.index, config, "retry")
             (stream / "STATE.md").write_bytes(b"owned state must survive\n")
             (self.index / "streams.tsv").write_text("id\tpath\tproject\n", encoding="utf-8")
-            before = {name: (stream / name).read_bytes() for name in ("STATE.md", "STREAM.md", "DECISIONS.md", "stream.toml")}
+            before = {name: (stream / name).read_bytes() for name in ("STATE.md", "AGENTS.md", "context/README.md", "stream.toml")}
             project.create_stream(self.index, config, "retry")
             project.create_stream(self.index, config, "retry")
         self.assertEqual((self.index / "streams.tsv").read_text(), f"id\tpath\tproject\nretry\t{stream}\t{self.root.name}\n")
@@ -272,8 +272,8 @@ class ScopedCommitTests(unittest.TestCase):
         (repo / "unapproved.md").write_bytes(b"not an engine record\n")
         self.assertTrue(project.commit_repo(repo, "initial"))
         self.assertEqual(git(repo, self.env, "ls-files"), (
-            ".gitignore\nAGENTS.md\nDECISIONS.md\nSTATE.md\nSTREAM.md\nchecks/.gitkeep\n"
-            "context/README.md\nhandover/.gitkeep\nstream.toml\nsubscriptions.tsv\nthreads.tsv\n"
+            ".gitignore\nAGENTS.md\nSTATE.md\nchecks/.gitkeep\ncontext/README.md\n"
+            "failures/.gitkeep\nhandover/.gitkeep\nhistory/.gitkeep\nstream.toml\nsubscriptions.tsv\nthreads.tsv\n"
         ))
         self.assertEqual(git(repo, self.env, "rev-list", "--count", "HEAD"), "1\n")
         self.assertEqual((repo / "scratch.csv").read_bytes(), b"a,b\n1,2\n")

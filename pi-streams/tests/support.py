@@ -62,6 +62,16 @@ def pi_stack_revision() -> str:
     ).strip()
 
 
+def seed_ratified_stream(stream: Path, project_name: str) -> None:
+    shutil.copytree(ROOT / "pi-streams/templates/stream", stream, dirs_exist_ok=True)
+    path = stream / "STATE.md"
+    path.write_text(path.read_text().replace("ratified: no", "ratified: 2026-10-23 fixture human confirmation", 1))
+    (stream / "stream.toml").write_text(
+        f'project = "{project_name}"\npi_stack_revision = "{pi_stack_revision()}"\nstate_schema = 1\n',
+        encoding="utf-8",
+    )
+
+
 @dataclass
 class Fixture:
     alpha: Path

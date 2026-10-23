@@ -51,7 +51,7 @@ class PerStreamTests(EngineCase):
         self.assertFalse((self.index / ".git").exists())
         self.assertEqual(
             (one / "stream.toml").read_text(encoding="utf-8"),
-            f'project = "proj"\npi_stack_revision = "{pi_stack_revision()}"\n',
+            f'project = "proj"\npi_stack_revision = "{pi_stack_revision()}"\nstate_schema = 1\n',
         )
         self.assertNotIn("../context/README.md", (one / "AGENTS.md").read_text(encoding="utf-8"))
         self.assertIn("context/README.md", (one / "AGENTS.md").read_text(encoding="utf-8"))
@@ -65,7 +65,7 @@ class PerStreamTests(EngineCase):
             f"gamma\t{self.fx.gamma.resolve()}\n",
         )
         head_two = git(two, self.env, "rev-parse", "HEAD")
-        (one / "DECISIONS.md").write_text("# DECISIONS\n\nkept apart\n", encoding="utf-8")
+        (one / "STATE.md").write_text((one / "STATE.md").read_text().replace("## Rules\n\n", "## Rules\nKeep this stream apart.\n\n"), encoding="utf-8")
         git(one, self.env, "add", "-A")
         git(one, self.env, "commit", "-m", "one only")
         self.assertNotEqual(git(one, self.env, "rev-parse", "HEAD"), head_two)
@@ -125,20 +125,24 @@ class PerStreamTests(EngineCase):
         self.assertEqual(git(one, self.env, "status", "--porcelain"), "")
         self.assertEqual(git(one, self.env, "check-ignore", "log/events.jsonl"), "log/events.jsonl\n")
 
-    def test_upgrade_does_not_modify_stream_md(self) -> None:
+    def test_upgrade_preserves_owned_state_history_and_retired_originals(self) -> None:
         one = self._new("one", "coord-1")
         kept = "KEEP\n"
-        (one / "STREAM.md").write_text(kept, encoding="utf-8")
+        (one / "STATE.md").write_text(kept, encoding="utf-8")
+        (one / "STREAM.md").write_text("retired original bytes\n", encoding="utf-8")
+        (one / "history" / "owned.md").write_text("cold exact bytes\n", encoding="utf-8")
         toml = one / "stream.toml"
         toml.write_text(toml.read_text(encoding="utf-8").replace(pi_stack_revision(), "0" * 40), encoding="utf-8")
         git(one, self.env, "add", "-A")
         git(one, self.env, "commit", "-m", "old revision")
         proc = self.run_streams("upgrade", "one")
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertEqual((one / "STREAM.md").read_text(encoding="utf-8"), kept)
+        self.assertEqual((one / "STATE.md").read_text(encoding="utf-8"), kept)
+        self.assertEqual((one / "STREAM.md").read_text(encoding="utf-8"), "retired original bytes\n")
+        self.assertEqual((one / "history" / "owned.md").read_text(encoding="utf-8"), "cold exact bytes\n")
         self.assertEqual(
             toml.read_text(encoding="utf-8"),
-            f'project = "proj"\npi_stack_revision = "{pi_stack_revision()}"\n',
+            f'project = "proj"\npi_stack_revision = "{pi_stack_revision()}"\nstate_schema = 1\n',
         )
         self.assertEqual(git(one, self.env, "log", "-1", "--format=%s"), "pi-streams upgrade one\n")
         self.assertEqual(git(one, self.env, "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"), "stream.toml\n")

@@ -6,8 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from engine import StreamsError, clock, repo_root
-from engine import piweb
-from engine.project import Project, Repo, _write, git, require_stream, stream_rows
+from engine import artifacts, piweb
+from engine.project import STATE_SCHEMA, Project, Repo, _write, git, load_stream_config, require_stream, stream_rows
 
 _ROLE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
@@ -208,8 +208,20 @@ def _coordinator_state(session_id: str, session: dict[str, object]) -> dict[str,
     }
 
 
+def _canonical_stream(stream_dir: Path) -> bool:
+    path = stream_dir / "stream.toml"
+    return path.is_file() and load_stream_config(path).state_schema == STATE_SCHEMA
+
+
 def _one_stream(stream_id: str, stream_dir: Path) -> dict[str, object]:
-    text = (stream_dir / "STREAM.md").read_text(encoding="utf-8")
+    canonical = _canonical_stream(stream_dir)
+    if canonical:
+        state = artifacts.read_stream_state(stream_dir)
+        authority = state.source[state.authority.start:state.authority.end].decode("utf-8")
+        words = authority.partition(":")[2].split()
+        ratified = bool(words) and words[0] != "no"
+    else:
+        ratified = is_ratified((stream_dir / "STREAM.md").read_text(encoding="utf-8"))
     rows = load_threads(stream_dir / "threads.tsv")
     counts = {name: 0 for name in ("active", "waiting_quota", "done", "archived")}
     coord: Thread | None = None
@@ -236,13 +248,20 @@ def _one_stream(stream_id: str, stream_dir: Path) -> dict[str, object]:
         session = piweb.session_status(row.session)
         thread_cost += _as_cost(session.get("cost"))
     share = None if thread_cost == 0 else coord_cost / thread_cost
-    return {
+    result = {
         "id": stream_id,
-        "ratified": is_ratified(text),
+        "ratified": ratified,
         "coordinator": coord_state,
         "threads": counts,
         "coordinatorCostShare": share,
     }
+    if canonical:
+        result["path"] = str(stream_dir)
+        result["threadSessions"] = [
+            {"session": row.session, "role": row.role, "worktree": row.worktree, "status": row.status.value}
+            for row in threads
+        ]
+    return result
 
 
 def status_report(index: Path, stream_id: str | None) -> dict[str, object]:
@@ -450,15 +469,25 @@ def rotate_coordinator(index: Path, project: Project, stream_id: str) -> str:
     coordinators = [row for row in rows if row.role == "coordinator"]
     if not coordinators:
         raise StreamsError(f"stream {stream_id} has no coordinator; run pi-streams new {stream_id}")
+    prompt = (
+        f"You are the new coordinator for stream {stream_id}. "
+        "Your memory is the files in this folder. Read STATE.md, then continue."
+    )
+    if _canonical_stream(stream_dir):
+        state = artifacts._read_stream_state_locked(stream_dir)
+        goal = artifacts.resolve_current_goal(state)
+        prompt = (
+            f"You are the new coordinator for stream {stream_id}. "
+            f"Read {stream_dir}/AGENTS.md and {stream_dir}/STATE.md before acting. "
+            "Use Goals' current objective, falling back to North Star. Current Goals and Rules take precedence. "
+            "Open history/, context/, checks/, and handover/ only on demand. "
+            f"Goal at pickup:\n{goal}"
+        )
     active = [row for row in coordinators if row.status is Status.active]
     for row in active:
         piweb.archive(row.session)
         transition(row, Status.archived)
     save_threads(path, rows)
-    prompt = (
-        f"You are the new coordinator for stream {stream_id}. "
-        "Your memory is the files in this folder. Read STATE.md, then continue."
-    )
     return ensure_coordinator(project, stream_dir, opening_prompt=prompt)
 
 

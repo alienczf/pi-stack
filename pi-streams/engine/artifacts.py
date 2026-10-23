@@ -308,6 +308,28 @@ def _checked_state(source: bytes, book: LogBook) -> StreamState:
     return state
 
 
+def _read_stream_state_locked(stream_dir: Path) -> StreamState:
+    if load_stream_config(stream_dir / "stream.toml").state_schema != STATE_SCHEMA:
+        raise StreamsError("canonical STATE schema required; explicit migration is needed")
+    path = stream_dir / "STATE.md"
+    if path.is_symlink():
+        raise StreamsError("refusing a STATE.md symlink")
+    data = _read_tick_data(stream_dir)
+    raw = data.get("state_log")
+    book = _book(raw) if raw is not None else LogBook()
+    if raw is not None and raw.get("pending") is not None:
+        raise StreamsError("artifact operation pending; reconcile through its canonical operation or tick")
+    try:
+        return _checked_state(path.read_bytes(), book)
+    except OSError as exc:
+        raise StreamsError(f"could not read {path}: {exc}") from exc
+
+
+def read_stream_state(stream_dir: Path) -> StreamState:
+    with stream_lock(stream_dir):
+        return _read_stream_state_locked(stream_dir)
+
+
 def _history_name(entry: LogEntry, kind: str, data: bytes) -> str:
     stamp = datetime.fromisoformat(entry.timestamp).strftime("%Y%m%dT%H%M%S%fZ")
     prefix = f"{stamp}-{kind}-{entry.occurrence:08d}-"

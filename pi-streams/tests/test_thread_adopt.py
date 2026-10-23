@@ -4,7 +4,7 @@ from __future__ import annotations
 import urllib.parse
 from pathlib import Path
 
-from support import EngineCase, git
+from support import EngineCase, git, seed_ratified_stream
 
 HEADER = "session\trole\trepo\tworktree\tbranch\tbase\tmodel\tthinking\tstatus\tstarted\n"
 
@@ -15,7 +15,7 @@ class AdoptTests(EngineCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         stream_dir = (self.home / "etl").resolve()
         stream_dir.mkdir(parents=True)
-        (stream_dir / "STREAM.md").write_text("ratified: no\n", encoding="utf-8")
+        seed_ratified_stream(stream_dir, self.root.name)
         (stream_dir / "threads.tsv").write_text(HEADER, encoding="utf-8")
         self.register_stream("etl", stream_dir)
         worktree = self.fx.alpha_wt.resolve()
@@ -94,7 +94,7 @@ class AdoptTests(EngineCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         stream_dir = (self.home / "etl").resolve()
         stream_dir.mkdir(parents=True)
-        (stream_dir / "STREAM.md").write_text("ratified: no\n", encoding="utf-8")
+        seed_ratified_stream(stream_dir, self.root.name)
         (stream_dir / "threads.tsv").write_text(HEADER, encoding="utf-8")
         self.register_stream("etl", stream_dir)
         worktree = self.fx.alpha_wt.resolve()

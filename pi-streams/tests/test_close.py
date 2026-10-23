@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import unittest
 
-from support import EngineCase, git
+from support import EngineCase, git, seed_ratified_stream
 
 HEADER = "session\trole\trepo\tworktree\tbranch\tbase\tmodel\tthinking\tstatus\tstarted\n"
 WHEN = "2026-10-06T00:00:00Z"
@@ -31,7 +31,7 @@ class CloseTests(EngineCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.stream_dir = self.register_stream("etl")
         (self.stream_dir / "handover").mkdir(parents=True)
-        (self.stream_dir / "STREAM.md").write_text("ratified: 2026-10-06 yes\n", encoding="utf-8")
+        seed_ratified_stream(self.stream_dir, self.root.name)
         (self.stream_dir / "threads.tsv").write_text(ROWS, encoding="utf-8")
         (self.stream_dir / "handover" / "datapull.md").write_text("intent: pull\n", encoding="utf-8")
         self.stub.requests.clear()
@@ -61,7 +61,7 @@ class CloseTests(EngineCase):
         self.assertEqual(git(self.stream_dir, self.env, "log", "-1", "--format=%s").strip(), "pi-streams close etl")
         self.assertEqual(
             git(self.stream_dir, self.env, "ls-files", "handover").splitlines(),
-            ["handover/datapull.md", "handover/review.md"],
+            ["handover/.gitkeep", "handover/datapull.md", "handover/review.md"],
         )
         self.assertEqual(git(self.stream_dir, self.env, "status", "--porcelain"), "")
 

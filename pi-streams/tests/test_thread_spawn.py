@@ -4,7 +4,7 @@ from __future__ import annotations
 import urllib.parse
 from pathlib import Path
 
-from support import EngineCase, git
+from support import EngineCase, git, seed_ratified_stream
 
 HEADER = "session\trole\trepo\tworktree\tbranch\tbase\tmodel\tthinking\tstatus\tstarted\n"
 
@@ -26,9 +26,11 @@ def expected_brief(stream_dir: str, worktree: str, base: str) -> str:
         f"Your working directory is {worktree}. The stream folder is {stream_dir}.\n"
         f"Role: datapull. Repo: alpha. Branch: stream/etl/datapull. Base: {base}.\n"
         "\n"
-        f"Read {stream_dir}/STREAM.md. Restate its goal and acceptance in your first reply before working.\n"
+        f"Every turn read your working-tree AGENTS.md when present and {stream_dir}/STATE.md. Restate the assigned goal and requested acceptance in your first reply before working. Follow STATE Goals and Rules without adopting the coordinator role.\n"
+        "Do not use TODO.md or PLAN.md in this pi-streams role. Goals plus Log replace them. Do not edit the stream's Goals or Rules.\n"
+        "On demand, open history/, context/ and its README index, checks/, or handover/ for this assignment. Never read engine-only registries, threads.tsv, subscriptions.tsv, stream.toml, events, tick-state, locks, or failures/.\n"
         "\n"
-        f"Stay in {worktree}. Never write outside it, except for the handover below. Verify on the real artifact.\n"
+        f"Stay in {worktree}. Outside it, only write the handover below or append an authorized work/failure summary through `pi-streams state append etl --subject SUBJECT --body-file - --request-id ID`. Keep the request ID stable on retry. Verify the requested acceptance on the real artifact. Do not invent extra checks or resource caps.\n"
         "\n"
         "ship the slice\n"
         "\n"
@@ -44,7 +46,7 @@ class SpawnTests(EngineCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.stream_dir = (self.home / "etl").resolve()
         self.stream_dir.mkdir(parents=True)
-        (self.stream_dir / "STREAM.md").write_text("ratified: no\n", encoding="utf-8")
+        seed_ratified_stream(self.stream_dir, self.root.name)
         (self.stream_dir / "threads.tsv").write_text(HEADER, encoding="utf-8")
         self.register_stream("etl", self.stream_dir)
         self.stub.requests.clear()

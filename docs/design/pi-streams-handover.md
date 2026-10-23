@@ -1,6 +1,8 @@
-# pi-streams: handover for a fresh session
+# Historical pi-streams handover, 2026-10-06
 
-Written 2026-10-06 at ZF's request, so this work can restart with fresh context. Treat this note and the two design docs as the authoritative trail, per pstack's session-pickup playbook: resume from here, and don't redo the research. Delete this file before PR #14 merges.
+This is a dated historical record, not current pickup instructions. Its old artifact layout, implementation status, model rule, and fresh-session policy are superseded. Do not use its operational instructions for a current stream.
+
+The current artifact contract is in [pi-streams.md](pi-streams.md). The harness-program progress artifact records actual implementation commits and verification. The remaining text preserves the original 2026-10-06 investigation context.
 
 ## Intent
 

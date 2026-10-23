@@ -1,29 +1,27 @@
 ---
 name: stream
-description: Start, check or close a pi-streams stream. Close gets a handover from every open thread and copies lasting knowledge into the project's context before it runs pi-streams close. Use only for /skill:stream or /stream with new, status or close.
+description: Start, inspect, or close a pi-streams stream through the engine. Use only for /skill:stream or /stream with new, status, or close.
 disable-model-invocation: true
 ---
 
 # Stream
 
-The arguments are `new <id>`, `status [<id>]` or `close <id>`. Pass any extra flags ZF gives to every `pi-streams` call.
+Arguments are `new <id>`, `status [<id>]`, or `close <id>`. Pass any extra flags ZF gives to each pi-streams call. In a stream role, read AGENTS.md and STATE.md each turn. Do not use TODO.md or PLAN.md; STATE Goals plus Log replace them.
 
 ## New and status
 
-Run `pi-streams new <id>`. Report the pi-web URL and the coordinator's session id it prints. The kickoff interview waits for ZF in that session.
+Run `pi-streams new <id>`. Report the URL and coordinator session ID it prints. The new STATE is explicitly unratified. The kickoff waits for ZF in that coordinator.
 
-Run `pi-streams status [<id>]` and report its output unchanged.
+Run `pi-streams status [<id>]` and report its output unchanged. For canonical streams, `pi-streams status <id> --json` provides the path and threadSessions view. Use that view instead of reading engine registries. Never resume a session merely to inspect it.
 
 ## Close
 
-Paths here are relative to the stream folder. Prompt threads only with `pi-web-cli prompt --steer <session> TEXT`. Then poll `pi-web-cli status <session>` in one shell loop. Stop when `isStreaming` is false, `pendingMessageCount` is 0 and `messageCount` has grown since the prompt, or when a `pendingAsk` appears. Answer a pending ask from STREAM.md and DECISIONS.md with `pi-web-cli answer <session> <askId> <questionId> TEXT`, or pass it to ZF. Never open or resume a thread's session to check on it.
+Use only the current Goals, Charter, and Rules as authority. Open history/, context/ and its README index, checks/, or handover/ on demand. Never read raw engine registries, configuration, tick logs/state, locks, or failures/.
 
-1. Run `pi-streams status <id> --json` to find the stream folder and its threads.
-2. Prompt each thread that is not archived and has no `handover/<role>.md` with this text, then wait until the file exists:
-   `Write <stream folder>/handover/<role>.md and leave it uncommitted. Follow pstack's poteto-mode/playbooks/pause-safely.md: your intent, what you did with proof, what is left, and what the next agent should know. Then stop.`
-   Never write a thread's handover yourself.
-3. Read every handover. Copy only lasting knowledge into this stream's `context/` files: how to test a repo, gotchas, and ZF's preferences. Keep each entry short. Update an existing entry instead of adding a duplicate, and list any new file in `context/README.md`.
-4. For a mistake that repeated across threads, start a thread in that repo with `pi-streams thread spawn <id> --repo NAME --role correct-NAME --note TEXT`, where TEXT names the mistake and the handovers that show it. Prompt it with pstack's `/skill:correct`, wait, then get its handover as in step 2.
-5. For a thread that fought one problem repeatedly, prompt it with pstack's `/skill:reflect` and wait. Reflect stops for approval, so read its last reply with `pi-web-cli messages <session>`, show it to ZF, and send ZF's choice back.
-6. Run `pi-streams close <id>`. It archives the threads, marks you, the coordinator, done, and commits, so commit nothing yourself. If it refuses or stops on a busy thread, fix what it names and run it again.
-7. Report each context entry you added or changed with its file, the reflect and correct results with any PR links, and the close output.
+1. Read the engine's status view with `pi-streams status <id> --json`. Identify each open thread by its full session ID, role, and worktree.
+2. Request the missing `handover/<role>.md` from each open thread through `pi-web-cli prompt --steer <session> TEXT`. The request names intent, work with proof, what remains, and the next owner's needs. Never author a thread's handover yourself.
+3. Inspect progress with `pi-web-cli status <session>` and `pi-web-cli messages <session>`. Do not open or resume the thread just to check it. Pass a genuine authorization question to ZF. Use `pi-web-cli answer <session> <askId> <questionId> TEXT` only when current Goals and Rules already supply the answer.
+4. Read the actual handovers and required acceptance evidence. Reuse existing checks when sufficient; do not invent a new script or proof campaign for every small ask.
+5. Harvest lasting task knowledge into context/ only within the grant. Keep context/README.md as an index. Do not create remedial rules, skills, or memory because of environment/auth/resource failures. Use correct or reflect only when the human authorizes that policy/skill work, retaining their approval boundaries.
+6. Run `pi-streams close <id>`. It archives workers, marks the coordinator done, and commits scoped artifacts. A busy-session refusal is not permission to abort or force archive. Report unresolved work or failures rather than silently repairing the environment.
+7. Append the verified outcome through `pi-streams state append <id> --subject SUBJECT --body-file - --request-id ID` and report actual evidence paths and close output. Keep the request ID stable on retry. Artifact receipts do not prove steer consumption or application.

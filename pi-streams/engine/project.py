@@ -24,7 +24,7 @@ PROJECT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 STREAM_COLUMNS = ("id", "path", "project")
 PROTECTED_STREAM_FILES = frozenset({"STREAM.md", "STATE.md", "DECISIONS.md", "GOAL.md", "ACTIONS.md", "threads.tsv"})
 STATE_SCHEMA = 1
-TEMPLATE_STATE_SCHEMA = 0
+TEMPLATE_STATE_SCHEMA = STATE_SCHEMA
 
 
 @dataclass
