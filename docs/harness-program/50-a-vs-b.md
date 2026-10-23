@@ -1,62 +1,52 @@
-# Merged candidate check, v2
+# Merged candidate check, v2, revised per Z25
 
-This replaces v1. It checks [51, the merged candidate](51-design-merged.md) against [31, A over Prime](31-design-a-detailed.md) and [42, B over stock Prime](42-design-b-prime-unchanged.md). [41](41-design-b-prime-detailed.md) is reference only for what native changes would add. Z17 leaves every design open. Z23 is a candidate, not a selected solution. [Decisions, Z20-Z23 and G29](03-decisions.md)
+This checks [51](51-design-merged.md) against [31](31-design-a-detailed.md) and [42](42-design-b-prime-unchanged.md). Z25 answers all seven former questions. Z26 asks for a working PoC on `feat/merged-poc` and external-machine installation. The documentation is a build plan, not a claim that the branch already works. Nothing beyond Z25 is locked under Z17. [Decisions, Z25/G36 and Z26](03-decisions.md) [ZF t232u/t233u](00b-zf-messages-verbatim.md)
 
-## What merges, and what does not
+## What the merge keeps and loses
 
-Goals, Rules, original messages, completion meaning and reviews stay in the repo. Computed checks and live command ordering are code, not optional instructions. That overlap is real. Stock Prime has native threshold compaction, but no demonstrated external hook that supplies fresh STATE before every internal request or vetoes every stale model tool. The merge cannot erase that distinction by calling sending functions hooks. [31 §§2-3][a-hooks] [42 §§2-3][stock-hooks] [51 §§1-3][merged-hooks]
+Goals, Rules, originals, findings and completion meaning stay in the stream repo. Deterministic message handling, tick decisions, compaction ordering and computed closing checks are pi-stack code around stock Prime. Workers are clean poteto sessions, not streams.
 
-| Check | 31 | 42 | 51 and the loss |
-|---|---|---|---|
-| Save before work can run | Native receiving changes save the original, preserve the command ID and propagate queue errors before runnable pickup. | pi-stack saves locally before sending. Direct/native input bypasses it. | Keeps 42's local save. Loses 31's native all-supported-input ordering and durable same-command lookup. Unknown sends need inspection, not automatic replay. [31 §3][a-hooks] [42 §2][stock-components] |
-| Fresh current files | Proposed native wrapper covers provider requests, including internal tool loops and DCR summary. | Fresh files in each pi-stack message only. | Keeps the narrower 42 path. Loses 31's every-request guarantee. Ordinary long-run gap, not a login exclusion. [31 §3][a-hooks] [42 §3][stock-hooks] |
-| Stop and stale actions | Proposed native receiving/tool checks reread current instructions. Existing effects are not rolled back. | Rejects stale pi-stack commands, not tools inside an existing run. | Keeps client checks and cooperative stop saving. Loses 31's native next-tool check and receiving-side recheck. Direct abort does not save a repo pause. [31 §3][a-hooks] [42 §3][stock-hooks] |
-| Results and computed close | Native result/write-error changes plus repo source/target/proof checks and fresh source comparison. | Captures connected replies; repo close executes/checks actual tests and references. | Keeps computed close and 31's explicit source-comparison text. Loses complete native outcome saving after disconnect/preflight/crash. No semantic oracle is gained. [31 §§3-4][a-hooks] [42 §3][stock-hooks] [51 §§3-4][merged-hooks] |
-| Compaction | Proposed safe native DCR, expected-entry reservation and saved operation query. Tick observes the 150k trial. | Existing native computed percentage threshold. Separate explicit DCR uses cooperative pause/check/compact/readback. | Keeps 42's native automatic hook and explicit DCR. Loses 31's native idle reservation, exact command-result query and automatic dump-before-compact contract. Neither a hard 150k boundary nor all-client race safety follows from stock settings. [31 §3][a-hooks] [42 §3][stock-hooks] |
-| Failure recovery and input bytes | Typed failures, human-restored same-session recovery and retained images/proof. No automatic safe fork transfer. | Text only, connected error capture, manual exceptional recovery. No worker-parent transfer. | Excludes automatic environment/reset recovery and binary attachments. Preserves text errors/unknown work and the original parent. Native worker transfer was already absent in both inputs. [31 §§5-6][a-lifecycle] [42 §§2,7][stock-components] [51 §7][merged-risks] |
+| Area | Change from 31 | Change from 42 and the earlier 51 |
+|---|---|---|
+| Current files and stops | Drops the proposed native per-request/tool integrations. Z25 accepts fresh STATE once per pi-stack message, stale-message rejection and best-effort stock abort. This matches the required scope. | Keeps per-message freshness and rejection. Stop reporting records the actual native result without guaranteeing tool termination. |
+| Input capture | Replaces native all-path receiving changes with local save-before-send on the stock paths pi-stack uses. Attachments are rejected. | Terminal input stays uncaptured by explicit acceptance. Original supported text and connected replies remain in Log/history; unknown sends are not blindly replayed. |
+| Compaction | Replaces native expected-entry/DCR changes and the absolute-token trial with a pi-stack-owned percentage check and public direct compact. No Prime patch. | Removes stock automatic compaction and the separate explicit-DCR path. Stock has no before hook, so set `compaction.enabled=false` before session construction. One controller does percentage check, save STATE, compact, readback and resume. |
+| Workers | Removes the shared stream AGENTS/STATE pair from workers. | Removes worker-owned STATE paths too. Workers get only context handover and poteto kickoff in a clean session. Stream assignments/results remain in stream files. |
+| Review and computed close | Removes mandatory fresh-session source comparison. The stream reviews every summary adversarially against original intent and chooses an optional reviewer itself. | Computed source/target/test/report checks remain. AGENTS.md carries review guidance; no hook creates or requires reviewers. |
+| Exceptional behavior | Drops typed environment/reset recovery and native durable-outcome changes. Neither input supplied safe native worker transfer. | Login/auth, outages and recovery are permanently excluded, not deferred implementation work. Received errors can be reported without adding repair machinery. |
 
-**Loss from 42.** No stock sending, reply-saving, wake, threshold, explicit-DCR, stale-command or computed-close hook is intentionally removed. Its known limits remain. Two repo contracts change. 51 uses 31's shared coordinator/worker AGENTS/STATE pair instead of worker-owned STATE paths. It retains needed exact text proof in history instead of relying solely on an external task report path/hash. Those changes affect context size, writes and checking, not native enforcement. 51 explicitly restricts coordinator product writes and adds the fixed source-comparison instruction. These are candidate choices, not ratified rules. [42 §§4-5][stock-storage] [31 §§4-5][a-storage] [51 §§4-5][merged-storage]
+Compaction evidence is [43](43-prime-compaction-hooks.md). `compaction_start` is notification-only and summarization begins immediately. `compaction_end` is an after signal. Consequently Z25's disable-and-own condition applies. The live supervisor toggle cannot replace pre-construction settings. Disabled automatic compaction also means overflow returns stock failure rather than automatically compacting, absent a separately scheduled native compact. 51 schedules none.
 
-## Corpus coverage that is lost or reduced
+## Corpus coverage retained or reduced
 
-These are bounded design comparisons, not measured prevention rates. F-numbers come from [30, lines 105-124](30-research-designs.md#input-3-the-explicit-balance-after-zfs-remedies).
+These are bounded mechanisms, not measured prevention rates. F-numbers come from [30](30-research-designs.md#input-3-the-explicit-balance-after-zfs-remedies).
 
-| Failure classes | What is no longer covered in 51 |
+| Failure classes | Revised coverage |
 |---|---|
-| F7, external blockers | 31's typed recovery, reset/human-release sequencing and quiet failure-notice integration are excluded. Saving a connected error is retained, not a replacement recovery mechanism. [31 §3][a-hooks] [51 §7, Not handled][merged-risks] |
-| F6, context/rotation churn | No every-internal-request STATE refresh, no native idle-and-compact reservation and no Z15 dump around every automatic compact. Log rotation and native threshold checks remain. [31 §3][a-hooks] [42 §3][stock-hooks] [51 §3][merged-hooks] |
-| F3 and F10, invented gates/constraint override | No native next-model-tool check or durable receiving-side stream-pause check. Repo Rules, computed checks and stale pi-stack-command refusal remain. [31 §3][a-hooks] [51 §3][merged-hooks] |
-| F2 and F8, narrowing/lost steer | No native capture of bypassing input or complete attachment support. Participating text saves and source-preservation checks remain. No design captures an outer message never sent. [31 §§3,7][a-hooks] [42 §2][stock-components] [51 §3][merged-hooks] |
-| F5, overclaim, and F6 | No complete durable native result for a disconnected/crashed run. Retained source/proof, actual computed close and review still address wrong-result claims. Semantic review remains fallible in all three. [31 §3][a-hooks] [42 §2][stock-components] [51 §§3,7][merged-hooks] |
-| F1, F4, F9, F11, F12 | Eligible tick reconsideration, named-path/source comparison, independent work, narrow publication and finite-work identity remain. None becomes complete semantic, scheduling or cleanup coverage. [31 §2][a-components] [42 §2][stock-components] [51 §2][merged-components] |
+| F7, external blockers | Environment, login, outage and recovery remedies are permanently not covered. Reporting a received error does not replace them. |
+| F6, context/rotation churn | Fresh files per stream message, history rotation and ordered save/compact/readback/resume remain. The percentage check runs before stream sends, after results and on tick; a long run can overflow before yielding. No native reservation or hard ceiling is claimed. |
+| F2 and F8, narrowing/lost steer | Save-before-send and source-preservation checks cover selected pi-stack text paths. Terminal capture and attachments are outside the accepted scope. Semantic narrowing still needs stream judgement. |
+| F4, F5 and F10, overbuild/overclaim/constraint override | Actual invocation/target/report checks and adversarial stream review remain. Mandatory independent fresh-session review is removed. Neither self-review nor an optional reviewer guarantees correct interpretation. |
+| F1, F3, F9, F11, F12 | Eligible tick wake, current Rules, stale-message rejection, best-effort stop, independent workers, narrow publication and distinct finite work remain. No general scheduler, cleanup service or universal semantic oracle is added. |
 
-Moving running children, rollback of external effects and automatic F-DCR remain unsupported. They are not newly solved by the merge, and neither 31 nor 42 supplied native transfer. Full transfer in 41 would require Prime changes outside this candidate. [31 §6][a-lifecycle] [42 §2][stock-components] [41 §3][native-hooks]
+31's stronger native save/result guarantees are not reproduced. A missing native outcome remains unknown, not an automatic replay/recovery problem for this design to solve. The accepted capture, freshness and stop boundaries are closed Z25 decisions. [51 §§3,7](51-design-merged.md#3-hooks)
 
 ## Real versus artificial differences
 
-The repo versus runtime ownership distinction was real between the old full B design and A. Stock-only 42 already moves current meaning and closing checks into repo files. Keeping a second runtime task identity merely to preserve the A/B labels would be artificial. After the Z21 cleanup, both inputs already use the three Z15 sections and existing history for task meaning. [31 §§1,5][a-storage] [42 §§1-2][stock-components]
+The historical ownership distinction was real between repo-owned A and full runtime-owned B. But stock-only 42 already put current meaning and closing checks back in repo files. Keeping separate task stores or names to preserve an A/B distinction would be artificial. Both reduced designs use Z15's Goals, Rules, Log and history.
 
-The remaining execution difference is real. 31 proposes Prime changes for native input ordering, provider context, tool checks and durable DCR/results. 42 and 51 cannot obtain those guarantees from external public commands alone. Dismissing login or fringe recovery does not remove the routine internal-request and stale-tool gaps. Stock already having threshold compaction also means not every deterministic operation requires a new native hook. [31 §3][a-hooks] [42 §§3,7][stock-hooks] [51 §7][merged-risks]
+The remaining implementation differences are real. 31 proposes native receiving/result/context/DCR changes. The revised merge uses stock commands and the Z25-approved scope instead. Its external compaction controller differs from 42's native automatic policy because the required before-save step cannot be attached to stock automatic compaction. The choice to disable that path is now answered, not another design fork. [31 §3](31-design-a-detailed.md#3-hooks) [42 §3](42-design-b-prime-unchanged.md#3-hooks) [43](43-prime-compaction-hooks.md)
 
-## Open questions
+51 §8 now gives exact pi-stack files/functions, ordered commits/tests, an isolated installer, fresh-machine commands and a real one-stream intake-to-compaction-to-close gate. The installer installs stock v0.10.1 and owned settings/hooks/templates without touching another installation. Login is the user's own step. PASS requires observed native operations and checked artifacts; fixtures alone do not establish a working PoC.
 
-1. **Blocking for the required contract.** Is STATE freshness required before every internal provider request, or before each pi-stack message? [51 §§1,3][merged-hooks]
-2. **Blocking for the required contract.** Must a newer stop prevent each subsequent native tool, or is rejecting stale pi-stack commands sufficient? [51 §3][merged-hooks]
-3. Which clients and native input paths must participate? Is rejecting attachments and leaving direct TUI/internal messages outside capture acceptable? [51 §3][merged-hooks]
-4. Must compaction retain an absolute 150k trial boundary and dump before every automatic compact, or is stock's configured percentage/headroom behavior sufficient? What explicitly authorized settings establish that behavior for new owned sessions? [31 §6][a-lifecycle] [42 §3][stock-hooks]
-5. Does the shared role pair fit worker context and product-policy needs, or are worker-owned STATE paths required? How should large original messages and retained proof affect the existing Log layout? [51 §5][merged-storage]
-6. At which completion boundaries is fresh source comparison required, and what held-out cases establish its detection benefit and false-rejection cost? [31 §7](31-design-a-detailed.md#7-risks-and-notes) [51 §§3-4][merged-hooks]
-7. Are the explicit F7 and exceptional-recovery exclusions acceptable for this iteration? What observed stock-runtime checks must pass before any narrower guarantee is described as verified? [51 §§7-8][merged-risks]
+## Former questions answered by Z25
 
-[a-components]: 31-design-a-detailed.md#2-components-and-justification
-[a-hooks]: 31-design-a-detailed.md#3-hooks
-[a-storage]: 31-design-a-detailed.md#5-artifact-storage
-[a-lifecycle]: 31-design-a-detailed.md#6-lifecycle-walkthrough-an-ask-from-intake-to-close-a-stall-a-failure
-[stock-components]: 42-design-b-prime-unchanged.md#2-components-and-justification
-[stock-hooks]: 42-design-b-prime-unchanged.md#3-hooks
-[stock-storage]: 42-design-b-prime-unchanged.md#5-artifact-storage
-[merged-components]: 51-design-merged.md#2-components-and-justification
-[merged-hooks]: 51-design-merged.md#3-hooks
-[merged-storage]: 51-design-merged.md#5-artifact-storage
-[merged-risks]: 51-design-merged.md#7-risks-and-notes
-[native-hooks]: 41-design-b-prime-detailed.md#3-hooks
+1. Freshness is once per pi-stack message; internal-request refresh is not required.
+2. Reject stale pi-stack messages; stopping running tools uses stock abort best-effort, with no per-tool stop check.
+3. Capture the stock paths pi-stack uses, reject attachments and accept uncaptured terminal input.
+4. Use Prime's percentage; lacking a before-compaction hook, disable stock automatic compaction before construction and own save/compact/resume. No percentage value is chosen.
+5. Workers have no state files and are not streams; use clean poteto sessions with handover and kickoff.
+6. The stream reviews reported summaries adversarially against original intent; spawn reviewers only when judged useful, with guidance in AGENTS.md and no mandatory fresh-session check.
+7. Login/auth failures, outages and recovery are permanently out of scope and are not intended to be solved.
+
+No questions remain open in this revision. These answers do not lock anything beyond Z25.
