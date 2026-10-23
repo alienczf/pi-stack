@@ -254,3 +254,5 @@ ZF's decisions, restated. His words are in `00b-zf-messages-verbatim.md`, sectio
   - Sent `briefs/track-1-reentry-2.md` (sha256 d46e1e2b): continue S1 from `2696a3f` with the full-SID handover unit, then the after-S1 disposable-stream check, then S2-S6, per its brief and 12-track-1-progress.md. Recorded at 15:08:53 (sha match).
   - Streaming at 68.2% and working the handover unit (temp dir `/tmp/pi-streams-s1-handovers.*`, TODO.md updated).
   - The 14:50 env failure is closed for every track.
+
+- **G30. 42 passes the gate.** Grok Bot decision, 2026-10-23 15:55 SGT. Track 4 reported `TRACK 4 STATUS: done (42 stock Prime; 41 reference only)` at 15:45. 42 has the first line "Runtime: stock Prime, no Prime changes (Z22)", all 8 headings, an empty New concepts table (zero), full prompt texts, no retired names or H/P codes, no native Prime change in its plan, and a covers/works-around/leaves-open answer with cost for each of the four gaps. b_unchanged_done set. spike/b-over-prime is unchanged at 8811a7a, already pushed. Track 5 still waits for 31. *Reason:* every gate item checked against the collected file.

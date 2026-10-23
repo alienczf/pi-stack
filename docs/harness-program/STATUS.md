@@ -9,7 +9,7 @@ tracking_issue: https://github.com/alienczf/pi-stack/issues/38
 box_mirror: /workspace/harness-program
 host_docs_worktree: /home/alphalab/Projects/worktrees/pi-stack-harness-program
 host_input_copy: /home/alphalab/Projects/pi-stack/streams/pi-streams-harness/context/harness-program
-updated: "2026-10-23T15:30+08:00 (driver run: T1 streaming S1 handovers at 68.5% ctx; T3 streaming 31 A over Prime at 65.0%; T4 streaming 42 at 68.1%; T2 idle blocked on Prime login; T5 idle standby. No steers pending, no compaction needed)"
+updated: "2026-10-23T15:55+08:00 (driver run: T4 done 15:45, 42 passed gate; T1 streaming S1 after-stack check at 73.0% ctx; T3 streaming 31 at 78.9%; T2 idle blocked on Prime login; T5 standby until 31 passes)"
 tracks:
   - id: 1
     name: pi-streams must-fix catalog
@@ -73,7 +73,7 @@ tracks:
     session: 01a166e0-220d-7dbc-8b1c-719e872dad2d
     host: options-01
     model: openai-codex/gpt-6.1-sol@xhigh
-    phase: "42 B-over-stock-Prime (Z22); 41 reference only (G29, Z21 rename stopped). steer-2 recorded 14:58:51, steer-3 15:00:09, steer-4 15:02:49; working since 15:06 after the outage"
+    phase: "done 15:45 (TRACK 4 STATUS: done, 42 stock Prime; 41 reference only). 42 passed gate 15:55 (G30). Branch unchanged at 8811a7a (already pushed)."
     pushed: spike/b-over-prime 8811a7a (2026-10-23 12:53, driver)
     started: 2026-10-23T11:51+08:00
     expected_done: 2026-10-23T15:30+08:00
@@ -106,7 +106,8 @@ a_over_prime_done: false
 naming_cleanup_done:
   '31': false
   '41': "dropped - G29, 41 reference only"
-b_unchanged_done: false
+  '42': true
+b_unchanged_done: true (2026-10-23T15:55+08:00, gate passed)
 merged_done: false
 comparison_v2_sent: false
 reference_only: [docs/harness-program/41-design-b-prime-detailed.md]
@@ -121,10 +122,10 @@ env_failure:
 
 | Track | Session | Phase | Artifact | Next |
 |---|---|---|---|---|
-| 1 fix catalog | `01a16655` | implementing, S1 commit 4 `2696a3f` (66.0% ctx) | `10-pi-streams-fix-catalog.md` + `feat/streams-must-fix` | S1-S6 done, then driver merges |
+| 1 fix catalog | `01a16655` | implementing, S1 commits done (`6b2f1ab`), after-stack check (73.0% ctx) | `10-pi-streams-fix-catalog.md` + `feat/streams-must-fix` | S1-S6 done, then driver merges |
 | 2 prime CLI | `01a16656` | blocked on Prime codex login; non-inference gaps in progress | `20-prime-cli-design.md` + `feat/prime-cli` (`6bc1242` pushed) | ZF logs Prime in, then inference verification |
 | 3 research | `01a16658` | A-over-Prime rewrite + naming cleanup (Z20, Z21) | `31-design-a-detailed.md` | done line, then gate; feeds 51 |
-| 4 B over prime | `01a166e0` | 42 B over stock Prime (Z22); 41 reference only | `40`, `41` (reference), `42-design-b-prime-unchanged.md` | done line, then gate; feeds 51 |
+| 4 B over prime | `01a166e0` | done; 42 passed gate 15:55 | `40`, `41` (reference), `42-design-b-prime-unchanged.md` | done line, then gate; feeds 51 |
 | 5 merged + v2 | `01a1671a` | standby (Z23) | `51-design-merged.md`, `50-a-vs-b.md` v2 | go after 31 and 42 pass |
 
 **Env failure 14:50-15:05 (closed):** options-01 lost outbound internet and model calls returned `fetch failed`. Every track was resumed by 15:09.
