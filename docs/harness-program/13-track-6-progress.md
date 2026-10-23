@@ -35,10 +35,10 @@ Run directory is `/home/alphalab/.cache/pi-stack-track6/20261023T172837Z/`.
 | Foundation | `23640e5d24501afb88da1e2eb5487a89001eac93`; preparation `198e433b19259eb56eec9b512b36b1247ffd519a` | Baseline passed 105 stream tests and 71 root tests. |
 | 1. State writer | `ea6ef52187a6b23a6ee68df7ae3b893881ff9f6c` | VERIFIED. 31 focused tests, 136 stream tests, 71 root tests, exact role template, syntax and diff checks passed. |
 | 2. Prime transport | `ffbacff02fb2d2dc689ad216b6f3cfc5da3a779b` | 39 focused, 144 stream and 72 root tests passed. `evidence/unit-2-{focused,streams,root}.log`. |
-| 3. Messages, wake and stop | awaiting commit | 48 focused, 153 stream and 72 root tests passed. `evidence/unit-3-{focused,streams,root}.log`. |
-| 4. Clean workers | pending | pending |
-| 5. Owned compaction | pending | pending |
-| 6. Computed close | pending | pending |
+| 3. Messages, wake and stop | `c3555ce4b8188e9d6962f1d5609e7ee9c11b3bbe` | 48 focused, 153 stream and 72 root tests passed. `evidence/unit-3-{focused,streams,root}.log`. |
+| 4. Clean workers | `e82609ec59be46d36fe9eccdd4c704827ac71d52` | 49 focused, 154 stream and 72 root tests passed. `evidence/unit-4-{focused,streams,root}.log`. |
+| 5. Owned compaction | `064e65dc27951395c2509a51182191701dd8e615` | 62 focused, 167 stream and 72 root tests passed. `evidence/unit-5-{focused,streams,root}.log`. Offline only. |
+| 6. Computed close | awaiting commit | 70 focused, 175 stream and 72 root tests passed. `evidence/unit-6-{focused,streams,root}.log`. |
 | 7. Isolated install | pending | pending |
 | 8. PoC verifier | pending | pending |
 
@@ -73,6 +73,20 @@ Run directory is `/home/alphalab/.cache/pi-stack-track6/20261023T172837Z/`.
 | 2026-10-23T18:03:04Z | Use pending-message values to separate locked socket writes from unlocked reply waits. | State must be saved and freshly wrapped before a send, but pause release and other commands must remain possible while waiting. | `engine/prime.py::PendingMessage`; `evidence/unit-3-focused.log` | New behavior verified. |
 | 2026-10-23T18:03:04Z | Run Prime ticks outside the legacy all-stream lock and reuse the existing registry and tick entry. | Inference must not hold unrelated stream locks, and a second task clock is unnecessary. | `engine/tick.py`; `evidence/unit-3-streams.log` | Legacy and Prime cases green. |
 | 2026-10-23T18:03:04Z | Preserve uncertain sends and expose abort replies without a termination promise. | A timeout is not native failure or permission to replay, and abort cannot promise rollback. | `evidence/unit-3-focused.log` | Duplicate, stale, timeout and abort checks pass. |
+
+| 2026-10-23T18:03:04Z | Reuse the existing thread registry and save each source-bound worker assignment before kickoff. | Clean sessions need no copied stream files, but the stream must retain full identities and exact handed-over wording. | `engine/threads.py::spawn_prime_worker`; `evidence/unit-4-focused.log` | Worker and stream-chosen reviewer paths verified. |
+| 2026-10-23T18:03:04Z | Keep summary review guidance solely in stream AGENTS and optional reviewer text. | Native run success is not task completion, and no hook may force a reviewer. | `templates/prime/AGENTS.md`; `evidence/unit-4-focused.log` | Product instructions unchanged; summaries retained in stream Log. |
+
+| 2026-10-23T18:03:04Z | Use the same DCR Log/history entries for percentage and explicit requests and retain a busy request's first observation. | No second controller or task database is needed, and busy observations cannot authorize a maintenance abort or duplicate native compact. | `engine/prime.py::check_compaction/run_compaction`; `evidence/unit-5-focused.log` | Verified offline. |
+| 2026-10-23T18:03:04Z | Require a new checked update during the save turn, then pause and recheck native activity before direct compact. | A successful model reply alone does not prove STATE was saved, and pause must not precede the save turn. | `evidence/unit-5-focused.log` | Missing save, stop, busy and failure cases refuse compact or resume. |
+| 2026-10-23T18:03:04Z | Verify one new current-branch compaction against the exact owned native transcript before choosing input. | In-memory tree entries are not persistence proof; newer saved human input takes priority over automatic resume. | `engine/prime.py::read_compaction_entry`; `evidence/unit-5-focused.log` | Missing, off-branch, ambiguous and wrong-summary entries rejected. |
+| 2026-10-23T18:03:04Z | Write followUp while paused and release the retained connection's pause before awaiting its result. | A queued prompt cannot finish while pickup is paused. | Parked-prompt socket fixture in `test_prime_compaction.py` | No deadlock; one continuation. |
+| 2026-10-23T18:03:04Z | Clone pinned stock Prime unchanged into the authorized cache for exact wire-format inspection. | Native tree and transcript shapes must come from the selected revision rather than a guessed fixture. | `prime-reference` at `8aac8692456c00c01d4e53e60e6d3347a3506559` under the run directory | No existing source or sessions touched. |
+
+| 2026-10-23T18:03:04Z | Execute named local Python checks outside the stream lock and bind actual argv/cwd/exit/output to immutable source, target and report proof. | A claimed green test cannot close work, while a concurrent instruction change must still stop publication. | `checks/state.py`; `evidence/unit-6-focused.log` | Wrong sources, target/report/proof, failed checks and changed instructions leave work open. |
+| 2026-10-23T18:03:04Z | Support unittest or one tracked `check_`/`test_` Python script, not shell or scheduler replay. | The new check boundary must reject uncertain job submission rather than execute arbitrary claimed tests. | `checks/state.py::run_check`; `evidence/unit-6-focused.log` | Safe local checks and a valid alternative pass; this is validation, not an OS sandbox. |
+| 2026-10-23T18:03:04Z | Define excerpt proof ranges as inclusive one-based LF line ranges and verify their exact bytes. | An excerpt cannot silently stand for an unretained full proof. | `test_prime_close.py` | Incorrect range rejected; exact Unicode excerpt accepted. |
+| 2026-10-23T18:03:04Z | Stage only enumerated owned files or explicit authorized paths and refuse foreign staged content before index writes. | The old broad staging captured scratch and Prime settings in a behavioral reproduction. | `evidence/unit-6-before.log`; `evidence/unit-6-focused.log` | Legacy suites remain green; scratch and runtime data stay untracked. |
 
 ## Orchestration correction
 
