@@ -25,7 +25,7 @@ STATE has exactly Goals, Rules, and Log. Immutable exact entries move to history
 
 ## Workflow and rigor
 
-The merged design is settled. Do not spend another design exploration on alternatives that section 8 already selects. Use one fresh implementation child per commit, serially in this worktree, with a full handoff between units. Each child inspects its seam before changing code and validates before committing. A separate final same-model validation child inspects actual files and CLI behavior. The parent reviews the final diff and evidence. No child launches children.
+The merged design is settled. Do not spend another design exploration on alternatives that section 8 already selects. Use one retained background implementation owner for the remaining seven commits, serially in this worktree. The original workflow returned its first child's launch receipt instead of awaiting completion, so its later children never launched. Resume only that known owner, which retains the checkout, report edit and source context. The child inspects each seam and validates before committing each unit. The parent independently inspects actual files, CLI behavior, final diff and evidence and reruns verification. No child launches children.
 
 Capture failing-before-fix behavior for existing paths. Label genuinely absent APIs as new functionality. Unit checks are `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s pi-streams/tests` and `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests`, with focused tests first. Final gates additionally run `bash scripts/check-overlay.sh`, `bash scripts/check-prime-install.sh`, `python3 scripts/check-readme-commands.py`, syntax checks, and `git diff --check`.
 

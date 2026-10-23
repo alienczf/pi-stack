@@ -71,7 +71,7 @@ class OwnedSupervisor:
         with stream:
             reader = stream.makefile("rb")
             try:
-                stream.sendall(b'{"type":"daemon_hello","protocol":{"name":"prime-agent.daemon","version":7}}\n')
+                stream.sendall(b'{"type":"daemon_hello","protocol":{"name":"prime-agent.daemon","version":7},"schemaRevision":30}\n')
                 for line in reader:
                     request = json.loads(line)
                     with self.lock:

@@ -47,6 +47,12 @@ class ProjectSection:
     pi_web_url: str
     worktrees_dir: str
     pi_stack_revision: str
+    backend: str = "pi"
+    prime_binary: str = ""
+    prime_agent_dir: str = ""
+    prime_sessions_dir: str = ""
+    prime_socket: str = ""
+    poteto_path: str = ""
 
 
 @dataclass
@@ -115,6 +121,9 @@ def dump_project(project: Project) -> str:
         f"steer_queue_minutes = {caps.steer_queue_minutes}",
         "",
     ]
+    if info.backend != "pi":
+        lines[7:7] = [f"{key} = {_q(getattr(info, key))}" for key in (
+            "backend", "prime_binary", "prime_agent_dir", "prime_sessions_dir", "prime_socket", "poteto_path")]
     for repo in project.repos:
         lines.append("[[repos]]")
         lines.append(f"name = {_q(repo.name)}")
@@ -170,6 +179,9 @@ def load_project(path: Path) -> Project:
                 pi_web_url=str(info["pi_web_url"]),
                 worktrees_dir=str(info["worktrees_dir"]),
                 pi_stack_revision=str(info["pi_stack_revision"]),
+                **{key: str(info.get(key, "pi" if key == "backend" else "")) for key in (
+                    "backend", "prime_binary", "prime_agent_dir", "prime_sessions_dir", "prime_socket", "poteto_path")},
+
             ),
             coordinator=ModelSettings(str(coordinator["model"]), str(coordinator["thinking"])),
             threads=ModelSettings(str(threads["model"]), str(threads["thinking"])),
@@ -843,11 +855,18 @@ def create_stream(index: Path, project: Project, stream_id: str, *, backend: str
     existing = [
         row for row in load_stream_rows(index) if row.id == stream_id and row.project == project.info.name
     ]
-    dest = Path(existing[0].path) if existing else (Path(project.info.root) / "streams" / stream_id).resolve()
+    dest = Path(existing[0].path) if existing else Path(project.info.root) / "streams" / stream_id
+    expected = Path(os.path.abspath(Path(project.info.root) / "streams" / stream_id))
+    lexical = Path(os.path.abspath(dest))
+    if any(path.is_symlink() for path in (lexical, *lexical.parents)):
+        raise StreamsError("refusing symlink in stream path or ancestors")
+    dest = lexical
     fresh = not (dest / "stream.toml").is_file()
     assert_artifacts_ready(dest)
     recorded_backend = load_stream_config(dest / "stream.toml").backend if not fresh else None
-    backend = backend or recorded_backend or "pi"
+    backend = backend or recorded_backend or project.info.backend
+    if backend == "prime" and dest != expected:
+        raise StreamsError("registered Prime stream path escapes its project stream directory")
     if backend not in {"pi", "prime"} or recorded_backend not in {None, backend}:
         raise StreamsError("stream backend conflicts with existing stream")
     if backend == "prime" and (dest.is_symlink() or any((dest / name).is_symlink() for name in ("AGENTS.md", "STATE.md", "threads.tsv", "history"))):
