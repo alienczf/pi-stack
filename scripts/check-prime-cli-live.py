@@ -17,7 +17,7 @@ import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "bin"))
-from prime_cli import CliError, LEVELS, PrimeClient, reject_json_constant
+from prime_cli import CliError, LEVELS, PrimeClient, array_field, object_data, reject_json_constant
 
 MODEL = "openai-codex/gpt-6.1-sol"
 THINKING = "xhigh"
@@ -330,7 +330,12 @@ class Check:
             self.gaps.append(f"Requested xhigh was clamped to {state['thinkingLevel']}. No xhigh inference is claimed.")
         self.evidence.append({"requestedThinking": THINKING, "effectiveThinking": state["thinkingLevel"]})
         if self.definition:
-            self.definition.expect(state["model"])
+            with PrimeClient(self.socket, self.timeout) as wire:
+                catalog = object_data(wire.request("get_model_catalog", activeSessionId=sid))
+            models = array_field(catalog, "models")
+            matches = [model for model in models if isinstance(model, dict)
+                       and (model.get("provider"), model.get("id")) == (self.definition.provider, self.definition.id)]
+            self.definition.expect(matches[0] if len(matches) == 1 else None)
             if state["thinkingLevel"] != THINKING:
                 raise CliError("model_thinking_mismatch", "Native thinking level differs from the requested level", 409)
             self.evidence.append({"modelMetadataMatched": True})
