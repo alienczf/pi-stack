@@ -120,6 +120,8 @@ The installed integration provides the needed primitives, with two important gap
 
 The existing queue is an in-memory Map at `W/dist/server/sessions/piSessionService.js:317,1371-1376`, drains independently at `:2483-2525`, and is cleared on disposal at `:502`. It is not proof of accepted-input durability or resume ordering. The narrow maintenance record must close those two gaps. Preserve ordinary explicit input and control stops while reserving the session for compaction.
 
+This is one maintenance operation, not three unrelated prompts or a mandatory five-minute wait between phases. The existing pi-web `agent_end` and `compaction_end` event path at `W/dist/server/sessions/piSessionService.js:2478-2490` can advance ready phases immediately. The next tick reconciles an interrupted operation rather than starting another. The receiving session record owns maintenance input and native outcomes. Tick state keeps the operation ID and observed dispatch progress, not a competing input queue.
+
 A short current phase record is sufficient. It is not a general workflow definition. Persist phases before dispatch, inspect the native transcript on uncertain completion, and keep one pending resume identity. A later stop invalidates execution resumption without deleting the saved checkpoint.
 
 **Direct prompts are covered by observation.** The tick resolves the actual coordinator and checks it regardless of whether its turn came from a tick, browser, CLI, or bot. Safe-point steering is already part of the installed agent loop at `W/node_modules/@earendil-works/pi-agent-core/dist/agent-loop.js:88-169`. The check is per tick, not per model request. A long in-flight call or tool can exceed 150k before it yields. That is permitted by Z3's no-interruption requirement and must be reported honestly.
@@ -384,7 +386,7 @@ These are problem statements, not commitments to a framework. D6 excludes a cont
 
 ## Stacked implementation plan
 
-All work below is future work after the catalog's first-pass go-ahead. Start fresh branches above pi-stack main `3acf0f0`. Keep each implementation commit small and its regression test in the same commit. Show each new regression failing against the base before accepting its fix. Do not merge a partial liveness stack that depends on an unlanded safety boundary.
+All work below is future work after the catalog's first-pass go-ahead. Start fresh branches above pi-stack main `3acf0f0`. Keep each implementation commit small and its regression test in the same commit. Show each new regression failing against the base before accepting its fix. Do not merge a partial liveness stack that depends on an unlanded safety boundary. Rows labelled pi-web or bot are companion PRs in their owning repositories, not commits mixed into a pi-stack PR. Their tested API/capability is a dependency of the corresponding pi-stack stack.
 
 ### Verification setup on options-01
 
@@ -428,7 +430,7 @@ This stack can land independently. It must not migrate or resume existing stream
 | `streams: resolve the designated coordinator before dispatch` | `engine/{threads,tick,doctor}.py`, new/adopt/status tests. | Item 8's stale and ambiguous identities. Verify one designated disposable coordinator. |
 | `streams: expose archive-stable evidence reads` | `engine/{sessionlog,piweb}.py`, `bin/pi-web-cli` if needed, new evidence tests. Small pi-web metadata exposure only if needed. | Item 5's exact hashes before/after a safe disposable archive. |
 | `streams: distinguish transport acceptance from applied steer` | `bin/pi-web-cli`, `engine/{piweb,tick,sessionlog}.py`, receipt command/tool, coordinator template, CLI/tick tests. | Item 7's accepted-only, consumed-only, applied, blocked, and uncertain cases. Inspect a real changed artifact. |
-| `pi-web: reject stale automatic admissions after stop or cancel` | `src/server/sessions/piSessionService.ts`, narrow persisted control-delivery generation, matching CLI/engine adapter fields, and focused race tests. | Delay a wake, recovery, and RESUME after sender revalidation. Stop, release, and observe zero task effects. Fresh explicit input remains usable. |
+| `pi-web: reject stale automatic admissions after stop or cancel` | `jmfederico/pi-web` `src/server/sessions/piSessionService.ts`, narrow persisted control-delivery generation, matching CLI/engine adapter fields, and focused race tests. | Delay a wake, recovery, and RESUME after sender revalidation. Stop, release, and observe zero task effects. Fresh explicit input remains usable. |
 | `streams: reuse coordinators and refuse unsafe explicit rotation` | `engine/{tick,threads,project}.py`, rotation/scenario tests, obsolete-policy docs. | Item 11. No size/age rotation, no busy abort, safe clean replacement and crash recovery. |
 
 Update the bot relay's receipt handling in its owning deployment source alongside this stack. It must stop claiming a transport receipt is delivery. Land the CLI response semantics and caller changes together or version the added fields without breaking the caller.
@@ -481,7 +483,7 @@ After ZF's first-pass go-ahead and the verified stack lands on main, rebase all 
 | Land receiving-side stop invalidation before any automatic RESUME. | The adversarial review demonstrated that stopping a runtime does not prevent a later prompt reopening it. Sender-side checks alone leave a race. |
 | Persist accepted maintenance-time input and reconcile it before old RESUME. | The existing compaction Map is volatile and drains independently. Its acceptance does not establish durability or stop ordering. |
 | Give verification a private XDG home as well as an explicit index. | `init --home` registers the index under XDG. Shared XDG would let the production global timer discover the test stream. |
-| Store only current drive, recovery, delivery, and maintenance facts in existing tick state. | These bounded operations need crash recovery. Z2 and P3 reject growing this into the research plan's general control engine. |
+| Store only current drive, recovery, delivery, and maintenance facts. | Tick state retains dispatch progress and operation IDs. Pi-web owns accepted maintenance input and native outcomes. Z2 and P3 reject a general control engine or competing input queues. |
 | Keep applied-steer receipts, but no per-ask completion ledger. | Z5 requires actual application. Z2 separately defers product lifecycle and self-grading. |
 | Use ZF-only Slack DM and episode-based suppression. | Z4 chooses the destination and quiet behavior. Full-disk notices must originate off-host under G5. |
 | Read "#37" as corpus row 37, not a GitHub issue. | G16 corrects the ambiguous original brief reference. GitHub #37 is the program's draft PR. |
@@ -518,4 +520,6 @@ The review challenged every item's layer and admission bar. It defended the boun
 | W2. Accepted compaction-time input is only in memory and may drain before the saved resume. | **Act on.** Item 3 now requires recoverable maintenance-time input identity/body/order/attachments and receiving-side reconciliation of newer input before old RESUME. Crash-during-compaction and newer-stop tests were added to the plan. |
 | W3. A private index without private XDG is discoverable by the production timer. | **Act on.** The real-stream recipe now isolates XDG for every CLI and private unit, sets an explicit verification pi-web destination, and checks unchanged production homes bytes. |
 
-No warning was dismissed as style. No critical finding was established. These corrections change the implementation specification only. They are not a claim that the proposed race or deployment tests have already passed.
+No warning was dismissed as style. No critical finding was established. Focused recheck run `96d8d074-ec39-4378-9cca-135ee306920b` closed W1-W3 and found no new concrete issue in their corrections. The reviewer confirmed the single-operation event path does not create a competing input queue. These are catalog-specification verdicts only. They do not claim that implementation, race, or deployment tests have passed.
+
+Final artifact checks confirmed all 15 review rows have matching symptom, root cause, fix, layer, blast radius, verification, and dependency details. Source stayed unchanged at `3acf0f0`, and no files were staged or committed. Other tracks' shared-doc changes were left untouched.
