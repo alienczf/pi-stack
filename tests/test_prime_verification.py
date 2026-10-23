@@ -110,6 +110,23 @@ Path({str(self.events_log)!r}).write_text(json.dumps({{"requests": server.reques
         self.assertLess(events.index("kill"), events.index("prompt"))
         self.assertEqual(events[-1], "shutdown")
 
+    def test_native_usage_error_keeps_typed_info_and_never_starts_inference(self):
+        text = self.runtime.read_text().replace('        if command["type"] == "shutdown":', '''        if command["type"] == "set_model":
+            return {"success": False, "error": "Fixture usage refusal", "errorInfo": {"code": "usage_limit"}}
+        if command["type"] == "shutdown":''')
+        self.runtime.write_text(text)
+        proc = self.verify("--inference")
+        self.assertEqual(proc.returncode, 1, proc.stderr + proc.stdout)
+        result = json.loads(proc.stdout)
+        self.assertEqual(result["error"]["error"], "upstream_error")
+        self.assertEqual(result["error"]["errorInfo"], {"code": "usage_limit"})
+        self.assertEqual(result["retainedOwnedSessions"], [])
+        events = json.loads(self.events_log.read_text())
+        self.assertEqual(events["events"].count("set_model"), 1)
+        self.assertEqual(events["admitted"], [])
+        self.assertNotIn("prompt_and_wait", events["events"])
+        self.assertEqual(events["events"][-1], "shutdown")
+
     def test_root_safety_and_no_retry_settings_are_checked_before_launch(self):
         settings = self.owned / "agent/settings.json"
         original = settings.read_bytes()
