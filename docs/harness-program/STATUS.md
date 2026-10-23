@@ -9,14 +9,14 @@ tracking_issue: https://github.com/alienczf/pi-stack/issues/38
 box_mirror: /workspace/harness-program
 host_docs_worktree: /home/alphalab/Projects/worktrees/pi-stack-harness-program
 host_input_copy: /home/alphalab/Projects/pi-stack/streams/pi-streams-harness/context/harness-program
-updated: "2026-10-23T21:52+08:00 (T1 streaming at ~45% context on S2 receipts row; pi-web 65cdaa4 committed, pi-streams receipt candidate uncommitted; T2 still blocked on Prime login)"
+updated: "2026-10-23T22:30+08:00 (T1 streaming at ~51% context on S2; pi-streams 916d1e0 receipts committed, suite 249 pass; next receiver stop-generation safety then reuse/rotation; T2 idle, still blocked on Prime login)"
 tracks:
   - id: 1
     name: pi-streams must-fix catalog
     session: 01a16655-5cfd-78c2-bf5f-e08c47e1665e
     host: options-01
     model: openai-codex/gpt-6.1-sol@xhigh
-    phase: "implementing - S1 done (6b2f1ab, native pass); S2 in progress (7b37d41 coordinator designation, 17efab2 archive-stable evidence reads; suite 219 OK at 7b37d41); streaming 20:24 at ~33% context; then S2a-S6"
+    phase: "implementing - S1 done (6b2f1ab, native pass); S2 in progress (7b37d41, 17efab2, a1bbdda, pi-web 65cdaa4, pi-streams 916d1e0 receipts; suite 249 pass); streaming 22:29 at ~51% context; remaining S2 units stop-generation safety + reuse/rotation, then S2a-S6"
     milestones_sent: [track-1-review-ready 2026-10-23T11:01+08:00]
     go_ahead: 2026-10-23T11:35+08:00 (ZF t221u, GO in 03)
     started: 2026-10-23T09:17+08:00
@@ -138,7 +138,7 @@ env_failure:
 
 | Track | Session | Phase | Artifact | Next |
 |---|---|---|---|---|
-| 1 fix catalog | `01a16655` | implementing; S1 done (`6b2f1ab`); S2 in progress (`7b37d41`, `17efab2`) | `10-pi-streams-fix-catalog.md` + `feat/streams-must-fix` | S1-S6 done, then driver merges |
+| 1 fix catalog | `01a16655` | implementing; S1 done (`6b2f1ab`); S2 in progress (up to `916d1e0`, suite 249 pass) | `10-pi-streams-fix-catalog.md` + `feat/streams-must-fix` | S1-S6 done, then driver merges |
 | 2 prime CLI | `01a16656` | blocked on Prime codex login; non-inference gaps in progress | `20-prime-cli-design.md` + `feat/prime-cli` (`6bc1242` pushed) | ZF logs Prime in, then inference verification |
 | 3 research | `01a16658` | done 18:21; 31 (A over Prime) passed gate 18:22 | `31-design-a-detailed.md` | feeds 51 |
 | 4 B over prime | `01a166e0` | done; 42 passed gate 15:55 | `40`, `41` (reference), `42-design-b-prime-unchanged.md` | feeds 51 |
