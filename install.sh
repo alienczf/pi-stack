@@ -37,7 +37,9 @@ npm:pi-web-access and npm:pi-subagents.
 Removes retired npm registrations and managed installs; backs up changed settings.
 PI_STACK_SKIP_PACKAGES=1 defers physical package removal until a normal install.
 Rewrites cursor/* subagent models to inherit. Links update-pstack into ~/.local/bin.
-Links pi-streams to this checkout. Installs the stream and stream-kickoff skills
+Links pi-streams, agent-cli, prime-cli, and prime-cli-remote to this checkout.
+The Prime clients do not install or start Prime or change its credentials.
+Installs the stream and stream-kickoff skills
 and the stream prompt. With --project, or once pi-streams has a registered home,
 also installs pi-web-cli into ~/.local/bin, pi-web when it is missing, and the
 tick timer. With --project, runs pi-streams init and then pi-streams doctor.
@@ -564,6 +566,7 @@ if [[ "$have_project" == 1 ]] || { [[ -f "$streams_homes" ]] && grep -q '[^[:spa
 	streams_in_use=1
 fi
 link_pi_streams
+bash "$here/scripts/install-agent-clis.sh"
 if [[ "$streams_in_use" == 1 ]]; then
 	install_pi_web_cli
 fi

@@ -1,0 +1,34 @@
+#!/usr/bin/env python3
+"""Select a backend without changing the child CLI's arguments or streams."""
+import argparse
+import json
+import os
+from pathlib import Path
+import sys
+
+
+class Parser(argparse.ArgumentParser):
+    def error(self, message):
+        print(json.dumps({"ok": False, "status": 400, "error": "usage", "message": message}))
+        raise SystemExit(1)
+
+
+def main():
+    parser = Parser(description="Select pi or prime. Pi remains the default.")
+    parser.add_argument("--backend", choices=("pi", "prime"), default=os.environ.get("PI_STACK_BACKEND", "pi"))
+    parser.add_argument("arguments", nargs=argparse.REMAINDER)
+    args = parser.parse_args()
+    if args.backend not in ("pi", "prime"):
+        parser.error("PI_STACK_BACKEND must be pi or prime")
+    if not args.arguments:
+        parser.error("a backend command is required")
+    executable = Path(__file__).resolve().parent / ("pi-web-cli" if args.backend == "pi" else "prime-cli")
+    try:
+        os.execv(executable, [str(executable), *args.arguments])
+    except OSError as exc:
+        print(json.dumps({"ok": False, "status": 502, "error": "backend_unavailable", "message": exc.strerror}))
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
