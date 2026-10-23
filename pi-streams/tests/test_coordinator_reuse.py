@@ -28,7 +28,7 @@ class CoordinatorReuseTests(TickCase):
     def routes(self, *, tokens=1000, modified="2026-10-06T11:00:00Z", streaming=False, pending=0, callbacks=()):
         body = status("current", tokens=tokens, streaming=streaming)
         body["pendingMessageCount"] = pending
-        body["rotationSafety"] = {"entryId": "checkpoint-ack", "callbacksKnown": True, "nativeChildCallbacks": list(callbacks)}
+        body["rotationSafety"] = {"entryId": "checkpoint-ack", "callbacksKnown": True, "callbackInventory": "native-and-extension-v1", "nativeChildCallbacks": list(callbacks), "unprovenCallbacks": []}
         self.stub.set_routes([
             ("GET", "/api/sessions", 200, [info("current", str(self.stream), self.log_path("current"), modified), info("worker", str(self.worker), self.log_path("worker"))]),
             ("GET", "/api/sessions/current/status", 200, body),
@@ -87,6 +87,30 @@ class CoordinatorReuseTests(TickCase):
                 self.assertNotIn("checkpoint is required", result.stderr)
                 self.assertEqual([request for request in self.stub.requests if request[0] == "POST"], [])
                 self.assertEqual(self.rows(self.stream).splitlines()[1].split("\t")[0], "current")
+
+    def test_old_native_only_callback_inventory_is_not_treated_as_complete(self):
+        self.checkpoint()
+        self.routes()
+        for method, path, _, value in self.stub.routes:
+            if method == "GET" and path.endswith("/status") and isinstance(value, dict) and "rotationSafety" in value:
+                value["rotationSafety"].pop("callbackInventory", None)
+        self.stub.requests.clear()
+        result = self.run_streams("rotate", "etl")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("callback inventory", result.stderr)
+        self.assertEqual([request for request in self.stub.requests if request[0] == "POST"], [])
+
+    def test_unproven_extension_completion_owner_refuses_without_native_mutation(self):
+        self.checkpoint()
+        self.routes()
+        for method, path, _, value in self.stub.routes:
+            if method == "GET" and path == "/api/sessions/current/status":
+                value["rotationSafety"].update({"callbacksKnown": False, "unprovenCallbacks": ["pi-subagents completion ownership"]})
+        self.stub.requests.clear()
+        result = self.run_streams("rotate", "etl")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("pi-subagents completion ownership", result.stderr)
+        self.assertEqual([request for request in self.stub.requests if request[0] == "POST"], [])
 
     def test_missing_or_stale_checkpoint_refuses_before_retirement(self):
         result = self.run_streams("rotate", "etl")

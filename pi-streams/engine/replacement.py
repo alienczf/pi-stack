@@ -156,8 +156,12 @@ def _idle(resolved) -> None:
     if status.get("pendingAsk") is not None or status.get("pendingDialogs"):
         raise StreamsError("coordinator has unresolved human input; refusing rotation")
     safety = status.get("rotationSafety")
-    if not isinstance(safety, dict) or safety.get("callbacksKnown") is not True:
-        raise StreamsError("native callback ownership is unavailable; checkpoint rotation capability required")
+    if not isinstance(safety, dict) or safety.get("callbackInventory") != "native-and-extension-v1":
+        raise StreamsError("complete native and extension callback inventory is unavailable; checkpoint rotation capability required")
+    if safety.get("callbacksKnown") is not True:
+        reasons = safety.get("unprovenCallbacks")
+        detail = "; ".join(item for item in reasons if isinstance(item, str)) if isinstance(reasons, list) else "unproved callback mechanism"
+        raise StreamsError(f"native callback inventory has unknown ownership: {detail}")
     children = safety.get("nativeChildCallbacks")
     if not isinstance(children, list) or children:
         raise StreamsError("native child callback ownership still needs the original coordinator")

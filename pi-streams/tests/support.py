@@ -190,7 +190,7 @@ class EngineCase(unittest.TestCase):
                     if item.get("id") == sid:
                         item["path"] = str(native)
             if method == "GET" and path == f"/api/sessions/{sid}/status" and isinstance(value, dict):
-                value["rotationSafety"] = {"entryId": entry, "callbacksKnown": True, "nativeChildCallbacks": []}
+                value["rotationSafety"] = {"entryId": entry, "callbacksKnown": True, "callbackInventory": "native-and-extension-v1", "nativeChildCallbacks": [], "unprovenCallbacks": []}
             if method == "POST" and path == f"/api/sessions/{sid}/archive":
                 found_archive = True
                 if code == 200 and isinstance(value, dict):
