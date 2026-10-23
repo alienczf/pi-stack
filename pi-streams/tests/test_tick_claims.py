@@ -85,6 +85,8 @@ class ClaimTests(TickCase):
             got_status("coord-d"),
             got_list(str(self.datapull)),
             got_status("coord-d"),
+            got_list(str(self.datapull)),
+            got_status("coord-d"),
             self.delivery_prompt(
                 "coord-d",
                 "pi-streams tick 2026-10-06T12:00:00Z:\n"
@@ -93,6 +95,8 @@ class ClaimTests(TickCase):
                 "followUp",
             ),
             *observed(self.etl, "w-1"),
+            got_list(str(self.etl)),
+            got_status("coord-e"),
             got_list(str(self.etl)),
             got_status("coord-e"),
             got_list(str(self.etl)),

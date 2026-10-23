@@ -125,6 +125,8 @@ class SubscriptionTests(TickCase):
             got_status("coord-1"),
             got_list(str(self.etl)),
             got_status("coord-1"),
+            got_list(str(self.etl)),
+            got_status("coord-1"),
             self.delivery_prompt(
                 "coord-1",
                 "pi-streams tick 2026-10-06T09:00:00Z:\nsubscription daily: Post the daily status to ZF.",
@@ -275,6 +277,8 @@ class SubscriptionTests(TickCase):
         failed = self.tick("2026-10-06T12:10:00Z")
         self.assertEqual((failed.returncode, failed.stdout, failed.stderr), (0, f"{self.etl}\tsubscription=1\n", ""))
         self.assertEqual(self.stub.requests, [
+            got_list(str(self.etl)),
+            got_status("coord-1"),
             got_list(str(self.etl)),
             got_status("coord-1"),
             got_list(str(self.etl)),

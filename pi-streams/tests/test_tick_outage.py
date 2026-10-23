@@ -74,6 +74,8 @@ class OutageTests(TickCase):
             got_status("coord-1"),
             got_list(str(self.etl)),
             got_status("coord-1"),
+            got_list(str(self.etl)),
+            got_status("coord-1"),
             self.delivery_prompt("coord-1", f"pi-streams tick 2026-10-06T12:00:00Z:\nidle t-1 datapull\noutage t-1 datapull {SHOWN}"),
         ])
         self.assertEqual(
@@ -196,6 +198,8 @@ class OutageTests(TickCase):
             got_status("coord-1"),
             got_status("t-1"),
             got_list("/wt/datapull"),
+            got_list(str(self.etl)),
+            got_status("coord-1"),
             got_list(str(self.etl)),
             got_status("coord-1"),
             got_list(str(self.etl)),

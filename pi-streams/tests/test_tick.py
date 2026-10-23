@@ -89,6 +89,8 @@ class TickTests(TickCase):
             got_status("coord-1"),
             got_list(str(self.etl)),
             got_status("coord-1"),
+            got_list(str(self.etl)),
+            got_status("coord-1"),
             self.delivery_prompt("coord-1", "pi-streams tick 2026-10-06T12:05:00Z:\nidle t-1 datapull"),
         ])
         self.assertEqual(
@@ -193,6 +195,8 @@ class TickTests(TickCase):
             got_status("coord-1"),
             got_list(str(self.etl)),
             got_status("coord-1"),
+            got_list(str(self.etl)),
+            got_status("coord-1"),
             self.delivery_prompt(
                 "coord-1",
                 "pi-streams tick 2026-10-06T12:00:00Z:\nask t-1 datapull May I write to Test?",
@@ -226,6 +230,8 @@ class TickTests(TickCase):
             got_post("coord-2", "thinking-level", {"level": "xhigh"}),
             got_status("coord-2"),
             got_prompt("coord-2", rotation("etl", self.etl)),
+            got_list(str(self.etl)),
+            got_status("coord-2"),
             got_list(str(self.etl)),
             got_status("coord-2"),
             self.delivery_prompt(
@@ -282,6 +288,8 @@ class TickTests(TickCase):
             got_post("coord-2", "thinking-level", {"level": "xhigh"}),
             got_status("coord-2"),
             got_prompt("coord-2", rotation("etl", self.etl)),
+            got_list(str(self.etl)),
+            got_status("coord-2"),
             got_list(str(self.etl)),
             got_status("coord-2"),
             self.delivery_prompt(
@@ -342,6 +350,8 @@ class TickTests(TickCase):
             got_status("coord-9"),
             got_status("t-9"),
             got_list("/wt/review"),
+            got_list(ops),
+            got_status("coord-9"),
             got_list(ops),
             got_status("coord-9"),
             got_list(ops),

@@ -59,10 +59,14 @@ def cmd_spawn(cwd: str) -> int:
     return out({"ok": ok, "status": code, "session": data}, ok)
 
 
-def cmd_prompt(sid: str, text: str, streaming: str | None = None, delivery_id: str | None = None) -> int:
+def cmd_prompt(sid: str, text: str, streaming: str | None = None, delivery_id: str | None = None, automatic: dict | None = None) -> int:
     body = {"text": text} if streaming is None else {"text": text, "streamingBehavior": streaming}
     if delivery_id is not None:
         body["deliveryId"] = delivery_id
+    if automatic is not None:
+        if delivery_id is None:
+            return out({"ok": False, "error": "automatic admission requires a caller-persisted delivery id"}, False)
+        body["automaticAdmission"] = automatic
     code, data = req("POST", f"/api/sessions/{sid}/prompt", body)
     accepted = code == 200 and isinstance(data, dict) and data.get("accepted") is True
     ok = accepted and (delivery_id is None or data.get("deliveryId") == delivery_id)
@@ -124,6 +128,7 @@ def main(argv: list[str]) -> int:
     pr.add_argument("sid")
     pr.add_argument("text", nargs="?")
     pr.add_argument("--delivery-id", help="caller-persisted correlation identity; acceptance is not application")
+    pr.add_argument("--automatic-admission", help="caller-persisted exact session/cwd/generation/kind JSON; never renewed by this CLI")
     behavior = pr.add_mutually_exclusive_group()
     behavior.add_argument("--steer", action="store_true")
     behavior.add_argument("--follow-up", action="store_true")
@@ -131,6 +136,9 @@ def main(argv: list[str]) -> int:
     st.add_argument("sid")
     cm = sub.add_parser("commands")
     cm.add_argument("sid")
+    control = sub.add_parser("automatic-admission")
+    control.add_argument("sid")
+    control.add_argument("mode", choices=("on", "off"))
     for name, (_method, _suffix, positionals, _build) in VERBS.items():
         verb = sub.add_parser(name)
         verb.add_argument("sid")
@@ -146,11 +154,23 @@ def main(argv: list[str]) -> int:
         if not text.strip():
             return out({"ok": False, "error": "empty prompt"}, False)
         streaming = "steer" if args.steer else "followUp" if args.follow_up else None
-        return cmd_prompt(args.sid, text, streaming, args.delivery_id)
+        automatic = None
+        if args.automatic_admission is not None:
+            try:
+                automatic = json.loads(args.automatic_admission)
+            except json.JSONDecodeError:
+                return out({"ok": False, "error": "automatic admission must be a JSON object"}, False)
+            if not isinstance(automatic, dict):
+                return out({"ok": False, "error": "automatic admission must be a JSON object"}, False)
+        return cmd_prompt(args.sid, text, streaming, args.delivery_id, automatic)
     if args.cmd == "status":
         return cmd_status(args.sid)
     if args.cmd == "commands":
         return cmd_commands(args.sid)
+    if args.cmd == "automatic-admission":
+        code, data = req("POST", f"/api/sessions/{args.sid}/automatic-admission", {"allowed": args.mode == "on"})
+        ok = code == 200 and isinstance(data, dict) and not data.get("error")
+        return out({"ok": ok, "status": code, "result": data}, ok)
     method, suffix, _positionals, build = VERBS[args.cmd]
     try:
         body = build(args)

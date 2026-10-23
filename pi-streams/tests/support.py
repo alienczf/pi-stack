@@ -188,6 +188,8 @@ class EngineCase(unittest.TestCase):
             raise AssertionError(f"expected one persisted delivery for {sid}: {text}")
         method, path, query, body = got_prompt(sid, text, behavior)
         body["deliveryId"] = records[0]["id"]
+        if "automatic" in records[0]:
+            body["automaticAdmission"] = records[0]["automatic"]
         return method, path, query, body
 
     @property

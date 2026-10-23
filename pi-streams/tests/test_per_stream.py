@@ -79,6 +79,8 @@ class PerStreamTests(EngineCase):
             state = stream / "STATE.md"
             state.write_text(state.read_text().replace("ratified: no", "ratified: 2026-10-23 fixture human confirmation", 1))
         self.stub.reflect_delivery_ids = True
+        for sid, stream in (("coord-1", one), ("coord-2", two)):
+            self.stub.automatic_admissions[sid] = {"sessionId": sid, "cwd": str(stream), "generation": f"fixture-{sid}", "allowed": True, "durable": True}
         shared = "/wt/shared"
         (one / "threads.tsv").write_text(
             (one / "threads.tsv").read_text(encoding="utf-8") + row("t-1", "worker", shared),

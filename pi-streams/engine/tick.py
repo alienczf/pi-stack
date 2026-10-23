@@ -456,6 +456,9 @@ class StreamTick:
             if resolved is None or resolved.row.session != coord.session:
                 raise StreamsError("coordinator designation changed before dispatch")
             status = resolved.native.status
+            _automatic, allowed = piweb.automatic_admission(status, coord.session, coord.worktree, "wake")
+            if not allowed:
+                return coord.session, None
             if status.get("isStreaming") is True:
                 return coord.session, "follow-up"
             if self.warm(coord, status):

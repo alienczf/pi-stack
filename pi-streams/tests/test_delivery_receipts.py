@@ -26,6 +26,7 @@ class DeliveryReceiptTests(EngineCase):
         (self.stream / "threads.tsv").write_text(HEADER + f"current\tcoordinator\t\t{self.stream}\t\t\topenai-codex/gpt-6-astra\txhigh\tactive\t2026-10-23T00:00:00Z\n")
         git(self.stream, self.env, "init")
         self.stub.reflect_delivery_ids = True
+        self.stub.automatic_admissions["current"] = {"sessionId": "current", "cwd": str(self.stream), "generation": "fixture-current", "allowed": True, "durable": True}
         self.stub.set_routes([
             ("GET", "/api/sessions", 200, [{"id": "current", "cwd": str(self.stream)}]),
             ("GET", "/api/sessions/current/status", 200, live("current")),

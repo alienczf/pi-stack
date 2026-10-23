@@ -101,11 +101,34 @@ def session_status(sid: str) -> dict[str, object]:
     return session
 
 
-def prompt(sid: str, text: str, behavior: str | None = None, *, delivery_id: str | None = None) -> dict[str, object]:
+def automatic_admission(session: dict[str, object], sid: str, cwd: str, kind: str) -> tuple[dict[str, str], bool]:
+    raw = session.get("automaticAdmission")
+    if not isinstance(raw, dict) or raw.get("durable") is not True:
+        raise StreamsError("durable automatic admission capability is unavailable")
+    native_cwd = raw.get("cwd")
+    generation = raw.get("generation")
+    if raw.get("sessionId") != sid or not isinstance(native_cwd, str) or Path(native_cwd).resolve() != Path(cwd).resolve():
+        raise StreamsError("automatic admission capability has a mismatched native identity")
+    if not isinstance(generation, str) or not generation or type(raw.get("allowed")) is not bool or kind not in ("wake", "recovery", "resume"):
+        raise StreamsError("automatic admission capability is malformed")
+    return {"sessionId": sid, "cwd": native_cwd, "generation": generation, "kind": kind}, raw["allowed"]
+
+
+def set_automatic_admission(sid: str, allowed: bool) -> dict[str, object]:
+    data = call(["automatic-admission", sid, "on" if allowed else "off"])
+    result = data.get("result")
+    if not isinstance(result, dict) or result.get("sessionId") != sid or result.get("durable") is not True or result.get("allowed") is not allowed:
+        raise StreamsError("automatic admission control publication is unconfirmed")
+    return result
+
+
+def prompt(sid: str, text: str, behavior: str | None = None, *, delivery_id: str | None = None, automatic: dict[str, str] | None = None) -> dict[str, object]:
     # On argv, a text that starts with a dash would parse as a flag.
     flags = [] if behavior is None else [f"--{behavior}"]
     if delivery_id is not None:
         flags += ["--delivery-id", delivery_id]
+    if automatic is not None:
+        flags += ["--automatic-admission", json.dumps(automatic, ensure_ascii=False)]
     return call(["prompt", sid, *flags], stdin=text)
 
 

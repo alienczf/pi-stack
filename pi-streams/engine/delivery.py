@@ -20,6 +20,7 @@ class Delivery:
     body: str
     origin: str = "steer"
     behavior: str | None = None
+    automatic: dict[str, str] | None = None
     state: str = "prepared"
     detail: str = ""
     events: list[dict] = field(default_factory=list)
@@ -43,6 +44,13 @@ def _records(data: dict) -> dict[str, Delivery]:
                 raise ValueError("missing delivery intent")
             if not isinstance(record.events, list) or not all(isinstance(item, dict) for item in record.events):
                 raise ValueError("invalid delivery events")
+            if record.automatic is not None and (
+                record.origin != "tick" or not isinstance(record.automatic, dict)
+                or set(record.automatic) != {"sessionId", "cwd", "generation", "kind"}
+                or not all(isinstance(value, str) and value for value in record.automatic.values())
+                or record.automatic["kind"] not in ("wake", "recovery", "resume")
+            ):
+                raise ValueError("invalid automatic admission snapshot")
             if not isinstance(record.detail, str) or (record.origin == "tick" and not record.events):
                 raise ValueError("invalid delivery description or empty tick batch")
             if record.state == "applied" and (
@@ -82,22 +90,25 @@ def receipts(stream_dir: Path) -> list[dict]:
     return [record.public() for record in _records(artifacts._read_tick_data(stream_dir)).values()]
 
 
-def prepare_locked(stream_dir: Path, identity: str, session: str, body: str, *, events: list[dict] | None = None, behavior: str | None = None) -> dict:
+def prepare_locked(stream_dir: Path, identity: str, session: str, body: str, *, events: list[dict] | None = None, behavior: str | None = None, automatic_kind: str = "wake") -> dict:
     if not identity.strip() or not session.strip() or not body.strip():
         raise StreamsError("delivery identity, destination and body are required")
     record = Delivery(identity, session, body, origin="steer" if events is None else "tick", behavior=behavior, events=events or [])
     records = _records(artifacts._read_tick_data(stream_dir))
     if identity in records:
         old = records[identity]
-        if (old.session, old.body, old.origin, old.events, old.behavior) != (record.session, record.body, record.origin, record.events, record.behavior):
+        if (old.session, old.body, old.origin, old.events, old.behavior) != (record.session, record.body, record.origin, record.events, record.behavior) or (old.automatic is not None and old.automatic["kind"] != automatic_kind):
             raise StreamsError(f"delivery {identity} has changed intent")
         return old.public()
+    if events is not None:
+        status = _require_destination(stream_dir, record, session)
+        record.automatic, _allowed = piweb.automatic_admission(status, session, str(stream_dir), automatic_kind)
     if events is None:
         artifacts.append_log_locked(stream_dir, clock.stamp(clock.now()), f"Steer {identity}", f"Destination session: {session}\n{body}", request_id=f"delivery:{identity}")
     return _save(stream_dir, record, tick=events is not None)
 
 
-def _require_destination(stream_dir: Path, record: Delivery, session: str) -> None:
+def _require_destination(stream_dir: Path, record: Delivery, session: str) -> dict[str, object]:
     from engine.threads import designated_coordinator, load_threads, resolve_coordinator
 
     row = designated_coordinator(load_threads(stream_dir / "threads.tsv"))
@@ -106,6 +117,7 @@ def _require_destination(stream_dir: Path, record: Delivery, session: str) -> No
     resolved = resolve_coordinator(stream_dir)
     if resolved is None or resolved.row.session != session:
         raise StreamsError(f"delivery {record.id} destination changed before dispatch")
+    return resolved.native.status
 
 
 def send_locked(stream_dir: Path, identity: str) -> dict:
@@ -118,13 +130,22 @@ def send_locked(stream_dir: Path, identity: str) -> dict:
         return _save(stream_dir, record)
     if record.state != "prepared":
         return record.public()
-    _require_destination(stream_dir, record, record.session)
+    status = _require_destination(stream_dir, record, record.session)
     if record.origin == "tick":
         require_ratified(stream_dir)
+        if record.automatic is None:
+            record.state = "blocked"
+            record.detail = "No saved automatic admission generation; reconcile the old request without renewing it."
+            return _save(stream_dir, record)
+        current, allowed = piweb.automatic_admission(status, record.session, str(stream_dir), record.automatic["kind"])
+        if not allowed or current != record.automatic:
+            record.state = "blocked"
+            record.detail = "Automatic admission was disabled or superseded; the saved generation is not renewed."
+            return _save(stream_dir, record)
     record.state = "sending"
     _save(stream_dir, record)
     try:
-        response = piweb.prompt(record.session, record.body, record.behavior, delivery_id=identity)
+        response = piweb.prompt(record.session, record.body, record.behavior, delivery_id=identity, automatic=record.automatic)
         if response.get("transportAccepted") is not True:
             raise StreamsError("delivery transport acceptance is unconfirmed")
     except StreamsError as exc:

@@ -172,6 +172,10 @@ class TickCase(EngineCase):
         state = (ROOT / "pi-streams/templates/stream/STATE.md").read_text()
         (stream_dir / "STATE.md").write_text(state.replace("ratified: no", "ratified: 2026-10-23 fixture human confirmation", 1))
         (stream_dir / "threads.tsv").write_text(HEADER + rows, encoding="utf-8")
+        for line in rows.splitlines():
+            cells = line.split("\t")
+            if len(cells) == 10 and cells[1] == "coordinator":
+                self.stub.automatic_admissions[cells[0]] = {"sessionId": cells[0], "cwd": cells[3], "generation": f"fixture-{cells[0]}", "allowed": True, "durable": True}
         (stream_dir / "subscriptions.tsv").write_text(SUBSCRIPTIONS, encoding="utf-8")
         (stream_dir / ".gitignore").write_text("log/\n", encoding="utf-8")
         (stream_dir / "stream.toml").write_text(

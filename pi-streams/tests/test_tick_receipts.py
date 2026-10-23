@@ -52,7 +52,7 @@ class TickReceiptTests(TickCase):
         self.assertNotEqual(data["tick_delivery"], identity)
         self.assertEqual(data["deliveries"][identity]["state"], "applied")
         sent = [body for method, _, _, body in self.stub.requests if method == "POST"]
-        self.assertEqual(sent, [{"text": "pi-streams tick 2026-10-06T12:05:00Z:\nsubscription New input after the saved batch.", "deliveryId": data["tick_delivery"]}])
+        self.assertEqual(sent, [{"text": "pi-streams tick 2026-10-06T12:05:00Z:\nsubscription New input after the saved batch.", "deliveryId": data["tick_delivery"], "automaticAdmission": {"sessionId": "current", "cwd": str(self.stream), "generation": "fixture-current", "kind": "wake"}}])
 
     def test_consumed_alone_retains_events_then_applied_removes_only_the_original_batch(self) -> None:
         result = self.tick("2026-10-06T12:00:00Z")

@@ -76,6 +76,8 @@ class FailureTests(TickCase):
             got_status("coord-2"),
             got_list(str(ops)),
             got_status("coord-2"),
+            got_list(str(ops)),
+            got_status("coord-2"),
             self.delivery_prompt("coord-2", "pi-streams tick 2026-10-06T12:00:00Z:\nask t-2 review Which venue first?"),
         ])
         self.assertEqual(
@@ -163,6 +165,8 @@ class FailureTests(TickCase):
             got_post("coord-2", "thinking-level", {"level": "xhigh"}),
             got_status("coord-2"),
             got_prompt("coord-2", rotation("etl", self.etl)),
+            got_list(str(self.etl)),
+            got_status("coord-2"),
             got_list(str(self.etl)),
             got_status("coord-2"),
             self.delivery_prompt("coord-2", "pi-streams tick 2026-10-06T12:05:00Z:\nask t-1 datapull Which venue first?", "followUp"),

@@ -28,6 +28,7 @@ class StubPiWeb:
         self.simulate_session_lifecycle = False
         self.created_sessions: dict[str, dict] = {}
         self.archived_sessions: set[str] = set()
+        self.automatic_admissions: dict[str, dict] = {}
         self._httpd: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
 
@@ -133,6 +134,8 @@ class StubPiWeb:
             if self.simulate_session_lifecycle and status in (200, 201):
                 if handler.command == "POST" and parsed.path == "/api/sessions" and isinstance(payload, dict) and isinstance(payload.get("id"), str):
                     self.created_sessions[payload["id"]] = payload
+                    if isinstance(payload.get("cwd"), str):
+                        self.automatic_admissions[payload["id"]] = {"sessionId": payload["id"], "cwd": payload["cwd"], "generation": f"fixture-{payload['id']}", "allowed": True, "durable": True}
                 archived = re.fullmatch(r"/api/sessions/([^/]+)/archive", parsed.path)
                 if handler.command == "POST" and archived:
                     self.archived_sessions.add(archived[1])
@@ -142,6 +145,11 @@ class StubPiWeb:
                     for item in payload:
                         if isinstance(item, dict) and item.get("id") in self.archived_sessions:
                             item["archived"] = True
+        if handler.command == "GET" and parsed.path.endswith("/status") and isinstance(payload, dict):
+            sid = payload.get("sessionId")
+            control = self.automatic_admissions.get(sid) if isinstance(sid, str) else None
+            if control is not None:
+                payload["automaticAdmission"] = copy.deepcopy(control)
         if self.reflect_delivery_ids and parsed.path.endswith("/prompt") and isinstance(body, dict) and "deliveryId" in body and isinstance(payload, dict) and payload.get("accepted") is True:
             payload["deliveryId"] = body["deliveryId"]
         cwd = urllib.parse.parse_qs(parsed.query).get("cwd", [None])[0]

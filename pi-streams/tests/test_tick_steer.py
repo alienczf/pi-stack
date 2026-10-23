@@ -64,6 +64,8 @@ class SteerTests(TickCase):
             got_status("coord-1"),
             got_list(str(self.etl)),
             got_status("coord-1"),
+            got_list(str(self.etl)),
+            got_status("coord-1"),
             self.delivery_prompt("coord-1", f"pi-streams tick 2026-10-06T12:10:00Z:\nstale-steer t-1 datapull {BARS}"),
         ])
         self.assertEqual(
@@ -149,6 +151,8 @@ class SteerTests(TickCase):
             got_status("t-1"),
             got_prompt("t-1", BARS, "steer"),
             got_list("/wt/datapull"),
+            got_list(str(self.etl)),
+            got_status("coord-1"),
             got_list(str(self.etl)),
             got_status("coord-1"),
             got_list(str(self.etl)),
