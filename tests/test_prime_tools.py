@@ -121,6 +121,9 @@ class OwnedSupervisor:
             data = {"sessions": [row]}
         elif kind == "get_queue":
             data = self.queue
+        elif kind == "resume_queue":
+            if not any(self.queue.values()):
+                return {"success": False, "error": "No queued work to resume"}
         elif kind in ("prompt", "steer", "follow_up"):
             lane = "steering" if kind == "steer" else "followUp"
             self.queue[lane].append(command["message"])

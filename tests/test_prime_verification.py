@@ -123,6 +123,18 @@ Path({str(self.events_log)!r}).write_text(json.dumps({{"requests": server.reques
         self.assertLess(events.index("kill"), events.index("prompt"))
         self.assertEqual(events[-1], "shutdown")
 
+    def test_inference_verifier_exercises_same_session_resume_before_clearing(self):
+        proc = self.verify("--inference")
+        self.assertEqual(proc.returncode, 1, proc.stderr + proc.stdout)
+        events = json.loads(self.events_log.read_text())
+        self.assertEqual([row for row in events["requests"] if row["type"] == "resume_queue"],
+                         [{"type": "resume_queue", "activeSessionId": "owned-durable"}])
+        resumed = events["events"].index("resume_queue")
+        self.assertEqual(events["events"][resumed + 1:resumed + 4],
+                         ["get_connection_state", "get_queue", "get_session_stats"])
+        self.assertIn("clear_queue", events["events"][resumed + 4:])
+        self.assertEqual(events["runnable"], [])
+
     def test_native_setter_changes_do_not_replace_existing_settings(self):
         before = (self.owned / "agent/settings.json").read_bytes()
         text = self.runtime.read_text().replace('        if command["type"] == "create":', '''        if command["type"] == "set_thinking_level":
