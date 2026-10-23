@@ -273,8 +273,10 @@ class Check:
         self.evidence.append({"command": args[0], "exit": proc.returncode, "ok": data.get("ok"),
                               "error": data.get("error")})
         if expected is not None and proc.returncode != expected:
+            info = data.get("errorInfo")
+            details = {"errorInfo": info} if isinstance(info, dict) else {}
             raise CliError(data.get("error", "check_failed"), data.get("message", f"{args[0]} failed"),
-                           details={"command": args[0]})
+                           data.get("status", 502), details={"command": args[0]}, **details)
         return data
 
     def messages(self, sid: str) -> list:
@@ -289,7 +291,7 @@ class Check:
         while time.monotonic() < deadline:
             session = self.call("status", sid)["session"]
             if session.get("isQuotaParked"):
-                raise CliError("quota", "Quota parked the owned session; stop and report")
+                raise CliError("quota", "Quota parked the owned session; stop and report", 429)
             messages = self.messages(sid)
             if condition(session, messages):
                 return session
@@ -300,6 +302,8 @@ class Check:
         session = self.call("spawn", self.cwd)["session"]
         sid = session["id"]
         state = self.call("status", sid)["session"]
+        if state.get("isQuotaParked"):
+            raise CliError("quota", "Quota parked the owned session; stop and report", 429)
         if state["model"].get("provider") != "openai-codex" or state["model"].get("id") != "gpt-6.1-sol":
             raise CliError("selection_mismatch", "Owned server did not retain the exact model")
         if state["thinkingLevel"] != THINKING:
