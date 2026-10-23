@@ -4,8 +4,8 @@
 program: harness-program
 repo: alienczf/pi-stack
 docs_branch: docs/harness-program
-pr: TBD
-tracking_issue: TBD
+pr: https://github.com/alienczf/pi-stack/pull/37
+tracking_issue: https://github.com/alienczf/pi-stack/issues/38
 box_mirror: /workspace/harness-program
 host_docs_worktree: /home/alphalab/Projects/worktrees/pi-stack-harness-program
 host_input_copy: /home/alphalab/Projects/pi-stack/streams/pi-streams-harness/context/harness-program
