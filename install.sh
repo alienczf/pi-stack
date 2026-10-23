@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [[ "${1-}" == "--merged-poc" ]]; then
+	shift
+	root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+	exec python3 "$root/pi-streams/engine/install_prime.py" "$@"
+fi
+
 pstack_skill_names=(
 	poteto-mode
 	how

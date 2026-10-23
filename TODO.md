@@ -10,7 +10,7 @@
 - [x] Unit 4. Dispatch clean poteto workers with handover and kickoff only.
 - [x] Unit 5. Own percentage-triggered save, compact, readback, and resume.
 - [x] Unit 6. Close only computed results and stage owned paths.
-- [ ] Unit 7. Install stock Prime and pi-stack under an isolated external prefix.
+- [x] Unit 7. Install stock Prime and pi-stack under an isolated external prefix.
 - [ ] Unit 8. Prove intake through compaction to checked close with the shared verifier.
 - [ ] Phase D: Keep the audit trail.
 - [ ] Phase E: Verify and hand back.
@@ -46,7 +46,9 @@ Unit 4 commit is `e82609ec59be46d36fe9eccdd4c704827ac71d52`. Unit 5 passed 62 fo
 
 Unit 5 commit is `064e65dc27951395c2509a51182191701dd8e615`. Unit 6 passed 70 focused, 175 stream and 72 root tests in `evidence/unit-6-{focused,streams,root}.log`. Closing executes an allowlisted local Python check outside the lock and rechecks source, target, report and proof before publication. Raw claimed completion is refused. Narrow staging leaves scratch and runtime settings untouched and refuses foreign staged paths.
 
-Next is Unit 7. Prime creation currently takes an explicit `backend="prime"` and persists it in `stream.toml`. Project-level backend settings remain Unit 2. Writers accept `locked=True` for callers already holding the stream lock. Successful computed completion remains blocked until Unit 6 supplies its actual closing checks. Explicit cancellation or informational explanation uses a complete linked answer and later trusted human source. Broad legacy staging remains unchanged until Unit 6. No native inference or authentication check was attempted.
+Unit 6 commit is `4d5dfc3954128aded35b63af3d21b8b4315b1c13`. Unit 7 passed 76 focused, 181 stream and 72 root tests in `evidence/unit-7-{focused,streams,root}.log`. Installer fixture checks are offline, not stock build proof. The README's private prerequisite commands installed Cargo/rustc 1.99.1 under the authorized prefix only; `evidence/unit-7-private-prerequisites.log` retains output. Final clean clone, real install/init/doctor/verify remain Unit 8 gates.
+
+Next is Unit 8. Prime creation currently takes an explicit `backend="prime"` and persists it in `stream.toml`. Project-level backend settings remain Unit 2. Writers accept `locked=True` for callers already holding the stream lock. Successful computed completion remains blocked until Unit 6 supplies its actual closing checks. Explicit cancellation or informational explanation uses a complete linked answer and later trusted human source. Broad legacy staging remains unchanged until Unit 6. No native inference or authentication check was attempted.
 
 ## Track 2 integration history
 
