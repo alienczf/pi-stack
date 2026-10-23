@@ -5,7 +5,7 @@ ZF's decisions are recorded first, with their source. Grok Bot's own calls follo
 ## ZF decisions D1–D4 (2026-10-22 17:43 SGT, pi-stack #33–#36)
 
 - **D1, #33.** Reject default resource and token budgeting as context bloat. It's opt-in at most. Remove kickoff Q5's demand to "get each cap as a number", and stop coordinators inventing CPU, RAM and disk guards.
-- **D2, #34.** The coordinator context target is 252k, down from about 484k effective. ZF left the mechanism open, and G4 below sets it.
+- **D2, #34.** The coordinator context target is 252k, down from about 484k effective. **SUPERSEDED by Z3** (dump, compact, resume at >= 150k).
 - **D3, #35.** Compact-and-continue vs compact-and-spawn-new is a design question, not instrumentation. Recommend separately for coordinators and threads.
 - **D4, #36.** Old-session artifacts are an artifact-management design question, not instrumentation. D7 reframes it.
 
@@ -30,12 +30,26 @@ These are numbered to match section 4 of the deep-research report.
 - **P6.** Track 2's end state is a working prime CLI on `feat/prime-cli`, verified against a real prime-agent server.
 - **P7.** Grok Bot owns all decisions. Log them here and don't card ZF.
 
+## ZF first-pass calls on "what actually breaks" (t211u, 2026-10-23 09:22 SGT)
+
+These were relayed by the parent Grok Bot. ZF's words are in `00-brief-verbatim.md`, and more calls are coming. The track 1 catalog is not sent for review until it reflects all of them.
+
+- **Z1. Fix tick liveness.** When a stream is being driven, the tick aggressively pushes it forward and turns unfinished work into the next action, instead of only relaying changes. This is a track 1 item. Quota and auth recovery stays a separate item under G5.
+- **Z2. Lifecycle design goes to track 3.** Per-ask lifecycle, the coordinator grading its own homework (context decay), and constraint lifetimes belong to the lifecycle workflow design. They move to track 3, not track 1.
+- **Z3. Context policy: dump, compact, resume. SUPERSEDES D2's 252k target and G4.** On every tick where the coordinator is taking a turn and its context is >= **150k**, the tick doesn't kill or interrupt it. Instead it runs one three-in-one action:
+  - (a) DUMP: the agent updates STATE.md, TODO and all relevant stream status and progress artifacts, and writes its own resume prompt for the same session after compaction.
+  - (b) COMPACT the same session.
+  - (c) RESUME it with that resume prompt.
+  Prefer compacting early; ZF will watch token use from outside. Issue #34 is updated to match.
+- **Z4. Alerts and waits go to ZF by Slack DM, as quietly as possible.** The format is `<stream-id>:: <message>`, sent to ZF only. BossOps was dropped. Keep them as quiet as possible to avoid notification fatigue. This sets the alert route for G5.
+- **Z5. Steer delivery acknowledgement stays in track 1.** An ack counts only once the coordinator has consumed and applied the steer. "Accepted for transport" doesn't count.
+
 ## Grok Bot calls
 
 - **G1. Where the program lives.** It lives in GitHub, on branch `docs/harness-program` of alienczf/pi-stack under `docs/harness-program/`, as a draft PR that's never merged without ZF. A tracking issue "Harness program" carries a checklist per track. `/workspace/harness-program/` on the Grok Bot box mirrors it, and `context/harness-program/` in the pi-streams-harness stream holds a read-only input copy. *Reason:* the pi-streams-harness stream is the broken thing, so it can't be the program's memory. GitHub survives every host and session. The box mirror lets every Grok Bot read it without a network round trip.
 - **G2. Who writes to git.** Track sessions write artifact files in host worktrees and commit locally. Only Grok Bot pushes, from the box, using the pi-bot HTTPS credential, and pulls the files or bundles through `options-01-ssh`. *Reason:* the host holds no pi-bot GitHub credential, and a single pusher avoids concurrent pushes to one branch.
 - **G3. Host worktrees.** The docs worktree is `/home/alphalab/Projects/worktrees/pi-stack-harness-program`, on branch `docs/harness-program`. The track 2 code worktree is `/home/alphalab/Projects/worktrees/pi-stack-prime-cli`, on branch `feat/prime-cli` cut from main 3acf0f0. The main clone stays at main. This follows the host convention `~/Projects/worktrees/<repo>-<name>`. *Reason:* the sessions' cwd remains the pi-stack clone, as briefed, while their writes stay isolated per D6.
-- **G4. How 252k is enforced (D2).** The harness imposes it: the coordinator compacts in place at a request-boundary check of 252k, with no user check. Threads keep pi defaults for now. *Reason:* principle "impose and measure". ZF named only the coordinator. Measure in the wild, then revisit threads.
+- **G4. SUPERSEDED by Z3.** How 252k is enforced (D2). The harness imposes it: the coordinator compacts in place at a request-boundary check of 252k, with no user check. Threads keep pi defaults for now. *Reason:* principle "impose and measure". ZF named only the coordinator. Measure in the wild, then revisit threads.
 - **G5. Same-provider auto-recovery (ZF's decision 2).** Grok Bot decision, 09:15 SGT: **ADOPT all five classes as drafted.** This replaces stop-and-report as the pi-streams *harness* default.
   1. Codex usage limit: wait for the reset time, retry the saved step once, otherwise re-park.
   2. Expired Codex login: alert once, never touch credentials, and resume on a real sign-in signal or ZF saying "auth fixed".

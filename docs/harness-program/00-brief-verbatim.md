@@ -28,3 +28,15 @@ These answer section 4 of `context/research/deep-research-2026-10-23.md` in the 
 ## ZF update relayed at 09:12 SGT (paraphrase relayed by Grok Bot, not ZF's own words)
 
 Grok Bot owns all decisions, and ZF should not be carded. Calls are logged in `03-decisions.md` with a short reason. Track 1's catalog is the only thing ZF reviews, as a first-pass review. After his go-ahead it gets implemented, merged to pi-stack main, and every branch is rebased onto the new main. Track 2's end state is a working prime CLI on branch `feat/prime-cli`, at parity with pi-web-cli for pi-stack's needs, verified against a real prime-agent server. Track 3's end state is the three-design proposal table for ZF to read. `STATUS.md` is the machine-readable status per track that a driving routine reads every run.
+
+## t211u (2026-10-23 09:22 SGT): ZF's first-pass calls on "what actually breaks"
+
+> **Gap.** At the time of writing, the dispatching Grok Bot had only the parent Grok Bot's relay of this message. What follows is that relay (a paraphrase), not ZF's words. Replace it with the verbatim t211u text from the parent conversation when that text is available.
+
+1. Tick liveness and recovery: fix the tick. When a stream is being driven, the tick should be aggressive about pushing it forward, turning unfinished work into the next action instead of only relaying changes. Quota and auth failure recovery is a separate item, and Grok Bot's five-class same-provider recovery decision is already adopted.
+2. Per-ask lifecycle, the coordinator grading its own homework (context decay), and constraint lifetimes all belong to the lifecycle workflow design. They move to track 3, not track 1.
+3. The context policy supersedes the 252k target (#34/D2). Use the tick-driven "dump, compact, resume" approach as one three-in-one action. On every tick where the coordinator is taking a turn and its context is >= 150k, don't kill or interrupt it. Instead: (a) DUMP: the agent updates STATE.md, TODO and all relevant stream status and progress artifacts, and writes its own resume prompt for the same session after compaction. (b) COMPACT the same session. (c) RESUME it with that resume prompt. Prefer compacting early; ZF will watch token use from outside. Update #34 to match.
+4. Alerts and waits go to ZF as a Slack DM in the format `<stream-id>:: <message>`, sent to him only. He floated the BossOps channel earlier and then dropped the idea. Keep them as quiet as possible to avoid notification fatigue.
+5. "Accepted for transport counts as delivered" stays a track 1 fix: an ack counts only once the coordinator has actually consumed and applied the steer.
+
+More calls on the candidate-fixes list are coming. The track 1 catalog is not sent for review until it reflects all of them.
