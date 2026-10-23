@@ -198,7 +198,7 @@ ZF's decisions, restated. His words are in `00b-zf-messages-verbatim.md`, sectio
 - The 13:25 A vs B comparison (`50-a-vs-b.md` v1, G28) is **superseded**: it compared A-over-pi-web with B-over-Prime. A v2 comparison, A-over-Prime vs B-over-Prime, follows once the rewritten 31 passes the driver gate.
 - Track 3 rewrites `31-design-a-detailed.md` (same 8 Z19 headings, top line "Runtime: Prime (Z20)"), using track 4's 40/41 for what Prime v0.10.1 supports; hooks name Prime extension points, and anything Prime lacks is listed as a native Prime change. Track 5 stands by to write 50 v2.
 - Design stays unlocked (Z17). No defaults; open questions stay questions.
-- **Steer delivered, not yet worked (Grok Bot, 15:06 SGT).** `briefs/track-3-steer-4.md` (sha256 8f82b860) sent to track 3 `01a16658` while it was idle at 45.5%, no compact needed. It's the last user message in the session jsonl at 14:58:50 SGT (sha match). But every model call since then has failed with `fetch failed`: options-01 has had no outbound internet since about 14:50 SGT. Track 5 got `briefs/track-5-standby.md` at 14:59:16. Once the network returns, Z20 counts as steered when track 3 resumes and works the steer.
+- **Steered (Grok Bot, 15:08 SGT): consumed and being worked.** Original note from 15:06: `briefs/track-3-steer-4.md` (sha256 8f82b860) sent to track 3 `01a16658` while it was idle at 45.5%, no compact needed. It's the last user message in the session jsonl at 14:58:50 SGT (sha match). But every model call since then has failed with `fetch failed`: options-01 has had no outbound internet since about 14:50 SGT. Track 5 got `briefs/track-5-standby.md` at 14:59:16. Once the network returns, Z20 counts as steered when track 3 resumes and works the steer.
 
 ## Z21 (ZF t228u, 2026-10-23 14:57 SGT): clean up nomenclature, justify every new concept
 - ZF: "Clean up the nomenclature. We spent time to reduce the abstraction bloat and here you just created another set. Clean all of this up and really justify the need of a new concept". This comes before ZF engages with the A vs B substance.
@@ -209,7 +209,7 @@ ZF's decisions, restated. His words are in `00b-zf-messages-verbatim.md`, sectio
   - Plain words and no coined labels. No two names that blur together (Z14) and no near-synonyms for one thing. Hooks and prompts get descriptive names (for example "save-incoming-message hook"), not codes.
   - A and B share one vocabulary so the v2 comparison lines up.
 - Design stays unlocked (Z17).
-- **Steer delivered, not yet worked (Grok Bot, 15:06 SGT).** Folded into `briefs/track-3-steer-4.md` (sha 8f82b860, 14:58:50) and sent to track 4 `01a166e0` as `briefs/track-4-steer-2.md` (sha 911ec9ee, 14:58:51). Both sha-match as the last user message, but both turns failed with `fetch failed` (host network outage).
+- **Steered (Grok Bot, 15:08 SGT): consumed and being worked.** Original note from 15:06: Folded into `briefs/track-3-steer-4.md` (sha 8f82b860, 14:58:50) and sent to track 4 `01a166e0` as `briefs/track-4-steer-2.md` (sha 911ec9ee, 14:58:51). Both sha-match as the last user message, but both turns failed with `fetch failed` (host network outage).
 
 ## Z22 (ZF t229u, 2026-10-23 14:59 SGT): a version of B that needs no Prime changes
 - ZF: "Yes let's do a no prime change version", replying to Grok Bot's offer to have the B session sketch a version of B that needs no changes to Prime.
@@ -224,7 +224,7 @@ ZF's decisions, restated. His words are in `00b-zf-messages-verbatim.md`, sectio
   - For each gap it must also give the cost: anything that bypasses the design, and any recovery that stays manual.
 - The v2 comparison (50) will then cover three designs: A over Prime, B over Prime with Prime changes (41), and B over stock Prime (42).
 - Design stays unlocked (Z17).
-- **Steer delivered, not yet worked (Grok Bot, 15:06 SGT).** `briefs/track-4-steer-3.md` (sha bc7bba87) recorded in track 4 at 15:00:09 SGT (sha match). The turn failed with `fetch failed` (host network outage).
+- **Steered (Grok Bot, 15:08 SGT): consumed and being worked.** Original note from 15:06: `briefs/track-4-steer-3.md` (sha bc7bba87) recorded in track 4 at 15:00:09 SGT (sha match). The turn failed with `fetch failed` (host network outage).
 
 ## Z23 (ZF t230u, 2026-10-23 15:01 SGT): the A/B differences feel artificial; a merged candidate
 - ZF: "Tbh so far the differences feels artificial? Feels like we can easily arrive at a merged solution where most of the deterministic behaviour goes into hooking prime, ignore corner cases like login and fringe failure. Less deterministic stuff stays in repo?"
@@ -241,4 +241,16 @@ ZF's decisions, restated. His words are in `00b-zf-messages-verbatim.md`, sectio
     1. Writes `51-design-merged.md` with the same 8 headings and the Z21 vocabulary rules, aiming for zero new concepts.
     2. Rewrites `50-a-vs-b.md` as v2: a short check of 51 against 31 and 42 covering what the merge loses from each, which corpus failures are no longer covered, where the A/B difference was real versus artificial, and open questions with no defaults.
   - *Reason:* the merged candidate depends on both inputs. Running it before they finish would rebuild the bias the v1 comparison had.
-- **Steer delivered, not yet worked (Grok Bot, 15:06 SGT).** `briefs/track-4-steer-4.md` (sha f4d861d3) recorded in track 4 at 15:02:49 SGT, and `briefs/track-5-steer-1.md` (sha 17846bc9) recorded in track 5 at 15:02:49 SGT (wait-for-go). Both sha-match, and both turns failed with `fetch failed` (host network outage).
+- **Steered (Grok Bot, 15:08 SGT): consumed and being worked.** Original note from 15:06: `briefs/track-4-steer-4.md` (sha f4d861d3) recorded in track 4 at 15:02:49 SGT, and `briefs/track-5-steer-1.md` (sha 17846bc9) recorded in track 5 at 15:02:49 SGT (wait-for-go). Both sha-match, and both turns failed with `fetch failed` (host network outage).
+
+- **Steer status update (Grok Bot, 15:08 SGT).** options-01's network was back by about 15:05 SGT. Resume prompts went out at 15:05:
+  - Track 3 has been working steer-4 since 15:06:22 (tool calls).
+  - Track 4 has been working steers 2-4, with steer 4 winning where they conflict, since 15:06:32.
+  - Track 5 replied `TRACK 5 STATUS: standby (steer 1 received)` at 15:06:25.
+  - Z20-Z23 are steered.
+  - Track 1 (`01a16655`) also hit `fetch failed` (last good turn 337a07cf at 14:49:44) and has not been resumed here; the driver should check it.
+- **Track 1 resumed after the outage (Grok Bot, 15:09 SGT).**
+  - Before sending: chatgpt.com is reachable from options-01 again (HTTP 403 from the edge, not a timeout). Track 1 `01a16655` was idle at 66.1% context, under 85%, so no compact.
+  - Sent `briefs/track-1-reentry-2.md` (sha256 d46e1e2b): continue S1 from `2696a3f` with the full-SID handover unit, then the after-S1 disposable-stream check, then S2-S6, per its brief and 12-track-1-progress.md. Recorded at 15:08:53 (sha match).
+  - Streaming at 68.2% and working the handover unit (temp dir `/tmp/pi-streams-s1-handovers.*`, TODO.md updated).
+  - The 14:50 env failure is closed for every track.
