@@ -14,7 +14,7 @@ The marked gap in `00-brief-verbatim.md` stays unknown. The old prime-stack kick
 
 The source checkout is `/home/alphalab/Projects/prime-agent`, initially at `71beca9478f552dc6fc898bba9685f9ce00515cf`. The real-server target is upstream stable `v0.10.1`, source revision `8aac8692456c00c01d4e53e60e6d3347a3506559`. Both declare daemon protocol 7, schema 30. The adapter targets the public supervisor socket, not private worker framing or the stdin-only RPC mode.
 
-Prime uses one long-running supervisor and one worker per resident session. Clients disconnect without ending resident sessions. The persistent `sessionId` and runtime `activeSessionId` are distinct. The compatibility `id` is the active selector returned by `create`. The daemon owns rebindings and durable transcripts. The CLI does not create another session registry.
+Prime uses one long-running supervisor and one worker per resident session. Clients disconnect without ending resident sessions. The persistent `sessionId` and runtime `activeSessionId` are distinct. The compatibility `id` is the durable `sessionId` returned by `create`. Native `activeSessionId` remains a separate field. The daemon owns rebindings and durable transcripts. The CLI does not create another session registry. This revises the initial active-selector choice after review showed that a fresh CLI connection does not receive the rebind event needed to validate an old active selector.
 
 Each connection receives `daemon_hello`. Commands are LF-delimited JSON envelopes with `type`, a unique `id`, `protocol`, and `command`. Replies have `type: response`, matching `id`, `command`, `success`, and optional `data` or `error`. Events may arrive before the reply. The client validates the hello and reply and ignores unrelated events, rather than interpreting the first received line as the result. No operation is automatically retried after a timeout or disconnect because acceptance may be uncertain.
 
@@ -43,9 +43,9 @@ The JSON envelopes remain:
 
 ```json
 {"ok":true,"status":200,"sessions":[]}
-{"ok":true,"status":201,"session":{"id":"active-selector","cwd":"/work"}}
+{"ok":true,"status":201,"session":{"id":"durable-session-id","cwd":"/work"}}
 {"ok":true,"status":200,"result":{"accepted":true}}
-{"ok":true,"status":200,"session":{"id":"active-selector","isStreaming":false,"pendingMessageCount":0,"contextUsage":null}}
+{"ok":true,"status":200,"session":{"id":"durable-session-id","isStreaming":false,"pendingMessageCount":0,"contextUsage":null}}
 {"ok":true,"status":200,"commands":[]}
 {"ok":true,"status":200,"result":{"messages":[]}}
 ```
@@ -59,7 +59,7 @@ Every row is LAYER 3. The CLI executes the translation on every invocation. A re
 | Command | Pi semantics and JSON | Prime equivalent | Gap | Shim |
 | --- | --- | --- | --- | --- |
 | `list --cwd PATH` | Cwd-scoped roster in `sessions`, including saved and archived rows | `list` with `cwd` and `all:true` | Different row identifiers and path key | Preserve native data, map `sessionFile` to `path`, preserve timestamps and message count, and derive `archived` from lifecycle. |
-| `spawn PATH` | Resident session in `session`, including `id` | `create` with `config.cwd` and `lifecycle: resident` | Active and durable IDs differ | Return active ID as `id`. Optional environment model selection goes inside `config`, and returned cwd and explicit model identity must match. |
+| `spawn PATH` | Resident session in `session`, including `id` | `create` with `config.cwd` and `lifecycle: resident` | Active and durable IDs differ | Return durable `sessionId` as `id`, retain `activeSessionId` separately, and verify cwd and explicit model identity. Optional model settings go inside `config`. |
 | `prompt SID [TEXT]` | Accept argv or stdin, `result.accepted` | `prompt` with `activeSessionId` and `message` | Prime can suspend admission after abort | Send an explicit follow-up behavior for ordinary input so a new user prompt resumes a stopped queue without replaying a failed request. |
 | `prompt SID --steer` | Steer an active turn | `steer` with `activeSessionId` and `message` | Acknowledgement is queue admission, not completion | Normalize successful admission to `accepted:true`. Keep native acknowledgement fields. |
 | `prompt SID --follow-up` | Deliver after the current turn | `follow_up` with `activeSessionId` and `message` | Same acknowledgement distinction | Normalize admission and preserve lane semantics. |
@@ -108,7 +108,7 @@ The selected route is `Grok Bot -> options-01-ssh -> host prime-cli -> superviso
 
 LAYER 3. `PRIME_AGENT_DAEMON_SOCKET` selects the local socket, otherwise the upstream per-user `/tmp/prime-agent-UID/daemon.sock` path applies. The client never starts or shuts down a daemon implicitly. Operators must select the intended server. There is no CLI token flag or credential import. Provider auth remains Prime-owned and absent from git, argv, and output.
 
-The stable release archive is checksum-verified against its published manifest and extracted outside git. The live check uses an isolated agent directory and dedicated socket so it cannot attach to or shut down an existing Prime daemon. The same-user trust boundary is explicit. A Unix socket is not a sandbox against that user.
+The stable release archive is checksum-verified against its published manifest and extracted outside git. The live check uses an isolated agent directory and dedicated socket so it cannot attach to or shut down an existing Prime daemon. Default control-only mode must not enqueue runnable prompt text. Prompt admission and model execution require explicit `--inference`. A native input pause can keep queued tests from running on the success path, but cannot guarantee that queued text stays suspended after connection loss. The same-user trust boundary is explicit. A Unix socket is not a sandbox against that user.
 
 ## Backend-neutral CLI and skill contract
 
@@ -184,6 +184,30 @@ requested xhigh -> effective off, reasoning=false on custom-ID fallback
 owned corrected baseline session archived
 ```
 
+The first implemented branch revision `eeb0af2` plus fixture correction `c323b30` passed 40 new offline tests and all 105 existing stream tests. The installer fixture first failed because its synthetic clone omitted `scripts/install-agent-clis.sh`. Commit `c323b30` adds that dependency to the fixture. The rerun returned `check-overlay ok`.
+
+A successful real control-check sequence exercised all mapped verbs on stable v0.10.1. Prompt admission tests held an input pause and cleared the inputs before release on this observed success path. No model completion is claimed:
+
+```text
+scripts/check-prime-cli-live.py run --root /tmp/prime-cli-check-v5p3iz67
+spawn, status, list, commands, messages -> success
+answer -> exit 1, unsupported
+model openai-codex/gpt-6.1-sol -> exit 1, upstream_error
+prompt from stdin, steer, follow-up -> admitted while paused
+pendingMessageCount -> 3
+queue-clear -> success
+steer then abort -> pendingMessageCount 0
+stop -> runtimeClosed false
+thinking-level xhigh -> accepted, effective off
+archive -> archived row retained in cwd list
+retainedOwnedSessions -> []
+overall exit 1 because requested model-set and reasoning parity are not available
+```
+
+The small full report is `/tmp/prime-cli-check-v5p3iz67/control-check.json`. The owned check daemon is PID `3149674` in tmux session `prime-cli-t2-check-01a16656`, with a separate agent directory and socket. The initial baseline daemon PID `3133971` was shut down through its own socket before starting this one.
+
+Independent same-model review reproduced four defects in that revision. A control-only check could release queued text on a failure, known spawn IDs were lost on readback transport errors, old active-selector status could reject legitimate native rebinds, and the dispatcher rejected leading backend `--socket`. These are accepted findings, not waived risks. Corrections and final verification are recorded below when complete.
+
 The native check found a public-supervisor versus worker-payload distinction that source inspection had missed. The implementation must test the exact nested request and validate the returned cwd and requested model. The default model in the failed baseline was not used for any inference.
 
 The checksum-verified stable release's bundled catalog contains fixture-named models. Its unknown-ID fallback preserves `gpt-6.1-sol` but assigns generic metadata, including no reasoning support and a 128000-token configured window. That window is not evidence of the requested model's actual capacity. Correct reasoning and context metadata need an operator-provided model definition or an updated catalog. The client must report effective thinking rather than claim xhigh was applied.
@@ -192,7 +216,7 @@ The checksum-verified stable release's bundled catalog contains fixture-named mo
 
 1. Use the public supervisor JSONL socket and stable v0.10.1 for verification. The wire is explicit and the release is reproducible.
 2. Choose the direct adapter over a new HTTP gateway. The gateway adds a service without closing the real API gaps.
-3. Use active session selectors as compatibility IDs. Prime owns the active-to-durable binding.
+3. Initial identity decision, superseded by decision 21. The first implementation exposed active selectors as compatibility IDs. Review found that native rebind events go only to attached connections, not short-lived CLI requests.
 4. Keep SSH remote execution rather than exposing a network listener. Existing machine access already provides authentication.
 5. Keep credentials Prime-owned. This task does not authorize importing Pi or Codex credentials or running a login flow.
 6. Preserve unknown context as null and distinguish admission from completion. Fabricated zero usage or delivery success would reproduce corpus F5 and F8.
@@ -210,6 +234,11 @@ The checksum-verified stable release's bundled catalog contains fixture-named mo
 18. Preserve host transcript paths and queue replay requirements in the later port contract. Display previews are not safe replay text, so internal Prime queue behavior stays an explicit gap rather than fabricated compatibility.
 19. Correct public create to use `config`, not top-level worker fields. The real daemon ignored the top-level fields and returned the wrong cwd and model. Add response validation so this failure cannot be called a successful spawn.
 20. Report the stable catalog's generic custom-model metadata rather than invent model facts. Real create preserved the requested ID but clamped thinking to off. No inference was sent to the accidentally default-selected baseline session.
+21. Expose durable `sessionId` as compatibility `id` consistently in spawn, list, and status. Keep active identity separately. Native resolution already understands durable selectors, so this avoids a shim registry and dependence on unavailable rebind events.
+22. Restrict runnable queue-admission tests to explicit inference mode. Independent review reproduced a failure path where disconnect released the input pause before cleanup. Clear or abort within the pause scope on ordinary errors, and do not claim disconnect safety from a connection-owned lease.
+23. Preserve a known created session in spawn errors even when model readback times out or the connection resets. An uncertain readback must not discard an already received identity or cause a second create.
+24. Parse only the neutral dispatcher's leading backend choice. Backend endpoint flags such as `--socket` must retain their original order.
+25. Fix the installer verification fixture rather than skip it. Its synthetic clone omitted the newly required helper. Adding the helper made the full installer check pass.
 
 ## Gaps
 
