@@ -134,6 +134,20 @@ class PrimeCliTests(unittest.TestCase):
         self.result(proc, {"ok": True, "status": 200, "sessions": [{"id": "s1", "activeSessionId": "s1", "cwd": "/work", "archived": False}, {"id": "old", "cwd": "/work", "lifecycle": "archived", "archived": True}]})
         self.commands(fixture, [{"type": "list", "all": True, "cwd": "/work"}])
 
+    def test_spawn_list_and_status_require_real_durable_identity(self):
+        for command, replies in [(("spawn", "/work"), [{"id": "s1", "cwd": "/work"}]),
+                                 (("list", "--cwd", "/work"), [{"sessions": [{"id": "s1", "cwd": "/work"}]}]),
+                                 (("status", "s1"), [self.state(sessionId=None), {"steering": [], "followUp": []}, {"cost": 0}])]:
+            with self.subTest(command=command):
+                with Fixture(replies) as fixture:
+                    proc = run_cli(*command, fixture=fixture)
+                self.assertEqual((proc.returncode, json.loads(proc.stdout).get("error")), (1, "invalid_response"))
+
+    def test_status_rejects_active_match_with_foreign_durable_identity(self):
+        with Fixture([self.state(sessionId="foreign-durable"), {"steering": [], "followUp": []}, {"cost": 0}]) as fixture:
+            proc = run_cli("status", "s1", fixture=fixture)
+        self.assertEqual((proc.returncode, json.loads(proc.stdout).get("error")), (1, "wrong_session"))
+
     def test_spawn(self):
         with Fixture([{"activeSessionId": "s1", "sessionId": "d1", "cwd": "/a b"}]) as fixture:
             proc = run_cli("spawn", "/a b", fixture=fixture)
