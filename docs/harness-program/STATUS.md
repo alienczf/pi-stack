@@ -9,7 +9,7 @@ tracking_issue: https://github.com/alienczf/pi-stack/issues/38
 box_mirror: /workspace/harness-program
 host_docs_worktree: /home/alphalab/Projects/worktrees/pi-stack-harness-program
 host_input_copy: /home/alphalab/Projects/pi-stack/streams/pi-streams-harness/context/harness-program
-updated: 2026-10-23T09:50+08:00
+updated: 2026-10-23T09:54+08:00
 tracks:
   - id: 1
     name: pi-streams must-fix catalog
@@ -54,7 +54,7 @@ tracks:
     brief: docs/harness-program/briefs/track-3.md
     steers: [docs/harness-program/briefs/track-3-steer-1.md]
     brief_sha256_verified: true
-    steer_note: steer-1 queued (pendingMessageCount=1) at 09:50; confirm it was consumed
+    steer_note: steer-1 consumed (pendingMessageCount=0 at 09:53 tick)
     next_action: When idle, pull 30-research-designs.md (and 30a if it exists), commit it, then give ZF the three-design table.
 ---
 
