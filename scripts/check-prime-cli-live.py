@@ -360,6 +360,10 @@ class Check:
                     queued = self.call("status", sid)["session"]
                     if queued["pendingMessageCount"] != 3:
                         raise CliError("queue_mismatch", "The paused owned session did not retain three inputs")
+                    self.call("queue-resume", sid)
+                    resumed = self.call("status", sid)["session"]
+                    if resumed["queuedMessages"] != queued["queuedMessages"]:
+                        raise CliError("queue_mismatch", "Native resume changed the paused queue previews")
                     self.call("queue-clear", sid)
                     self.call("prompt", sid, "--steer", text="Owned inference-enabled abort check.")
                     self.call("abort", sid)
