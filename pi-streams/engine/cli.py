@@ -5,7 +5,7 @@ import json
 import sys
 from pathlib import Path
 
-from engine import StreamsError, artifacts, clock, delivery, replacement
+from engine import StreamsError, artifacts, clock, delivery, migration, replacement
 from engine.doctor import run_doctor
 from engine.project import (
     STATE_SCHEMA,
@@ -78,6 +78,12 @@ def _parser() -> argparse.ArgumentParser:
             operation.add_argument("--evidence")
 
     sub.add_parser("doctor")
+
+    migrate = sub.add_parser("migrate")
+    migrate.add_argument("stream")
+    migrate.add_argument("--home")
+    migrate.add_argument("--plan", action="store_true", help="show a source-backed migration plan without changing artifacts")
+    migrate.add_argument("--mapping", help="explicit JSON byte-span authority/history map")
 
     upgrade = sub.add_parser("upgrade")
     upgrade.add_argument("stream_id", metavar="id", nargs="?")
@@ -153,6 +159,20 @@ def _open_stream(index: Path, project_name: str, stream_id: str) -> Path:
     stream_dir = require_stream(index, project_name, stream_id)
     ensure_git(stream_dir)
     return stream_dir
+
+
+def cmd_migrate(args: argparse.Namespace) -> int:
+    if not args.plan:
+        raise StreamsError("migration application is not enabled; use --plan to inspect exact sources first")
+    mapping = json.loads(migration.regular_bytes(Path(args.mapping))) if args.mapping else None
+    index = resolve_index(args.home)
+    with index_lock(index):
+        project = resolve_project(index)
+        stream = require_stream(index, project.info.name, args.stream)
+        with stream_lock(stream):
+            plan = migration.plan_migration(stream, mapping)
+    print(json.dumps(plan.public(), sort_keys=True))
+    return 0
 
 
 def cmd_new(args: argparse.Namespace) -> int:
@@ -337,6 +357,8 @@ def main(argv: list[str] | None = None) -> int:
             return run_doctor()
         if args.cmd == "upgrade":
             return cmd_upgrade(args)
+        if args.cmd == "migrate":
+            return cmd_migrate(args)
         if args.cmd == "checkpoint":
             return cmd_checkpoint(args)
         if args.cmd == "rotate":
