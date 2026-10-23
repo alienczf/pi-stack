@@ -410,7 +410,9 @@ Open questions remain open under Z17:
 - Does fresh source comparison at current-objective completion detect enough semantic error to justify its cost and false rejections?
 - Is creating independent Prime workers through pi-stack sufficient, or must native RLM spawning also support the same checked registration before task work?
 - Is same-session recovery with explicit refusal of automatic F-DCR sufficient, or is safe fork recovery required despite the extra native work?
-- Is retaining the last 30 verbatim steer entries acceptable when individual messages are large? No alternative cap or early-rotation rule is silently applied here.
+- Is retaining the last 30 verbatim steer entries acceptable when individual messages are large?
+
+No alternative cap or early-rotation rule is applied here.
 
 Principles read for this revision changed concrete choices. Subtract Before You Add removed extra artifact families and coded names before revising hooks. Redesign From First Principles replaced the former runtime integration with actual Prime entry points. Laziness Protocol reused saved native entries and refused unsupported replacement instead of building transfer machinery. Make Operations Idempotent required same-command lookup and history-before-prune. Guard the Context Window kept full source audits in two bounded read-only children. Prove It Works separated source findings and document checks from unperformed runtime tests.
 
@@ -444,8 +446,10 @@ For an existing bug, first run a test through its old receiving/compaction/write
 - [x] Replace coded names with descriptive hooks and full plain-text prompts.
 - [x] Validate final headings, paths, terms, native symbols, prompt completeness, and write scope.
 
-Direct-file checks passed for the exact Runtime line and eight headings, zero additional concept rows, eight justified components, six native-change groups, twelve descriptive hooks, ten complete prompt texts, eight proposed commits, JSON examples, local links, existing native symbols, and vocabulary/whitespace. The artifact is uncommitted and unstaged. Only 31 was authored by this parent. This session wrote no other docs or Prime/spike source. It operated no credentials, services, or pre-existing sessions. Two own read-only children supplied source findings. No provider switch or new quota error occurred.
+Direct-file checks passed for the exact Runtime line and eight headings, zero additional concept rows, eight justified components, six native-change groups, twelve descriptive hooks, ten complete prompt texts, eight proposed commits, JSON examples, local links, existing native symbols, and vocabulary/whitespace. The artifact is uncommitted and unstaged. This Prime rewrite changed only 31, not other docs or Prime/spike source. It operated no credentials, services, or pre-existing sessions. Two earlier read-only children supplied source findings. Final validation resumed after the operator reset the usage limit. The provider/model stayed openai-codex/gpt-6.1-sol with xhigh reasoning.
 
-These are document and source-static checks. No native build, inference, compaction, persistence fault injection, stop-race, or semantic-effectiveness test was performed. The plan names those later gates rather than claiming they passed.
+The prior checkbox assertion matched the required pending Goals item inside the fenced STATE example. The corrected check distinguishes examples from design progress and preserves that checkbox. The final open question now ends at its question mark, with the no-cap statement in a separate paragraph. All five open questions remain unanswered.
+
+These are document and source-static checks. No native build, Prime inference, compaction, persistence fault injection, stop-race, or semantic-effectiveness test was performed. The plan names those later gates rather than claiming they passed.
 
 The earlier comparison is superseded by Z20. The later G29 note keeps 31 in scope and makes it input to the merged candidate and revised comparison alongside the stock-Prime work. This document does not edit, select, or pre-judge those artifacts, and applies no locked defaults.
