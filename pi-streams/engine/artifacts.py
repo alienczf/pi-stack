@@ -541,11 +541,15 @@ def _append_locked(stream_dir: Path, data: dict, book: LogBook, state: StreamSta
     return entry.occurrence
 
 
-def append_log(stream_dir: Path, at: str, subject: str, body: str, *, request_id: str) -> int:
+def append_log_locked(stream_dir: Path, at: str, subject: str, body: str, *, request_id: str) -> int:
     intent = _sha(_text(json.dumps(["append", subject, body], ensure_ascii=False)))
+    data, book, state = _open_log_locked(stream_dir)
+    return _append_locked(stream_dir, data, book, state, at, subject, body, request_id, intent)
+
+
+def append_log(stream_dir: Path, at: str, subject: str, body: str, *, request_id: str) -> int:
     with stream_lock(stream_dir):
-        data, book, state = _open_log_locked(stream_dir)
-        return _append_locked(stream_dir, data, book, state, at, subject, body, request_id, intent)
+        return append_log_locked(stream_dir, at, subject, body, request_id=request_id)
 
 
 def record_ruling(stream_dir: Path, at: str, subject: str, ruling: str,

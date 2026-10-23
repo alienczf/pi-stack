@@ -151,6 +151,8 @@ class TickCase(EngineCase):
         super().setUp()
         proc = self.run_streams("init", str(self.root), "-y")
         self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.stub.reflect_delivery_ids = True
+        self.stub.simulate_session_lifecycle = True
         self.fixture_streams: list[Path] = []
         self.logs = self.tmp / "sessions"
         self.logs.mkdir()
@@ -225,6 +227,25 @@ class TickCase(EngineCase):
         self.stub.requests.clear()
         self.env["PI_STREAMS_NOW"] = at
         return self.run_streams("tick", *args)
+
+    def apply_tick_delivery(self, stream_dir: Path) -> None:
+        data = self.state(stream_dir)
+        identity = data["tick_delivery"]
+        record = data["deliveries"][identity]
+        proof = Path("context") / f"fixture-plan-{identity}.md"
+        (stream_dir / proof).parent.mkdir(exist_ok=True)
+        (stream_dir / proof).write_text(f"Fixture coordinator incorporated this event batch in its active plan.\n{record['body']}\n")
+        for phase, detail, extra in (
+            ("consumed", "Read the exact fixture event batch.", []),
+            ("applied", "Incorporated the batch in the fixture active plan.", ["--evidence", str(proof)]),
+        ):
+            result = self.run_streams("delivery", "ack", stream_dir.name, identity, "--session", record["session"], "--state", phase, "--detail", detail, *extra)
+            self.assertEqual(result.returncode, 0, result.stderr)
+        git(stream_dir, self.env, "add", "--", str(proof))
+        git(stream_dir, self.env, "commit", "-m", "fixture applied tick batch")
+
+    def tick_facts(self, stream_dir: Path) -> dict:
+        return {key: value for key, value in self.state(stream_dir).items() if key not in ("deliveries", "tick_delivery")}
 
     def events(self, stream_dir: Path) -> str:
         return (stream_dir / "log" / "events.jsonl").read_text(encoding="utf-8")

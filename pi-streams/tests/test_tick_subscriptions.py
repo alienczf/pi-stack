@@ -123,7 +123,9 @@ class SubscriptionTests(TickCase):
             got_status("coord-1"),
             got_list(str(self.etl)),
             got_status("coord-1"),
-            got_prompt(
+            got_list(str(self.etl)),
+            got_status("coord-1"),
+            self.delivery_prompt(
                 "coord-1",
                 "pi-streams tick 2026-10-06T09:00:00Z:\nsubscription daily: Post the daily status to ZF.",
                 "followUp",
@@ -195,7 +197,7 @@ class SubscriptionTests(TickCase):
 
         due = self.tick("2026-10-06T09:00:00Z")
         self.assertEqual((due.returncode, due.stdout), (1, f"{self.etl}\tsubscription=1\ttick-error=2\n"))
-        self.assertEqual(self.stub.requests[-1], got_prompt(
+        self.assertEqual(self.stub.requests[-1], self.delivery_prompt(
             "coord-1",
             "pi-streams tick 2026-10-06T09:00:00Z:\nsubscription daily: Post the daily status to ZF.",
             "followUp",
@@ -219,16 +221,17 @@ class SubscriptionTests(TickCase):
         grew = self.tick("2026-10-06T12:10:00Z")
         self.assertEqual((grew.returncode, grew.stdout, grew.stderr), (0, f"{self.etl}\tsubscription=1\n", ""))
         last_20 = " / ".join(f"row {n}" for n in range(6, 26))
-        self.assertEqual(self.stub.requests[-1], got_prompt(
+        self.assertEqual(self.stub.requests[-1], self.delivery_prompt(
             "coord-1",
             f"pi-streams tick 2026-10-06T12:10:00Z:\n{ROWS_ACTION} / {last_20}",
             "followUp",
         ))
 
+        self.apply_tick_delivery(self.etl)
         watch.unlink()
         failed = self.tick("2026-10-06T12:15:00Z")
         self.assertEqual((failed.returncode, failed.stdout, failed.stderr), (0, f"{self.etl}\tsubscription=1\n", ""))
-        self.assertEqual(self.stub.requests[-1], got_prompt(
+        self.assertEqual(self.stub.requests[-1], self.delivery_prompt(
             "coord-1",
             f"pi-streams tick 2026-10-06T12:15:00Z:\n{ROWS_ACTION} / cat: watch.txt: No such file or directory",
             "followUp",
@@ -276,7 +279,9 @@ class SubscriptionTests(TickCase):
             got_status("coord-1"),
             got_list(str(self.etl)),
             got_status("coord-1"),
-            got_prompt(
+            got_list(str(self.etl)),
+            got_status("coord-1"),
+            self.delivery_prompt(
                 "coord-1",
                 f"pi-streams tick 2026-10-06T12:10:00Z:\n{PR_ACTION} / state=OPEN reviewDecision=REVIEW_REQUIRED "
                 "checks=codecov/patch:SUCCESS,lint:SUCCESS,test:FAILURE mergedAt=- reviews=0",
@@ -286,9 +291,10 @@ class SubscriptionTests(TickCase):
 
         passed = (check_run("lint", "SUCCESS"), check_run("test", "SUCCESS"), status_context("codecov/patch", "SUCCESS"))
         self.gh_answers(pr_view(*passed, decision="APPROVED", reviews=(review("APPROVED"),)))
+        self.apply_tick_delivery(self.etl)
         approved = self.tick("2026-10-06T14:35:00Z")
         self.assertEqual((approved.returncode, approved.stdout), (0, f"{self.etl}\tsubscription=1\n"))
-        self.assertEqual(self.stub.requests[-1], got_prompt(
+        self.assertEqual(self.stub.requests[-1], self.delivery_prompt(
             "coord-1",
             f"pi-streams tick 2026-10-06T14:35:00Z:\n{PR_ACTION} / state=OPEN reviewDecision=APPROVED "
             "checks=codecov/patch:SUCCESS,lint:SUCCESS,test:SUCCESS mergedAt=- reviews=1",
@@ -302,9 +308,10 @@ class SubscriptionTests(TickCase):
             merged_at="2026-10-06T15:00:00Z",
             reviews=(review("APPROVED"),),
         ))
+        self.apply_tick_delivery(self.etl)
         merged = self.tick("2026-10-06T15:05:00Z")
         self.assertEqual((merged.returncode, merged.stdout), (0, f"{self.etl}\tsubscription=1\n"))
-        self.assertEqual(self.stub.requests[-1], got_prompt(
+        self.assertEqual(self.stub.requests[-1], self.delivery_prompt(
             "coord-1",
             f"pi-streams tick 2026-10-06T15:05:00Z:\n{PR_ACTION} / state=MERGED reviewDecision=APPROVED "
             "checks=codecov/patch:SUCCESS,lint:SUCCESS,test:SUCCESS mergedAt=2026-10-06T15:00:00Z reviews=1",
@@ -338,7 +345,7 @@ class SubscriptionTests(TickCase):
         self.gh_answers(pr_view(check_run("test", "SUCCESS"), decision="APPROVED", reviews=(review("APPROVED"),)))
         back = self.tick("2026-10-06T14:35:00Z")
         self.assertEqual((back.returncode, back.stdout), (1, f"{self.etl}\tsubscription=1\ttick-error=1\n"))
-        self.assertEqual(self.stub.requests[-1], got_prompt(
+        self.assertEqual(self.stub.requests[-1], self.delivery_prompt(
             "coord-1",
             f"pi-streams tick 2026-10-06T14:35:00Z:\n{PR_ACTION} / state=OPEN reviewDecision=APPROVED "
             "checks=test:SUCCESS mergedAt=- reviews=1",

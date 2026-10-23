@@ -41,7 +41,7 @@ def call(args: list[str], stdin: str | None = None) -> dict[str, object]:
         raise StreamsError(f"pi-web-cli {' '.join(args)} returned {type(data).__name__}")
     if proc.returncode != 0 or data.get("ok") is False:
         detail = proc.stderr.strip() or proc.stdout.strip()
-        error = PromptRejected if args[0] == "prompt" and data.get("status") == 409 else StreamsError
+        error = PromptRejected if args[0] == "prompt" and data.get("status") in (400, 404, 409, 422) else StreamsError
         raise error(f"pi-web-cli {' '.join(args)} failed: {detail}")
     return data
 
@@ -101,10 +101,12 @@ def session_status(sid: str) -> dict[str, object]:
     return session
 
 
-def prompt(sid: str, text: str, behavior: str | None = None) -> None:
+def prompt(sid: str, text: str, behavior: str | None = None, *, delivery_id: str | None = None) -> dict[str, object]:
     # On argv, a text that starts with a dash would parse as a flag.
     flags = [] if behavior is None else [f"--{behavior}"]
-    call(["prompt", sid, *flags], stdin=text)
+    if delivery_id is not None:
+        flags += ["--delivery-id", delivery_id]
+    return call(["prompt", sid, *flags], stdin=text)
 
 
 def queue_clear(sid: str) -> None:

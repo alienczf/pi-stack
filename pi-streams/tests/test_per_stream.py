@@ -78,6 +78,7 @@ class PerStreamTests(EngineCase):
         for stream in (one, two):
             state = stream / "STATE.md"
             state.write_text(state.read_text().replace("ratified: no", "ratified: 2026-10-23 fixture human confirmation", 1))
+        self.stub.reflect_delivery_ids = True
         shared = "/wt/shared"
         (one / "threads.tsv").write_text(
             (one / "threads.tsv").read_text(encoding="utf-8") + row("t-1", "worker", shared),
@@ -113,7 +114,7 @@ class PerStreamTests(EngineCase):
         self.assertIn('"kind": "claim"', (two / "log" / "events.jsonl").read_text(encoding="utf-8"))
         self.assertEqual(
             self.stub.requests[-1],
-            got_prompt(
+            self.delivery_prompt(
                 "coord-2",
                 "pi-streams tick 2026-10-06T12:00:00Z:\n"
                 "claim t-2 reviewer shares worktree /wt/shared with one worker t-1",

@@ -5,7 +5,7 @@ import json
 import sys
 from pathlib import Path
 
-from engine import StreamsError, artifacts, clock
+from engine import StreamsError, artifacts, clock, delivery
 from engine.doctor import run_doctor
 from engine.project import (
     STATE_SCHEMA,
@@ -58,6 +58,24 @@ def _parser() -> argparse.ArgumentParser:
     status.add_argument("stream_id", metavar="id", nargs="?")
     status.add_argument("--json", action="store_true")
     status.add_argument("--home")
+
+    receipts = sub.add_parser("delivery")
+    receipt_sub = receipts.add_subparsers(dest="delivery_cmd", required=True)
+    for name in ("list", "send", "ack"):
+        operation = receipt_sub.add_parser(name)
+        operation.add_argument("stream")
+        operation.add_argument("--home")
+        if name == "send":
+            operation.add_argument("--delivery-id", required=True)
+            operation.add_argument("--session", required=True)
+            operation.add_argument("--body-file", required=True)
+            operation.add_argument("--behavior", choices=("steer", "follow-up"))
+        if name == "ack":
+            operation.add_argument("delivery_id")
+            operation.add_argument("--session", required=True)
+            operation.add_argument("--state", required=True, choices=("consumed", "applied", "blocked"))
+            operation.add_argument("--detail", required=True)
+            operation.add_argument("--evidence")
 
     sub.add_parser("doctor")
 
@@ -241,6 +259,23 @@ def cmd_state(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_delivery(args: argparse.Namespace) -> int:
+    index = resolve_index(args.home)
+    with index_lock(index):
+        project = resolve_project(index)
+        stream_dir = require_stream(index, project.info.name, args.stream)
+        with stream_lock(stream_dir):
+            if args.delivery_cmd == "list":
+                result = delivery.receipts(stream_dir)
+            elif args.delivery_cmd == "send":
+                delivery.prepare_locked(stream_dir, args.delivery_id, args.session, _state_body(args.body_file), behavior=args.behavior)
+                result = delivery.send_locked(stream_dir, args.delivery_id)
+            else:
+                result = delivery.acknowledge_locked(stream_dir, args.delivery_id, args.session, args.state, args.detail, evidence=args.evidence)
+    print(json.dumps(result, sort_keys=True))
+    return 0
+
+
 def cmd_tick(args: argparse.Namespace) -> int:
     indexes = [resolve_index(args.home)] if args.home else read_homes()
     return run_tick(indexes)
@@ -294,6 +329,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_tick(args)
         if args.cmd == "state":
             return cmd_state(args)
+        if args.cmd == "delivery":
+            return cmd_delivery(args)
         if args.cmd == "thread" and args.thread_cmd == "spawn":
             return cmd_thread_spawn(args)
         if args.cmd == "thread" and args.thread_cmd == "adopt":

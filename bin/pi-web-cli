@@ -59,11 +59,14 @@ def cmd_spawn(cwd: str) -> int:
     return out({"ok": ok, "status": code, "session": data}, ok)
 
 
-def cmd_prompt(sid: str, text: str, streaming: str | None = None) -> int:
+def cmd_prompt(sid: str, text: str, streaming: str | None = None, delivery_id: str | None = None) -> int:
     body = {"text": text} if streaming is None else {"text": text, "streamingBehavior": streaming}
+    if delivery_id is not None:
+        body["deliveryId"] = delivery_id
     code, data = req("POST", f"/api/sessions/{sid}/prompt", body)
-    ok = code == 200 and isinstance(data, dict) and data.get("accepted") is True
-    return out({"ok": ok, "status": code, "result": data}, ok)
+    accepted = code == 200 and isinstance(data, dict) and data.get("accepted") is True
+    ok = accepted and (delivery_id is None or data.get("deliveryId") == delivery_id)
+    return out({"ok": ok, "transportAccepted": accepted, "status": code, "result": data}, ok)
 
 
 def cmd_status(sid: str) -> int:
@@ -120,6 +123,7 @@ def main(argv: list[str]) -> int:
     pr = sub.add_parser("prompt")
     pr.add_argument("sid")
     pr.add_argument("text", nargs="?")
+    pr.add_argument("--delivery-id", help="caller-persisted correlation identity; acceptance is not application")
     behavior = pr.add_mutually_exclusive_group()
     behavior.add_argument("--steer", action="store_true")
     behavior.add_argument("--follow-up", action="store_true")
@@ -142,7 +146,7 @@ def main(argv: list[str]) -> int:
         if not text.strip():
             return out({"ok": False, "error": "empty prompt"}, False)
         streaming = "steer" if args.steer else "followUp" if args.follow_up else None
-        return cmd_prompt(args.sid, text, streaming)
+        return cmd_prompt(args.sid, text, streaming, args.delivery_id)
     if args.cmd == "status":
         return cmd_status(args.sid)
     if args.cmd == "commands":

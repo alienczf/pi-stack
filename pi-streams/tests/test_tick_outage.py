@@ -72,7 +72,9 @@ class OutageTests(TickCase):
             got_list("/wt/datapull"),
             got_list(str(self.etl)),
             got_status("coord-1"),
-            got_prompt("coord-1", f"pi-streams tick 2026-10-06T12:00:00Z:\nidle t-1 datapull\noutage t-1 datapull {SHOWN}"),
+            got_list(str(self.etl)),
+            got_status("coord-1"),
+            self.delivery_prompt("coord-1", f"pi-streams tick 2026-10-06T12:00:00Z:\nidle t-1 datapull\noutage t-1 datapull {SHOWN}"),
         ])
         self.assertEqual(
             self.rows(self.etl),
@@ -93,6 +95,7 @@ class OutageTests(TickCase):
         ])
         self.assertEqual(self.alerts(), f"2026-10-06T12:00:00Z etl t-1 datapull {SHOWN}\n")
 
+        self.apply_tick_delivery(self.etl)
         long_reply = "Pulled the 1m bars. " + "ok " * 40000
         self.write_log(
             "t-1",
@@ -105,7 +108,7 @@ class OutageTests(TickCase):
         )
         back = self.tick("2026-10-06T12:10:00Z")
         self.assertEqual((back.returncode, back.stdout, back.stderr), (0, f"{self.etl}\trecovered=1\n", ""))
-        self.assertEqual(self.stub.requests[-1], got_prompt(
+        self.assertEqual(self.stub.requests[-1], self.delivery_prompt(
             "coord-1",
             "pi-streams tick 2026-10-06T12:10:00Z:\nrecovered t-1 datapull",
         ))
@@ -182,6 +185,7 @@ class OutageTests(TickCase):
             got_list("/wt/datapull"),
         ])
 
+        held = self.state(self.etl)["pending"]
         self.write_log(
             "coord-1", str(self.etl), user("/skill:stream-kickoff"), failure(LIMIT), user("Continue."), reply("Back.")
         )
@@ -194,7 +198,9 @@ class OutageTests(TickCase):
             got_list("/wt/datapull"),
             got_list(str(self.etl)),
             got_status("coord-1"),
-            got_prompt(
+            got_list(str(self.etl)),
+            got_status("coord-1"),
+            self.delivery_prompt(
                 "coord-1",
                 "pi-streams tick 2026-10-06T12:10:00Z:\n"
                 "ask t-1 datapull Which venue first?\n"
@@ -203,7 +209,7 @@ class OutageTests(TickCase):
             ),
         ])
         self.assertEqual(self.alerts(), "")
-        self.assertEqual((self.state(self.etl)["outages"], self.state(self.etl)["pending"]), ([], []))
+        self.assertEqual((self.state(self.etl)["outages"], self.state(self.etl)["pending"]), ([], held + [{"at": "2026-10-06T12:10:00Z", "kind": "recovered", "session": "coord-1", "role": "coordinator", "detail": ""}]))
 
     def test_a_coordinator_archived_during_its_outage_requires_reconciliation(self) -> None:
         self.write_log("coord-1", str(self.etl), user("/skill:stream-kickoff"), failure(LIMIT))

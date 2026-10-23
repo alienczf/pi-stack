@@ -62,17 +62,19 @@ class SteerTests(TickCase):
             got_prompt("t-1", RERUN, "followUp"),
             got_list(str(self.etl)),
             got_status("coord-1"),
-            got_prompt("coord-1", f"pi-streams tick 2026-10-06T12:10:00Z:\nstale-steer t-1 datapull {BARS}"),
+            got_list(str(self.etl)),
+            got_status("coord-1"),
+            self.delivery_prompt("coord-1", f"pi-streams tick 2026-10-06T12:10:00Z:\nstale-steer t-1 datapull {BARS}"),
         ])
         self.assertEqual(
             self.events(self.etl),
             '{"at": "2026-10-06T12:10:00Z", "kind": "stale-steer", "session": "t-1", "role": "datapull", '
             f'"detail": "{BARS}"}}\n',
         )
-        self.assertEqual(self.state(self.etl), {
+        self.assertEqual(self.tick_facts(self.etl), {
             "claims": [],
             "outages": [],
-            "pending": [],
+            "pending": [{"at": "2026-10-06T12:10:00Z", "kind": "stale-steer", "session": "t-1", "role": "datapull", "detail": BARS}],
             "rotating": False,
             "subscriptions": {},
             "sessions": {"t-1": {"asks": [], "busy": True, "context": False, "queued": {
@@ -149,7 +151,9 @@ class SteerTests(TickCase):
             got_list("/wt/datapull"),
             got_list(str(self.etl)),
             got_status("coord-1"),
-            got_prompt("coord-1", f"pi-streams tick 2026-10-06T12:15:00Z:\nstale-steer t-1 datapull {BARS}"),
+            got_list(str(self.etl)),
+            got_status("coord-1"),
+            self.delivery_prompt("coord-1", f"pi-streams tick 2026-10-06T12:15:00Z:\nstale-steer t-1 datapull {BARS}"),
         ])
         self.assertEqual(self.state(self.etl)["sessions"]["t-1"]["busy"], True)
 

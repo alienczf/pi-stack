@@ -400,6 +400,11 @@ def _one_stream(stream_id: str, stream_dir: Path) -> dict[str, object]:
         "threads": counts,
         "coordinatorCostShare": share,
     }
+    from engine.delivery import receipts
+
+    deliveries = receipts(stream_dir)
+    if deliveries:
+        result["deliveries"] = deliveries
     if canonical:
         result["path"] = str(stream_dir)
         result["threadSessions"] = [

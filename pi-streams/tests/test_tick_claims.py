@@ -83,7 +83,9 @@ class ClaimTests(TickCase):
             *observed(self.datapull, "r-2", "t-4"),
             got_list(str(self.datapull)),
             got_status("coord-d"),
-            got_prompt(
+            got_list(str(self.datapull)),
+            got_status("coord-d"),
+            self.delivery_prompt(
                 "coord-d",
                 "pi-streams tick 2026-10-06T12:00:00Z:\n"
                 "claim r-2 reviewer shares worktree /wt/alpha/feat-a with etl worker w-1\n"
@@ -93,7 +95,9 @@ class ClaimTests(TickCase):
             *observed(self.etl, "w-1"),
             got_list(str(self.etl)),
             got_status("coord-e"),
-            got_prompt(
+            got_list(str(self.etl)),
+            got_status("coord-e"),
+            self.delivery_prompt(
                 "coord-e",
                 "pi-streams tick 2026-10-06T12:00:00Z:\n"
                 "claim w-1 worker shares worktree /wt/alpha/feat-a with datapull reviewer r-2\n"

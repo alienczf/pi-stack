@@ -87,16 +87,18 @@ class TickTests(TickCase):
             got_list("/wt/datapull"),
             got_list(str(self.etl)),
             got_status("coord-1"),
-            got_prompt("coord-1", "pi-streams tick 2026-10-06T12:05:00Z:\nidle t-1 datapull"),
+            got_list(str(self.etl)),
+            got_status("coord-1"),
+            self.delivery_prompt("coord-1", "pi-streams tick 2026-10-06T12:05:00Z:\nidle t-1 datapull"),
         ])
         self.assertEqual(
             self.events(self.etl),
             '{"at": "2026-10-06T12:05:00Z", "kind": "idle", "session": "t-1", "role": "datapull", "detail": ""}\n',
         )
-        self.assertEqual(self.state(self.etl), {
+        self.assertEqual(self.tick_facts(self.etl), {
             "claims": [],
             "outages": [],
-            "pending": [],
+            "pending": [{"at": "2026-10-06T12:05:00Z", "kind": "idle", "session": "t-1", "role": "datapull", "detail": ""}],
             "rotating": False,
             "subscriptions": {},
             "sessions": {"t-1": {"asks": [], "busy": False, "context": False, "queued": {}, "replay": []}},
@@ -112,7 +114,7 @@ class TickTests(TickCase):
         self.assertEqual((first.returncode, first.stdout, first.stderr), (0, f"{self.etl}\tidle=1\n", ""))
         self.assertEqual(
             self.stub.requests[-1],
-            got_prompt("coord-1", "pi-streams tick 2026-10-06T12:00:00Z:\nidle t-1 datapull"),
+            self.delivery_prompt("coord-1", "pi-streams tick 2026-10-06T12:00:00Z:\nidle t-1 datapull"),
         )
         again = self.tick("2026-10-06T12:05:00Z")
         self.assertEqual((again.returncode, again.stdout), (0, ""))
@@ -130,7 +132,7 @@ class TickTests(TickCase):
         ])
         first = self.tick("2026-10-06T12:00:00Z")
         self.assertEqual((first.returncode, first.stdout), (0, f"{self.etl}\task=1\tcontext=1\n"))
-        self.assertEqual(self.stub.requests[-1], got_prompt(
+        self.assertEqual(self.stub.requests[-1], self.delivery_prompt(
             "coord-1",
             "pi-streams tick 2026-10-06T12:00:00Z:\n"
             "ask t-1 datapull Which venue first? / One day or one week?\n"
@@ -150,9 +152,10 @@ class TickTests(TickCase):
             ("GET", "/api/sessions/t-1/status", 200, status("t-1", streaming=True, tokens=160000, ask=ASK_2)),
             *self.coordinator(status("coord-1")),
         ])
+        self.apply_tick_delivery(self.etl)
         newer = self.tick("2026-10-06T12:10:00Z")
         self.assertEqual((newer.returncode, newer.stdout), (0, f"{self.etl}\task=1\n"))
-        self.assertEqual(self.stub.requests[-1], got_prompt(
+        self.assertEqual(self.stub.requests[-1], self.delivery_prompt(
             "coord-1",
             "pi-streams tick 2026-10-06T12:10:00Z:\nask t-1 datapull May I write to Test?",
         ))
@@ -165,10 +168,10 @@ class TickTests(TickCase):
             '{"at": "2026-10-06T12:10:00Z", "kind": "ask", "session": "t-1", "role": "datapull", '
             '"detail": "May I write to Test?"}\n',
         )
-        self.assertEqual(self.state(self.etl), {
+        self.assertEqual(self.tick_facts(self.etl), {
             "claims": [],
             "outages": [],
-            "pending": [],
+            "pending": [{"at": "2026-10-06T12:10:00Z", "kind": "ask", "session": "t-1", "role": "datapull", "detail": "May I write to Test?"}],
             "rotating": False,
             "subscriptions": {},
             "sessions": {"t-1": {"asks": ["ask-2"], "busy": True, "context": True, "queued": {}, "replay": []}},
@@ -188,7 +191,9 @@ class TickTests(TickCase):
             got_list("/wt/datapull"),
             got_list(str(self.etl)),
             got_status("coord-1"),
-            got_prompt(
+            got_list(str(self.etl)),
+            got_status("coord-1"),
+            self.delivery_prompt(
                 "coord-1",
                 "pi-streams tick 2026-10-06T12:00:00Z:\nask t-1 datapull May I write to Test?",
                 "followUp",
@@ -221,7 +226,9 @@ class TickTests(TickCase):
             got_post("coord-2", "thinking-level", {"level": "xhigh"}),
             got_status("coord-2"),
             got_prompt("coord-2", rotation("etl", self.etl)),
-            got_prompt(
+            got_list(str(self.etl)),
+            got_status("coord-2"),
+            self.delivery_prompt(
                 "coord-2",
                 "pi-streams tick 2026-10-06T12:00:00Z:\nask t-1 datapull May I write to Test?",
                 "followUp",
@@ -234,7 +241,7 @@ class TickTests(TickCase):
             + row("t-1", "datapull", "/wt/datapull")
             + f"coord-2\tcoordinator\t\t{self.etl}\t\t\topenai-codex/gpt-6-astra\txhigh\tactive\t2026-10-06T12:00:00Z\n",
         )
-        self.assertEqual(self.state(self.etl)["pending"], [])
+        self.assertEqual(self.state(self.etl)["pending"], [{"at": "2026-10-06T12:00:00Z", "kind": "ask", "session": "t-1", "role": "datapull", "detail": "May I write to Test?"}])
         self.assertEqual(git(self.etl, self.env, "status", "--porcelain"), "")
 
     def test_a_coordinator_idle_for_six_hours_is_rotated(self) -> None:
@@ -244,7 +251,7 @@ class TickTests(TickCase):
         ])
         warm = self.tick("2026-10-06T11:59:59Z")
         self.assertEqual((warm.returncode, warm.stdout), (0, f"{self.etl}\task=1\n"))
-        self.assertEqual(self.stub.requests[-1], got_prompt(
+        self.assertEqual(self.stub.requests[-1], self.delivery_prompt(
             "coord-1",
             "pi-streams tick 2026-10-06T11:59:59Z:\nask t-1 datapull Which venue first? / One day or one week?",
         ))
@@ -255,6 +262,7 @@ class TickTests(TickCase):
             ("GET", "/api/sessions/coord-2/status", 200, status("coord-2", tokens=None)),
             *self.coordinator(status("coord-1", tokens=None), modified="2026-10-06T06:00:00.000Z"),
         ])
+        self.apply_tick_delivery(self.etl)
         cold = self.tick("2026-10-06T12:00:00Z")
         self.assertEqual((cold.returncode, cold.stdout, cold.stderr), (0, f"{self.etl}\task=1\n", ""))
         self.assertEqual(self.stub.requests, [
@@ -274,7 +282,9 @@ class TickTests(TickCase):
             got_post("coord-2", "thinking-level", {"level": "xhigh"}),
             got_status("coord-2"),
             got_prompt("coord-2", rotation("etl", self.etl)),
-            got_prompt(
+            got_list(str(self.etl)),
+            got_status("coord-2"),
+            self.delivery_prompt(
                 "coord-2",
                 "pi-streams tick 2026-10-06T12:00:00Z:\nask t-1 datapull May I write to Test?",
                 "followUp",
@@ -334,7 +344,9 @@ class TickTests(TickCase):
             got_list("/wt/review"),
             got_list(ops),
             got_status("coord-9"),
-            got_prompt("coord-9", "pi-streams tick 2026-10-06T12:05:00Z:\nidle t-9 review"),
+            got_list(ops),
+            got_status("coord-9"),
+            self.delivery_prompt("coord-9", "pi-streams tick 2026-10-06T12:05:00Z:\nidle t-9 review"),
         ])
         self.assertEqual(
             self.state(self.etl)["sessions"],

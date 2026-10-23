@@ -7,7 +7,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from engine import StreamsError, artifacts, clock, piweb, sessionlog
+from engine import StreamsError, artifacts, clock, delivery, piweb, sessionlog
 from engine.project import (
     Project,
     StreamRow,
@@ -428,6 +428,15 @@ class StreamTick:
         return timedelta(0) if seen is None else self.now - seen
 
     def wake(self) -> None:
+        current = delivery.current_tick(self.stream_dir)
+        if current is not None:
+            if current["state"] == "applied":
+                remaining = delivery.finish_tick_locked(self.stream_dir, [asdict(event) for event in self.state.pending])
+                self.state.pending = [Event(**event) for event in remaining]
+            else:
+                if current["state"] in ("prepared", "sending"):
+                    delivery.send_locked(self.stream_dir, current["id"])
+                return
         coord = self.coordinator()
         if not self.state.pending or (coord is None and not self.state.rotating):
             return
@@ -436,8 +445,9 @@ class StreamTick:
         require_ratified(self.stream_dir)
         text = "\n".join([f"pi-streams tick {self.at}:", *(event.line() for event in self.state.pending)])
         sid, behavior = self.wake_target(coord)
-        piweb.prompt(sid, text, behavior)
-        self.state.pending = []
+        identity = delivery.new_identity()
+        delivery.prepare_locked(self.stream_dir, identity, sid, text, events=[asdict(event) for event in self.state.pending], behavior=behavior)
+        delivery.send_locked(self.stream_dir, identity)
         self.state.rotating = False
 
     def wake_target(self, coord: Thread | None) -> tuple[str, str | None]:

@@ -37,6 +37,7 @@ SPAWN_STDOUT = """\
 PROMPT_STDOUT = """\
 {
   "ok": true,
+  "transportAccepted": true,
   "status": 200,
   "result": {
     "accepted": true
@@ -80,6 +81,7 @@ OK_STDOUT = """\
 PROMPT_400_STDOUT = """\
 {
   "ok": false,
+  "transportAccepted": false,
   "status": 400,
   "result": {
     "error": "nope"
@@ -90,6 +92,7 @@ PROMPT_400_STDOUT = """\
 PROMPT_500_STDOUT = """\
 {
   "ok": false,
+  "transportAccepted": false,
   "status": 500,
   "result": {
     "error": "down"

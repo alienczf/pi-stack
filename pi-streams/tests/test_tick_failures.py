@@ -74,7 +74,9 @@ class FailureTests(TickCase):
             got_list("/wt/review"),
             got_list(str(ops)),
             got_status("coord-2"),
-            got_prompt("coord-2", "pi-streams tick 2026-10-06T12:00:00Z:\nask t-2 review Which venue first?"),
+            got_list(str(ops)),
+            got_status("coord-2"),
+            self.delivery_prompt("coord-2", "pi-streams tick 2026-10-06T12:00:00Z:\nask t-2 review Which venue first?"),
         ])
         self.assertEqual(
             self.events(self.etl),
@@ -106,7 +108,7 @@ class FailureTests(TickCase):
         proc = self.tick("2026-10-06T12:00:00Z")
         self.assertEqual((proc.returncode, proc.stdout), (1, f"{self.etl}\task=1\ttick-error=1\n{ops}\task=1\n"))
         self.assertTrue(proc.stderr.startswith(f"{self.etl}: [Errno 21] Is a directory"), proc.stderr)
-        self.assertEqual(self.stub.requests[-1], got_prompt("coord-2", "pi-streams tick 2026-10-06T12:00:00Z:\nask t-2 review Which venue first?"))
+        self.assertEqual(self.stub.requests[-1], self.delivery_prompt("coord-2", "pi-streams tick 2026-10-06T12:00:00Z:\nask t-2 review Which venue first?"))
         self.assertEqual(git(self.etl, self.env, "status", "--porcelain"), "")
         self.assertEqual(git(ops, self.env, "status", "--porcelain"), "")
 
@@ -161,14 +163,16 @@ class FailureTests(TickCase):
             got_post("coord-2", "thinking-level", {"level": "xhigh"}),
             got_status("coord-2"),
             got_prompt("coord-2", rotation("etl", self.etl)),
-            got_prompt("coord-2", "pi-streams tick 2026-10-06T12:05:00Z:\nask t-1 datapull Which venue first?", "followUp"),
+            got_list(str(self.etl)),
+            got_status("coord-2"),
+            self.delivery_prompt("coord-2", "pi-streams tick 2026-10-06T12:05:00Z:\nask t-1 datapull Which venue first?", "followUp"),
         ])
         self.assertEqual(
             self.rows(self.etl),
             archived
             + f"coord-2\tcoordinator\t\t{self.etl}\t\t\topenai-codex/gpt-6-astra\txhigh\tactive\t2026-10-06T12:05:00Z\n",
         )
-        self.assertEqual((self.state(self.etl)["rotating"], self.state(self.etl)["pending"]), (False, []))
+        self.assertEqual((self.state(self.etl)["rotating"], self.state(self.etl)["pending"]), (False, [ASKED]))
 
     def test_a_rotation_that_stopped_after_pi_web_archived_the_coordinator_requires_reconciliation(self) -> None:
         state = {"outages": [], "pending": [ASKED], "rotating": True, "sessions": {}}

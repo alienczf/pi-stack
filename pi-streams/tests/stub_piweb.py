@@ -7,6 +7,7 @@ Unmatched requests get 200 and {"ok": true}. Each recorded request is
 """
 from __future__ import annotations
 
+import copy
 import json
 import re
 import socket
@@ -23,6 +24,10 @@ class StubPiWeb:
         self.routes: list[tuple[str, str, int, object]] = []
         self.requests: list[tuple[str, str, str, object]] = []
         self._lock = threading.Lock()
+        self.reflect_delivery_ids = False
+        self.simulate_session_lifecycle = False
+        self.created_sessions: dict[str, dict] = {}
+        self.archived_sessions: set[str] = set()
         self._httpd: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
 
@@ -123,6 +128,22 @@ class StubPiWeb:
             self.requests.append((handler.command, parsed.path, parsed.query, body))
             routes = list(self.routes)
         status, payload = _match(handler.command, parsed.path, routes)
+        payload = copy.deepcopy(payload)
+        with self._lock:
+            if self.simulate_session_lifecycle and status in (200, 201):
+                if handler.command == "POST" and parsed.path == "/api/sessions" and isinstance(payload, dict) and isinstance(payload.get("id"), str):
+                    self.created_sessions[payload["id"]] = payload
+                archived = re.fullmatch(r"/api/sessions/([^/]+)/archive", parsed.path)
+                if handler.command == "POST" and archived:
+                    self.archived_sessions.add(archived[1])
+                if handler.command == "GET" and parsed.path == "/api/sessions" and isinstance(payload, list):
+                    known = {item.get("id") for item in payload if isinstance(item, dict)}
+                    payload += [copy.deepcopy(item) for sid, item in self.created_sessions.items() if sid not in known]
+                    for item in payload:
+                        if isinstance(item, dict) and item.get("id") in self.archived_sessions:
+                            item["archived"] = True
+        if self.reflect_delivery_ids and parsed.path.endswith("/prompt") and isinstance(body, dict) and "deliveryId" in body and isinstance(payload, dict) and payload.get("accepted") is True:
+            payload["deliveryId"] = body["deliveryId"]
         cwd = urllib.parse.parse_qs(parsed.query).get("cwd", [None])[0]
         if handler.command == "GET" and parsed.path == "/api/sessions" and isinstance(payload, list) and cwd:
             payload = [item for item in payload if not isinstance(item, dict) or item.get("cwd", cwd) == cwd]

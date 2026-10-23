@@ -1,6 +1,7 @@
 """Temp project fixture and an explicit subprocess environment."""
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -20,12 +21,16 @@ LIVE = "http://127.0.0.1:8504"
 def make_env(home: Path, xdg: Path, pi_web_url: str) -> dict[str, str]:
     if pi_web_url.rstrip("/") == LIVE:
         raise RuntimeError("refusing to call the live PI WEB server")
+    temporary = home.parent
     return {
         "PATH": "/usr/bin:/bin",
         "HOME": str(home),
         "XDG_CONFIG_HOME": str(xdg),
         "XDG_DATA_HOME": str(home / ".local" / "share"),
         "XDG_STATE_HOME": str(home / ".local" / "state"),
+        "XDG_CACHE_HOME": str(home / ".cache"),
+        "TMPDIR": str(temporary),
+        "PYTHONDONTWRITEBYTECODE": "1",
         "PI_WEB_URL": pi_web_url,
         # A request to any address but the stub goes to a dead proxy, even when
         # a test removes PI_WEB_URL and the engine falls back to a default.
@@ -169,6 +174,21 @@ class EngineCase(unittest.TestCase):
             encoding="utf-8",
             check=False,
         )
+
+    def delivery_prompt(self, sid: str, text: str, behavior: str | None = None) -> tuple:
+        from tick_support import got_prompt
+
+        streams = getattr(self, "fixture_streams", self.home.glob("*"))
+        records = []
+        for stream in streams:
+            path = stream / "log/tick-state.json"
+            if path.is_file():
+                records.extend(record for record in json.loads(path.read_text()).get("deliveries", {}).values() if record["session"] == sid and record["body"] == text)
+        if len(records) != 1:
+            raise AssertionError(f"expected one persisted delivery for {sid}: {text}")
+        method, path, query, body = got_prompt(sid, text, behavior)
+        body["deliveryId"] = records[0]["id"]
+        return method, path, query, body
 
     @property
     def home(self) -> Path:

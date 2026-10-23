@@ -27,7 +27,7 @@ def named_commands() -> list[str]:
 
 def command_path(snippet: str) -> list[str]:
     words = snippet.split()
-    depth = 3 if words[:2] in (["pi-streams", "thread"], ["pi-streams", "state"]) else 2
+    depth = 3 if words[:2] in (["pi-streams", "thread"], ["pi-streams", "state"], ["pi-streams", "delivery"]) else 2
     return words[:depth]
 
 
@@ -35,6 +35,9 @@ class ProseCommandTests(unittest.TestCase):
     def test_the_prose_names_these_commands(self) -> None:
         self.assertEqual(sorted({" ".join(command_path(item)) for item in named_commands()}), [
             "pi-streams close",
+            "pi-streams delivery ack",
+            "pi-streams delivery list",
+            "pi-streams delivery send",
             "pi-streams new",
             "pi-streams state append",
             "pi-streams state objective",
