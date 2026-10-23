@@ -42,3 +42,23 @@ This is way too heavy I think? But how much of it belongs to pstack/pistack. Onl
 ## t216u (2026-10-23 11:29 SGT, phone)
 
 In some ways I have no contentions, but to spend time fixing nomenclature, things like stream and actions is very poor in token space, and we really do want, like obvious things like state and history. Like, you, you can't have stream and state coexisting, you can't have actions and stream coexisting, like it's kind of impossible to tell from the language perspective, like pay attention to that.
+
+## t220u (2026-10-23 11:33 SGT, phone)
+
+Instead don't like the split, so I think let's sort of make it even cleaner. goals should stay in the same file as state at the top of the file so that way it's always ingested. and in this case rules, I would say, or decisions which are meant to be applied to rules should be the second section that follows after goals. also appended at the top of the state file, so the state should have goals and then quote unquote like rules for within, like, basically exactly this rules for giving conditional account state, right? and then, of course, you have your locks and everything you have your proposed state lock. So that sort of, and then the historical decisions can just get merged into history. with maybe some kind of tagging or some kind of labeling, but I'm suspecting the labeling may not even be needed. Yeah, so history should have both the user steering pattern, the stream action taking, so that way, that, that way, that's the only way that stream is useful.
+
+## t221u (2026-10-23 11:35 SGT, phone)
+
+Go
+
+## t222u (2026-10-23 11:36 SGT, phone, reply to track 3 designs)
+
+Not clear to me how A is not just the output of C?
+
+Not clear to me what's involved in triggering C consistently
+
+## t223u (2026-10-23 11:37 SGT, phone)
+
+No decisions for design yet. We're still iterating.
+
+Is the prime branch validated to be working?

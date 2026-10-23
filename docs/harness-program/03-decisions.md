@@ -117,3 +117,51 @@ ZF's decisions, restated. His words are in `00b-zf-messages-verbatim.md`, sectio
 - Naming rule for the catalog: no two stream files may share a concept. Each name answers one question: GOAL (what we want), STATE (what just happened), HISTORY (what happened before), DECISIONS (what ZF ruled).
 - Apply this across the catalog, 11-artifact-map.md and the templates, and check every name in the tier table against the rule. Not yet steered: the driver should steer it along with Z13.
 - **G21. Track 2 compacted at 84.5% context.** Grok Bot decision, 11:31 SGT. Aborted the turn, ran `/compact` via PI WEB `commands/run` (down to 19.1%), queued `briefs/track-2-reentry-1.md` (brief + steer-1 phase). Pushed feat/prime-cli `29ff206`. *Reason:* 84.5% of 500k is ~422k, nearly 3x the Z3 150k line and at the 85% session-care rule; the next tick is 30 minutes out and the session was still growing, so compacting now beats an overflow mid-edit.
+
+## Z15 (ZF t220u, 2026-10-23 11:33 SGT) + G23 (Grok Bot). Supersedes the layout in G17, G21 and G22
+- Z15: one file, always loaded. STATE.md has three sections, in this order:
+  1. `## Goals`: the single mutable North Star plus the current objective.
+  2. `## Rules`: decisions that are still in force, meaning ZF's rulings that act as rules conditioning the state.
+  3. `## Log`: the append-only `### <ts> <subject>` entries, capped at 30.
+- G23 (Grok Bot's interpretation of ZF's speech-to-text):
+  - "locks" = logs.
+  - Every turn loads AGENTS.md (role) and STATE.md. That's all.
+- Retired:
+  - GOAL.md and STREAM.md. The ratified charter text either moves into Goals or becomes the first history entry.
+  - DECISIONS.md.
+- history/ holds one file per entry, named `<UTC ts>-<slug>.md`. It takes:
+  - log entries that rotate out,
+  - superseded or retired rules,
+  - historical decisions,
+  - ZF steers.
+  No tag field is needed, because the slug and the body carry enough. A ZF steer is logged as a Log entry when it arrives, so it reaches history through normal rotation.
+- Rule lifecycle:
+  - A new ruling lands in Rules and gets a Log entry.
+  - When a ruling is superseded, it is removed from Rules and its text goes to history in a file named like `<ts>-rule-retired-<slug>.md`.
+- Migration:
+  - Split STREAM.md into Goals, active rules, and history.
+  - Move DECISIONS.md entries that are still in force into Rules, and the rest into history.
+  - Move old STATE.md into history.
+- Only the Log section is capped. Rules must stay short. The Goals and Rules sections are rewritten in place, never appended.
+- The catalog, 11-artifact-map.md and the templates follow this. Not yet steered; the driver steers it together with Z13 and Z14.
+
+## GO (ZF t221u, 2026-10-23 11:35 SGT): track 1 go-ahead
+- ZF gave the go-ahead on the track 1 first-pass review. That covers the catalog as amended by Z13, Z14 and Z15 (Z15's single STATE.md layout wins over Z14 and G22). It authorizes implementing the stacked plan, merging to alienczf/pi-stack main, rebasing the live branches and verifying.
+- ZF didn't answer track 3's two decisions, so the defaults stand: task meaning goes with proposal A (track 3 work, not part of this MVP), and the Z11 delete-after-fork-streams stays as he dictated.
+- At 11:35 the parent dispatched the Z13 to Z15 amendment steer plus the go-ahead to track 1. The driver should check whether it was consumed and re-send only if it was lost, not dispatch it a second time.
+- Dispatch record (Grok Bot, 11:38 SGT): checked first; no 11:35 steer had reached the session (its last user message was still re-entry-1 from 10:35), so this is the first and only send. Track 1 was idle at 33.9% context (169.5k of 500k), so no compact. Sent `briefs/track-1-go.md` (sha256 aaa62d2f) as a normal prompt at 11:38:50; consumed, byte-matched as the last user message, streaming at 35.7% (the brief header says 11:45, a typo for 11:38). Track 1 phase = implementing.
+- **G25. Track 1 implementation shape.** Grok Bot decision. Code branch `feat/streams-must-fix` off pi-stack main `3acf0f0` in worktree `/home/alphalab/Projects/worktrees/pi-stack-streams-must-fix`; pi-web source changes the stacks name go on a same-named local branch of the pi-web source checkout. S2a (migration) is part of the run, between S2 and S3. External prerequisite E (Twingate wrapper) is Grok Bot's on the box, not track 1's. The session keeps a progress file `docs/harness-program/12-track-1-progress.md` in the docs worktree so a compact or re-entry loses nothing, and collect.sh now also pulls it and `11-artifact-map.md`. Disposable verification runs under its own pi-web port and XDG dirs and never touches the live 8504 pi-web, the systemd tick, `~/.pi-stack` or `~/.local/bin`. Credentials are read in place, never copied; if isolation would need a copy, it stops and reports. *Reason:* one named branch the driver can merge, a re-entry path that survives compaction, and no shared state between the test instance and live streams.
+
+## Z16 (ZF t222u, 2026-10-23 11:36 SGT) + G24 (Grok Bot)
+- Z16: ZF challenges whether A is just the output of C, and asks what would make C trigger consistently.
+- G24 (Grok Bot's call): ZF is right. A and C both use markdown records plus a structural checker. The only real difference is who creates the per-ask record. In C, the coordinator writes a TODO row, and that's a rule or playbook (layers 4/5), so an ask nobody wrote a row for can't be detected. In A, intake code creates the record before dispatch, with the verbatim source and its hash (layer 3), so CI can fail an open ask that has no record. Making C trigger consistently needs exactly that intake hook, and adding it turns C into A.
+- Decision: collapse A and C into one design. Use C's minimal shape: no work/ directory, no per-ask state machine. Each ask is a row or entry produced by intake code from the message identity, and a checker fails any intake id that has no row.
+- Track 3 should redo the doc as this merged design plus B, against Z15's layout. The layout is one STATE.md with Goals, Rules and a capped Log, plus history/. The current doc still uses the superseded STREAM, ACTIONS and history names, so it must be updated. Decide where the ask rows live: a `## Open asks` section in STATE.md, or the Log plus a checker. Default: an `## Asks` section in STATE.md between Rules and Log, rewritten in place, with rows moved to history when closed. List any blocking decisions with defaults.
+- Not steered yet. The driver should steer track 3, then send ZF the revised table when it's ready.
+
+## Z17 (ZF t223u, 2026-10-23 11:37 SGT): design not locked
+- ZF: "No decisions for design yet. We're still iterating."
+- So nothing in track 3 is decided. G24 (collapse A/C) is now a working draft direction for the next iteration, not a decision.
+- The GO entry's line "track 3 defaults stand" is withdrawn. Proposal A is not chosen.
+- The Z11 delete-after-fork stays in the track 1 MVP only because ZF dictated it, not as a design ruling.
+- When the track 3 revision goes to ZF, frame its "blocking decisions" as open questions for the next iteration, with no defaults applied.
