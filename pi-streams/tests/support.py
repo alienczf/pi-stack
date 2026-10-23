@@ -24,6 +24,8 @@ def make_env(home: Path, xdg: Path, pi_web_url: str) -> dict[str, str]:
         "PATH": "/usr/bin:/bin",
         "HOME": str(home),
         "XDG_CONFIG_HOME": str(xdg),
+        "XDG_DATA_HOME": str(home / ".local" / "share"),
+        "XDG_STATE_HOME": str(home / ".local" / "state"),
         "PI_WEB_URL": pi_web_url,
         # A request to any address but the stub goes to a dead proxy, even when
         # a test removes PI_WEB_URL and the engine falls back to a default.

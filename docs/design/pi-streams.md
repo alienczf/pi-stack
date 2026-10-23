@@ -6,7 +6,7 @@ Pi-stack owns the shared engine, CLI, templates, stream skills, overlay, and tic
 
 This document describes the canonical STATE artifact contract. The original 2026-10-06 design and its cache observations are historical background, not current rotation, budget, or authority policy. The implementation stack is still partial. Do not deploy the partial stack or silently convert an existing stream.
 
-The delivered artifact units provide durable snapshots, scoped automatic Git commits, STATE parsing, objective updates, Log/ruling operations, and every-tick Log rotation. The generated contract now uses schema 1. Full-session-ID handovers and the runtime safety units remain separate work. The harness-program catalog and progress artifact record the authorized sequence and actual verification evidence.
+The delivered artifact units provide durable snapshots, scoped automatic Git commits, STATE parsing, objective updates, Log/ruling operations, and every-tick Log rotation. The generated contract uses schema 1 and full-session-ID handovers. After-stack disposable verification and the runtime safety units remain pending. The harness-program catalog and progress artifact record the authorized sequence and actual verification evidence.
 
 ## Artifact tiers
 
@@ -19,7 +19,7 @@ Every turn reads only the role's AGENTS.md and stream STATE.md. A worker follows
 | On demand | history/ | One exact cold entry per file. |
 | On demand | context/ and context/README.md | Reference material and its index, not a diary or required turn read. |
 | On demand | checks/ | Task acceptance checks and small source-bound reports. |
-| On demand | handover/ | Worker exit evidence at the path in its brief. Session-bound naming is the next S1 unit. |
+| On demand | handover/<role>/<full-session-id>.md | One worker session's exit evidence at the exact path in its brief. |
 | Engine-only | Index homes, projects configuration, streams.tsv, and ALERTS | Registration, discovery, and off-host notification input. |
 | Engine-only | threads.tsv, subscriptions.tsv, stream.toml | Runtime designation, watches, identity, and schema. |
 | Engine-only | log/events.jsonl, log/tick-state.json, locks, and failures/ | Engine observations, durable operations, writer exclusion, and recovery markers. |
@@ -101,13 +101,17 @@ Writes and autonomy are explicit grants. Record a resource or spend limit only w
 
 Ratification follows the human's explicit confirmation, with the dated confirming words in Goals. Historical rulings are presented for confirmation before becoming active Rules. A recommendation is not permission to act outside the grant, and silence is never approval.
 
-The coordinator never writes product code. Workers stay in their assigned worktrees, apart from the rendered handover and authorized engine Log append. Generated briefs disable TODO/PLAN planning and point at current STATE. Close reads actual handover and requested acceptance evidence. It does not force a busy archive or turn a failure into autonomous policy/skill repair.
+The coordinator never writes product code. Workers stay in their assigned worktrees, apart from the rendered handover, explicitly authorized small exact evidence copies, and authorized engine Log append. Generated briefs disable TODO/PLAN planning and point at current STATE. Close reads actual handover and requested acceptance evidence. It does not force a busy archive or turn a failure into autonomous policy/skill repair.
+
+New handovers start with the exact line `session: <full-session-id>` and a nonempty UTF-8 body. Close validates that identity before archiving any worker and passes only validated paths to scoped commits. A legacy `handover/<role>.md` is accepted in place only when its first line matches a uniquely recorded actual session. Unknown or prefix-only identity refuses. Close never copies, rewrites, or relabels legacy evidence, and a conflicting canonical file cannot fall back to it. Valid archived-worker artifacts remain eligible for publication after a partially completed busy close. The marker binds declared identity; it does not authenticate authorship or replace S2's runtime identity checks.
+
+Required tool outputs stay in the worker's owned worktree, or as explicitly authorized small exact copies in the owned stream repository. Source and session provenance stays with the evidence. A tool repository's disposable output is not the sole reference.
 
 ## Runtime work still gated
 
 The artifact contract does not claim the remaining runtime fixes are complete:
 
-- S1 still needs full-session-ID handovers.
+- S1's artifact commits still need after-stack disposable verification.
 - S2 owns exact coordinator selection, dispatch/ratification enforcement, receiver stop generations, application receipts, archived evidence, and unsafe-rotation refusal.
 - S2a owns explicit lossless stream-root migration, with preserved original bytes/provenance and no worker-worktree writes.
 - S3 owns same-session tick-observed 150k DCR and the fixed engine resume, including the receiving-side compaction/input boundary.

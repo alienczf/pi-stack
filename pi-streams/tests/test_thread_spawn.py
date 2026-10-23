@@ -20,9 +20,10 @@ def status_body(sid: str) -> dict[str, object]:
     }
 
 
-def expected_brief(stream_dir: str, worktree: str, base: str) -> str:
+def expected_brief(stream_dir: str, worktree: str, base: str, sid: str = "thread-1") -> str:
     return (
         "You are a thread of stream etl.\n"
+        f"Your full session ID is {sid}.\n"
         f"Your working directory is {worktree}. The stream folder is {stream_dir}.\n"
         f"Role: datapull. Repo: alpha. Branch: stream/etl/datapull. Base: {base}.\n"
         "\n"
@@ -30,12 +31,16 @@ def expected_brief(stream_dir: str, worktree: str, base: str) -> str:
         "Do not use TODO.md or PLAN.md in this pi-streams role. Goals plus Log replace them. Do not edit the stream's Goals or Rules.\n"
         "On demand, open history/, context/ and its README index, checks/, or handover/ for this assignment. Never read engine-only registries, threads.tsv, subscriptions.tsv, stream.toml, events, tick-state, locks, or failures/.\n"
         "\n"
-        f"Stay in {worktree}. Outside it, only write the handover below or append an authorized work/failure summary through `pi-streams state append etl --subject SUBJECT --body-file - --request-id ID`. Keep the request ID stable on retry. Verify the requested acceptance on the real artifact. Do not invent extra checks or resource caps.\n"
+        f"Stay in {worktree}. Outside it, only write the handover below, an explicitly authorized small exact evidence copy at a named owned stream destination, or append an authorized work/failure summary through `pi-streams state append etl --subject SUBJECT --body-file - --request-id ID`. Keep the request ID stable on retry. Verify the requested acceptance on the real artifact. Do not invent extra checks or resource caps.\n"
         "\n"
         "ship the slice\n"
         "\n"
-        f"Before you stop, write {stream_dir}/handover/datapull.md with intent, "
-        "what was done with proof, what is left, and what the next agent should know.\n"
+        f"Before you stop, create the handover's parent directory if needed and write {stream_dir}/handover/datapull/{sid}.md. "
+        f"Its first line must be exactly `session: {sid}`. "
+        "Follow it with intent, what was done with proof, what is left, and what the next agent should know. "
+        "Never overwrite or relabel another session's handover.\n"
+        "Keep required tool outputs in your owned worktree, or retain small exact copies at an explicitly authorized owned stream destination. "
+        "Retain source and session provenance. Never use another tool repository's disposable output as the sole evidence.\n"
     )
 
 
@@ -213,7 +218,7 @@ class SpawnTests(EngineCase):
             5,
             "POST",
             "/api/sessions/thread-2/prompt",
-            {"text": expected_brief(str(self.stream_dir), str(worktree), base)},
+            {"text": expected_brief(str(self.stream_dir), str(worktree), base, "thread-2")},
         )
         lines = (self.stream_dir / "threads.tsv").read_text(encoding="utf-8").splitlines()
         self.assertEqual(

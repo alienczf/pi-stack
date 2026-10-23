@@ -56,6 +56,12 @@ class Thread:
     started: str
 
 
+@dataclass(frozen=True)
+class CloseResult:
+    report: tuple[str, ...]
+    handovers: tuple[str, ...]
+
+
 def utc_now() -> str:
     return clock.stamp(clock.now())
 
@@ -301,8 +307,16 @@ def format_status(report: dict[str, object]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def handover_path(role: str, session_id: str) -> Path:
+    _require_role(role)
+    if _ROLE.fullmatch(session_id) is None:
+        raise StreamsError(f"invalid handover session: {session_id}")
+    return Path("handover") / role / f"{session_id}.md"
+
+
 def render_brief(
     *,
+    session_id: str,
     stream: str,
     stream_dir: str,
     role: str,
@@ -314,6 +328,8 @@ def render_brief(
 ) -> str:
     text = (repo_root() / "pi-streams" / "templates" / "thread-brief.md").read_text(encoding="utf-8")
     values = {
+        "session_id": session_id,
+        "handover": str(Path(stream_dir) / handover_path(role, session_id)),
         "stream": stream,
         "stream_dir": stream_dir,
         "role": role,
@@ -445,6 +461,7 @@ def spawn_thread(
         piweb.prompt(
             sid,
             render_brief(
+                session_id=sid,
                 stream=stream_id,
                 stream_dir=str(stream_dir),
                 role=role,
@@ -491,19 +508,51 @@ def rotate_coordinator(index: Path, project: Project, stream_id: str) -> str:
     return ensure_coordinator(project, stream_dir, opening_prompt=prompt)
 
 
-def _has_handover(stream_dir: Path, role: str) -> bool:
-    path = stream_dir / "handover" / f"{role}.md"
-    return path.is_file() and path.read_text(encoding="utf-8").strip() != ""
+def _validated_handover(stream_dir: Path, row: Thread) -> str:
+    canonical = handover_path(row.role, row.session)
+    for relative in (canonical, Path("handover") / f"{row.role}.md"):
+        path = stream_dir
+        for part in relative.parts:
+            path = path / part
+            if path.is_symlink():
+                raise StreamsError(f"refusing handover symlink: {relative}")
+        if not path.exists():
+            continue
+        if not path.is_file():
+            raise StreamsError(f"handover is not a regular file: {relative}")
+        try:
+            data = path.read_bytes()
+            lines = data.decode("utf-8").splitlines()
+        except (OSError, UnicodeError) as exc:
+            raise StreamsError(f"could not read handover {relative}: {exc}") from exc
+        if (b"\x00" in data or not lines or lines[0] != f"session: {row.session}"
+                or not any(line.strip() for line in lines[1:])):
+            raise StreamsError(
+                f"handover {relative} must start with 'session: {row.session}' and contain a nonempty UTF-8 body"
+            )
+        return relative.as_posix()
+    raise StreamsError(f"missing handover for session {row.session}: {canonical}")
 
 
-def close_stream(index: Path, project: Project, stream_id: str) -> list[str]:
+def close_stream(index: Path, project: Project, stream_id: str) -> CloseResult:
     stream_dir = _require_stream(index, project, stream_id)
     path = stream_dir / "threads.tsv"
     rows = load_threads(path)
+    if len({row.session for row in rows}) != len(rows):
+        raise StreamsError("ambiguous recorded session identity; refusing handover approval")
     open_threads = [row for row in rows if row.role != "coordinator" and row.status is not Status.archived]
-    missing = [f"handover/{row.role}.md" for row in open_threads if not _has_handover(stream_dir, row.role)]
-    if missing:
-        raise StreamsError(f"stream {stream_id} has no " + ", ".join(missing))
+    handovers: list[str] = []
+    for row in rows:
+        if row.role == "coordinator":
+            continue
+        try:
+            relative = _validated_handover(stream_dir, row)
+        except StreamsError:
+            if row.status is not Status.archived:
+                raise
+            continue
+        # A busy close may already have archived this worker without committing its evidence.
+        handovers.append(relative)
     report: list[str] = []
     for row in open_threads:
         piweb.archive(row.session)
@@ -517,7 +566,7 @@ def close_stream(index: Path, project: Project, stream_id: str) -> list[str]:
             transition(row, Status.done)
             report.append(f"done {row.session} coordinator")
     save_threads(path, rows)
-    return report
+    return CloseResult(tuple(report), tuple(handovers))
 
 
 def adopt_thread(

@@ -69,14 +69,14 @@ class GeneratedStateContractTests(EngineCase):
             self.assertNotIn(stale, role)
 
     def test_worker_brief_uses_state_and_disables_overlay_planning(self) -> None:
-        brief = threads.render_brief(stream="contract", stream_dir=str(self.stream), role="worker", repo="alpha", worktree=str(self.fx.alpha_wt), branch="feat-a", base="abc", note="Only the assigned slice.")
+        brief = threads.render_brief(session_id="worker-contract", stream="contract", stream_dir=str(self.stream), role="worker", repo="alpha", worktree=str(self.fx.alpha_wt), branch="feat-a", base="abc", note="Only the assigned slice.")
         self.assertIn(str(self.stream / "STATE.md"), brief)
         self.assertNotIn(str(self.stream / "STREAM.md"), brief)
         self.assertIn("Do not use TODO.md or PLAN.md", brief)
         self.assertIn("On demand", brief)
         self.assertIn("Only the assigned slice.", brief)
         self.assertIn(str(self.fx.alpha_wt), brief)
-        self.assertIn("handover/worker.md", brief)
+        self.assertIn("handover/worker/worker-contract.md", brief)
 
     def test_canonical_status_reads_first_line_authority_and_opaque_log_without_registry_reads(self) -> None:
         source = PREFIX.replace(b"ratified: ZF notice 42, charter v3", b"ratified: no", 1)

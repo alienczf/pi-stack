@@ -33,7 +33,7 @@ class CloseTests(EngineCase):
         (self.stream_dir / "handover").mkdir(parents=True)
         seed_ratified_stream(self.stream_dir, self.root.name)
         (self.stream_dir / "threads.tsv").write_text(ROWS, encoding="utf-8")
-        (self.stream_dir / "handover" / "datapull.md").write_text("intent: pull\n", encoding="utf-8")
+        (self.stream_dir / "handover" / "datapull.md").write_text("session: t-1\nintent: pull\n", encoding="utf-8")
         self.stub.requests.clear()
 
     def statuses(self) -> list[str]:
@@ -44,12 +44,12 @@ class CloseTests(EngineCase):
         (self.stream_dir / "handover" / "review.md").write_text("  \n", encoding="utf-8")
         refused = self.run_streams("close", "etl")
         self.assertEqual(refused.returncode, 1)
-        self.assertEqual(refused.stderr, "stream etl has no handover/review.md\n")
+        self.assertEqual(refused.stderr, "handover handover/review.md must start with 'session: t-2' and contain a nonempty UTF-8 body\n")
         self.assertEqual(self.stub.requests, [])
         self.assertEqual((self.stream_dir / "threads.tsv").read_text(encoding="utf-8"), ROWS)
 
     def test_archives_open_threads_and_marks_the_coordinator_done(self) -> None:
-        (self.stream_dir / "handover" / "review.md").write_text("intent: review\n", encoding="utf-8")
+        (self.stream_dir / "handover" / "review.md").write_text("session: t-2\nintent: review\n", encoding="utf-8")
         closed = self.run_streams("close", "etl")
         self.assertEqual(closed.returncode, 0, closed.stderr)
         self.assertEqual(closed.stdout, "archived t-1 datapull\narchived t-2 review\ndone coord-1 coordinator\n")
@@ -66,7 +66,7 @@ class CloseTests(EngineCase):
         self.assertEqual(git(self.stream_dir, self.env, "status", "--porcelain"), "")
 
     def test_rerun_after_a_busy_thread_archives_only_what_is_left(self) -> None:
-        (self.stream_dir / "handover" / "review.md").write_text("intent: review\n", encoding="utf-8")
+        (self.stream_dir / "handover" / "review.md").write_text("session: t-2\nintent: review\n", encoding="utf-8")
         self.stub.set_routes([("POST", "/api/sessions/t-2/archive", 409, BUSY)])
         stopped = self.run_streams("close", "etl")
         self.assertEqual(stopped.returncode, 1)
