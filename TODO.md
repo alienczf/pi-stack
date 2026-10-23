@@ -59,14 +59,23 @@ Structured answers return 501. Stop does not dispose the resident runtime. Queue
 ## Parent verification
 
 - [x] The design was written first at `docs/harness-program/20-prime-cli-design.md` in the shared docs worktree and remains uncommitted.
-- [x] Repeat all 40 Prime offline tests and all 105 existing stream tests on the implementation branch.
+- [x] Repeat the final 49 Prime offline tests and all 105 existing stream tests on the implementation branch.
 - [x] Run the real stable v0.10.1 daemon under this user with a dedicated socket and agent directory. No sudo or service installation.
-- [x] Exercise every mapped command against owned sessions. Queue tests hold a native input pause and clear inputs before release, so admission tests do not invoke an unintended model.
+- [x] Exercise every mapped command against owned sessions. Default checks now submit no text. Explicit inference mode verifies queued admission and clears it inside the pause scope, without claiming safety after connection loss or successful model delivery.
 - [x] Record explicit model-set refusal, unsupported answer, and xhigh-to-off metadata clamp rather than claim parity.
 - [x] Run the full installer fixture. It initially failed because its synthetic source clone omitted the new installer helper. Add the helper to that fixture and rerun successfully.
-- [ ] Consume independent same-model final review.
-- [ ] Attempt inference only with openai-codex/gpt-6.1-sol. Stop on missing credentials or quota. Record exact error and clean up owned sessions.
-- [ ] Stop the owned daemon, finalize artifact 20, and hand back local commits without pushing.
+- [x] Consume independent same-model final review. All four accepted findings were verified fixed at 8ff0b59.
+- [x] Attempt inference only with openai-codex/gpt-6.1-sol. Prime returned `No API key found for openai-codex.` No credentials or provider were changed, and model attempts stopped.
+- [x] Preserve the exact failure through native prompt_and_wait in the live-check script. The initial admission-plus-message-poll probe timed out because Prime persisted no assistant error row. Add a regression and rerun all 49 Prime tests.
+- [x] Verify installed agent-cli forwarding to the real socket with durable IDs and archived metadata.
+- [x] Archive every owned session and stop both owned daemons through their dedicated sockets. The final check reported zero retained sessions and the final daemon socket was removed.
+- [x] Record the final blocked result in artifact 20. Keep this session's design edits uncommitted and code commits local. No pushes or STATUS.md edits.
+
+## Final result
+
+BLOCKED, not full parity. The exact native inference error was `No API key found for openai-codex.` The stable catalog also clamped requested xhigh to off and rejected native model selection for gpt-6.1-sol. Structured answers, exact runtime-disposing stop, safe internal queue replay, atomic archive, and real off-host connectivity remain documented gaps. No successful inference, active-run steering delivery, or compaction is claimed.
+
+Small real-server reports remain outside git under `/tmp/prime-cli-check-v5p3iz67/`. The final inference report is `final-inference-check-exact.json`. Code, tests, and small docs are the only committed artifacts.
 
 ## Constraints
 
