@@ -172,6 +172,19 @@ def _parser() -> argparse.ArgumentParser:
         if name == "ruling":
             operation.add_argument("--notice-id", required=True, help="human ruling provenance, not an authentication receipt")
             operation.add_argument("--supersedes-file", help="exact retired Rules text; no automatic classification")
+    for name in ("check", "read-entry", "update", "close"):
+        command = state_sub.add_parser(name)
+        command.add_argument("stream")
+        if name == "read-entry":
+            command.add_argument("entry")
+        if name in {"update", "close"}:
+            command.add_argument("--expect", required=True)
+    poc = sub.add_parser("poc")
+    commands = poc.add_subparsers(dest="poc_cmd", required=True)
+    for name in ("init", "doctor", "verify"):
+        command = commands.add_parser(name)
+        command.add_argument("--root", required=True)
+        command.add_argument("--stream", required=True)
     return parser
 
 
@@ -459,9 +472,43 @@ def cmd_upgrade(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_prime_state(args):
+    from engine import state
+    stream = Path(args.stream).absolute()
+    try:
+        if args.state_cmd == "read-entry":
+            sys.stdout.write(state.read_entry(stream, args.entry))
+            return 0
+        if args.state_cmd == "check":
+            current = state.check_state(stream)
+            result = {"success": True, "reason": "checked", "state_sha256": current.sha256, "history_files": []}
+        else:
+            payload = json.loads(sys.stdin.read())
+            if args.state_cmd == "close":
+                if not hasattr(state, "close_work"):
+                    raise StreamsError("computed close is not wired")
+                result = state.close_work(stream, expect=args.expect, **payload)
+            else:
+                result = state.update_state(stream, expect=args.expect, **payload)
+    except (StreamsError, OSError, ValueError, TypeError) as exc:
+        result = {"success": False, "reason": str(exc), "state_sha256": None, "history_files": []}
+    print(json.dumps(result, ensure_ascii=False, sort_keys=True, allow_nan=False))
+    return 0 if result["success"] else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
+        if args.cmd == "state":
+            return cmd_prime_state(args) if args.state_cmd in {"check", "read-entry", "update", "close"} else cmd_state(args)
+        if args.cmd == "poc":
+            import importlib.util
+            if importlib.util.find_spec("engine.poc") is None:
+                raise StreamsError("merged PoC commands are not wired yet")
+            from engine import poc
+            result = getattr(poc, args.poc_cmd)(Path(args.root), args.stream)
+            print(json.dumps(result, sort_keys=True, ensure_ascii=False, allow_nan=False))
+            return 0 if result.get("status") == "PASS" else 1
         if args.cmd == "init":
             return cmd_init(args)
         if args.cmd == "new":
@@ -482,8 +529,6 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_close(args)
         if args.cmd == "tick":
             return cmd_tick(args)
-        if args.cmd == "state":
-            return cmd_state(args)
         if args.cmd == "failure":
             return cmd_failure(args)
         if args.cmd == "dcr":

@@ -12,6 +12,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from engine import StreamsError
+from engine.project import git
 from engine.artifacts import parse_state, replace_current_objective, resolve_current_goal, update_current_objective
 
 OBJECTIVE = "Finish \"phase α\", then verify 東京.\n\n".encode()
@@ -209,7 +210,7 @@ class ObjectiveFileTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = Path(tempfile.mkdtemp(prefix="pi-streams-objective-"))
         self.addCleanup(lambda: shutil.rmtree(self.tmp))
-        (self.tmp / ".git").mkdir()
+        git(self.tmp, "init", "--quiet")
         self.path = self.tmp / "STATE.md"
         self.path.write_bytes(STATE)
 
