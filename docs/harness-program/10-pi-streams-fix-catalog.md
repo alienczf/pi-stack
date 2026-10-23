@@ -43,7 +43,7 @@ Installed dependency observations are separate from that Git pin. `W/` means `/h
 
 The bar is a small correction or a change required for the dictated MVP. Items 1, 2, 3, 6, 7, 16, and 18 meet the second bar even where integration crosses repositories. Item 18 is honestly high blast radius because it deletes original sessions; it is included because Z11 requires it, not because deletion is a small patch. They are not represented as one-line fixes. The remaining items remove concrete contradictory defaults or repair existing boundaries.
 
-Historical claims are not assumed current. A's verified `c146285:STATE.md` was 10,195,068 bytes and 165,597 lines. The newer `11-artifact-map.md` reports 654 STATE at 19 KB. Its larger current pickup problem is TODO 465 KB, PLAN 255 KB, context/README 212 KB, STREAM 66 KB, and STATE 19 KB, about 1 MB if read in full. These are map observations, not a new live measurement or proof that 250k tokens entered a request. The map also reports invented ALERTS.md at 294 KB, log/ at 34 GB, and analysis/ at 47 GB.
+Historical claims are not assumed current. A's verified `c146285:STATE.md` was 10,195,068 bytes and 165,597 lines. The later historical observation in `11-artifact-map.md` reports 654 STATE at 19 KB. Its then-observed pickup load includes TODO 465 KB, PLAN 255 KB, context/README 212 KB, STREAM 66 KB, and STATE 19 KB, about 1 MB if read in full. These are map observations, not a new live measurement or proof that 250k tokens entered a request. The map also reports invented ALERTS.md at 294 KB, log/ at 34 GB, and analysis/ at 47 GB.
 
 ### Current artifact contract under Z15
 
@@ -592,7 +592,7 @@ The existing offline suite is `python3 -m unittest discover -s pi-streams/tests`
 |---|---|---|
 | `box: reuse Twingate across remote CLI calls` | Owning deployment source for `pi-web-cli-remote`, `options-01-ssh`, and wrapper tests. Locate and pin it first. | Item 9's reconnect classification. Repeat read-only disposable-stream status calls from the box. |
 
-This companion change does not go into the pi-stack PR or generic host CLI.
+External prerequisite E is Grok Bot's work and is skipped by this implementation writer. This companion change does not go into pi-stack or the generic host CLI.
 
 ### Stack S1. Code-owned artifact operations, then their callers
 
@@ -637,7 +637,7 @@ Run this on a new disposable legacy-layout stream before enabling DCR there. Rea
 | `streams: sync compact and resume with the fixed 150k DCR template` | `engine/tick.py`, small code-owned prompt renderer, maintenance state/adapter tests. | Item 3. Shared STATE goal resolution, AGENTS/STATE reads, no agent-written resume, same SID, no active-tool abort, changed objective/stop/input races. |
 | `streams: describe the implemented DCR sync in coordinator instructions` | AGENTS/skills and literal tests only after code is present. | SYNC safely updates STATE Goals and appends Log, preserves active Rules, and tick-rotates only Log. No TODO/PLAN/index read mandate or failure-driven rule/skill change. |
 
-Build and install the exact tested pi-web artifact before enabling this stack, then require its maintenance capability in doctor. The current installer skips an existing pi-web, so merely reinstalling pi-stack is not this deployment step. Do not revive the superseded 252k native-hook work. Real verification must show no interruption of the running tool and actual resumed task progress.
+Build the exact tested pi-web source artifact and run it only in the isolated verification instance before enabling this stack there. Require its maintenance capability in doctor. Do not replace the global installed package or production service. The current installer skips an existing pi-web, so merely reinstalling pi-stack is not this deployment step. Do not revive the superseded 252k native-hook work. Real verification must show no interruption of the running tool and actual resumed task progress.
 
 ### Stack S4. Make the existing tick a driver
 
@@ -747,6 +747,6 @@ Those historical artifact checks covered the original 15 rows only, not this ame
 
 The reviewed draft hash was `c3771f5e1fb426647cc49649295643215290c4c9ad57c514fd6b3c3487083bda`. Afterward the parent added only source-cited Prime capability/default clarification, the explicit integrated-production-activation gate, and this record. Those narrow clarifications were parent-checked; no second independent review of them is claimed.
 
-Historical direct artifact assertions passed for the then-current 18 unique review rows and matching details, the disjoint 11-mechanical/7-artifact partition, all seven detail fields, Z1-Z11 verdict annotations, O1-O4, failures/ migration, and the F-DCR round-trip plan. Whitespace and stale-design checks pass. Active STATE reads, agent-authored resume, and disposition-gated reinjection are not retained. That superseded draft treated STATE references as baseline or migration. Z15 now requires active STATE reads and replaces its artifact contract.
+Historical direct artifact assertions passed for the then-current 18 unique review rows and matching details, the disjoint 11-mechanical/7-artifact partition, all seven detail fields, Z1-Z11 verdict annotations, O1-O4, failures/ migration, and the F-DCR round-trip plan. Its whitespace and stale-design checks passed against that superseded design, which excluded active STATE reads. Those assertions are not a review of this Z15 amendment. The current contract requires active STATE reads and retains neither agent-authored resume nor disposition-gated reinjection.
 
 Prove It Works required checking the actual catalog and terminal child report. Guard the Context Window kept re-entry and capability checks targeted. Sequence Work into Verifiable Units kept code ahead of template callers and made integrated recovery a production gate. At that historical checkpoint, progress remained in this artifact only, source was clean at `3acf0f0`, and no other project file had been edited, staged, or committed by that amendment. Current progress now belongs in `12-track-1-progress.md`. No implementation, full-suite, deployment, live recovery, or Prime-server verification is claimed. The four open engineering items retain chosen defaults and parked fallbacks; none requires a new ZF policy decision.
