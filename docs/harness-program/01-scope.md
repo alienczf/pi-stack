@@ -6,10 +6,10 @@ Canonical home: branch `docs/harness-program` on alienczf/pi-stack, folder `docs
 
 ## Track 1 — pi-streams must-fix catalog, then the fixes
 
-- **What:** a catalog of every obvious or must-fix change to pi-streams itself. An item qualifies if it has a low blast radius, or if it must change no matter what. That includes the tick (continuation and liveness), the circular recovery, the coordinator compaction boundary imposed in the harness at 252k, removing the numeric-caps kickoff question (D1), the evidence-path archive bug (#37), STATE as a current view, steer delivery acknowledgement, and stale coordinator ids.
+- **What:** a catalog of every obvious or must-fix change to pi-streams itself. An item qualifies if it has a low blast radius, or if it must change no matter what. That includes the tick (continuation and liveness), the circular recovery, the tick-driven dump→compact→resume of the coordinator at 150k (Z3, superseding the 252k target), removing the numeric-caps kickoff question (D1), the evidence-path archive bug (corpus row 37), STATE as a current view, steer delivery acknowledgement, and stale coordinator ids.
 - **Artifact:** `docs/harness-program/10-pi-streams-fix-catalog.md`. It has one table that ZF can review in one sitting, with the fix, its layer, its blast radius and the default for any item that needs his call. It ends with a stacked, ready-to-implement plan of small commits.
 - **Gate:** the catalog is the ONLY thing ZF reviews, as a first pass. After his go-ahead the fixes are implemented, merged to pi-stack main, and every open branch is rebased onto the new main.
-- Frameworky or speculative items go to track 3.
+- Frameworky or speculative items go to track 3, along with the per-ask lifecycle, self-grading and constraint lifetimes (Z2).
 
 ## Track 2 — prime-agent CLI access (runs now, in parallel)
 
