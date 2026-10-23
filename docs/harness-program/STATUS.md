@@ -9,7 +9,7 @@ tracking_issue: https://github.com/alienczf/pi-stack/issues/38
 box_mirror: /workspace/harness-program
 host_docs_worktree: /home/alphalab/Projects/worktrees/pi-stack-harness-program
 host_input_copy: /home/alphalab/Projects/pi-stack/streams/pi-streams-harness/context/harness-program
-updated: "2026-10-23T15:55+08:00 (driver run: T4 done 15:45, 42 passed gate; T1 streaming S1 after-stack check at 73.0% ctx; T3 streaming 31 at 78.9%; T2 idle blocked on Prime login; T5 standby until 31 passes)"
+updated: "2026-10-23T16:30+08:00 (driver run: ChatGPT usage limit hit 16:14 on openai-codex, reset ~2026-10-30 01:10 SGT; all sessions idle and parked; no provider switch; ZF told once)"
 tracks:
   - id: 1
     name: pi-streams must-fix catalog
@@ -111,6 +111,14 @@ b_unchanged_done: true (2026-10-23T15:55+08:00, gate passed)
 merged_done: false
 comparison_v2_sent: false
 reference_only: [docs/harness-program/41-design-b-prime-detailed.md]
+usage_limit:
+  open: 2026-10-23T16:14+08:00
+  kind: "ChatGPT usage limit (self_serve_business_prolite) on openai-codex; every session errors 'Try again in ~9176 min'"
+  reset_expected: "about 2026-10-30T01:10+08:00 (from 08:14:48Z + 9176 min)"
+  zf_told: 2026-10-23T16:30+08:00 (once, via main chat; never resend)
+  policy: "never switch provider; no prompts, compactions or re-entries until reset; driver runs only collect and stay silent"
+  parked_at: {T1: "idle 73.8%, S1 6b2f1ab done, disposable check pending, async subagent 7f6b0202 was running", T2: "idle 31.9%, blocked on Prime login", T3: "idle 87.3%, mid-edit of 31 (uncommitted, last check assertion failed) - compact before re-entry", T4: "done, 77.5%", T5: "standby 30.1%"}
+  after_reset: "T3 compact via commands/run then re-enter on 31; T1 re-enter from 12-track-1-progress.md (compact first if over 60%); then normal gates"
 env_failure:
   open: 2026-10-23T14:50+08:00
   closed: 2026-10-23T15:05+08:00 (all tracks resumed by 15:09; no fork)
