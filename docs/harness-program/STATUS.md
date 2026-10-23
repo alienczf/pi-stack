@@ -9,7 +9,7 @@ tracking_issue: https://github.com/alienczf/pi-stack/issues/38
 box_mirror: /workspace/harness-program
 host_docs_worktree: /home/alphalab/Projects/worktrees/pi-stack-harness-program
 host_input_copy: /home/alphalab/Projects/pi-stack/streams/pi-streams-harness/context/harness-program
-updated: 2026-10-23T11:58+08:00
+updated: 2026-10-23T12:30+08:00 (driver run: T1 streaming 47.6% still at S1 checkpoint; T2 idle blocked on Prime login, 6bc1242 already pushed; T3 streaming 45.4%, 31 drafted 8 headings; T4 streaming 45.5%, 40 and 41 drafted; no unsteered Z entries)
 tracks:
   - id: 1
     name: pi-streams must-fix catalog
