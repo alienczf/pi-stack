@@ -339,7 +339,7 @@ def check_current_command(stream, identity, expected, *, mode="automatic"):
     from engine.prompts import render
     current = state.check_current_text(stream, expected)
     _, entries = stream_entries(stream)
-    if coordinator_id(stream) != identity.session_id or mode not in {"human", "save"} and not eligible(current, entries):
+    if coordinator_id(stream) != identity.session_id or mode not in {"human", "save", "input"} and not eligible(current, entries):
         raise StreamsError(render("stale", stream_id=Path(stream).name, command_name=mode).strip())
     if current.goals.status == "paused" and mode != "human":
         raise StreamsError("operator stop supersedes automatic work")
@@ -348,7 +348,7 @@ def check_current_command(stream, identity, expected, *, mode="automatic"):
 
 def send_stream_message(client, stream, identity, *, body, command_id=None, sender=None,
                         lane="followUp", mode="human", expected=None, original_entries=(),
-                        attachments=(), wait_result=True, metadata=None):
+                        attachments=(), wait_result=True, metadata=None, sessions_dir=None):
     from engine import state
     from engine.project import stream_lock
     from engine.prompts import render
@@ -369,6 +369,15 @@ def send_stream_message(client, stream, identity, *, body, command_id=None, send
         if prior:
             replies = [e for e in entries.values() if e.command == command and "sent_text_sha256" in e.body]
             return {"sending_status": "Prime replied" if replies else "unknown after connection loss", "entry": replies[0].file if replies else prior[0].file}
+    if mode in {"human", "automatic"}:
+        maintenance = check_compaction(client, stream, identity, sessions_dir=sessions_dir)
+        if maintenance["status"] == "held":
+            return {"sending_status": "not sent", "held": maintenance}
+    with stream_lock(stream):
+        current, entries = stream_entries(stream)
+        prior = [e for e in entries.values() if e.command == command and "goals_rules_sha256" in e.body]
+        if prior:
+            return {"sending_status": "Prime replied", "entry": prior[0].file}
         expected = expected or current.goals_rules_sha256
         check_current_command(stream, identity, expected, mode=mode)
         resolve_session(client, identity.session_id, identity.active_session_id)
@@ -388,16 +397,19 @@ def send_stream_message(client, stream, identity, *, body, command_id=None, send
         client.write("prompt_and_wait", command_id=command, activeSessionId=identity.active_session_id,
                      message=text, streamingBehavior=lane)
     pending = PendingMessage(command, identity, text, tuple(original_entries), mode)
-    return finish_message(client, stream, pending) if wait_result else pending
+    return finish_message(client, stream, pending, sessions_dir=sessions_dir) if wait_result else pending
 
 
-def finish_message(client, stream, pending):
+def finish_message(client, stream, pending, *, sessions_dir=None):
     frame = client.wait(pending.command_id)
     data = object_data(client.query("get_messages", activeSessionId=pending.identity.active_session_id))
     messages = array_field(data, "messages")
     saved = save_reply(stream, session_id=pending.identity.session_id, command_id=pending.command_id,
                        sent_text=pending.text, frame=frame, messages=messages)
-    return {"sending_status": "Prime replied", "frame": frame, "entry": saved["entry"], "pending": pending}
+    result = {"sending_status": "Prime replied", "frame": frame, "entry": saved["entry"], "pending": pending}
+    if pending.mode in {"human", "automatic"} and frame["success"]:
+        result["compaction"] = check_compaction(client, stream, pending.identity, sessions_dir=sessions_dir)
+    return result
 
 
 def stop_session(client, stream, identity, *, sender=None, command_id=None):
@@ -433,3 +445,219 @@ def stop_session(client, stream, identity, *, sender=None, command_id=None):
     except (StreamsError, OSError):
         result["unsaved"] = True
     return result
+
+
+def native_idle(client, identity):
+    _, connection = resolve_session(client, identity.session_id, identity.active_session_id)
+    summary = object_data(client.query("get_state", activeSessionId=identity.active_session_id))
+    queue = object_data(client.query("get_queue", activeSessionId=identity.active_session_id))
+    idle = all(connection.get(key) is False for key in ("isStreaming", "isCompacting", "isBashRunning"))
+    idle = idle and summary.get("hasRunningSubagents") is False and queue.get("steering") == [] and queue.get("followUp") == []
+    idle = idle and not connection.get("activeToolNames")
+    return bool(idle), connection
+
+
+def branch_entries(tree):
+    nodes = array_field(object_data(tree), "flatNodes")
+    entries = {}
+    for node in nodes:
+        entry = object_data(object_data(node).get("entry"))
+        if not isinstance(entry.get("id"), str) or entry["id"] in entries:
+            raise StreamsError("invalid native tree entry identity")
+        entries[entry["id"]] = entry
+    branch, seen, leaf = [], set(), tree.get("leafId")
+    while leaf is not None:
+        if leaf in seen or leaf not in entries:
+            raise StreamsError("native branch is missing or cyclic")
+        seen.add(leaf)
+        entry = entries[leaf]
+        branch.append(entry)
+        leaf = entry.get("parentId")
+    return branch
+
+
+def read_compaction_entry(tree, before_ids, native_result, session_file, sessions_dir, identity):
+    from engine.state import sha256
+    summary = object_data(native_result).get("summary")
+    if not isinstance(summary, str) or not summary:
+        raise StreamsError("compact reply has no actual summary")
+    candidates = [e for e in branch_entries(tree) if e.get("type") == "compaction" and e["id"] not in before_ids]
+    if len(candidates) != 1 or candidates[0].get("summary") != summary:
+        raise StreamsError("missing or ambiguous new matching current-branch compaction")
+    path, root = Path(session_file), Path(sessions_dir)
+    if not path.is_absolute() or not root.is_absolute() or not path.is_relative_to(root) or path == root:
+        raise StreamsError("native transcript is outside the owned session directory")
+    if any(item.is_symlink() for item in (path, *path.parents, root, *root.parents)):
+        raise StreamsError("native transcript symlink escape")
+    try:
+        text = path.read_bytes().decode("utf-8")
+        rows = [json.loads(line, parse_constant=reject_json_constant) for line in text.split("\n") if line]
+    except (OSError, ValueError, UnicodeError) as exc:
+        raise StreamsError(f"native compaction disk readback failed: {exc}") from exc
+    if not rows or rows[0].get("type") != "session" or rows[0].get("id") != identity.session_id:
+        raise StreamsError("native transcript durable identity differs")
+    matches = [row for row in rows[1:] if row.get("id") == candidates[0]["id"]]
+    if len(matches) != 1 or any(matches[0].get(key) != candidates[0].get(key) for key in ("id", "type", "summary")):
+        raise StreamsError("native compaction is not persisted with matching ID/type/summary")
+    return {"id": matches[0]["id"], "type": matches[0]["type"], "summary": summary, "path": str(path), "sha256": sha256(text)}
+
+
+def dcr_entries(entries, session_id):
+    return sorted((e for e in entries.values() if "threshold_percent" in e.body and e.session == session_id), key=lambda e: e.timestamp)
+
+
+def check_compaction(client, stream, identity, *, sessions_dir=None):
+    settings = validate_stream_settings(stream)
+    current, entries = stream_entries(stream)
+    notes = dcr_entries(entries, identity.session_id)
+    if notes and notes[-1].body["result"] in {"requested", "saving", "paused", "compacting", "unknown", "verified"}:
+        return {"status": "held", "reason": "pending or unknown DCR"}
+    if unresolved(entries):
+        return {"status": "held", "reason": "unknown prior send"}
+    replies = [e for e in entries.values() if "sent_text_sha256" in e.body]
+    if replies and max(replies, key=lambda e: e.timestamp).body["success"] is not True:
+        return {"status": "held", "reason": "native failure"}
+    _, connection = resolve_session(client, identity.session_id, identity.active_session_id)
+    usage = connection.get("contextUsage")
+    percent = usage.get("percent") if isinstance(usage, dict) else None
+    if isinstance(percent, bool) or not isinstance(percent, (int, float)) or not math.isfinite(percent) or not 0 <= percent <= 100:
+        return {"status": "unknown", "reason": "native percentage is unknown"}
+    threshold = settings["compaction"]["thresholdPercent"]
+    if percent <= threshold:
+        return {"status": "not-due", "percent": percent}
+    if sessions_dir is None:
+        raise StreamsError("compaction is due but owned native session storage is unwired")
+    return run_compaction(client, stream, identity, trigger="percentage", percent=percent,
+                          sessions_dir=sessions_dir, threshold_percent=threshold)
+
+
+def _dcr_current(stream, identity, baseline):
+    from engine import state
+    current = state.check_state(stream)
+    if coordinator_id(stream) != identity.session_id or current.goals.status == "paused":
+        raise StreamsError("stop or target change supersedes DCR")
+    if current.rules_text != baseline.rules_text or (current.goals.north_star, current.goals.original_entry, current.goals.objective, current.goals.status) != (baseline.goals.north_star, baseline.goals.original_entry, baseline.goals.objective, baseline.goals.status):
+        raise StreamsError("unrelated current instruction change supersedes DCR")
+    old = {w.original_entry: w for w in baseline.goals.work}
+    new = {w.original_entry: w for w in current.goals.work}
+    if any(new.get(ref) != item for ref, item in old.items()):
+        raise StreamsError("current work changed during DCR")
+    if any(worker["worktree"] == str(stream) for work in current.goals.work for worker in work.workers):
+        raise StreamsError("known worker mutates the stream worktree")
+    return current
+
+
+def run_compaction(client, stream, identity, *, trigger, sessions_dir, threshold_percent=None, percent=None, command_id=None):
+    from engine import state
+    from engine.project import stream_lock
+    from engine.prompts import render
+    stream = Path(stream)
+    threshold = validate_stream_settings(stream)["compaction"]["thresholdPercent"]
+    if threshold_percent is not None and threshold_percent != threshold or trigger not in {"explicit", "percentage"}:
+        raise StreamsError("invalid DCR trigger or threshold")
+    command = command_id or str(uuid.uuid4())
+    pause = None
+    with stream_lock(stream):
+        baseline, entries = stream_entries(stream)
+        previous = dcr_entries(entries, identity.session_id)
+        if previous and previous[-1].body["result"] in {"requested", "saving", "paused", "compacting", "unknown", "verified"}:
+            return {"status": "held", "reason": "pending or unknown DCR"}
+        repeated = [e for e in previous if e.command == command]
+        if repeated:
+            return {"status": repeated[-1].body["result"], "command": command}
+        if previous and previous[-1].body["result"] == "deferred" and previous[-1].body["dump_entry"] is None:
+            command = previous[-1].command
+        if unresolved(entries) or baseline.goals.status == "paused":
+            return {"status": "held", "reason": "stopped or unknown native send"}
+        note = {"command": command, "trigger": trigger, "percent": percent, "threshold_percent": threshold,
+                "before_entry": None, "dump_entry": None, "compaction_entry": None, "next_command": None,
+                "result": "requested", "error": None}
+        retained = [e for e in previous if e.command == command and e.file.endswith("-dcr-request.md")]
+        if retained:
+            note = dict(retained[0].body)
+        def record(purpose, result, error=None):
+            note["result"], note["error"] = result, error
+            return state.append_log(stream, subject="DCR " + result, body=dict(note), session_id=identity.session_id,
+                                    command_id=command, purpose="dcr-" + purpose, locked=True)
+        record("request", "requested")
+    try:
+        idle, connection = native_idle(client, identity)
+        if not idle:
+            with stream_lock(stream):
+                record("deferred", "deferred")
+            return {"status": "deferred", "command": command}
+        before = set(entries)
+        dump = send_stream_message(client, stream, identity, body=render("save"), mode="save", original_entries=[w.original_entry for w in baseline.goals.work], sessions_dir=sessions_dir)
+        if dump.get("frame", {}).get("success") is not True:
+            raise StreamsError("save-STATE native result failed or unknown")
+        baseline, after = stream_entries(stream)
+        checked_saves = [e for ref, e in after.items() if ref not in before and e.file.endswith("-update.md")]
+        if not checked_saves:
+            raise StreamsError("save-STATE turn did not perform a checked update")
+        if baseline.goals.status == "paused":
+            raise StreamsError("operator stop supersedes DCR")
+        idle, connection = native_idle(client, identity)
+        note["before_entry"] = connection.get("leafId")
+        note["dump_entry"] = connection.get("leafId")
+        with stream_lock(stream):
+            record("saved", "saving")
+        paused = object_data(client.query("acquire_session_input_pause", activeSessionId=identity.active_session_id, leaseKey=command))
+        pause = paused.get("pauseId")
+        if not isinstance(pause, str) or not pause:
+            raise StreamsError("native input pause has no ID")
+        note["pause_id"] = pause
+        with stream_lock(stream):
+            record("paused", "paused")
+        idle, connection = native_idle(client, identity)
+        if not idle:
+            with stream_lock(stream):
+                record("deferred-after-save", "deferred")
+            return {"status": "deferred", "command": command}
+        tree = client.query("get_session_tree", activeSessionId=identity.active_session_id)
+        before_ids = {e["id"] for e in branch_entries(tree) if e.get("type") == "compaction"}
+        with stream_lock(stream):
+            _dcr_current(stream, identity, baseline)
+            record("before-compact", "compacting")
+            compact_id = client.write("compact", activeSessionId=identity.active_session_id, customInstructions=render("compact"))
+        compact = client.wait(compact_id)
+        if compact["success"] is not True:
+            raise StreamsError("native compact failed: " + str(compact.get("error")))
+        _, connection = resolve_session(client, identity.session_id, identity.active_session_id)
+        tree = client.query("get_session_tree", activeSessionId=identity.active_session_id)
+        readback = read_compaction_entry(tree, before_ids, compact.get("data"), connection.get("sessionFile", ""), sessions_dir, identity)
+        note["compaction_entry"] = readback["id"]
+        with stream_lock(stream):
+            current = _dcr_current(stream, identity, baseline)
+            note["readback"] = readback
+            note["native_result"] = compact
+            record("verified", "verified")
+            _, after = stream_entries(stream)
+            sent = {e.command for e in after.values() if "goals_rules_sha256" in e.body}
+            incoming = sorted((e for e in after.values() if state._original(e) and e.command not in sent), key=lambda e: e.timestamp)
+            if incoming:
+                source = incoming[0]
+                next_body, next_id, mode, refs = source.body["text"], source.command, "input", [source.file]
+            elif eligible(current, after):
+                next_body, next_id, mode, refs = render("resume", compaction_entry_id=readback["id"], session_id=identity.session_id), str(uuid.uuid4()), "resume", [w.original_entry for w in current.goals.work]
+            else:
+                next_body = None
+        pending = None
+        if next_body is not None:
+            pending = send_stream_message(client, stream, identity, body=next_body, command_id=next_id, mode=mode,
+                         expected=current.goals_rules_sha256, original_entries=refs, lane="followUp", wait_result=False, sessions_dir=sessions_dir)
+            note["next_command"] = pending.command_id
+        client.query("release_session_input_pause", activeSessionId=identity.active_session_id, pauseId=pause)
+        pause = None
+        result = finish_message(client, stream, pending, sessions_dir=sessions_dir) if pending else None
+        if result and result.get("frame", {}).get("success") is not True:
+            raise StreamsError("post-compaction input result failed")
+        with stream_lock(stream):
+            record("complete", "complete")
+        return {"status": "verified", "command": command, "readback": readback, "dump": dump, "continuation": result}
+    except (StreamsError, OSError) as exc:
+        with stream_lock(stream):
+            record("unknown", "unknown", str(exc))
+        return {"status": "unknown", "command": command, "error": str(exc)}
+    finally:
+        if pause:
+            client.query("release_session_input_pause", activeSessionId=identity.active_session_id, pauseId=pause)

@@ -9,6 +9,8 @@ class WorkerTests(PrimeCase):
     def test_clean_worker_and_optional_reviewer_keep_product_instructions(self):
         source = self.active()
         for reviewer in (False, True):
+            session = "reviewer-durable" if reviewer else "worker-durable"
+            routing = "reviewer-routing" if reviewer else "worker-routing"
             worktree = self.root / ("review-worktree" if reviewer else "product-worktree")
             worktree.mkdir()
             project.git(worktree, "init")
@@ -18,26 +20,26 @@ class WorkerTests(PrimeCase):
                 kind = request["command"]["type"]
                 if kind == "create":
                     self.assertEqual(request["command"]["config"]["cwd"], str(worktree))
-                    data = {"sessionId": "worker-durable", "activeSessionId": "worker-routing"}
+                    data = {"sessionId": session, "activeSessionId": routing}
                 elif kind == "get_connection_state":
-                    data = {"sessionId": "worker-durable", "activeSessionId": "worker-routing", "cwd": str(worktree), "thinkingLevel": "xhigh", "model": {"provider": "openai-codex", "id": "gpt-6.1-sol"}}
+                    data = {"sessionId": session, "activeSessionId": routing, "cwd": str(worktree), "thinkingLevel": "xhigh", "model": {"provider": "openai-codex", "id": "gpt-6.1-sol"}}
                 elif kind == "get_messages":
                     data = {"messages": [{"role": "assistant", "content": [{"type": "text", "text": "Worker summary with uncertainty"}]}]}
                 else:
                     current = state.check_state(self.stream)
-                    self.assertEqual(current.goals.work[0].workers[-1]["session"], "worker-durable")
+                    self.assertEqual(current.goals.work[0].workers[-1]["session"], session)
                     text = request["command"]["message"]
-                    self.assertTrue(text.startswith('Context handover for clean worker session "worker-durable".'))
+                    self.assertTrue(text.startswith(f'Context handover for clean worker session "{session}".'))
                     self.assertIn('Read the installed process entry at "/installed/poteto/SKILL.md"', text)
                     self.assertNotIn("Current files for stream", text)
                     self.assertNotIn(str(self.stream / "STATE.md"), text)
                     self.assertEqual("Review the handed-over result adversarially" in text, reviewer)
-                    self.assertEqual(load_threads(self.stream / "threads.tsv")[-1].session, "worker-durable")
+                    self.assertEqual(load_threads(self.stream / "threads.tsv")[-1].session, session)
                     data = None
                 return stub.response(request, data)
             with StubPrime(handler) as stub, PrimeClient(stub.path) as client:
                 identity, result = spawn_prime_worker(client, self.stream, worktree=worktree, work="Review A" if reviewer else "Implement A", original_entries=[source], poteto_path="/installed/poteto/SKILL.md", model="openai-codex/gpt-6.1-sol", thinking="xhigh", reviewer=reviewer)
-            self.assertEqual(identity.session_id, "worker-durable")
+            self.assertEqual(identity.session_id, session)
             self.assertEqual(result["frame"]["success"], True)
             self.assertEqual((worktree / "AGENTS.md").read_text(), "Keep native product instructions.\n")
             self.assertFalse((worktree / "STATE.md").exists())
