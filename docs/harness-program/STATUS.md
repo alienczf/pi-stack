@@ -9,7 +9,7 @@ tracking_issue: https://github.com/alienczf/pi-stack/issues/38
 box_mirror: /workspace/harness-program
 host_docs_worktree: /home/alphalab/Projects/worktrees/pi-stack-harness-program
 host_input_copy: /home/alphalab/Projects/pi-stack/streams/pi-streams-harness/context/harness-program
-updated: "2026-10-24T05:22+08:00 (driver run: T1 streaming 44.5%, S2a at 8aa63e8 disposable=pass; T6 streaming 40.8% waiting on own subagent (files edited 05:17), fixes uncommitted, head 7503ca4; T2 idle 31.9%, Prime login not recorded)"
+updated: "2026-10-24T05:58+08:00 (driver run: T1 streaming 53.1% on S2a 8aa63e8 disposable=pass; T6 idle 47.0%, TRACK 6 STATUS blocked on operator Codex login, f5beb90 pushed; Prime-login blocker note sent once; T2 idle, login not recorded)"
 tracks:
   - id: 1
     name: pi-streams must-fix catalog
@@ -106,9 +106,11 @@ tracks:
     session: 01a169cc-9519-7411-bf2f-51073758fc53
     host: options-01
     model: openai-codex/gpt-6.1-sol@xhigh
-    phase: "building - all 8 units committed (7503ca4); fresh clean-HOME install, init and doctor passed; native verifier stopped at the expected missing openai-codex login (no inference yet); follow-up fixes uncommitted; streaming 40.8% at 04:28, no TRACK 6 STATUS line yet. When it goes idle with code committed and only login missing, send the one Prime-login blocker note."
+    phase: "blocked-on-prime-codex-login - TRACK 6 STATUS blocked | feat/merged-poc@f5beb90 | suite=pass (221 streams + 72 root + 8 installer) | install=pass (clean HOME) | e2e=pending native inference. Idle 47.0% at 05:58."
+    milestones_sent: [track-6-blocker-prime-login 2026-10-24T05:58+08:00]
+    login_command: "HOME=/home/alphalab/.cache/pi-stack-track6/20261023T172837Z/home /home/alphalab/.cache/pi-stack-track6/20261023T172837Z/home/pi-stack-merged-poc-test/bin/prime-agent then /login in the TUI"
     started: 2026-10-24T01:26+08:00
-    pushed: feat/merged-poc 7503ca4 (2026-10-24 04:28, driver; unit 8 amended, force-with-lease over 491f163)
+    pushed: feat/merged-poc f5beb90 (2026-10-24 05:57, driver; fast-forward over 7503ca4)
     code_branch: feat/merged-poc (session creates worktree /home/alphalab/Projects/worktrees/pi-stack-merged-poc off local main + feat/prime-cli)
     deadline: 2026-10-26T09:00+08:00
     brief: docs/harness-program/briefs/track-6.md (final sha256 4ec99908, aligned to revised 51 section 8)
@@ -164,7 +166,7 @@ env_failure:
 | 3 research | `01a16658` | done 18:21; 31 (A over Prime) passed gate 18:22 | `31-design-a-detailed.md` | feeds 51 |
 | 4 B over prime | `01a166e0` | done; 42 passed gate 15:55 | `40`, `41` (reference), `42-design-b-prime-unchanged.md` | feeds 51 |
 | 5 merged + v2 | `01a1671a` | done; revised 51 and 50 passed the Z25 gate 01:30 | `51-design-merged.md`, `50-a-vs-b.md` v2 | gate merged_revision_z25, then one short note to ZF |
-| 6 merged PoC | `01a169cc` | all 8 units committed (491f163 pushed); fresh clean-HOME install and native end-to-end run in progress | `feat/merged-poc` + install for a fresh external setup | build 51 section 8; tell ZF once when the PoC works (deadline Mon 26 Oct 09:00) |
+| 6 merged PoC | `01a169cc` | built and verified offline (f5beb90 pushed); clean-HOME install passes; native end-to-end waits on ZF Codex login (note sent 05:58) | `feat/merged-poc` + install for a fresh external setup | build 51 section 8; tell ZF once when the PoC works (deadline Mon 26 Oct 09:00) |
 
 **Usage limit 16:14-18:11 (closed):** ChatGPT usage limit on openai-codex; ZF reset it at 18:06 and work resumed on the same provider.
 
