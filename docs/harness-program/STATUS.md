@@ -9,7 +9,7 @@ tracking_issue: https://github.com/alienczf/pi-stack/issues/38
 box_mirror: /workspace/harness-program
 host_docs_worktree: /home/alphalab/Projects/worktrees/pi-stack-harness-program
 host_input_copy: /home/alphalab/Projects/pi-stack/streams/pi-streams-harness/context/harness-program
-updated: "2026-10-24T05:58+08:00 (driver run: T1 streaming 53.1% on S2a 8aa63e8 disposable=pass; T6 idle 47.0%, TRACK 6 STATUS blocked on operator Codex login, f5beb90 pushed; Prime-login blocker note sent once; T2 idle, login not recorded)"
+updated: "2026-10-24T06:25+08:00 (driver run: T1 streaming 54.9% on S3 5d7e205; T6 idle 47.0% blocked on operator Codex login, f5beb90; T2 idle, login not recorded)"
 tracks:
   - id: 1
     name: pi-streams must-fix catalog
