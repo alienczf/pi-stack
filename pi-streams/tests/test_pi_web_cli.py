@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import os
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
 from stub_piweb import StubPiWeb
+from support import make_env
 
 CLI = Path(__file__).resolve().parents[2] / "bin" / "pi-web-cli"
 LIVE = "http://127.0.0.1:8504"
@@ -103,6 +105,12 @@ PROMPT_500_STDOUT = """\
 
 class PiWebCliTests(unittest.TestCase):
     def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory(prefix="pi-web-cli-test-")
+        self.addCleanup(temporary.cleanup)
+        self.home = Path(temporary.name) / "home"
+        self.xdg = Path(temporary.name) / "config"
+        self.home.mkdir()
+        self.xdg.mkdir()
         self.stub = StubPiWeb()
         self.stub.start()
         self.assertNotEqual(self.stub.url.rstrip("/"), LIVE)
@@ -114,12 +122,7 @@ class PiWebCliTests(unittest.TestCase):
         target = self.stub.url if url is None else url
         if target.rstrip("/") == LIVE:
             raise AssertionError("refusing to call the live PI WEB server")
-        env = {
-            "PATH": os.environ["PATH"],
-            "PI_WEB_URL": target,
-            "LANG": "C.UTF-8",
-            "LC_ALL": "C.UTF-8",
-        }
+        env = make_env(self.home, self.xdg, target)
         return subprocess.run(
             [os.fspath(CLI), *args],
             env=env,

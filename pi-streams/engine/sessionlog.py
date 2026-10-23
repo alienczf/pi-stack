@@ -56,6 +56,16 @@ def read_record(path: Path, session_id: str, entry_id: str, expected_sha256: str
     return EvidenceRecord(session_id, entry_id, digest, raw, number, str(path), archived)
 
 
+def compaction_record(evidence: EvidenceRecord) -> dict:
+    try:
+        entry = json.loads(evidence.raw)
+    except ValueError as exc:
+        raise StreamsError("native compaction evidence is not valid JSON") from exc
+    if not isinstance(entry, dict) or entry.get("type") != "compaction" or entry.get("id") != evidence.entry_id or not isinstance(entry.get("summary"), str) or not entry["summary"].strip() or not isinstance(entry.get("firstKeptEntryId"), str) or not entry["firstKeptEntryId"] or type(entry.get("tokensBefore")) is not int or entry["tokensBefore"] < 0:
+        raise StreamsError("evidence is not a successful persisted native compaction entry")
+    return {"sessionId": evidence.session_id, "entryId": evidence.entry_id, "sha256": evidence.sha256, "tokensBefore": entry["tokensBefore"], "summary": entry["summary"]}
+
+
 def last_assistant(path: Path) -> dict[str, object] | None:
     try:
         with open(path, "rb") as handle:

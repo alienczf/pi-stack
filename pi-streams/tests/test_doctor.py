@@ -81,8 +81,15 @@ class DoctorTests(EngineCase):
             git(stream, self.env, "commit", "-m", "stream")
         return stream
 
+    def _basic_routes(self) -> list[tuple]:
+        return [
+            ("GET", "/api/sessiond/runtime", 200, {"component": "sessiond", "capabilities": ["sessions.maintenanceCheckpoint"]}),
+            ("GET", "/api/sessions", 200, []),
+        ]
+
     def _stream_routes(self) -> list[tuple]:
         return [
+            self._basic_routes()[0],
             ("GET", "/api/sessions", 200, [{"id": "coord-1", "cwd": str(self.home / "etl")}]),
             ("GET", "/api/sessions/coord-1/status", 200, status_body("coord-1")),
         ]
@@ -97,19 +104,20 @@ class DoctorTests(EngineCase):
         self.env["PATH"] = f"{bindir}{os.pathsep}/usr/bin:/bin"
         return str((bindir / "pi").resolve())
 
-    def _report(self, pi: str, pi_web: str, tail: str, streams: str = "") -> str:
+    def _report(self, pi: str, pi_web: str, tail: str, streams: str = "", maintenance: str = "PASS maintenance: receiving checkpoint/input-v1 capability is present") -> str:
         project = str(self.project_file.resolve())
         return (
             f"PASS pi: found at {pi}\n"
             f"{pi_web}\n"
             "PASS steer: prompt accepts --steer\n"
+            f"{maintenance}\n"
             f"PASS project: {project} parses\n"
             f"{streams}"
             "PASS skills: present\n"
             f"{tail}"
         )
 
-    def _lines(self, pi: str, pi_web: str, extra: str = "", streams: str = "") -> str:
+    def _lines(self, pi: str, pi_web: str, extra: str = "", streams: str = "", maintenance: str = "PASS maintenance: receiving checkpoint/input-v1 capability is present") -> str:
         if streams:
             streams = "PASS coordinator: etl exact native identity coord-1\n" + streams
         return self._report(
@@ -117,11 +125,12 @@ class DoctorTests(EngineCase):
             pi_web,
             extra + "PASS systemd: pi-streams-tick.service and pi-streams-tick.timer are installed\n",
             streams,
+            maintenance,
         )
 
     def test_doctor_pass(self) -> None:
         pi = self._pi_on_path()
-        self.stub.set_routes([("GET", "/api/sessions", 200, [])])
+        self.stub.set_routes(self._basic_routes())
         proc = self.run_streams("doctor")
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(proc.stderr, "")
@@ -138,7 +147,7 @@ class DoctorTests(EngineCase):
         proc = self.run_streams("doctor")
         self.assertEqual(proc.returncode, 1)
         self.assertEqual(proc.stderr, "")
-        self.assertEqual(proc.stdout, self._lines(pi, "FAIL pi-web: list failed"))
+        self.assertEqual(proc.stdout, self._lines(pi, "FAIL pi-web: list failed", maintenance="FAIL maintenance: receiving checkpoint/input-v1 capability is unavailable; automatic DCR is disabled"))
 
     def test_doctor_reaches_pi_web_from_its_config_without_pi_web_url(self) -> None:
         pi = self._pi_on_path()
@@ -148,18 +157,18 @@ class DoctorTests(EngineCase):
         config.parent.mkdir(parents=True)
         port = urllib.parse.urlsplit(self.stub.url).port
         config.write_text(json.dumps({"host": "127.0.0.1", "port": port}) + "\n", encoding="utf-8")
-        self.stub.set_routes([("GET", "/api/sessions", 200, [])])
+        self.stub.set_routes(self._basic_routes())
         proc = self.run_streams("doctor")
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(proc.stdout, self._lines(pi, "PASS pi-web: list ok"))
-        self.assertEqual([(method, path) for method, path, _query, _body in self.stub.requests], [("GET", "/api/sessions")])
+        self.assertEqual([(method, path) for method, path, _query, _body in self.stub.requests], [("GET", "/api/sessions"), ("GET", "/api/sessiond/runtime")])
 
     def test_doctor_warns_about_jig_and_leaves_it(self) -> None:
         pi = self._pi_on_path()
         jig = self.fx.alpha / ".pi" / "jig"
         jig.mkdir(parents=True)
         (jig / "state").write_text("kept\n", encoding="utf-8")
-        self.stub.set_routes([("GET", "/api/sessions", 200, [])])
+        self.stub.set_routes(self._basic_routes())
         proc = self.run_streams("doctor")
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(
@@ -174,7 +183,7 @@ class DoctorTests(EngineCase):
         pi.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
         pi.chmod(0o755)
         self.env["PATH"] = "/usr/bin:/bin"
-        self.stub.set_routes([("GET", "/api/sessions", 200, [])])
+        self.stub.set_routes(self._basic_routes())
         proc = self.run_streams("doctor")
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(proc.stdout, self._lines(str(pi.resolve()), "PASS pi-web: list ok"))
@@ -184,7 +193,7 @@ class DoctorTests(EngineCase):
         unit_dir = self.xdg / "systemd" / "user"
         for name in ("pi-streams-tick.service", "pi-streams-tick.timer"):
             (unit_dir / name).unlink()
-        self.stub.set_routes([("GET", "/api/sessions", 200, [])])
+        self.stub.set_routes(self._basic_routes())
         proc = self.run_streams("doctor")
         self.assertEqual(proc.returncode, 1)
         self.assertEqual(proc.stderr, "")
@@ -202,7 +211,7 @@ class DoctorTests(EngineCase):
         for name in ("python3", "git"):
             (bindir / name).symlink_to(shutil.which(name, path="/usr/bin:/bin"))
         self.env["PATH"] = str(bindir)
-        self.stub.set_routes([("GET", "/api/sessions", 200, [])])
+        self.stub.set_routes(self._basic_routes())
         expected = self._report(
             str(pi.resolve()),
             "PASS pi-web: list ok",
@@ -219,7 +228,7 @@ class DoctorTests(EngineCase):
     def test_doctor_names_the_one_missing_tick_unit(self) -> None:
         pi = self._pi_on_path()
         (self.xdg / "systemd" / "user" / "pi-streams-tick.timer").unlink()
-        self.stub.set_routes([("GET", "/api/sessions", 200, [])])
+        self.stub.set_routes(self._basic_routes())
         proc = self.run_streams("doctor")
         self.assertEqual(proc.returncode, 1)
         self.assertEqual(
@@ -279,7 +288,7 @@ class DoctorTests(EngineCase):
         path = self.user_home / ".pi-web" / "projects.json"
         self._write_projects(["/tmp/pi-streams-other-project"])
         before = path.read_bytes()
-        self.stub.set_routes([("GET", "/api/sessions", 200, [])])
+        self.stub.set_routes(self._basic_routes())
         proc = self.run_streams("doctor")
         self.assertEqual(proc.returncode, 0, proc.stderr)
         root = str(self.root.resolve())
@@ -294,7 +303,7 @@ class DoctorTests(EngineCase):
         pi = self._pi_on_path()
         path = self.user_home / ".pi-web" / "projects.json"
         path.unlink()
-        self.stub.set_routes([("GET", "/api/sessions", 200, [])])
+        self.stub.set_routes(self._basic_routes())
         proc = self.run_streams("doctor")
         self.assertEqual(proc.returncode, 0, proc.stderr)
         root = str(self.root.resolve())
@@ -308,7 +317,7 @@ class DoctorTests(EngineCase):
     def test_doctor_accepts_a_project_root_inside_a_listed_directory(self) -> None:
         pi = self._pi_on_path()
         self._write_projects([str(self.tmp)])
-        self.stub.set_routes([("GET", "/api/sessions", 200, [])])
+        self.stub.set_routes(self._basic_routes())
         proc = self.run_streams("doctor")
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(proc.stdout, self._lines(pi, "PASS pi-web: list ok"))

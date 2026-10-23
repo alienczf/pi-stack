@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -41,7 +42,7 @@ def call(args: list[str], stdin: str | None = None) -> dict[str, object]:
         raise StreamsError(f"pi-web-cli {' '.join(args)} returned {type(data).__name__}")
     if proc.returncode != 0 or data.get("ok") is False:
         detail = proc.stderr.strip() or proc.stdout.strip()
-        error = PromptRejected if args[0] == "prompt" and data.get("status") in (400, 404, 409, 422) else StreamsError
+        error = PromptRejected if args[0] in ("prompt", "compact", "maintenance-resume") and data.get("status") in (400, 404, 409, 422) else StreamsError
         raise error(f"pi-web-cli {' '.join(args)} failed: {detail}")
     return data
 
@@ -130,6 +131,89 @@ def prompt(sid: str, text: str, behavior: str | None = None, *, delivery_id: str
     if automatic is not None:
         flags += ["--automatic-admission", json.dumps(automatic, ensure_ascii=False)]
     return call(["prompt", sid, *flags], stdin=text)
+
+
+def command_run(sid: str, text: str) -> dict:
+    data = call(["command-run", sid], stdin=text)
+    result = data.get("result")
+    if data.get("commandAccepted") is not True or not isinstance(result, dict):
+        raise StreamsError("native command acceptance is unconfirmed")
+    return result
+
+
+def maintenance_capabilities() -> bool:
+    data = call(["runtime"])
+    runtime = data.get("runtime")
+    return isinstance(runtime, dict) and runtime.get("component") == "sessiond" and isinstance(runtime.get("capabilities"), list) and "sessions.maintenanceCheckpoint" in runtime["capabilities"]
+
+
+def require_maintenance(sid: str) -> dict[str, object]:
+    status = session_status(sid)
+    require_identity(status, sid)
+    if status.get("maintenanceSupport") != "checkpoint-input-v1":
+        raise StreamsError("receiving maintenance capability is unavailable; automatic DCR is disabled")
+    return status
+
+
+def _maintenance_result(data: dict, sid: str, identity: str, cwd: str) -> dict:
+    result = data.get("result")
+    if not isinstance(result, dict) or type(result.get("version")) is not int or result["version"] != 1 or result.get("id") != identity or result.get("sessionId") != sid:
+        raise StreamsError("maintenance receiver returned a mismatched operation/session identity")
+    native_cwd = result.get("cwd")
+    if not isinstance(native_cwd, str) or Path(native_cwd).resolve() != Path(cwd).resolve():
+        raise StreamsError("maintenance receiver returned a mismatched native cwd")
+    if result.get("state") not in ("prepared", "compacting", "complete", "failed", "uncertain", "superseded", "resuming", "resumed") or type(result.get("inputSequence")) is not int or result["inputSequence"] < 0 or not isinstance(result.get("inputs"), list) or len(result["inputs"]) != result["inputSequence"]:
+        raise StreamsError("maintenance receiver returned malformed phase/input state")
+    return result
+
+
+def compact_at_checkpoint(sid: str, identity: str, expected: dict[str, str], instructions: str) -> dict:
+    if set(expected) != {"sessionId", "cwd", "entryId", "generation"} or expected["sessionId"] != sid or not all(isinstance(value, str) and value for value in expected.values()):
+        raise StreamsError("compaction requires the exact saved native checkpoint")
+    status = require_maintenance(sid)
+    automatic, allowed = automatic_admission(status, sid, expected["cwd"], "wake")
+    safety = status.get("rotationSafety")
+    if not allowed or automatic["generation"] != expected["generation"] or not isinstance(safety, dict) or safety.get("entryId") != expected["entryId"]:
+        raise PromptRejected("saved maintenance checkpoint/generation was superseded")
+    data = call(["compact", sid, identity, "--expected-idle", json.dumps(expected)], stdin=instructions)
+    result = _maintenance_result(data, sid, identity, expected["cwd"])
+    if result.get("entryId") != expected["entryId"] or result.get("generation") != expected["generation"] or result.get("instructions") != instructions:
+        raise StreamsError("maintenance receiver changed the saved compaction intent")
+    return result
+
+
+def maintenance_status(cwd: str, sid: str, identity: str) -> dict:
+    data = call(["maintenance", sid, identity, "--cwd", cwd])
+    return _maintenance_result(data, sid, identity, cwd)
+
+
+def reconcile_maintenance(cwd: str, sid: str, identity: str) -> dict:
+    data = call(["maintenance", sid, identity, "--cwd", cwd, "--reconcile"])
+    return _maintenance_result(data, sid, identity, cwd)
+
+
+def resume_maintenance(sid: str, identity: str, compaction_entry: str, input_sequence: int, automatic: dict[str, str], delivery_id: str, text: str) -> dict:
+    if automatic.get("sessionId") != sid or automatic.get("kind") != "resume" or type(input_sequence) is not int or input_sequence < 0:
+        raise StreamsError("RESUME requires its saved exact session/generation/input sequence")
+    data = call(["maintenance-resume", sid, identity, "--compaction-entry", compaction_entry, "--input-sequence", str(input_sequence), "--delivery-id", delivery_id, "--automatic-admission", json.dumps(automatic)], stdin=text)
+    result = _maintenance_result(data, sid, identity, automatic["cwd"])
+    receipt = result.get("resume")
+    if not isinstance(receipt, dict) or receipt.get("deliveryId") != delivery_id or receipt.get("text") != text or receipt.get("generation") != automatic.get("generation") or receipt.get("inputSequence") != input_sequence:
+        raise StreamsError("RESUME admission intent is unconfirmed or changed")
+    return result
+
+
+def compaction_result(cwd: str, sid: str, identity: str) -> dict | None:
+    operation = maintenance_status(cwd, sid, identity)
+    if operation["state"] in ("prepared", "compacting") or operation["state"] == "superseded" and operation.get("compactionEntryId") is None:
+        return None
+    if operation["state"] in ("failed", "uncertain"):
+        raise StreamsError(f"maintenance {operation['state']}: {operation.get('detail', 'no proven completion')}")
+    entry, digest = operation.get("compactionEntryId"), operation.get("compactionSha256")
+    if not isinstance(entry, str) or not entry or not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None or not isinstance(operation.get("markerEntryId"), str) or not operation["markerEntryId"]:
+        raise StreamsError("maintenance has no exact persisted compaction receipt")
+    evidence = read_evidence(cwd, sid, entry, digest)
+    return sessionlog.compaction_record(evidence)
 
 
 def queue_clear(sid: str) -> None:

@@ -87,6 +87,15 @@ def check_steer() -> list[Finding]:
     return [Finding("FAIL", "steer", "prompt --help does not offer --steer")]
 
 
+def check_maintenance() -> list[Finding]:
+    try:
+        if piweb.maintenance_capabilities():
+            return [Finding("PASS", "maintenance", "receiving checkpoint/input-v1 capability is present")]
+    except StreamsError:
+        pass
+    return [Finding("FAIL", "maintenance", "receiving checkpoint/input-v1 capability is unavailable; automatic DCR is disabled")]
+
+
 def _check_stream(row: StreamRow, harness: str) -> list[Finding]:
     repo = Path(row.path)
     if not (repo / ".git").exists():
@@ -273,6 +282,7 @@ CHECK_FNS: list[Callable[[], list[Finding]]] = [
     check_pi,
     check_pi_web,
     check_steer,
+    check_maintenance,
     check_index,
     check_skills,
     check_jig,

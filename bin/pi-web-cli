@@ -89,6 +89,50 @@ class UsageError(Exception):
     pass
 
 
+def _text_input(argument: str | None) -> str:
+    return argument if argument is not None else sys.stdin.buffer.read().decode("utf-8")
+
+
+def _json_object(text: str, label: str) -> dict:
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise UsageError(f"{label} must be JSON") from exc
+    if not isinstance(value, dict):
+        raise UsageError(f"{label} must be an object")
+    return value
+
+
+def cmd_maintenance(args: argparse.Namespace) -> int:
+    sid = urllib.parse.quote(args.sid, safe="")
+    if args.cmd == "command-run":
+        code, data = req("POST", f"/api/sessions/{sid}/commands/run", {"text": _text_input(args.text)})
+        accepted = code == 200 and isinstance(data, dict) and data.get("type") in ("done", "select")
+        return out({"ok": accepted, "commandAccepted": accepted, "status": code, "result": data}, accepted)
+    if args.cmd == "compact":
+        expected = _json_object(args.expected_idle, "expected idle checkpoint")
+        if expected.get("sessionId") != args.sid or not isinstance(expected.get("cwd"), str):
+            raise UsageError("expected checkpoint must name the exact session and cwd")
+        path = f"/api/sessions/{sid}/maintenance/compact"
+        body = {"cwd": expected["cwd"], "id": args.operation_id, "expectedIdle": expected, "instructions": _text_input(args.text)}
+        method = "POST"
+    elif args.cmd == "maintenance-resume":
+        automatic = _json_object(args.automatic_admission, "automatic admission")
+        if automatic.get("sessionId") != args.sid or not isinstance(automatic.get("cwd"), str) or automatic.get("kind") != "resume":
+            raise UsageError("RESUME requires the saved exact session/cwd/resume generation")
+        path = f"/api/sessions/{sid}/maintenance/resume"
+        body = {"cwd": automatic["cwd"], "id": args.operation_id, "compactionEntryId": args.compaction_entry, "inputSequence": args.input_sequence, "automaticAdmission": automatic, "deliveryId": args.delivery_id, "text": _text_input(args.text)}
+        method = "POST"
+    else:
+        operation = urllib.parse.quote(args.operation_id, safe="")
+        path = f"/api/sessions/{sid}/maintenance/{operation}"
+        method, body = ("POST", {"cwd": args.cwd}) if args.reconcile else ("GET", None)
+        path += "/reconcile" if args.reconcile else "?" + urllib.parse.urlencode({"cwd": args.cwd})
+    code, data = req(method, path, body)
+    ok = code == 200 and isinstance(data, dict) and not data.get("error")
+    return out({"ok": ok, "status": code, "result": data}, ok)
+
+
 def _model_body(args: argparse.Namespace) -> dict[str, str]:
     provider, slash, model_id = args.model.partition("/")
     if slash == "" or provider == "" or model_id == "":
@@ -151,6 +195,28 @@ def main(argv: list[str]) -> int:
     control = sub.add_parser("automatic-admission")
     control.add_argument("sid")
     control.add_argument("mode", choices=("on", "off"))
+    sub.add_parser("runtime")
+    command = sub.add_parser("command-run")
+    command.add_argument("sid")
+    command.add_argument("text", nargs="?")
+    compact = sub.add_parser("compact")
+    compact.add_argument("sid")
+    compact.add_argument("operation_id")
+    compact.add_argument("--expected-idle", required=True)
+    compact.add_argument("text", nargs="?")
+    maintenance = sub.add_parser("maintenance")
+    maintenance.add_argument("sid")
+    maintenance.add_argument("operation_id")
+    maintenance.add_argument("--cwd", required=True)
+    maintenance.add_argument("--reconcile", action="store_true")
+    resume = sub.add_parser("maintenance-resume")
+    resume.add_argument("sid")
+    resume.add_argument("operation_id")
+    resume.add_argument("--compaction-entry", required=True)
+    resume.add_argument("--input-sequence", type=int, required=True)
+    resume.add_argument("--delivery-id", required=True)
+    resume.add_argument("--automatic-admission", required=True)
+    resume.add_argument("text", nargs="?")
     for name, (_method, _suffix, positionals, _build) in VERBS.items():
         verb = sub.add_parser(name)
         verb.add_argument("sid")
@@ -159,6 +225,15 @@ def main(argv: list[str]) -> int:
         if name == "archive":
             verb.add_argument("--expected-idle", help="exact session/cwd/logical entry/generation JSON; refuse stale or busy replacement")
     args = p.parse_args(argv)
+    if args.cmd == "runtime":
+        code, data = req("GET", "/api/sessiond/runtime")
+        ok = code == 200 and isinstance(data, dict) and data.get("component") == "sessiond" and isinstance(data.get("capabilities"), list)
+        return out({"ok": ok, "status": code, "runtime": data}, ok)
+    if args.cmd in ("command-run", "compact", "maintenance", "maintenance-resume"):
+        try:
+            return cmd_maintenance(args)
+        except (UsageError, UnicodeError) as exc:
+            return out({"ok": False, "error": str(exc)}, False)
     if args.cmd == "list":
         return cmd_list(args.cwd)
     if args.cmd == "spawn":
