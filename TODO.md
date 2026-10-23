@@ -1,5 +1,32 @@
 # Track 2 progress
 
+## G20 follow-up
+
+- [x] Phase A: Frame. Continue from pushed bccf159. No Prime login, credential access/import/copy, provider switch, or model inference is authorized in this follow-up.
+- [x] Phase B: Design the workflow. Read both completed investigations. Public same-session queue resumption is feasible. Correlated answers, resident-root disposal without archive, and rich cross-session replay remain unavailable.
+- [x] Phase C: Run the loop. Commit failing regressions before each feasible fix. All 69 Prime fixture tests pass. No push, auth, inference, real daemon, or SSH call by this writer.
+- [ ] Phase D: Keep the audit trail. Code decisions and adjacent reference are updated. Parent owns the uncommitted artifact 20 update for Grok Bot.
+- [ ] Phase E: Verify and hand back. Worker passed 69 Prime tests, 105 stream tests, the installer fixture, shell/Python syntax, and whitespace checks. Parent owns real non-inference checks and independent acceptance review.
+
+Throughput checkpoint for G20:
+
+- Blocking first steps. Confirmed bccf159 and the parent's pre-existing TODO edit. Read artifact 20, the decisions, and both actual investigations. Native login is bare TUI /login with provider selection, not a CLI login subcommand. It was not executed.
+- Independent workstreams. Read-only control-plane and operator-setup investigations run in parallel. One implementation writer follows them. The parent owns artifact 20 and real non-inference verification.
+- Shared mutable state. No upstream, stream, credential, or other-branch writes. Child code writes and parent code writes never overlap. Docs remain parent-owned.
+- Smallest safe decomposition. Prefer native public operations over a gateway, a shadow session registry, or mutation of Prime internals. A missing native operation stays explicitly missing, with an executable safety regression and evidence.
+
+Deliver the exact operator login command, a ready-to-run post-login inference check that this session does not execute, and the exact Grok Bot off-host wrapper command in artifact 20. Same-model subagents only.
+
+G20 worker result at code revision `b7c326d`:
+
+- Added durable `SessionIdentity`, typed queue previews and observed capability limits. Existing unflagged grammar remains unchanged. Exact-stop and replay-safe-clear requirements return 501 before connecting.
+- Added only `queue-resume`, a one-request native same-session wake. It cannot restore cleared inputs or transfer internal objects. Empty-queue errors propagate without fallback. No real resume was invoked.
+- Added an endpoint-free catalog snapshot with the observed reasoning map, context window, maximum output, and flat costs. Strict metadata input and native registration are limited to the existing isolated agent directory. Pricing tiers and unsupported compatibility data remain explicit losses.
+- Added `scripts/check-prime-cli-live.py verify --root EXISTING_ROOT --runtime ABSOLUTE_BINARY`. It never prepares a new root or invokes login. It refuses collisions, registers temporary native metadata without reading existing models.json, pins all runtime paths, runs control first, and authorizes runnable checks only with explicit `--inference`.
+- Verification checks complete metadata and effective xhigh before input. Native model/usage failures remain typed and stop without provider switches or uncertain retries. Cleanup archives only known created IDs, shuts down only the owned dedicated process/socket, restores its saved nonsecret settings, and removes only its owned metadata file.
+- All runtime tests use fake executables and owned socket fixtures. No successful authentication, inference, active-turn steering, compaction, off-host access, exact stop, or rich replay is claimed. The verifier always reports `parityComplete:false`.
+- Manual cleanup replaced unavailable control-cli/deslop and forbidden child review. No new line comments, suppressions, workflow service, HTTP gateway, private close markers, or worker-protocol calls were introduced.
+
 ## Bounded review fixes
 
 1. [x] Reproduce it yourself on the matching surface via the control skill. Reproduced all four through offline CLI/socket fixtures. Control-cli is unavailable; no real daemon was contacted.
