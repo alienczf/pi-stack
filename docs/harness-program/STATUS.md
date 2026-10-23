@@ -9,21 +9,21 @@ tracking_issue: https://github.com/alienczf/pi-stack/issues/38
 box_mirror: /workspace/harness-program
 host_docs_worktree: /home/alphalab/Projects/worktrees/pi-stack-harness-program
 host_input_copy: /home/alphalab/Projects/pi-stack/streams/pi-streams-harness/context/harness-program
-updated: "2026-10-23T16:30+08:00 (driver run: ChatGPT usage limit hit 16:14 on openai-codex, reset ~2026-10-30 01:10 SGT; all sessions idle and parked; no provider switch; ZF told once)"
+updated: "2026-10-23T18:25+08:00 (usage limit cleared - ZF reset 18:06, T3 compact succeeded 18:11; T3 done + 31 passed gate 18:22; T1 compacted + re-entered 18:19; T5 go 18:23; no provider switch)"
 tracks:
   - id: 1
     name: pi-streams must-fix catalog
     session: 01a16655-5cfd-78c2-bf5f-e08c47e1665e
     host: options-01
     model: openai-codex/gpt-6.1-sol@xhigh
-    phase: implementing
+    phase: "implementing - re-entered 18:19 after usage-limit reset (compact 73.8% -> re-entry-3 sha bb4ab9ba, byte match); after-S1 disposable check then S2-S6"
     milestones_sent: [track-1-review-ready 2026-10-23T11:01+08:00]
     go_ahead: 2026-10-23T11:35+08:00 (ZF t221u, GO in 03)
     started: 2026-10-23T09:17+08:00
     expected_done: 2026-10-23T18:00+08:00
     artifact: docs/harness-program/10-pi-streams-fix-catalog.md
     brief: docs/harness-program/briefs/track-1.md
-    steers: [docs/harness-program/briefs/track-1-steer-1.md, docs/harness-program/briefs/track-1-steer-2.md, docs/harness-program/briefs/track-1-steer-3.md, docs/harness-program/briefs/track-1-reentry-1.md, docs/harness-program/briefs/track-1-go.md, docs/harness-program/briefs/track-1-reentry-2.md]
+    steers: [docs/harness-program/briefs/track-1-steer-1.md, docs/harness-program/briefs/track-1-steer-2.md, docs/harness-program/briefs/track-1-steer-3.md, docs/harness-program/briefs/track-1-reentry-1.md, docs/harness-program/briefs/track-1-go.md, docs/harness-program/briefs/track-1-reentry-2.md, docs/harness-program/briefs/track-1-reentry-3.md]
     steer_note: 10:27 context 86.8% -> aborted, cleared unconsumed steer-3, /compact via PI WEB commands/run (G19). 10:34 re-entry-1 (brief + phase + steer-3 folded in, sha 742d71f3) consumed, streaming, context 9.8%. Compact recipe - curl -X POST 127.0.0.1:8504/api/sessions/<sid>/commands/run -d {"text":"/compact"} on the host; pi-web-cli prompt "/compact" does NOT compact. 11:38 go steer (briefs/track-1-go.md, sha aaa62d2f; Z13-Z15 amendments + implement S1-S6) sent while idle at 33.9%, consumed (byte match), streaming at 35.7%.
     inputs: [docs/harness-program/11-artifact-map.md]
     code_branch: feat/streams-must-fix (off main 3acf0f0; pi-web source gets a same-named local branch)
@@ -57,14 +57,14 @@ tracks:
     session: 01a16658-09d0-7fcc-9815-7ac75f2cbb29
     host: options-01
     model: openai-codex/gpt-6.1-sol@xhigh
-    phase: "A-over-Prime rewrite + Z21 naming cleanup (steer-4 recorded 14:58:50, worked since 15:06 after the outage). Comparison v1 superseded (Z20)."
+    phase: "done 18:21 (TRACK 3 STATUS: done (A over Prime)); 31 passed gate 18:22 (G33). Compacted 18:08-18:11 (87.3% -> ~27%), re-entry-1 sha bfd69ee5 byte match 18:12."
     milestones_sent: [track-3-designs-ready 2026-10-23T11:01+08:00]
     started: 2026-10-23T09:21+08:00
     expected_done: 2026-10-23T13:30+08:00
     artifact: docs/harness-program/31-design-a-detailed.md (after 30-research-designs.md)
     inputs: [docs/harness-program/31-x-corpus-seed.md]
     brief: docs/harness-program/briefs/track-3.md
-    steers: [docs/harness-program/briefs/track-3-steer-1.md, docs/harness-program/briefs/track-3-steer-2.md, docs/harness-program/briefs/track-3-steer-3.md, docs/harness-program/briefs/track-3-steer-4.md]
+    steers: [docs/harness-program/briefs/track-3-steer-1.md, docs/harness-program/briefs/track-3-steer-2.md, docs/harness-program/briefs/track-3-steer-3.md, docs/harness-program/briefs/track-3-steer-4.md, docs/harness-program/briefs/track-3-reentry-1.md]
     brief_sha256_verified: true
     steer_note: steer-1 consumed (09:53). steer-2 (Z12 five inputs, coverage table, three proposals, blocking decisions) consumed 10:11 (sha match, streaming, pending 0).
     next_action: "Z20+Z21. Wait for 'TRACK 3 STATUS: done (A over Prime)'. Gate - first line 'Runtime: Prime (Z20)', 8 headings, New concepts table near the top (fewest rows), hooks name Prime extension points, native Prime changes listed, no retired names or H/P codes. When 31 and 42 both pass, send track 5 'GO track 5 steer 1'."
@@ -92,7 +92,7 @@ tracks:
     session: 01a1671a-01d1-7f51-b240-533efc527a61
     host: options-01
     model: openai-codex/gpt-6.1-sol@xhigh
-    phase: "standby for 51 merged + 50 v2 (standby 14:59:16, steer-1 recorded 15:02:49; do not start until driver go)"
+    phase: "working 51 merged + 50 v2 (GO track 5 steer 1 sent 18:23, accepted, streaming)"
     started: 2026-10-23T12:53+08:00
     expected_done: 2026-10-23T14:00+08:00
     artifact: docs/harness-program/50-a-vs-b.md
@@ -102,9 +102,9 @@ tracks:
     next_action: "Z23/G29. When 31 and 42 pass the gate, send 'GO track 5 steer 1' (briefs/track-5-steer-1.md, sha 17846bc9, recorded 15:02:49). Gate - 51 first line, 8 headings, New concepts table (target zero), Not handled section; 50 v2 covers losses vs 31 and 42, uncovered F-numbers, real vs artificial, open questions with no defaults."
 comparison_sent: 2026-10-23T13:25+08:00 (v1, handed to main chat via WakeParent; never resend; superseded by Z20)
 comparison_v1_superseded: true
-a_over_prime_done: false
+a_over_prime_done: true (2026-10-23T18:22+08:00, gate passed, G33)
 naming_cleanup_done:
-  '31': false
+  '31': true
   '41': "dropped - G29, 41 reference only"
   '42': true
 b_unchanged_done: true (2026-10-23T15:55+08:00, gate passed)
@@ -113,10 +113,11 @@ comparison_v2_sent: false
 reference_only: [docs/harness-program/41-design-b-prime-detailed.md]
 usage_limit:
   open: 2026-10-23T16:14+08:00
+  closed: "2026-10-23T18:11+08:00 (ZF reset the limit 18:06, t231u/Z24; track 3 /compact on openai-codex succeeded 18:11 as the probe; same provider)"
   kind: "ChatGPT usage limit (self_serve_business_prolite) on openai-codex; every session errors 'Try again in ~9176 min'"
   reset_expected: "about 2026-10-30T01:10+08:00 (from 08:14:48Z + 9176 min)"
   zf_told: 2026-10-23T16:30+08:00 (once, via main chat; never resend)
-  policy: "never switch provider; no prompts, compactions or re-entries until reset; driver runs only collect and stay silent"
+  policy: "(closed) never switch provider; normal driving resumed 18:11"
   parked_at: {T1: "idle 73.8%, S1 6b2f1ab done, disposable check pending, async subagent 7f6b0202 was running", T2: "idle 31.9%, blocked on Prime login", T3: "idle 87.3%, mid-edit of 31 (uncommitted, last check assertion failed) - compact before re-entry", T4: "done, 77.5%", T5: "standby 30.1%"}
   after_reset: "T3 compact via commands/run then re-enter on 31; T1 re-enter from 12-track-1-progress.md (compact first if over 60%); then normal gates"
 env_failure:
@@ -130,11 +131,13 @@ env_failure:
 
 | Track | Session | Phase | Artifact | Next |
 |---|---|---|---|---|
-| 1 fix catalog | `01a16655` | implementing, S1 commits done (`6b2f1ab`), after-stack check (73.0% ctx) | `10-pi-streams-fix-catalog.md` + `feat/streams-must-fix` | S1-S6 done, then driver merges |
+| 1 fix catalog | `01a16655` | implementing; S1 commits done (`6b2f1ab`), re-entered 18:19 on the after-S1 disposable check, then S2-S6 | `10-pi-streams-fix-catalog.md` + `feat/streams-must-fix` | S1-S6 done, then driver merges |
 | 2 prime CLI | `01a16656` | blocked on Prime codex login; non-inference gaps in progress | `20-prime-cli-design.md` + `feat/prime-cli` (`6bc1242` pushed) | ZF logs Prime in, then inference verification |
-| 3 research | `01a16658` | A-over-Prime rewrite + naming cleanup (Z20, Z21) | `31-design-a-detailed.md` | done line, then gate; feeds 51 |
-| 4 B over prime | `01a166e0` | done; 42 passed gate 15:55 | `40`, `41` (reference), `42-design-b-prime-unchanged.md` | done line, then gate; feeds 51 |
-| 5 merged + v2 | `01a1671a` | standby (Z23) | `51-design-merged.md`, `50-a-vs-b.md` v2 | go after 31 and 42 pass |
+| 3 research | `01a16658` | done 18:21; 31 (A over Prime) passed gate 18:22 | `31-design-a-detailed.md` | feeds 51 |
+| 4 B over prime | `01a166e0` | done; 42 passed gate 15:55 | `40`, `41` (reference), `42-design-b-prime-unchanged.md` | feeds 51 |
+| 5 merged + v2 | `01a1671a` | working (go 18:23) | `51-design-merged.md`, `50-a-vs-b.md` v2 | done line, then gate; then v2 to ZF once |
+
+**Usage limit 16:14-18:11 (closed):** ChatGPT usage limit on openai-codex; ZF reset it at 18:06 and work resumed on the same provider.
 
 **Env failure 14:50-15:05 (closed):** options-01 lost outbound internet and model calls returned `fetch failed`. Every track was resumed by 15:09.
 
