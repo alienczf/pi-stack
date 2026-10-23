@@ -9,14 +9,14 @@ tracking_issue: https://github.com/alienczf/pi-stack/issues/38
 box_mirror: /workspace/harness-program
 host_docs_worktree: /home/alphalab/Projects/worktrees/pi-stack-harness-program
 host_input_copy: /home/alphalab/Projects/pi-stack/streams/pi-streams-harness/context/harness-program
-updated: "2026-10-24T01:45+08:00 (driver run: T5 done, revised 51+50 passed merged_revision_z25 gate (G38); track 6 spawned 01a169cc, brief sha 4ec99908 consumed, streaming; T1 idle at 65.7% since 01:12 -> compacted 01:38-01:41 (now ~15%), auto-continued, reentry-5 sha c604f050 queued pending 1 - confirm next run; T2 idle, Prime login not recorded)"
+updated: "2026-10-24T01:55+08:00 (driver run: T1 reentry-5 confirmed landed, streaming 22.6%, waiting on its subagent; T6 streaming 24%, feat/merged-poc 198e433 pushed (merge of feat/prime-cli + track 6 contract doc); T2 idle 31.9%, Prime login not recorded)"
 tracks:
   - id: 1
     name: pi-streams must-fix catalog
     session: 01a16655-5cfd-78c2-bf5f-e08c47e1665e
     host: options-01
     model: openai-codex/gpt-6.1-sol@xhigh
-    phase: "implementing - S1 done (6b2f1ab); S2 nearly done (stop/cancel admission d2a378b pi-web + dfd9ab6 streams; suites 254 pi-streams / 2324 pi-web pass); last S2 unit safe coordinator rotation, then S2a-S6. Compacted 01:38-01:41 (65.7% -> ~15%); reentry-5 c604f050 queued"
+    phase: "implementing - S1 done (6b2f1ab); S2 nearly done (stop/cancel admission d2a378b pi-web + dfd9ab6 streams; suites 254 pi-streams / 2324 pi-web pass); last S2 unit safe coordinator rotation, then S2a-S6. Compacted 01:38-01:41 (65.7% -> ~15%); reentry-5 c604f050 landed (confirmed 01:55)"
     milestones_sent: [track-1-review-ready 2026-10-23T11:01+08:00]
     go_ahead: 2026-10-23T11:35+08:00 (ZF t221u, GO in 03)
     started: 2026-10-23T09:17+08:00
@@ -108,6 +108,7 @@ tracks:
     model: openai-codex/gpt-6.1-sol@xhigh
     phase: "building - spawned 01:26, model/xhigh set, /poteto then brief (sha 4ec99908) consumed 01:28, streaming"
     started: 2026-10-24T01:26+08:00
+    pushed: feat/merged-poc 198e433 (2026-10-24 01:55, driver)
     code_branch: feat/merged-poc (session creates worktree /home/alphalab/Projects/worktrees/pi-stack-merged-poc off local main + feat/prime-cli)
     deadline: 2026-10-26T09:00+08:00
     brief: docs/harness-program/briefs/track-6.md (final sha256 4ec99908, aligned to revised 51 section 8)
