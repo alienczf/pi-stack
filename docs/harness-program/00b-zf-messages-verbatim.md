@@ -92,3 +92,21 @@ Tbh so far the differences feels artificial? Feels like we can easily arrive at 
 ## t231u (2026-10-23 18:06 SGT, laptop)
 
 i've reset so continue?
+
+## t232u (2026-10-24 00:42 SGT, laptop, reply to the seven open questions on 51)
+
+1. Enough. It's literally mid turn, flushing to disk can wait
+2. I don't know what a newer stop means. But rejecting pi stack messages probably good enough. Tool call related behavior in this scenario sounds fringe. We do want stop running tool calls. But best effort of course
+3. Yes. Keep it simple and stock prime
+4. We can use prime percentage. Important to make sure we can hook it pre and post compaction though.. If not we'll need to disable it and roll our own
+5. Worker should not have state. They are not streams. We run them in poteto, they should just have come context handover and a kickoff and run like a "clean session"
+6. No idea what's this talking about
+7. Not just this round. Not meant to be solved
+
+## t233u (2026-10-24 00:44 SGT, follow-up on question 6)
+
+Oh for 6. Leave it for stream to provide guidance. We can spawn reviewers if needed but otherwise stream can review reported summary against original intent in an adversarial day..
+
+## t234u (2026-10-24 00:46 SGT)
+
+Going to leave you to drive and make this work over the weekend. Lmk when we have a working poc on branch. Update install so we can test the branch on a new external setup

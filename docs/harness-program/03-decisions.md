@@ -269,3 +269,37 @@ ZF's decisions, restated. His words are in `00b-zf-messages-verbatim.md`, sectio
 - **G34. 51 and 50 v2 pass the gate; v2 summary to ZF.** Grok Bot decision, 2026-10-23 18:58 SGT. Track 5 replied `TRACK 5 STATUS: done (51 merged + 50 v2)` at 18:37. 51 has the first line "Runtime: stock Prime, no Prime changes; merged candidate (Z23)", all 8 headings (Goals/Rules/Log headings sit inside the fenced STATE schema), an empty New concepts table (zero), full prompt texts, descriptively named hooks, no retired STREAM/ACTIONS/GOAL/DECISIONS names, no H-/P-codes, no native Prime change in its plan, and a "Not handled" section. 50 v2 covers losses vs 31 and 42, uncovered failure classes, real vs artificial, and seven open questions with no defaults. spike/b-over-prime (8811a7a) and feat/prime-cli (6bc1242) already match the host; docs branch pushed. merged_done and comparison_v2_sent set. *Reason:* every gate item checked against the collected files; G29 order.
 
 - **G35. options-01 reboot; re-enter track 1 on S2.** Grok Bot decision, 2026-10-23 19:30 SGT. options-01 rebooted at 19:11 SGT (uptime), wiping /tmp. Track 1's turn died while waiting on subagent 1e2140ca, which was mid S2 full-suite run (transcript stopped 18:57); the session showed not streaming with an unanswered tool call. S2 edits are intact but uncommitted in the worktree (cli, doctor, piweb, threads, tick, new test_coordinator_identity.py). The S1 native-check /tmp evidence is lost; its pass is recorded in 12 and the after-stack check reruns it. Sent `briefs/track-1-reentry-4.md` (sha256 f56bbe58) at 19:29: rerun S2 tests in a fresh scratch dir, commit S2, continue S2a-S6, keep scratch out of /tmp. Accepted, streaming at ~17% context. Track 2 session survived (idle, still blocked on Prime login). Not sent to ZF. *Reason:* the outage was already over when found, so there was nothing for ZF to fix; the reboot is recoverable from the worktree without any reset.
+
+## Z25 (ZF t232u 2026-10-24 00:42 SGT + t233u 00:44 SGT): answers to the seven open questions on 51
+
+Verbatim in 00b (t232u, t233u). Meaning, as logged by Grok Bot:
+
+1. **STATE freshness:** fresh STATE once per pi-stack message is enough. Freshness before every internal Prime request is not required ("flushing to disk can wait").
+2. **Stops:** rejecting stale pi-stack messages is enough. Stopping running tool calls is wanted, best-effort. There is no per-tool-call stop check (fringe).
+3. **Input paths:** capture only the stock Prime input paths pi-stack uses, keeping it simple and stock. Attachments are rejected. Messages typed straight into the terminal stay uncaptured.
+4. **Compaction:** use Prime's percentage threshold, but only if we can hook both before and after compaction. If stock Prime can't, disable its automatic compaction and roll our own. Evidence in `43-prime-compaction-hooks.md`: stock v0.10.1 has an after-compaction signal (`compaction_end`) but no before-compaction hook (`compaction_start` is notification-only and the summarizer starts immediately). So the condition applies: `compaction.enabled=false` set before the session is built, plus a pi-stack-owned percentage check followed by save, direct `compact` and resume.
+5. **Workers:** workers have no state files. They are not streams. They run in poteto as clean sessions with only a context handover and a kickoff. The shared coordinator/worker file pair is dropped.
+6. **Result checking (t233u):** there is no mandatory fresh-session check. The stream itself reviews each reported summary adversarially against the original intent. It spawns a reviewer session only when it judges one is needed. This guidance lives in the stream's role/repo text, not in a hook. Question closed.
+7. **Out of scope for good:** login/auth failures, outages and recovery are permanently out of scope, not just for this round ("not meant to be solved").
+
+Nothing else is locked (Z17).
+
+- **G36. Steer track 5 to revise 51 and 50 per Z25.** Grok Bot decision, 2026-10-24 00:50 SGT. Track 5 (`01a1671a`) gets `briefs/track-5-steer-2.md`: revise 51 and 50 v2 to match Z25 answers 1-7 and the compaction finding in 43. Requirements:
+  - Z21 naming, the 8 headings and the first line are kept.
+  - "Not handled" is reworded as permanently out of scope.
+  - The revised 51 has zero open questions.
+  - The gate before ZF hears about it is `merged_revision_z25`.
+  - *Reason:* ZF answered every question; 51 must reflect his answers before anything else builds on it.
+- **Steered (Grok Bot, 00:47 SGT).** Track 5 was idle at 51.8% context (under 60%, so no compact). `briefs/track-5-steer-2.md` (sha256 e9ac4de5) was recorded as a user message at 00:46:45 SGT, a byte match (the file minus its trailing newline). The session is streaming. Z25 (including Q6 from t233u) is steered.
+
+## Z26 (ZF t234u, 2026-10-24 00:46 SGT): drive over the weekend to a working proof of concept on a branch, with install updated
+
+Verbatim in 00b. ZF hands the driving to Grok Bot for the weekend. He wants to hear when there is a working proof of concept on a branch. The install must be updated so the branch can be tested on a new external setup.
+
+- **G37. Track 6: merged-design proof of concept.** Grok Bot decision, 2026-10-24 00:50 SGT.
+  - **What:** the driver routine gains track 6. It builds the revised 51 Implementation plan directly as the proof of concept on branch `feat/merged-poc`, including the install changes needed to test it on a fresh external machine.
+  - **When:** it starts only after the revised 51 passes the `merged_revision_z25` gate. The deadline is Mon 2026-10-26 09:00 SGT.
+  - **Who hears what:** ZF gets one message when a working proof of concept is on the branch (`poc_sent`).
+  - **Steered:** track 5 got a short follow-up steer (`briefs/track-5-steer-3.md`) saying the 51 Implementation plan is built directly as the proof of concept. It must therefore be concrete enough to code from, including the install changes for a new external machine.
+  - **Tracking:** a checklist item was added to issue #38.
+  - *Reason:* ZF's t234u ask; the proof of concept needs a settled 51 to build from.
