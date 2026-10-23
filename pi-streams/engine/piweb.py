@@ -6,7 +6,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from engine import StreamsError, repo_root
+from engine import StreamsError, repo_root, sessionlog
 from engine.project import default_pi_web_url
 
 
@@ -52,6 +52,26 @@ def list_sessions(cwd: str) -> list[dict[str, object]]:
     if not isinstance(sessions, list):
         raise StreamsError("pi-web-cli list returned no session list")
     return [item for item in sessions if isinstance(item, dict)]
+
+
+def read_evidence(cwd: str, session_id: str, entry_id: str, expected_sha256: str, *, line_hint: int | None = None) -> sessionlog.EvidenceRecord:
+    if line_hint is not None and (type(line_hint) is not int or line_hint < 1):
+        raise StreamsError("evidence line hint must be a positive integer")
+    matches = [item for item in list_sessions(cwd) if item.get("id") == session_id]
+    if not matches:
+        raise StreamsError(f"evidence session {session_id} unavailable")
+    if len(matches) != 1:
+        raise StreamsError(f"ambiguous evidence session {session_id}")
+    info = matches[0]
+    native_cwd = info.get("cwd")
+    if not isinstance(native_cwd, str) or Path(native_cwd).resolve() != Path(cwd).resolve():
+        raise StreamsError("evidence session identity has the wrong cwd")
+    archived = info.get("archived") is True
+    raw_path = info.get("archivePath" if archived else "path")
+    if not isinstance(raw_path, str) or not raw_path or not Path(raw_path).is_absolute():
+        kind = "archive" if archived else "live"
+        raise StreamsError(f"{kind} evidence path unavailable for {session_id}")
+    return sessionlog.read_record(Path(raw_path), session_id, entry_id, expected_sha256, archived=archived)
 
 
 def spawn(cwd: str) -> str:

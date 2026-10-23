@@ -1,13 +1,59 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO
 
 from engine import StreamsError
 
 CHUNK = 65536
+
+
+@dataclass(frozen=True)
+class EvidenceRecord:
+    session_id: str
+    entry_id: str
+    sha256: str
+    raw: bytes
+    line_number: int
+    path: str
+    archived: bool
+
+
+def read_record(path: Path, session_id: str, entry_id: str, expected_sha256: str, *, archived: bool = False) -> EvidenceRecord:
+    if not session_id or not entry_id or re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None:
+        raise StreamsError("evidence requires exact session/entry identity and a SHA-256 hash")
+    found: tuple[int, bytes] | None = None
+    try:
+        with path.open("rb") as handle:
+            try:
+                header = json.loads(handle.readline())
+            except ValueError as exc:
+                raise StreamsError("evidence source has invalid session identity") from exc
+            if not isinstance(header, dict) or header.get("type") != "session" or header.get("id") != session_id:
+                raise StreamsError("evidence source session identity does not match")
+            for number, raw in enumerate(handle, start=2):
+                try:
+                    entry = json.loads(raw)
+                except ValueError:
+                    continue
+                if isinstance(entry, dict) and entry.get("id") == entry_id:
+                    if found is not None:
+                        raise StreamsError(f"ambiguous evidence entry {entry_id}")
+                    found = number, raw
+    except OSError as exc:
+        raise StreamsError(f"evidence source unavailable at {path}: {exc}") from exc
+    if found is None:
+        raise StreamsError(f"evidence entry {entry_id} unavailable")
+    number, raw = found
+    digest = hashlib.sha256(raw).hexdigest()
+    if digest != expected_sha256:
+        raise StreamsError(f"evidence hash mismatch for {session_id}/{entry_id}: expected {expected_sha256}, got {digest}")
+    return EvidenceRecord(session_id, entry_id, digest, raw, number, str(path), archived)
 
 
 def last_assistant(path: Path) -> dict[str, object] | None:
