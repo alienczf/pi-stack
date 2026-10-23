@@ -47,11 +47,14 @@ class MetadataSupervisor(OwnedSupervisor):
             return {{"success": True}}
         if command["type"] == "create":
             self.archived = False
-        result = super().response(command, owner)
-        if result.get("success") and command["type"] in ("get_connection_state", "set_model"):
+        result = {{"success": True}} if command["type"] == "get_model_catalog" else super().response(command, owner)
+        if result.get("success") and command["type"] in ("get_connection_state", "get_model_catalog", "set_model"):
             definition = json.loads((root / "agent/models.json").read_text())["providers"]["openai-codex"]["models"][0]
             model = {{"provider": "openai-codex", **definition}}
-            if command["type"] == "get_connection_state":
+            if command["type"] == "get_model_catalog":
+                result["data"] = {{"models": [model], "configuredProviders": ["openai-codex"]}}
+            elif command["type"] == "get_connection_state":
+                model = {{key: model[key] for key in ("id", "provider", "name", "api", "reasoning")}}
                 result["data"]["model"] = model
             else:
                 result["data"] = model
@@ -89,6 +92,16 @@ Path({str(self.events_log)!r}).write_text(json.dumps({{"requests": server.reques
         self.assertEqual((self.owned / "agent/settings.json").read_bytes(), before)
         self.assertFalse((self.owned / "daemon.sock").exists())
         self.assertFalse((self.owned / "verification.lock").exists())
+
+    def test_full_metadata_is_read_from_catalog_not_thin_connection_summary(self):
+        proc = self.verify()
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        result = json.loads(proc.stdout)
+        self.assertIn({"modelMetadataMatched": True}, result["checks"])
+        events = json.loads(self.events_log.read_text())
+        self.assertEqual([row for row in events["requests"] if row["type"] == "get_model_catalog"],
+                         [{"type": "get_model_catalog", "activeSessionId": "owned-durable"}])
+        self.assertEqual(events["admitted"], [])
 
     def test_launcher_native_shutdown_targets_only_owned_socket(self):
         proc = self.verify()
