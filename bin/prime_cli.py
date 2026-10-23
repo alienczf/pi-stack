@@ -23,6 +23,12 @@ class CliError(Exception):
         self.output = {"ok": False, "status": status, "error": code, "message": message, **details}
 
 
+def transport_failure(error: OSError) -> CliError:
+    if isinstance(error, TimeoutError):
+        return CliError("timeout", "Prime daemon timed out; command outcome may be uncertain", 504)
+    return CliError("transport_error", f"Prime daemon transport failed: {error.strerror or type(error).__name__}")
+
+
 class Parser(argparse.ArgumentParser):
     def error(self, message: str) -> None:
         raise CliError("usage", message, 400)
@@ -205,9 +211,10 @@ def spawn(client: PrimeClient, cwd: str) -> dict:
                 raise CliError("cwd_mismatch", "Prime connection state has a different cwd", 409)
             expect_model(state.get("model"), requested)
             row.update(model=state["model"], thinkingLevel=state.get("thinkingLevel"))
-        except CliError as exc:
-            exc.output["session"] = row
-            raise
+        except (CliError, OSError) as exc:
+            failure = exc if isinstance(exc, CliError) else transport_failure(exc)
+            failure.output["session"] = row
+            raise failure
     return {"ok": True, "status": 201, "session": row}
 
 
@@ -349,9 +356,7 @@ def main(argv: list[str] | None = None) -> int:
             output = execute(client, args)
     except CliError as exc:
         output = exc.output
-    except TimeoutError:
-        output = CliError("timeout", "Prime daemon timed out; command outcome may be uncertain", 504).output
     except OSError as exc:
-        output = CliError("transport_error", f"Prime daemon transport failed: {exc.strerror or type(exc).__name__}").output
+        output = transport_failure(exc).output
     print(json.dumps(output, indent=2, ensure_ascii=False, allow_nan=False))
     return 0 if output["ok"] else 1

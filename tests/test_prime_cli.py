@@ -5,7 +5,6 @@ import json
 import os
 from pathlib import Path
 import socket
-import struct
 import subprocess
 import tempfile
 import threading
@@ -68,8 +67,6 @@ class Fixture:
                     request = json.loads(line)
                     self.requests.append(request)
                     if index == self.disconnect_at:
-                        if self.reset:
-                            stream.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
                         reader.close()
                         return
                     if self.raw is not None:
@@ -83,6 +80,11 @@ class Fixture:
                         response.update(reply(request))
                     elif reply is not None:
                         response["data"] = reply
+                    if self.reset and index + 1 == self.disconnect_at:
+                        stream.shutdown(socket.SHUT_RD)
+                        self.send(stream, response)
+                        reader.close()
+                        return
                     self.send(stream, response)
                 reader.close()
         except (BrokenPipeError, ConnectionResetError):
@@ -173,7 +175,8 @@ class PrimeCliTests(unittest.TestCase):
                 data = json.loads(proc.stdout)
                 self.assertEqual(data["error"], code)
                 self.assertEqual(data.get("session"), {**created, "archived": False})
-                self.assertEqual([request["command"]["type"] for request in fixture.requests], ["create", "get_connection_state"])
+                expected = ["create"] if fault == "reset" else ["create", "get_connection_state"]
+                self.assertEqual([request["command"]["type"] for request in fixture.requests], expected)
 
     def test_spawn_fallback_is_error_with_retained_session(self):
         with Fixture([{"id": "s1", "cwd": "/work"}, self.state(model={"provider": "other", "id": "wrong"})]) as fixture:

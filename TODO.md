@@ -12,7 +12,7 @@
 Throughput checkpoint. Establish clean c323b30 first. Reproduce and fix one defect at a time. This worker owns this worktree; the parent owns artifact 20 and live checks. Four independently tested commits avoid overlapping code ownership.
 
 - [x] P1. Default checks admit no runnable input; inference-only queue checks clear inside their pause scope on ordinary failure. The two disconnect-aware CLI regressions failed before the fix, exposing three runnable inputs, then passed. This supersedes the historical control-only safety claim below.
-- [ ] P2. Spawn readback transport errors preserve the known created session.
+- [x] P2. Spawn readback transport errors preserve the known created session. Timeout and reset regressions reproduced identity loss; timeout, reset, and EOF now preserve the received row without retry/deletion.
 - [ ] P2. Compatibility IDs use durable sessionId with no shim registry or binding-event dependency.
 - [ ] P2. Dispatcher consumes only a leading backend selection and forwards backend options verbatim.
 
