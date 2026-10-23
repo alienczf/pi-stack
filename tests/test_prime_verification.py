@@ -12,6 +12,15 @@ from test_prime_cli import ROOT
 from test_prime_tools import OwnedSupervisor
 
 
+DEFINITION = {"provider": "openai-codex", "id": "gpt-6.1-sol", "name": "GPT-6.1 Sol",
+              "api": "openai-codex-responses", "reasoning": True,
+              "thinkingLevelMap": {"off": None, "minimal": "low", "low": "low", "medium": "medium",
+                                   "high": "high", "xhigh": "xhigh", "max": "max"},
+              "input": ["text", "image"],
+              "contextWindow": 500000, "maxTokens": 128000,
+              "cost": {"input": 2, "output": 10, "cacheRead": 0.1, "cacheWrite": 2.5}}
+
+
 class VerificationTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="prime-verification-test-")
@@ -95,6 +104,46 @@ with OwnedSupervisor(root) as server:
         self.assertEqual(result["retainedOwnedSessions"], [])
         self.assertEqual(result["runtime"], {"started": True, "stopped": True, "socketRemoved": True})
         self.assertFalse((self.owned / "daemon.sock").exists())
+
+    def test_registration_uses_only_whitelisted_metadata_in_isolated_agent_dir(self):
+        text = self.runtime.read_text().replace('"agentDir": os.environ.get("PRIME_AGENT_CODING_AGENT_DIR")',
+            '"agentDir": os.environ.get("PRIME_AGENT_CODING_AGENT_DIR"), "models": json.loads((root / "agent/models.json").read_text())')
+        self.runtime.write_text(text)
+        proc = self.verify()
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        model = {key: value for key, value in DEFINITION.items() if key != "provider"}
+        self.assertEqual(json.loads(self.log.read_text())["models"], {"providers": {"openai-codex": {"models": [model]}}})
+        self.assertFalse((self.owned / "agent/models.json").exists())
+        self.assertIn("not represented", json.loads(proc.stdout)["modelMetadata"]["limitations"][0])
+
+    def test_explicit_metadata_is_validated_without_launch_or_secret_fields(self):
+        source = self.root / "definition.json"
+        cases = [{**DEFINITION, "contextWindow": 0}, {**DEFINITION, "reasoning": "true"},
+                 {**DEFINITION, "maxTokens": 500001}, {**DEFINITION, "contextWindow": True},
+                 {**DEFINITION, "provider": "other"}, {**DEFINITION, "api": "other"},
+                 {**DEFINITION, "cost": {**DEFINITION["cost"], "input": -1}},
+                 {**DEFINITION, "cost": {**DEFINITION["cost"], "output": float("nan")}},
+                 {**DEFINITION, "thinkingLevelMap": {"xhigh": "guessed"}},
+                 {**DEFINITION, "headers": {}}, {**DEFINITION, "baseUrl": "not-a-provider-endpoint"},
+                 {key: value for key, value in DEFINITION.items() if key != "maxTokens"}]
+        for definition in cases:
+            with self.subTest(definition=definition):
+                source.write_text(json.dumps(definition))
+                proc = self.verify("--model-definition", str(source))
+                self.assertEqual(proc.returncode, 1, proc.stderr + proc.stdout)
+                self.assertEqual(json.loads(proc.stdout)["error"]["error"], "invalid_model_definition")
+                self.assertFalse(self.log.exists())
+                self.assertFalse((self.owned / "agent/models.json").exists())
+                self.assertFalse((self.owned / "verification.lock").exists())
+
+    def test_registration_refuses_existing_native_config_without_replacing_it(self):
+        config = self.owned / "agent/models.json"
+        config.write_text("unowned configuration\n")
+        proc = self.verify()
+        self.assertEqual(proc.returncode, 1, proc.stderr + proc.stdout)
+        self.assertEqual(json.loads(proc.stdout)["error"]["error"], "model_registration_collision")
+        self.assertEqual(config.read_text(), "unowned configuration\n")
+        self.assertFalse(self.log.exists())
 
     def test_launcher_never_runs_check_after_startup_exit(self):
         self.runtime.write_text('#!/usr/bin/env python3\nraise SystemExit(17)\n')
