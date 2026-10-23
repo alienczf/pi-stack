@@ -9,7 +9,7 @@ tracking_issue: https://github.com/alienczf/pi-stack/issues/38
 box_mirror: /workspace/harness-program
 host_docs_worktree: /home/alphalab/Projects/worktrees/pi-stack-harness-program
 host_input_copy: /home/alphalab/Projects/pi-stack/streams/pi-streams-harness/context/harness-program
-updated: "2026-10-24T04:30+08:00 (driver run: T1 streaming 40.8%, S2 at ae32edd; T6 streaming 40.8%, unit 8 amended to 7503ca4 and force-pushed with lease; native end-to-end ran up to the missing openai-codex login in the clean HOME, remaining fixes uncommitted; T2 idle 31.9%, Prime login not recorded)"
+updated: "2026-10-24T04:58+08:00 (driver run: T1 streaming 44.5%, S2 done disposable=pass, S2a at ed47a63; T6 streaming 40.8% waiting on own subagent, fixes uncommitted, head 7503ca4; T2 idle 31.9%, Prime login not recorded)"
 tracks:
   - id: 1
     name: pi-streams must-fix catalog
