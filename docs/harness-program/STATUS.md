@@ -9,7 +9,7 @@ tracking_issue: https://github.com/alienczf/pi-stack/issues/38
 box_mirror: /workspace/harness-program
 host_docs_worktree: /home/alphalab/Projects/worktrees/pi-stack-harness-program
 host_input_copy: /home/alphalab/Projects/pi-stack/streams/pi-streams-harness/context/harness-program
-updated: "2026-10-24T03:52+08:00 (driver run: T1 streaming 32.4%, S2 at ae32edd; T6 streaming 30.7%, unit 8 committed 491f163 and pushed, fresh documented install from a clean HOME in progress; T2 idle 31.9%, Prime login not recorded)"
+updated: "2026-10-24T04:30+08:00 (driver run: T1 streaming 40.8%, S2 at ae32edd; T6 streaming 40.8%, unit 8 amended to 7503ca4 and force-pushed with lease; native end-to-end ran up to the missing openai-codex login in the clean HOME, remaining fixes uncommitted; T2 idle 31.9%, Prime login not recorded)"
 tracks:
   - id: 1
     name: pi-streams must-fix catalog
@@ -106,9 +106,9 @@ tracks:
     session: 01a169cc-9519-7411-bf2f-51073758fc53
     host: options-01
     model: openai-codex/gpt-6.1-sol@xhigh
-    phase: "building - units through install committed (35bcb64); end-to-end PoC check (poc.py, uncommitted) in progress via its own worker; streaming 30.7% at 03:20"
+    phase: "building - all 8 units committed (7503ca4); fresh clean-HOME install, init and doctor passed; native verifier stopped at the expected missing openai-codex login (no inference yet); follow-up fixes uncommitted; streaming 40.8% at 04:28, no TRACK 6 STATUS line yet. When it goes idle with code committed and only login missing, send the one Prime-login blocker note."
     started: 2026-10-24T01:26+08:00
-    pushed: feat/merged-poc 491f163 (2026-10-24 03:51, driver; through unit 8 end-to-end verifier)
+    pushed: feat/merged-poc 7503ca4 (2026-10-24 04:28, driver; unit 8 amended, force-with-lease over 491f163)
     code_branch: feat/merged-poc (session creates worktree /home/alphalab/Projects/worktrees/pi-stack-merged-poc off local main + feat/prime-cli)
     deadline: 2026-10-26T09:00+08:00
     brief: docs/harness-program/briefs/track-6.md (final sha256 4ec99908, aligned to revised 51 section 8)
