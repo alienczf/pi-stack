@@ -88,3 +88,7 @@ Yes let's do a no prime change version
 ## t230u (2026-10-23 15:01 SGT)
 
 Tbh so far the differences feels artificial? Feels like we can easily arrive at a merged solution where most of the deterministic behaviour goes into hooking prime, ignore corner cases like login and fringe failure. Less deterministic stuff stays in repo?
+
+## t231u (2026-10-23 18:06 SGT, laptop)
+
+i've reset so continue?
