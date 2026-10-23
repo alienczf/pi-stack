@@ -190,6 +190,17 @@ class PrimeToolsTests(unittest.TestCase):
         self.assertEqual(json.loads(proc.stdout), {"ok": True, "status": 200, "result": {"queued": True, "accepted": True}})
         self.assertEqual(fixture.requests[0]["command"], {"type": "follow_up", "activeSessionId": "s1", "message": "exact\n雪"})
 
+    def test_dispatcher_preserves_backend_options_and_later_backend_tokens(self):
+        dispatcher = self.root / "agent-cli"
+        shutil.copy2(ROOT / "bin/agent-cli", dispatcher)
+        self.executable(self.root / "prime-cli", ECHO)
+        backend_args = ["--socket", "/owned/socket with spaces", "status", "durable-1", "--backend", "pi", "雪\n'quoted'"]
+        for selection in [("--backend", "prime"), ("--backend=prime",)]:
+            with self.subTest(selection=selection):
+                proc = self.run_tool(dispatcher, *selection, *backend_args, text="exact\nstdin 雪", env={"ECHO_EXIT": "7"})
+                self.assertEqual(proc.returncode, 7, proc.stdout)
+                self.assertEqual(json.loads(proc.stdout), {"tool": "prime-cli", "argv": backend_args, "stdin": "exact\nstdin 雪"})
+
     def test_dispatcher_validation_and_help(self):
         for args, env in [((), {}), (("--backend", "other", "list"), {}), (("list",), {"PI_STACK_BACKEND": "other"})]:
             with self.subTest(args=args):
