@@ -4,7 +4,7 @@
 - [x] Phase A: Frame.
 - [x] Phase B: Design the workflow.
 - [ ] Phase C: Run the loop.
-- [ ] Unit 1. Implement the Z15 stream writer and focused behavior tests.
+- [x] Unit 1. Implement the Z15 stream writer and focused behavior tests.
 - [ ] Unit 2. Expose public stock transport and owned sessions.
 - [ ] Unit 3. Save and refresh messages, wake eligible work, and stop best effort.
 - [ ] Unit 4. Dispatch clean poteto workers with handover and kickoff only.
@@ -17,3 +17,17 @@
 - [ ] Opening a PR. skip: The user permits local commits only and forbids pushes and PRs.
 
 The implementation and verification contract is in `PLAN.md`. The canonical decisions, commit SHAs, checks and evidence paths are in `/home/alphalab/Projects/worktrees/pi-stack-harness-program/docs/harness-program/13-track-6-progress.md`. Historical track-2 work remains in the merged CLI branch history and artifact 20.
+
+## Unit 1 verification
+
+New functionality adds typed Goals, Rules and immutable entries, exact parsing, checked updates, original saves, history-first Log retention, Prime templates and linked-worktree locks. Existing Pi templates remain unchanged. Reused project Git/config/registry helpers and kernel flock; no new index or task store.
+
+Evidence is under `/home/alphalab/.cache/pi-stack-track6/20261023T172837Z/evidence/`.
+
+- `unit-1-before.log` records old creation failing the missing-current-work assertion and the linked-worktree lock error before correction.
+- `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s pi-streams/tests -p test_prime_state.py` passed 31 tests in `unit-1-focused.log`.
+- `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s pi-streams/tests` passed 136 tests in `unit-1-streams.log`.
+- `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests` passed 71 tests in `unit-1-root.log`.
+- Exact section-4 AGENTS bytes, Python syntax and `git diff --check` passed in `unit-1-static.log`.
+
+Next is Unit 2. Prime creation currently takes an explicit `backend="prime"` and persists it in `stream.toml`. Project-level backend settings remain Unit 2. Writers accept `locked=True` for callers already holding the stream lock. Successful computed completion remains blocked until Unit 6 supplies its actual closing checks. Explicit cancellation or informational explanation uses a complete linked answer and later trusted human source. Broad legacy staging remains unchanged until Unit 6. No native inference or authentication check was attempted.
