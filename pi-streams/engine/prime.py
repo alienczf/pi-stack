@@ -5,7 +5,9 @@ import json
 import math
 import os
 import socket
+import stat
 import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -23,6 +25,19 @@ class CliError(StreamsError):
     def __init__(self, code: str, message: str, status: int = 502, **details: Any):
         super().__init__(message)
         self.output = {"ok": False, "status": status, "error": code, "message": message, **details}
+
+
+class UsageQuotaError(CliError):
+    def __init__(self, frame):
+        info = frame.get("errorInfo")
+        super().__init__("upstream_error", frame.get("error", "provider usage or quota failure"),
+                         **({"errorInfo": info} if isinstance(info, dict) else {}))
+        self.frame = frame
+
+
+def usage_or_quota(frame):
+    text = str(frame.get("error", "")) + " " + str(frame.get("errorInfo", {}))
+    return frame.get("success") is False and any(word in text.lower() for word in ("quota", "usage", "rate_limit", "rate limit"))
 
 
 def transport_failure(error: OSError) -> CliError:
@@ -95,7 +110,15 @@ class PrimeClient:
     def connect(self):
         try:
             self.stream.settimeout(self.timeout)
-            self.stream.connect(self.path)
+            if sys.platform == "linux" and len(os.fsencode(self.path)) > 107:
+                path = Path(self.path)
+                fd = os.open(path.parent, getattr(os, "O_PATH", os.O_RDONLY) | os.O_DIRECTORY)
+                try:
+                    self.stream.connect(f"/proc/self/fd/{fd}/{path.name}")
+                finally:
+                    os.close(fd)
+            else:
+                self.stream.connect(self.path)
             hello = self.read_frame(self._deadline())
             protocol = hello.get("protocol")
             if (hello.get("type") != "daemon_hello" or protocol != PROTOCOL
@@ -171,6 +194,8 @@ class PrimeClient:
                 if target in self.replies and self.replies[target] != frame:
                     raise CliError("invalid_response", "Conflicting duplicate Prime response")
                 self.replies[target] = frame
+                if usage_or_quota(frame):
+                    raise UsageQuotaError(frame)
             return self.replies[request_id]
 
     def query(self, kind, **fields):
@@ -249,6 +274,7 @@ class OwnedDaemon:
     process: subprocess.Popen
     socket: Path
     log_handle: Any
+    socket_identity: tuple[int, int] | None = None
 
 
 def start_owned_daemon(binary, socket_path, log_path, *, env=None):
@@ -264,6 +290,10 @@ def start_owned_daemon(binary, socket_path, log_path, *, env=None):
             if process.poll() is not None:
                 raise StreamsError(f"owned daemon exited with {process.returncode}")
             time.sleep(0.05)
+        info = path.lstat()
+        if not stat.S_ISSOCK(info.st_mode):
+            raise StreamsError("owned daemon did not create a socket")
+        owned.socket_identity = (info.st_dev, info.st_ino)
         return owned
     except BaseException:
         if 'process' in locals() and process.poll() is None:
@@ -274,10 +304,20 @@ def start_owned_daemon(binary, socket_path, log_path, *, env=None):
 
 
 def stop_owned_daemon(owned):
-    if owned.process.poll() is None:
-        owned.process.terminate()
-    owned.process.wait()
-    owned.log_handle.close()
+    try:
+        if owned.process.poll() is None:
+            try:
+                info = owned.socket.lstat()
+                if not stat.S_ISSOCK(info.st_mode) or (info.st_dev, info.st_ino) != owned.socket_identity:
+                    raise StreamsError("owned daemon socket identity changed; no replacement was contacted")
+                with PrimeClient(str(owned.socket)) as client:
+                    client.query("shutdown", force=True)
+            except (StreamsError, OSError):
+                if owned.process.poll() is None:
+                    owned.process.terminate()
+        owned.process.wait()
+    finally:
+        owned.log_handle.close()
 
 
 @dataclass(frozen=True)
@@ -337,7 +377,10 @@ def eligible(current, entries):
 def check_current_command(stream, identity, expected, *, mode="automatic"):
     from engine import state
     from engine.prompts import render
-    current = state.check_current_text(stream, expected)
+    try:
+        current = state.check_current_text(stream, expected)
+    except StreamsError as exc:
+        raise StreamsError(render("stale", stream_id=Path(stream).name, command_name=mode).strip()) from exc
     _, entries = stream_entries(stream)
     if coordinator_id(stream) != identity.session_id or mode not in {"human", "save", "input"} and not eligible(current, entries):
         raise StreamsError(render("stale", stream_id=Path(stream).name, command_name=mode).strip())
@@ -371,7 +414,7 @@ def send_stream_message(client, stream, identity, *, body, command_id=None, send
             return {"sending_status": "Prime replied" if replies else "unknown after connection loss", "entry": replies[0].file if replies else prior[0].file}
     if mode in {"human", "automatic"}:
         maintenance = check_compaction(client, stream, identity, sessions_dir=sessions_dir)
-        if maintenance["status"] == "held":
+        if maintenance["status"] == "held" and (mode != "human" or maintenance.get("reason") == "pending or unknown DCR"):
             return {"sending_status": "not sent", "held": maintenance}
     with stream_lock(stream):
         current, entries = stream_entries(stream)
@@ -401,7 +444,16 @@ def send_stream_message(client, stream, identity, *, body, command_id=None, send
 
 
 def finish_message(client, stream, pending, *, sessions_dir=None):
-    frame = client.wait(pending.command_id)
+    try:
+        frame = client.wait(pending.command_id)
+    except UsageQuotaError as exc:
+        save_reply(stream, session_id=pending.identity.session_id, command_id=pending.command_id,
+                   sent_text=pending.text, frame=exc.frame, messages=[])
+        raise
+    if usage_or_quota(frame):
+        save_reply(stream, session_id=pending.identity.session_id, command_id=pending.command_id,
+                   sent_text=pending.text, frame=frame, messages=[])
+        raise UsageQuotaError(frame)
     data = object_data(client.query("get_messages", activeSessionId=pending.identity.active_session_id))
     messages = array_field(data, "messages")
     saved = save_reply(stream, session_id=pending.identity.session_id, command_id=pending.command_id,
@@ -427,9 +479,18 @@ def stop_session(client, stream, identity, *, sender=None, command_id=None):
                 "received_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")},
                 command_id=command, session_id=identity.session_id, purpose="stop", locked=True)
             current = state.check_state(Path(stream))
-            if current.goals.objective is not None:
-                state.update_state(Path(stream), expect=current.sha256, goals=replace(current.goals, status="paused"), rules=None,
-                    entry={"subject": "Paused by operator stop", "body": {"command": "abort"}, "original_entries": []}, locked=True)
+            if identity.session_id == coordinator_id(stream):
+                stopped = replace(current.goals, status="paused")
+                affected = []
+            else:
+                affected = [w.original_entry for w in current.goals.work
+                            if any(worker["session"] == identity.session_id for worker in w.workers)]
+                stopped = replace(current.goals, work=tuple(
+                    replace(w, next=None, waiting_for="stopped worker " + identity.session_id)
+                    if w.original_entry in affected else w for w in current.goals.work))
+            if stopped != current.goals:
+                state.update_state(Path(stream), expect=current.sha256, goals=stopped, rules=None,
+                    entry={"subject": "Paused by operator stop", "body": {"command": "abort"}, "original_entries": affected}, locked=True)
     except (StreamsError, OSError) as exc:
         storage_error = str(exc)
     try:
@@ -620,6 +681,8 @@ def run_compaction(client, stream, identity, *, trigger, sessions_dir, threshold
             record("before-compact", "compacting")
             compact_id = client.write("compact", activeSessionId=identity.active_session_id, customInstructions=render("compact"))
         compact = client.wait(compact_id)
+        if usage_or_quota(compact):
+            raise UsageQuotaError(compact)
         if compact["success"] is not True:
             raise StreamsError("native compact failed: " + str(compact.get("error")))
         _, connection = resolve_session(client, identity.session_id, identity.active_session_id)
@@ -655,6 +718,10 @@ def run_compaction(client, stream, identity, *, trigger, sessions_dir, threshold
             record("complete", "complete")
         return {"status": "verified", "command": command, "readback": readback, "dump": dump, "continuation": result}
     except (StreamsError, OSError) as exc:
+        if isinstance(exc, UsageQuotaError):
+            raise
+        if isinstance(exc, CliError) and usage_or_quota({"success": False, "error": str(exc.output)}):
+            raise UsageQuotaError({"success": False, "error": str(exc)}) from exc
         with stream_lock(stream):
             record("unknown", "unknown", str(exc))
         return {"status": "unknown", "command": command, "error": str(exc)}

@@ -1,5 +1,6 @@
 """New shared transport functionality and preserved CLI contracts."""
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -13,6 +14,22 @@ from stub_prime import StubPrime
 
 
 class TransportTests(unittest.TestCase):
+    def test_long_owned_socket_path_uses_the_same_filesystem_socket(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp) / ("a" * 70) / ("b" * 70)
+            directory.mkdir(parents=True)
+            with StubPrime(lambda s, r: s.response(r, {"owned": "same inode"})) as stub:
+                path = directory / "owned.sock"
+                os.link(stub.path, path)
+                try:
+                    with PrimeClient(str(path)) as client:
+                        self.assertEqual(client.query("get_state"), {"owned": "same inode"})
+                finally:
+                    if not stub.requests:
+                        with PrimeClient(stub.path) as cleanup:
+                            cleanup.query("get_state")
+                self.assertEqual(path.stat().st_ino, Path(stub.path).stat().st_ino)
+
     def test_schema_and_protocol_mismatch(self):
         for schema, protocol in ((29, 7), (30, 6)):
             with StubPrime(lambda s, r: s.response(r), schema=schema, protocol=protocol) as stub:

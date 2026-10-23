@@ -31,7 +31,8 @@ class CompactionTests(PrimeCase):
         self.events.append(kind)
         if kind == "prompt_and_wait":
             text = request["command"]["message"]
-            if "Prepare this stream session for compaction." in text:
+            body = json.loads(text.split("Message body as JSON follows.\n", 1)[1].split("\n", 1)[0])
+            if body.startswith("Prepare this stream session for compaction."):
                 self.events.append("save-turn")
                 if self.checked_save:
                     current = state.check_state(self.stream)
@@ -43,6 +44,7 @@ class CompactionTests(PrimeCase):
                 return stub.response(request) if self.dump_ok else stub.response(request, success=False, error="save turn refused")
             if any(e.get("type") == "compaction" for e in self.nodes):
                 self.parked = request
+                self.events.append("parked-input")
                 return None
             return stub.response(request)
         if kind == "acquire_session_input_pause":
@@ -102,6 +104,7 @@ class CompactionTests(PrimeCase):
         self.assertLess(self.events.index("acquire_session_input_pause"), self.events.index("compact"))
         self.assertLess(self.events.index("compact"), self.events.index("release_session_input_pause"))
         self.assertEqual(self.events.count("compact"), 1)
+        self.assertEqual(self.events.count("parked-input"), 1)
         self.assertEqual(state.check_state(self.stream).goals.objective, "Fresh checked save objective")
         prompts = [r["command"] for r in stub.requests if r["command"]["type"] == "prompt_and_wait"]
         self.assertIn("Compaction saved native entry", prompts[-1]["message"])
@@ -213,6 +216,22 @@ class CompactionTests(PrimeCase):
         second = {"id": "compact-two", "parentId": "compact-one", "type": "compaction", "summary": self.summary}
         with self.assertRaises(StreamsError):
             read_compaction_entry({"flatNodes": tree["flatNodes"] + [{"entry": second}], "leafId": "compact-two"}, set(), {"summary": self.summary}, self.transcript, self.native, self.identity)
+
+    def test_unknown_compact_timeout_releases_without_resume_or_retry(self):
+        def handler(stub, request):
+            if request["command"]["type"] == "compact":
+                self.events.append("compact")
+                return None
+            return self.handler(stub, request)
+        with StubPrime(handler) as stub, PrimeClient(stub.path, timeout=.05) as client:
+            self.prepare(client)
+            first = check_compaction(client, self.stream, self.identity, sessions_dir=self.native)
+            second = check_compaction(client, self.stream, self.identity, sessions_dir=self.native)
+        self.assertEqual(first["status"], "unknown")
+        self.assertEqual(second["status"], "held")
+        self.assertEqual(self.events.count("compact"), 1)
+        self.assertEqual(self.events.count("prompt_and_wait"), 1)
+        self.assertIn("release_session_input_pause", self.events)
 
     def test_settings_are_idempotent_and_conflicts_do_not_reconfigure(self):
         path = project.write_prime_settings(self.stream, 50)

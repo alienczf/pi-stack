@@ -64,6 +64,59 @@ class MessageTests(PrimeCase):
         self.assertEqual(result["frame"]["success"], True)
         self.assertEqual([r["command"]["type"] for r in stub.requests].count("prompt_and_wait"), 1)
 
+    def test_human_steer_can_arrive_while_a_known_prompt_is_pending(self):
+        with StubPrime(lambda s, r: self.handler(s, r) if r["command"]["type"] != "prompt_and_wait" else None) as stub, PrimeClient(stub.path) as client:
+            first = send_stream_message(client, self.stream, self.identity, body="initial finite ask", wait_result=False)
+            second = send_stream_message(client, self.stream, self.identity, body="new steer while busy", lane="steer", wait_result=False)
+        prompts = [r["command"] for r in stub.requests if r["command"]["type"] == "prompt_and_wait"]
+        self.assertEqual(len(prompts), 2)
+        self.assertEqual(prompts[-1]["streamingBehavior"], "steer")
+        self.assertIn("new steer while busy", prompts[-1]["message"])
+
+    def test_usage_failure_is_retained_and_stops_before_more_native_queries(self):
+        from engine.prime import UsageQuotaError
+        def handler(stub, request):
+            if request["command"]["type"] == "prompt_and_wait":
+                return stub.response(request, success=False, error="fixture usage limit", errorInfo={"code": "usage_limit"})
+            return self.handler(stub, request)
+        with StubPrime(handler) as stub, PrimeClient(stub.path) as client:
+            with self.assertRaises(UsageQuotaError):
+                send_stream_message(client, self.stream, self.identity, body="finite fixture")
+        commands = [r["command"]["type"] for r in stub.requests]
+        self.assertEqual(commands[-1], "prompt_and_wait")
+        current = state.check_state(self.stream)
+        reply = next(e for e in current.log if "sent_text_sha256" in e.body)
+        self.assertEqual(reply.body["error"], "fixture usage limit")
+        self.assertEqual(reply.body["messages"], [])
+
+    def test_worker_stop_pauses_only_its_assignment_not_independent_stream_work(self):
+        from engine.prime import SessionIdentity, eligible, stream_entries
+        self.active()
+        self.active()
+        current = state.check_state(self.stream)
+        assigned = replace(current.goals.work[0], workers=({"session": "worker-durable", "worktree": "/assigned/product", "work": "dependent part"},))
+        independent = current.goals.work[1]
+        state.update_state(self.stream, expect=current.sha256, goals=replace(current.goals, work=(assigned, independent)), rules=None,
+            entry={"subject": "Worker assignment", "body": {}, "original_entries": [assigned.original_entry]})
+        with StubPrime(self.handler) as stub, PrimeClient(stub.path) as client:
+            result = stop_session(client, self.stream, SessionIdentity("worker-durable", "worker-routing"), sender="operator")
+        after, entries = stream_entries(self.stream)
+        self.assertEqual(after.goals.status, "active")
+        self.assertEqual(after.goals.work[1], independent)
+        self.assertEqual(after.goals.work[0].waiting_for, "stopped worker worker-durable")
+        self.assertEqual(eligible(after, entries), True)
+        self.assertEqual(stub.requests[0]["command"], {"type": "abort", "activeSessionId": "worker-routing"})
+        self.assertEqual(result["termination_guaranteed"], False)
+
+    def test_stream_stop_without_an_objective_still_pauses_maintenance(self):
+        with StubPrime(self.handler) as stub, PrimeClient(stub.path) as client:
+            result = stop_session(client, self.stream, self.identity, sender="operator")
+        current = state.check_state(self.stream)
+        self.assertEqual(current.goals.objective, None)
+        self.assertEqual(current.goals.status, "paused")
+        self.assertEqual(result["termination_guaranteed"], False)
+        self.assertEqual(stub.requests[0]["command"]["type"], "abort")
+
     def test_stop_success_failure_and_timeout_never_guarantee_termination(self):
         self.active()
         for outcome in ("success", "failure", "timeout"):

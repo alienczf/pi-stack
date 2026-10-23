@@ -6,6 +6,21 @@ from stub_prime import StubPrime
 
 
 class WorkerTests(PrimeCase):
+    def test_symlink_worker_ancestor_is_refused_before_native_create(self):
+        from engine import StreamsError
+        source = self.active()
+        product = self.root / "product"
+        product.mkdir()
+        project.git(product, "init")
+        alias = self.root / "alias"
+        alias.symlink_to(self.root, target_is_directory=True)
+        with StubPrime(self.handler) as stub, PrimeClient(stub.path) as client:
+            with self.assertRaisesRegex(StreamsError, "symlink"):
+                spawn_prime_worker(client, self.stream, worktree=alias / "product", work="A", original_entries=[source],
+                    poteto_path="/installed/poteto/SKILL.md", model="openai-codex/gpt-6.1-sol", thinking="xhigh")
+        self.assertEqual(stub.requests, [])
+        self.assertFalse((product / "STATE.md").exists())
+
     def test_clean_worker_and_optional_reviewer_keep_product_instructions(self):
         source = self.active()
         for reviewer in (False, True):

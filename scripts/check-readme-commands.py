@@ -24,11 +24,37 @@ def commands() -> list[str]:
     return result
 
 
+def check_merged_commands() -> None:
+    text = README.read_text(encoding="utf-8")
+    section = text.split("## Isolated stock Prime merged PoC\n", 1)[1].split("## Verify the repository", 1)[0]
+    blocks = re.findall(r"```bash\n(.*?)\n```", section, re.DOTALL)
+    if len(blocks) != 4:
+        raise SystemExit("merged PoC must document selection, prerequisites, install/init/doctor and verify")
+    required = (
+        "git clone --branch feat/merged-poc --single-branch https://github.com/alienczf/pi-stack.git pi-stack-merged-poc",
+        '--coordinator-model "$POC_MODEL" --coordinator-thinking "$POC_THINKING"',
+        '--compaction-percent "$POC_PERCENT"',
+        '"$POC_ROOT/bin/pi-streams" poc init --root "$POC_ROOT" --stream weekend-poc',
+        '"$POC_ROOT/bin/pi-streams" poc doctor --root "$POC_ROOT" --stream weekend-poc',
+        '"$POC_ROOT/bin/pi-streams" poc verify --root "$POC_ROOT" --stream weekend-poc',
+        'export CARGO_HOME="$POC_ROOT/build/cargo"',
+        'export RUSTUP_HOME="$POC_ROOT/build/rustup"',
+    )
+    if any(command not in section for command in required):
+        raise SystemExit("merged PoC commands do not match the explicit isolated contract")
+    for block in blocks:
+        subprocess.run(["bash", "-n"], input=block, text=True, check=True)
+    for verb in ("init", "doctor", "verify"):
+        subprocess.run([str(ROOT / "bin/pi-streams"), "poc", verb, "--help"], stdout=subprocess.DEVNULL, check=True)
+    subprocess.run([str(ROOT / "install.sh"), "--merged-poc", "--help"], stdout=subprocess.DEVNULL, check=True)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--execute", action="store_true")
     arguments = parser.parse_args()
     extracted = commands()
+    check_merged_commands()
     for command in extracted:
         if arguments.execute:
             completed = subprocess.run(command, cwd=ROOT, shell=True)

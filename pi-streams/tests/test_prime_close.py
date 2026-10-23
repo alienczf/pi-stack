@@ -1,5 +1,8 @@
 """Computed close is new functionality; broad staging is an existing-path correction."""
 import hashlib
+import json
+import subprocess
+from pathlib import Path
 from dataclasses import replace
 from unittest.mock import patch
 from prime_support import PrimeCase, project, state
@@ -88,6 +91,19 @@ class ComputedCloseTests(PrimeCase):
                     self.close(**change)
                 self.assertEqual(state.check_state(self.stream).sha256, before.sha256)
         self.assertFalse((self.product / "count").exists())
+
+    def test_cli_runs_the_same_computed_check_and_returns_exact_schema(self):
+        payload = {"goals": None, "rules": None, "entry": {"subject": "CLI computed close", "original_entries": [self.original], "body": {"findings": "A and B verified"}},
+                   "target": self.target, "check": {"argv": ["python3", "check_fixture.py"], "cwd": str(self.product)},
+                   "report": {"path": str(self.report), "sha256": hashlib.sha256(self.report.read_bytes()).hexdigest()}, "proof_entries": self.proofs, "review": None}
+        cli = Path(__file__).resolve().parents[2] / "bin/pi-streams"
+        result = subprocess.run([str(cli), "state", "close", str(self.stream), "--expect", state.check_state(self.stream).sha256], input=json.dumps(payload), text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        data = json.loads(result.stdout)
+        self.assertEqual(set(data), {"success", "reason", "state_sha256", "history_files"})
+        self.assertEqual(data["success"], True)
+        self.assertEqual((self.product / "count").read_text(), "1")
+        self.assertEqual(state.check_state(self.stream).goals.work, ())
 
     def test_actual_failed_check_keeps_request_open(self):
         with self.assertRaisesRegex(StreamsError, "computed check failed"):

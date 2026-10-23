@@ -492,6 +492,7 @@ def cmd_prime_state(args):
                 result = state.update_state(stream, expect=args.expect, **payload)
     except (StreamsError, OSError, ValueError, TypeError, KeyError) as exc:
         result = {"success": False, "reason": str(exc), "state_sha256": None, "history_files": []}
+    result = {key: result[key] for key in ("success", "reason", "state_sha256", "history_files")}
     print(json.dumps(result, ensure_ascii=False, sort_keys=True, allow_nan=False))
     return 0 if result["success"] else 1
 
