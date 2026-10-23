@@ -9,7 +9,7 @@ tracking_issue: https://github.com/alienczf/pi-stack/issues/38
 box_mirror: /workspace/harness-program
 host_docs_worktree: /home/alphalab/Projects/worktrees/pi-stack-harness-program
 host_input_copy: /home/alphalab/Projects/pi-stack/streams/pi-streams-harness/context/harness-program
-updated: "2026-10-24T00:50+08:00 (Z26 - track 6 PoC added, waits for merged_revision_z25; T5 steer-3 00:48 sha 609ab238 (PoC-ready section 8 + install); Z25 steered to T5 00:46, steer-2 sha e9ac4de5, revising 51/50; 43 compaction-hook evidence added. Earlier: T1 idle since 00:01 at ~59% context, waiting on its own async writer 81e8a51a for S2 stop/cancel safety; pytest active 00:18; last commit 916d1e0; T2 idle, still blocked on Prime login)"
+updated: "2026-10-24T00:56+08:00 (driver run: T5 streaming ~63% on Z25 revision, steer-2 and steer-3 both confirmed in transcript; T1 idle ~61% waiting on its own running async writer 81e8a51a (process alive), no re-prompt; T2 idle, Prime login not recorded; track 6 brief drafted; collect.sh now also pulls 43 and 13)"
 tracks:
   - id: 1
     name: pi-streams must-fix catalog
@@ -109,6 +109,8 @@ tracks:
     phase: "waiting - starts when merged_revision_z25 passes"
     code_branch: feat/merged-poc (off origin/main; not created yet)
     deadline: 2026-10-26T09:00+08:00
+    brief: docs/harness-program/briefs/track-6.md (drafted 00:55, sha256 80e8ef66; finalize against revised 51 section 8 before spawn)
+    progress: docs/harness-program/13-track-6-progress.md
     source: "ZF t234u 00:46 SGT (Z26/G37): drive over the weekend; tell ZF when a working PoC is on the branch; update install for a new external setup"
     gate: "Branch feat/merged-poc pushed; revised 51 section 8 commits implemented with their tests passing; end-to-end PoC check (one stream on stock Prime v0.10.1: intake -> own percentage compaction (save, compact, resume) -> ask close) passes; install updated and verified from a fresh external-style setup (clean HOME/dir) with the documented commands; login is the user's own step."
     next_action: "When merged_revision_z25 is done, spawn the track 6 session (poteto, Codex same provider), brief from revised 51 section 8, record session id here. On gate pass, send ZF one message with the branch and the fresh-setup test commands, set poc_sent."
