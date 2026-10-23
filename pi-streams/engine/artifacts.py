@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from engine import StreamsError
-from engine.project import STATE_SCHEMA, _sync_directory, _write, git_blob, load_stream_config, stream_lock
+from engine.project import STATE_SCHEMA, _sync_directory, _write, assert_artifacts_ready, git_blob, load_stream_config, stream_lock
 
 _HEADER = re.compile(rb" {0,3}(#{1,6})(?:[ \t]+(.*)|[ \t]*)")
 _FENCE = re.compile(rb" {0,3}(`{3,}|~{3,})(.*)")
@@ -133,6 +133,24 @@ def parse_state(source: bytes, *, log_size: int | None = None) -> StreamState:
     )
 
 
+def has_ratified_authority_line(line: str) -> bool:
+    if len(line.splitlines()) != 1:
+        return False
+    match = re.fullmatch(r"ratified:[ \t]+(\S+)[ \t]+(.+)", line.rstrip("\r\n"))
+    if match is None:
+        return False
+    reference, provenance = match.groups()
+    if reference.casefold() == "zf":
+        return re.fullmatch(r"notice[ \t]+\S.*", provenance, re.IGNORECASE) is not None
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}(?:T\S+)?", reference) is None:
+        return False
+    try:
+        stamp = datetime.fromisoformat(reference)
+    except ValueError:
+        return False
+    return bool(provenance.strip()) and ("T" not in reference or stamp.tzinfo is not None)
+
+
 def resolve_current_goal(state: StreamState) -> str:
     objective = state.source[state.current_objective.body.start:state.current_objective.body.end].decode("utf-8").strip()
     if objective:
@@ -159,6 +177,7 @@ def replace_current_objective(state: StreamState, objective: str) -> bytes:
 
 def update_current_objective(stream_dir: Path, objective: str) -> bool:
     with stream_lock(stream_dir):
+        assert_artifacts_ready(stream_dir)
         path = stream_dir / "STATE.md"
         if path.is_symlink():
             raise StreamsError("refusing a STATE.md symlink")
@@ -309,6 +328,7 @@ def _checked_state(source: bytes, book: LogBook) -> StreamState:
 
 
 def _read_stream_state_locked(stream_dir: Path) -> StreamState:
+    assert_artifacts_ready(stream_dir)
     if load_stream_config(stream_dir / "stream.toml").state_schema != STATE_SCHEMA:
         raise StreamsError("canonical STATE schema required; explicit migration is needed")
     path = stream_dir / "STATE.md"
@@ -476,6 +496,7 @@ def _recover_log_locked(stream_dir: Path, data: dict) -> tuple[LogBook, StreamSt
 
 
 def _open_log_locked(stream_dir: Path) -> tuple[dict, LogBook, StreamState]:
+    assert_artifacts_ready(stream_dir)
     if load_stream_config(stream_dir / "stream.toml").state_schema != STATE_SCHEMA:
         raise StreamsError("canonical STATE schema required; explicit migration is needed")
     data = _read_tick_data(stream_dir)
@@ -584,6 +605,7 @@ def record_ruling(stream_dir: Path, at: str, subject: str, ruling: str,
 
 
 def _rotate_log_locked(stream_dir: Path) -> list[str]:
+    assert_artifacts_ready(stream_dir)
     if load_stream_config(stream_dir / "stream.toml").state_schema == 0:
         return []
     data, book, state = _open_log_locked(stream_dir)

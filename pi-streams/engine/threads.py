@@ -9,7 +9,7 @@ from pathlib import Path
 
 from engine import StreamsError, clock, repo_root
 from engine import artifacts, piweb
-from engine.project import STATE_SCHEMA, Project, Repo, _write, git, load_stream_config, require_stream, stream_rows
+from engine.project import STATE_SCHEMA, Project, Repo, _write, assert_artifacts_ready, git, load_stream_config, require_stream, stream_rows
 
 _ROLE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
@@ -196,6 +196,7 @@ def _native_session(session_id: str, cwd: Path, listing: list[dict[str, object]]
 
 
 def resolve_coordinator(stream_dir: Path, rows: list[Thread] | None = None) -> Coordinator | None:
+    assert_artifacts_ready(stream_dir)
     rows = load_threads(stream_dir / "threads.tsv") if rows is None else rows
     row = designated_coordinator(rows)
     if row is None:
@@ -557,9 +558,7 @@ def _require_worker_role(role: str) -> None:
 
 def _has_ratified_authority(state: artifacts.StreamState) -> bool:
     authority = state.source[state.authority.start:state.authority.end].decode("utf-8")
-    words = authority.partition(":")[2].split()
-    normalized = [word.lower() for word in words]
-    return bool(normalized) and normalized[0] not in ("no", "false", "unratified") and normalized not in (["yes"], ["true"])
+    return artifacts.has_ratified_authority_line(authority)
 
 
 def require_ratified(stream_dir: Path) -> None:

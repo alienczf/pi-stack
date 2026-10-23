@@ -557,7 +557,7 @@ _TEXT_SUFFIXES = frozenset({
 })
 
 
-def _commit_paths(repo: Path, head: str, paths: tuple[str, ...] | None) -> list[str]:
+def _commit_paths(repo: Path, head: str, paths: tuple[str, ...] | None, *, scope_only: bool = False) -> list[str]:
     templates = templates_dir() / "stream"
     seeded = {path.relative_to(templates).as_posix() for path in templates.rglob("*") if path.is_file()}
     records = seeded | {"stream.toml"}
@@ -571,7 +571,7 @@ def _commit_paths(repo: Path, head: str, paths: tuple[str, ...] | None) -> list[
         )
 
     approved = set(paths or ())
-    selected = records | {name for name in tracked if allowed(name)} | approved
+    selected = approved if scope_only else records | {name for name in tracked if allowed(name)} | approved
     result: list[str] = []
     for name in sorted(selected):
         relative = Path(name)
@@ -593,12 +593,12 @@ def _commit_paths(repo: Path, head: str, paths: tuple[str, ...] | None) -> list[
                 raise StreamsError(f"refusing binary candidate: {name}")
         if full.exists() or name in tracked:
             result.append(name)
-        elif name in approved:
+        elif name in approved and not scope_only:
             raise StreamsError(f"no approved file: {name}")
     return result
 
 
-def commit_repo(repo: Path, message: str, *, paths: tuple[str, ...] | None = None) -> bool:
+def commit_repo(repo: Path, message: str, *, paths: tuple[str, ...] | None = None, scope_only: bool = False) -> bool:
     index = Path(git(repo, "rev-parse", "--path-format=absolute", "--git-path", "index").strip())
     lock = index.with_name(index.name + ".lock")
     try:
@@ -611,7 +611,7 @@ def commit_repo(repo: Path, message: str, *, paths: tuple[str, ...] | None = Non
         except StreamsError:
             git(repo, "symbolic-ref", "--quiet", "HEAD")
             head = ""
-        selected = _commit_paths(repo, head, paths)
+        selected = _commit_paths(repo, head, paths, scope_only=scope_only)
         if not selected:
             return False
         with tempfile.TemporaryDirectory(prefix="pi-streams-commit-", dir=index.parent) as directory:
@@ -787,13 +787,29 @@ def resolve_project(index: Path, cwd: Path | None = None) -> Project:
     raise StreamsError(f"could not resolve a project\n{listed}")
 
 
-def require_stream(index: Path, project_name: str, stream_id: str) -> Path:
+def assert_artifacts_ready(stream: Path) -> None:
+    path = stream / "log/migration.json"
+    if not path.exists() and not path.is_symlink():
+        return
+    if path.is_symlink() or path.parent.is_symlink() or not path.is_file():
+        raise StreamsError("unsafe migration journal; artifact operations are parked")
+    try:
+        operation = json.loads(path.read_bytes())
+    except (OSError, ValueError) as exc:
+        raise StreamsError("unreadable migration journal; artifact operations are parked") from exc
+    if not isinstance(operation, dict) or operation.get("version") != 1 or operation.get("root") != str(stream.resolve()) or operation.get("phase") != "complete":
+        raise StreamsError("artifact migration is pending; resume the exact migration before other operations")
+
+
+def require_stream(index: Path, project_name: str, stream_id: str, *, allow_migration: bool = False) -> Path:
     if STREAM_ID.fullmatch(stream_id) is None:
         raise StreamsError(f"invalid stream id: {stream_id}")
     for row in load_stream_rows(index):
         if row.id == stream_id and row.project == project_name:
             path = Path(row.path)
             if (path / "threads.tsv").is_file():
+                if not allow_migration:
+                    assert_artifacts_ready(path)
                 return path
             raise StreamsError(f"no stream {stream_id}")
     raise StreamsError(f"no stream {stream_id}")
@@ -817,6 +833,7 @@ def create_stream(index: Path, project: Project, stream_id: str) -> Path:
     ]
     dest = Path(existing[0].path) if existing else (Path(project.info.root) / "streams" / stream_id).resolve()
     fresh = not (dest / "stream.toml").is_file()
+    assert_artifacts_ready(dest)
     dest.mkdir(parents=True, exist_ok=True)
     ensure_git(dest)
     if not fresh and load_stream_config(dest / "stream.toml").state_schema != TEMPLATE_STATE_SCHEMA:
@@ -850,6 +867,7 @@ def _template_bytes(revision: str, relative: str) -> bytes | None:
 
 
 def upgrade_stream(repo: Path, stream_id: str) -> bool:
+    assert_artifacts_ready(repo)
     config = load_stream_config(repo / "stream.toml")
     if config.state_schema != TEMPLATE_STATE_SCHEMA:
         raise StreamsError("stream/template STATE schema mismatch; explicit migration is required")

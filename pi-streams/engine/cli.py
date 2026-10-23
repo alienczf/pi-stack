@@ -82,7 +82,10 @@ def _parser() -> argparse.ArgumentParser:
     migrate = sub.add_parser("migrate")
     migrate.add_argument("stream")
     migrate.add_argument("--home")
-    migrate.add_argument("--plan", action="store_true", help="show a source-backed migration plan without changing artifacts")
+    migration_mode = migrate.add_mutually_exclusive_group(required=True)
+    migration_mode.add_argument("--plan", action="store_true", help="show a source-backed migration plan without changing artifacts")
+    migration_mode.add_argument("--apply", metavar="PLAN_FILE", help="apply the exact reviewed source-backed plan")
+    migration_mode.add_argument("--resume", action="store_true", help="resume only the already recorded migration")
     migrate.add_argument("--mapping", help="explicit JSON byte-span authority/history map")
 
     upgrade = sub.add_parser("upgrade")
@@ -162,16 +165,17 @@ def _open_stream(index: Path, project_name: str, stream_id: str) -> Path:
 
 
 def cmd_migrate(args: argparse.Namespace) -> int:
-    if not args.plan:
-        raise StreamsError("migration application is not enabled; use --plan to inspect exact sources first")
+    if args.mapping and not args.plan:
+        raise StreamsError("--mapping is only for --plan; application requires the exact reviewed plan file")
     mapping = json.loads(migration.regular_bytes(Path(args.mapping))) if args.mapping else None
+    document = json.loads(migration.regular_bytes(Path(args.apply))) if args.apply else None
     index = resolve_index(args.home)
     with index_lock(index):
         project = resolve_project(index)
-        stream = require_stream(index, project.info.name, args.stream)
+        stream = require_stream(index, project.info.name, args.stream, allow_migration=True)
         with stream_lock(stream):
-            plan = migration.plan_migration(stream, mapping)
-    print(json.dumps(plan.public(), sort_keys=True))
+            result = migration.plan_migration(stream, mapping).public() if args.plan else migration.apply_migration_locked(stream, document)
+    print(json.dumps(result, sort_keys=True))
     return 0
 
 
