@@ -1,62 +1,121 @@
-# 11. Stream artifact map
+# Stream artifact contract and baseline observations
 
-Grok Bot, 2026-10-23 09:58 SGT, for ZF's t212u ask. Sources: pi-stack `main` @ 3acf0f0 (`pi-streams/templates/stream/`, `pi-streams/templates/thread-brief.md`, `skills/stream*/SKILL.md`, `pi-streams/engine/{tick,threads,project,doctor}.py`, `overlay/{AGENTS,APPEND_SYSTEM}.md`, `docs/design/pi-streams.md` §3–§7). Reality: the 12 streams in `~/.config/pi-streams/streams.tsv` on options-01, read at 10:05 SGT (byte sizes; ÷4 ≈ tokens).
+## Current contract under Z15
 
-"Every turn" means the template `AGENTS.md` (step 1) or the overlay system prompt tells the agent to read it on each turn or each session start.
+This is the authorized implementation target, not the deployed layout. Z15 in `03-decisions.md` supersedes G17, G21, and G22. Z13 excludes invented artifacts and bulk-output ownership work. GO and G25 authorize the isolated local implementation described in `10-pi-streams-fix-catalog.md`. Actual implementation and verification progress belongs in `12-track-1-progress.md`.
 
-## Per stream (stream folder, its own git repo)
+Every turn reads only AGENTS.md and STATE.md. No two stream files share a current-state concept.
 
-| File | Supposed to hold | Writer | Reader / when | Observed |
-|---|---|---|---|---|
-| `AGENTS.md` | Coordinator role, 5 per-turn rules | `new` (template) | pi system prompt, every session | 0.7 KB; 4 of 12 hand-edited (≤3.8 KB) |
-| `STREAM.md` | Ratified charter: GOAL…NO-GO | Kickoff, then ZF only | Coord every turn; thread at spawn; engine (ratified marker) | Accretes amendments: 654 66 KB, vola 12 KB |
-| `STATE.md` | Working state "kept short": plan, threads, waiting-on, next | Coord, rewrite each turn | Coord every turn; new coord after rotate | Newest-first `##` pile, never pruned: vola 181 KB/741 lines, 654 19 KB |
-| `DECISIONS.md` | ZF's rulings, append-only | Coord (kickoff, concessions) | On demand | 654 202 KB, vola 178 KB, fill 172 KB |
-| `context/` + `README.md` | Lasting how-to, gotchas, prefs (harvest) | Coord at close/milestones | README every turn; files on demand | 654 README 212 KB; vola 298 files |
-| `threads.tsv` | One row per session: role, worktree, status | Engine (spawn/adopt/rotate/close); tick status | Tick every 5 min; coord on demand | Fine; 654 8 KB |
-| `subscriptions.tsv` | Watches: source, when, action | Coord, only on ZF ask | Tick every 5 min | Header only in all 12 (no watches) |
-| `checks/` | Acceptance scripts | Coord / threads | Coord to accept "done" | 0–189 files; used as scratch |
-| `handover/<role>.md` | Thread exit note (pause-safely) | Thread before stop/close | Coord at close/harvest | Many variants per role (`-r2-r1`) |
-| `stream.toml` | Project name, pi-stack rev, remote | `new`, `upgrade` | Engine, doctor | Fine |
-| `log/events.jsonl` | Tick events (gitignored) | Tick, append | Coord: newest lines every turn | Fine (≤216 KB) |
-| `log/tick-state.json` | Tick memory: seen, pending, outages | Tick only | Tick; doctor freshness | Fine |
-| `log/` (other) | Nothing specified | Coord/threads ad hoc | Nobody | Dump ground: 654 34 GB (19 MB message dumps) |
-| `.git/pi-streams.lock` | Per-stream writer lock | Engine/tick | Engine/tick | Fine |
-
-## Not pi-streams, but loaded in every stream
-
-| File | Supposed to hold | Writer | Reader / when | Observed |
-|---|---|---|---|---|
-| `TODO.md` | Progress (overlay: "TodoWrite is TODO.md") | Any agent | Overlay: read when present, every session | 654 465 KB/2263 lines; vola 113 KB |
-| `PLAN.md` | Plan mode (overlay) | Any agent | Overlay: read when present, every session | 654 255 KB; vola 90 KB |
-
-## Invented per stream (no pi-stack source)
-
-| File | Used as | Observed |
+| Tier | Name | Sole concept and access |
 |---|---|---|
-| `ALERTS.md` | Coord's own alert/blocker log | 8 of 12; 654 294 KB |
-| `decisions.tsv` | Coord's own decision ledger | 5 of 12; vola 123 KB |
-| `METRICS.md`, `streamlog/`, `analysis/`, `evidence/`, `delivery/` | Ad hoc | 654 `analysis/` 47 GB |
+| Every turn | `AGENTS.md` | Role and operating instructions. Read with STATE, not an additional planning ledger. |
+| Every turn | `STATE.md` | Current Goals, active Rules, and recent Log in that order. The only always-loaded stream state. |
+| On demand | `history/<UTC ts>-<slug>.md` | One cold entry per file. Rotated Log entries, retired rules, historical decisions, and migration provenance. |
+| On demand | `context/` and `context/README.md` | Reference material and its index. The README is not a diary or a required turn read. |
+| On demand | `checks/` | Acceptance checks and their small source-bound reports. |
+| On demand | `handover/<role>/<full-session-id>.md` | One session's exit evidence. Never a role-reusable current-state file. |
+| Engine-only | Index `streams.tsv`, `projects/<name>.toml`, and `homes` | Stream/project registration and discovery. Never read by agents. |
+| Engine-only | `threads.tsv` | Session designation and runtime lifecycle. Never an agent-maintained task plan. |
+| Engine-only | `subscriptions.tsv` | Tick watch definitions. Agent interaction uses the existing command boundary. |
+| Engine-only | `stream.toml` | Stream identity, schema, and engine metadata. |
+| Engine-only | `log/events.jsonl` and `log/tick-state.json` | Engine events and durable delivery/maintenance/recovery progress. This grants no ownership of other `log/` contents. |
+| Engine-only | Index `ALERTS` | Typed off-host notification intake, not stream-local ALERTS.md. |
+| Engine-only | Index and stream locks | Short writer exclusion. No network/Git wait under an all-stream lock. |
+| Engine-only | `failures/<full-session-id>.lastgood` | Parking marker containing only that session's last completely persisted good-turn entry ID. |
 
-## Index (`~/.config/pi-streams/`, not a git repo)
+### STATE shape and authority
 
-| File | Supposed to hold | Writer | Reader / when | Observed |
-|---|---|---|---|---|
-| `homes` | Index dirs the tick reads | `init` | Engine, tick | 1 home |
-| `projects/<name>.toml` | Root, pi-web URL, models, caps, repos | `init` | Engine, tick, kickoff scout | 3 + 2 `.bak` |
-| `streams.tsv` | id, path, project | `new` | Tick, engine, kickoff | 12 streams |
-| `ALERTS` | Outage and claim lines for Grok Bot | Tick | Grok Bot routine | Empty now |
-| `.pi-streams.lock` | Index lock | Engine/tick | Engine/tick | Fine |
-| worktree `.stream` | Pointer to stream dir | `thread spawn/adopt` | Engine | Also sits in vola's stream dir |
+```markdown
+## Goals
+ratified: <authority reference, empty until ratified>
+### North Star
+<one mutable, human-authorized goal>
+### Current objective
+<coordinator-editable immediate objective, possibly empty>
+### Charter
+<remaining ratified scope, acceptance, WRITES, and NO-GO terms>
+## Rules
+<only human rulings still in force>
+## Log
+### <UTC timestamp> <subject>
+<free body>
+```
 
-## Separation-of-duty notes
+Goals and Rules are rewritten in place. The coordinator may replace only Current objective through the narrow engine operation. North Star, charter authority, and Rules change only with human authorization. The first line of Goals carries the actual `ratified:` marker. Historical prose is not ratification. Worker spawn/adopt validates that authority before effects.
 
-1. **ZF's guess is half right.** STATE.md is behaving as long-term history loaded every turn: coordinators prepend `##` sections ("Resumed after…", "PAUSED by ZF…") and never prune, so vola's is 181 KB. But STREAM.md is not the current state. It is the ratified charter. It bloats differently, with amendments piling up under `ratified:` (654: 66 KB).
-2. **No "10 MB STATE.md" exists.** 654's STATE.md is 19 KB. The real per-turn load in 654 is TODO.md 465 KB + PLAN.md 255 KB + context/README 212 KB + STREAM.md 66 KB + STATE.md 19 KB ≈ 1 MB ≈ 250k tokens if read in full. That is above the 150k DCR trigger before any work starts.
-3. **Four files do one job.** STATE.md, TODO.md, PLAN.md and the invented ALERTS.md all end up as "current plus history" logs. TODO/PLAN come from the global overlay, not pi-streams, so the stream rules and the overlay rules overlap with no owner.
-4. **Rotation and DCR both point at STATE.md** (`rotate_coordinator`: "Read STATE.md, then continue"), so the bloated file is exactly what a fresh context loads first.
-5. **Nothing bounds the write-only areas.** `log/`, `checks/`, `handover/` and `context/` have no size or retention rule (654 `log/` 34 GB), and DECISIONS.md is append-only with no index.
+One header-aware parser serves section mutation and goal resolution. It recognizes headers outside code fences and rejects duplicate or ambiguous required sections. The resolver selects the nonempty Current objective, otherwise North Star. There is no goal-completion flag. An extra level-two section between Rules and Log is tolerated and preserved byte-for-byte. Future Asks is not implemented.
 
-## What Z9 / G17 changes
+Only Log is append-only and capped at 30 entries. The canonical engine append operation writes `### <timestamp> <subject>` plus a free body. Engine metadata retains accepted occurrence boundaries. The agent never prunes or rotates. Every tick rotates the oldest overflow into one exact-byte `history/<UTC ts>-<slug>.md` per entry, before drive/event/outage gates. Stable occurrence/hash suffixes prevent collisions. Free body length means this is not a token bound or a resource budget.
 
-`ACTIONS.md` (append-only, 30 newest `### <ts> <subject>` entries, tick-rotated) replaces STATE.md. `history/<YYYYMMDDTHHMMZ>-<slug>.md` takes the overflow, one file per entry. STREAM.md stays the charter with GOAL as North Star plus a coordinator-editable `CURRENT` paragraph, and its amendments move to DECISIONS.md. Bounding TODO.md/PLAN.md, context/README.md and `log/` is artifact-health work (Z10b) for the track 1 catalog.
+A new human ruling updates Rules and appends Log. A superseded ruling leaves Rules only after its exact text is retained in `history/<UTC ts>-rule-retired-<slug>.md`. New ZF steers enter Log at arrival and reach history through normal rotation. No tag field is added. Goals, Rules, and intervening sections are not rotated with Log.
+
+### Retired and excluded artifacts
+
+GOAL.md, STREAM.md, DECISIONS.md, and ACTIONS.md are retired. There is no separate CURRENT section. Within a stream, Goals plus Log replace global-overlay TODO.md/PLAN.md planning. The stream template/brief disables those demands. Non-stream overlay behavior is unchanged.
+
+Z13 excludes invented ALERTS.md, decisions.tsv, ad-hoc log/, and analysis directories. Fix 12 stops referencing them. No import, migration, inventory, ownership assignment, or cleanup is included. Existing TODO/PLAN and context contents are not migration targets either. The engine owns only its named log/events and tick-state records, not every file under log/. Removing fix 17 leaves 17 stable fixes, numbered 1-16 and 18, split into 11 mechanical and 6 artifact fixes.
+
+### Explicit S2a migration
+
+Migration is a lossless, idempotent, explicit per-stream operation. It uses a persisted source-backed byte-span map and refuses ambiguous active authority rather than classifying arbitrary prose automatically.
+
+- STREAM.md maps into Goals, active Rules, and history. The ratified marker and still-binding charter terms survive.
+- DECISIONS.md maps still-in-force rulings into Rules and the rest into history.
+- Old STATE.md moves into history before fresh three-section STATE is published.
+- Original bytes, hashes, source paths, and available Git provenance remain stable. Historical section timestamps use source evidence or a labelled persisted-time fallback.
+- failures/ is created and protected. Existing full-SID lastgood markers and recovery metadata remain byte-identical.
+- One scoped commit covers only approved migration paths. Retry adds no duplicate seed, history, rule, or commit. Unrelated staged content survives.
+
+Migration does not follow worktree pointers or out-of-root symlinks, write worker worktrees, prompt sessions, or perform any existing-session lifecycle action. TODO/PLAN and invented artifacts are not inputs. Unknown intermediate GOAL/ACTIONS schemas require an explicit source-backed plan or refusal. New templates and ordinary upgrade do not silently migrate or overwrite owned state.
+
+## Historical baseline observations
+
+The following is the earlier map, not a new live measurement or the current policy. Grok Bot prepared it on 2026-10-23 at 09:58 SGT and read the 12 registered options-01 streams at 10:05 SGT. This amendment does not reread or change those streams or their registry.
+
+Source pin is pi-stack `3acf0f01e6084a317b89cef3a86f4781e60877cf`. Source areas were `pi-streams/templates/stream/`, `pi-streams/templates/thread-brief.md`, `skills/stream*/SKILL.md`, `pi-streams/engine/{tick,threads,project,doctor}.py`, `overlay/{AGENTS,APPEND_SYSTEM}.md`, and `docs/design/pi-streams.md` sections 3-7. The observed registry was `~/.config/pi-streams/streams.tsv`. These paths are historical evidence, not implementation mutation targets.
+
+### Baseline stream files
+
+| File | Baseline role and readers | Recorded observation |
+|---|---|---|
+| AGENTS.md | Template coordinator role and five per-turn rules. Loaded by Pi. | About 0.7 KB. Four of twelve were hand-edited, up to 3.8 KB. |
+| STREAM.md | Ratified GOAL/charter. Coordinator read every turn, worker at spawn, engine for ratification. | Accreted amendments. 654 was 66 KB, vola 12 KB. |
+| STATE.md | Coordinator-rewritten plan, threads, waiting-on, next. Read every turn and after replacement. | Newest-first level-two history pile. Vola was 181 KB and 741 lines. 654 was 19 KB. |
+| DECISIONS.md | Append-only ZF rulings, nominally on demand. | 654 was 202 KB, vola 178 KB, fill 172 KB. |
+| context/ and README.md | Harvested reference material. AGENTS required the README every turn. | 654 README was 212 KB. Vola had 298 context files. |
+| threads.tsv | Engine session/role/worktree/status rows. Tick and coordinator readers. | 654 was 8 KB. |
+| subscriptions.tsv | Coordinator-defined tick watches. | Header only in all twelve. |
+| checks/ | Acceptance scripts used by coordinators/workers. | Zero to 189 files, also used as scratch. |
+| handover/<role>.md | Worker exit note, read at close/harvest. | Reused role variants such as `-r2-r1`. |
+| stream.toml | Engine identity/revision/remote. | No reported issue. |
+| log/events.jsonl | Gitignored engine tick events. AGENTS required recent lines every turn. | At most about 216 KB. |
+| log/tick-state.json | Tick memory for seen/pending/outages and doctor freshness. | No reported issue. |
+| .git/pi-streams.lock | Per-stream engine writer lock. | No reported issue. |
+
+### Baseline global overlay and out-of-scope observations
+
+| Name | Historical source or use | Recorded observation |
+|---|---|---|
+| TODO.md | Global overlay progress checklist, read when present at session start. Not a stream template. | 654 was 465 KB and 2,263 lines. Vola was 113 KB. |
+| PLAN.md | Global overlay plan, read when present at session start. | 654 was 255 KB. Vola was 90 KB. |
+| ALERTS.md | Invented stream-local alert/blocker log, not pi-stack source. | Present in eight of twelve. 654 was 294 KB. |
+| decisions.tsv | Invented stream-local decision ledger, not pi-stack source. | Present in five of twelve. Vola was 123 KB. |
+| Other log/ contents | Ad-hoc files, not the engine's named events/tick-state records. | 654 was 34 GB, with message dumps around 19 MB. |
+| METRICS.md, streamlog/, analysis/, evidence/, delivery/ | Ad-hoc material, not a new pi-stack ownership contract. | 654 analysis/ was 47 GB. |
+
+These observations do not authorize import, ownership work, or cleanup. The source repository's existing decisions.tsv is a separate file and stays untouched.
+
+### Baseline index
+
+| Name | Historical role | Recorded observation |
+|---|---|---|
+| homes | Index directories discovered by global tick. | One home. |
+| projects/<name>.toml | Root, pi-web URL, models, caps, repos. | Three files and two backups. |
+| streams.tsv | Stream ID/path/project rows. | Twelve streams. |
+| ALERTS | Tick-produced outage/claim lines for Grok Bot. | Empty at observation time. |
+| .pi-streams.lock | Index writer lock. | No reported issue. |
+| Worktree .stream | Engine pointer to stream directory. | Also present in vola's stream directory. |
+
+The old full-read sum for 654 was approximately 1 MB from TODO 465 KB, PLAN 255 KB, context README 212 KB, STREAM 66 KB, and STATE 19 KB. Dividing bytes by four was only a rough token estimate. No request-token measurement or proof of 250k input tokens exists. A separate historical frozen `c146285:STATE.md` was 10,195,068 bytes and 165,597 lines. That is not the map's later 19 KB STATE.
+
+The old G17 ACTIONS/STREAM/CURRENT proposal is superseded. It is not the current artifact policy or implementation evidence. This run's amended contract requires actual section/parser, rotation, migration, read-contract, and disposable-runtime checks before completion.
