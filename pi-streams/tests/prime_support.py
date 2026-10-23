@@ -19,6 +19,7 @@ class PrimeCase(unittest.TestCase):
         self.stream.mkdir()
         project.git(self.stream, "init")
         project.copy_missing(project.templates_dir() / "prime", self.stream)
+        project.save_stream_config(self.stream, project.StreamConfig("fixture", "", backend="prime"))
         project.write_prime_settings(self.stream, 50)
         header = (project.templates_dir() / "stream/threads.tsv").read_text()
         (self.stream / "threads.tsv").write_text(header + f"durable\tcoordinator\t\t{self.stream}\t\t\topenai-codex/gpt-6.1-sol\txhigh\tactive\t2026-10-23T00:00:00Z\n")
