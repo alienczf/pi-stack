@@ -31,6 +31,7 @@ class VerificationTests(unittest.TestCase):
         proc = self.run_check("prepare")
         self.owned = Path(json.loads(proc.stdout)["root"])
         self.log = self.root / "runtime.json"
+        self.events_log = self.root / "events.json"
         self.runtime = self.root / "fake-prime-agent"
         self.runtime.write_text(f'''#!/usr/bin/env python3
 import json, os, signal, sys
@@ -38,9 +39,14 @@ from pathlib import Path
 sys.path.insert(0, {str(ROOT / "tests")!r})
 from test_prime_tools import OwnedSupervisor
 root = Path(sys.argv[sys.argv.index("--daemon-socket") + 1]).parent
-Path({str(self.log)!r}).write_text(json.dumps({{"argv": sys.argv[1:], "agentDir": os.environ.get("PRIME_AGENT_CODING_AGENT_DIR")}}))
+Path({str(self.log)!r}).write_text(json.dumps({{"argv": sys.argv[1:], "agentDir": os.environ.get("PRIME_AGENT_CODING_AGENT_DIR"), "sessionDir": os.environ.get("PRIME_AGENT_SESSION_DIR"), "socketEnv": os.environ.get("PRIME_AGENT_DAEMON_SOCKET"), "cwd": os.getcwd()}}))
 class MetadataSupervisor(OwnedSupervisor):
     def response(self, command, owner):
+        if command["type"] == "shutdown":
+            self.stopped.set()
+            return {{"success": True}}
+        if command["type"] == "create":
+            self.archived = False
         result = super().response(command, owner)
         if result.get("success") and command["type"] in ("get_connection_state", "set_model"):
             definition = json.loads((root / "agent/models.json").read_text())["providers"]["openai-codex"]["models"][0]
@@ -53,6 +59,7 @@ class MetadataSupervisor(OwnedSupervisor):
 with MetadataSupervisor(root) as server:
     signal.signal(signal.SIGTERM, lambda *_: server.stopped.set())
     server.stopped.wait(15)
+Path({str(self.events_log)!r}).write_text(json.dumps({{"requests": server.requests, "events": server.events, "admitted": server.admitted_inputs, "runnable": server.runnable_inputs}}))
 ''')
         self.runtime.chmod(0o755)
 
@@ -77,10 +84,52 @@ with MetadataSupervisor(root) as server:
         self.assertEqual(result["runtime"], {"started": True, "stopped": True, "socketRemoved": True})
         self.assertEqual(json.loads(self.log.read_text()), {
             "argv": ["--mode", "daemon", "--daemon-socket", str(self.owned / "daemon.sock")],
-            "agentDir": str(self.owned / "agent")})
+            "agentDir": str(self.owned / "agent"), "sessionDir": str(self.owned / "agent/sessions"),
+            "socketEnv": str(self.owned / "daemon.sock"), "cwd": str(self.owned / "work")})
         self.assertEqual((self.owned / "agent/settings.json").read_bytes(), before)
         self.assertFalse((self.owned / "daemon.sock").exists())
         self.assertFalse((self.owned / "verification.lock").exists())
+
+    def test_launcher_native_shutdown_targets_only_owned_socket(self):
+        proc = self.verify()
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        events = json.loads(self.events_log.read_text())
+        self.assertEqual(events["requests"][-1], {"type": "shutdown", "force": True})
+        self.assertEqual(events["admitted"], [])
+        self.assertEqual(events["runnable"], [])
+
+    def test_explicit_inference_runs_control_first_and_never_retries_native_failure(self):
+        proc = self.verify("--inference")
+        self.assertEqual(proc.returncode, 1, proc.stderr + proc.stdout)
+        result = json.loads(proc.stdout)
+        self.assertEqual(result["error"]["error"], "upstream_error")
+        self.assertEqual(result["retainedOwnedSessions"], [])
+        events = json.loads(self.events_log.read_text())["events"]
+        self.assertEqual(events.count("create"), 2)
+        self.assertEqual(events.count("prompt_and_wait"), 1)
+        self.assertLess(events.index("kill"), events.index("prompt"))
+        self.assertEqual(events[-1], "shutdown")
+
+    def test_root_safety_and_no_retry_settings_are_checked_before_launch(self):
+        settings = self.owned / "agent/settings.json"
+        original = settings.read_bytes()
+        for changes in ({"enabled": True}, {"provider": {"waitForUsage": {"enabled": True, "pauseUntilReset": True}}}):
+            config = json.loads(original)
+            config["retry"].update(changes)
+            settings.write_text(json.dumps(config))
+            proc = self.verify()
+            self.assertEqual(proc.returncode, 1, proc.stdout)
+            self.assertEqual(json.loads(proc.stdout)["error"]["error"], "unsafe_verification_root")
+            self.assertFalse(self.log.exists())
+        settings.write_bytes(original)
+        outside = self.root / "outside-settings.json"
+        outside.write_bytes(original)
+        settings.unlink()
+        settings.symlink_to(outside)
+        proc = self.verify()
+        self.assertEqual(proc.returncode, 1, proc.stdout)
+        self.assertEqual(json.loads(proc.stdout)["error"]["error"], "unsafe_verification_root")
+        self.assertFalse(self.log.exists())
 
     def test_launcher_refuses_existing_socket_without_contact_or_shutdown(self):
         with OwnedSupervisor(self.owned) as server:
