@@ -34,8 +34,8 @@ Run directory is `/home/alphalab/.cache/pi-stack-track6/20261023T172837Z/`.
 |---|---|---|
 | Foundation | `23640e5d24501afb88da1e2eb5487a89001eac93`; preparation `198e433b19259eb56eec9b512b36b1247ffd519a` | Baseline passed 105 stream tests and 71 root tests. |
 | 1. State writer | `ea6ef52187a6b23a6ee68df7ae3b893881ff9f6c` | VERIFIED. 31 focused tests, 136 stream tests, 71 root tests, exact role template, syntax and diff checks passed. |
-| 2. Prime transport | awaiting commit | 39 focused, 144 stream and 72 root tests passed. `evidence/unit-2-{focused,streams,root}.log`. |
-| 3. Messages, wake and stop | pending | pending |
+| 2. Prime transport | `ffbacff02fb2d2dc689ad216b6f3cfc5da3a779b` | 39 focused, 144 stream and 72 root tests passed. `evidence/unit-2-{focused,streams,root}.log`. |
+| 3. Messages, wake and stop | awaiting commit | 48 focused, 153 stream and 72 root tests passed. `evidence/unit-3-{focused,streams,root}.log`. |
 | 4. Clean workers | pending | pending |
 | 5. Owned compaction | pending | pending |
 | 6. Computed close | pending | pending |
@@ -69,6 +69,10 @@ Run directory is `/home/alphalab/.cache/pi-stack-track6/20261023T172837Z/`.
 | 2026-10-23T18:03:04Z | Keep a single transport in `engine/prime.py` and move compatibility projections to `engine/prime_compat.py`. | A thin bin entry can preserve imported CLI helpers while live hooks share one multiplexed connection. | `evidence/unit-2-focused.log`; `evidence/unit-2-root.log` | Verified. |
 | 2026-10-23T18:03:04Z | Require schema 30 and update the old owned supervisor fixture to advertise it. | The original CLI accepted schema 29; enforcing the public contract must not silently grandfather an incomplete fixture hello. | `evidence/unit-2-before.log`; `tests/test_prime_tools.py` | Failed before correction, both suites green afterward. |
 | 2026-10-23T18:03:04Z | Reject symlink paths before resolving and require registered Prime streams to stay in their project stream directory. | Resolving first erased the symlink identity and allowed writes into a foreign directory. | `evidence/parent-state-path-review.log`; `evidence/unit-2-path-before.log`; `test_prime_state.py` | Destination, ancestor and registered-path regression passes. |
+
+| 2026-10-23T18:03:04Z | Use pending-message values to separate locked socket writes from unlocked reply waits. | State must be saved and freshly wrapped before a send, but pause release and other commands must remain possible while waiting. | `engine/prime.py::PendingMessage`; `evidence/unit-3-focused.log` | New behavior verified. |
+| 2026-10-23T18:03:04Z | Run Prime ticks outside the legacy all-stream lock and reuse the existing registry and tick entry. | Inference must not hold unrelated stream locks, and a second task clock is unnecessary. | `engine/tick.py`; `evidence/unit-3-streams.log` | Legacy and Prime cases green. |
+| 2026-10-23T18:03:04Z | Preserve uncertain sends and expose abort replies without a termination promise. | A timeout is not native failure or permission to replay, and abort cannot promise rollback. | `evidence/unit-3-focused.log` | Duplicate, stale, timeout and abort checks pass. |
 
 ## Orchestration correction
 
