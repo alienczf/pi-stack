@@ -45,6 +45,14 @@ def array_field(data: dict, name: str) -> list:
     return value
 
 
+def queue_lanes(value: Any) -> tuple[list, list]:
+    queue = object_data(value)
+    steering, follow_up = array_field(queue, "steering"), array_field(queue, "followUp")
+    if any(not isinstance(text, str) for text in [*steering, *follow_up]):
+        raise CliError("invalid_response", "Prime queue previews must be strings")
+    return steering, follow_up
+
+
 def split_model(selector: str) -> tuple[str, str]:
     provider, slash, model = selector.partition("/")
     if not slash or not provider or not model or selector != selector.strip():
@@ -180,17 +188,21 @@ def spawn(client: PrimeClient, cwd: str) -> dict:
     selection = os.environ.get("PRIME_CLI_MODEL")
     thinking = os.environ.get("PRIME_CLI_THINKING")
     requested = split_model(selection) if selection else None
-    fields: dict[str, Any] = {"cwd": cwd, "lifecycle": "resident"}
+    fields: dict[str, Any] = {"cwd": cwd}
     if requested:
         fields.update(provider=requested[0], model=requested[1])
     if thinking:
         if thinking not in LEVELS:
             raise CliError("usage", "Invalid PRIME_CLI_THINKING", 400)
         fields["thinking"] = thinking
-    row = session_row(client.request("create", **fields))
+    row = session_row(client.request("create", lifecycle="resident", telemetryDisabled=True, config=fields))
+    if row["cwd"] != cwd:
+        raise CliError("cwd_mismatch", "Prime did not use the requested cwd", 409, session=row)
     if requested:
         try:
             state = client.session_state(row["id"])
+            if state.get("cwd") != cwd:
+                raise CliError("cwd_mismatch", "Prime connection state has a different cwd", 409)
             expect_model(state.get("model"), requested)
             row.update(model=state["model"], thinkingLevel=state.get("thinkingLevel"))
         except CliError as exc:
@@ -202,9 +214,7 @@ def spawn(client: PrimeClient, cwd: str) -> dict:
 def status(client: PrimeClient, sid: str) -> dict:
     state = client.session_state(sid)
     active = state["activeSessionId"]
-    queue = object_data(client.request("get_queue", activeSessionId=active))
-    steering = array_field(queue, "steering")
-    follow_up = array_field(queue, "followUp")
+    steering, follow_up = queue_lanes(client.request("get_queue", activeSessionId=active))
     stats = object_data(client.request("get_session_stats", activeSessionId=active))
     cost = stats.get("cost")
     if isinstance(cost, bool) or not isinstance(cost, (int, float)) or not math.isfinite(cost):
@@ -263,15 +273,13 @@ def execute(client: PrimeClient, args: argparse.Namespace) -> dict:
     if args.cmd == "list":
         data = object_data(client.request("list", all=True, cwd=args.cwd))
         sessions = [session_row(row) for row in array_field(data, "sessions")]
-        sessions = [row for row in sessions if row["cwd"] == args.cwd and not row["archived"]]
+        sessions = [row for row in sessions if row["cwd"] == args.cwd]
         return {"ok": True, "status": 200, "sessions": sessions}
     if args.cmd == "commands":
         data = object_data(client.request("get_commands", activeSessionId=args.sid))
         return {"ok": True, "status": 200, "commands": array_field(data, "commands")}
     if args.cmd == "prompt":
-        text = args.text if args.text is not None else sys.stdin.read()
-        if not text.strip():
-            raise CliError("usage", "empty prompt", 400)
+        text = args.text
         kind = "steer" if args.steer else "follow_up" if args.follow_up else "prompt"
         fields = {"activeSessionId": args.sid, "message": text}
         if kind == "prompt":
@@ -290,12 +298,12 @@ def execute(client: PrimeClient, args: argparse.Namespace) -> dict:
         summary = object_data(client.request("get_state", activeSessionId=active))
         if summary.get("activeSessionId") != active:
             raise CliError("wrong_session", "Prime returned a different session during archive preflight")
-        queue = object_data(client.request("get_queue", activeSessionId=active))
+        steering, follow_up = queue_lanes(client.request("get_queue", activeSessionId=active))
         flags = [state.get(name) for name in ("isStreaming", "isCompacting", "isBashRunning")]
         flags.append(summary.get("hasRunningSubagents"))
         if any(type(flag) is not bool for flag in flags):
             raise CliError("invalid_response", "Prime archive preflight lacks activity flags")
-        if any(flags) or array_field(queue, "steering") or array_field(queue, "followUp"):
+        if any(flags) or steering or follow_up:
             raise CliError("session_busy", "Cannot archive a session with active or queued work", 409)
         fields["activeSessionId"] = active
     requested = None
@@ -312,7 +320,7 @@ def execute(client: PrimeClient, args: argparse.Namespace) -> dict:
     if args.cmd == "archive":
         data = {"archived": True, "preflightAtomic": False}
     elif args.cmd == "stop":
-        data = {**({} if data is None else object_data(data)), "stopped": True,
+        data = {**({} if data is None else object_data(data)), "accepted": True,
                 "runtimeClosed": False, "semantics": "abort-and-clear-resident-shim"}
     return {"ok": True, "status": 200, "result": data if data is not None else {}}
 
@@ -324,8 +332,11 @@ def main(argv: list[str] | None = None) -> int:
             raise CliError("unsupported", "Prime has no correlated interactive-answer API", 501)
         if args.cmd == "model":
             split_model(args.model)
-        if args.cmd == "prompt" and args.text is not None and not args.text.strip():
-            raise CliError("usage", "empty prompt", 400)
+        if args.cmd == "prompt":
+            if args.text is None:
+                args.text = sys.stdin.read()
+            if not args.text.strip():
+                raise CliError("usage", "empty prompt", 400)
         path = args.socket or os.environ.get("PRIME_AGENT_DAEMON_SOCKET") or os.path.join(
             os.environ.get("TMPDIR", tempfile.gettempdir()), f"prime-agent-{os.getuid()}", "daemon.sock")
         try:

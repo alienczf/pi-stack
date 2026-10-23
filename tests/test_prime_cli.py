@@ -115,26 +115,40 @@ class PrimeCliTests(unittest.TestCase):
                 "isCompacting": False, "isBashRunning": False, "thinkingLevel": "xhigh",
                 "model": {"provider": "openai-codex", "id": "gpt-6.1-sol"}, **updates}
 
-    def test_list_cwd_archived_and_runtime_id(self):
+    def test_list_cwd_preserves_archived_and_runtime_id(self):
         rows = [{"id": "durable", "activeSessionId": "s1", "cwd": "/work"},
                 {"id": "old", "cwd": "/work", "lifecycle": "archived"},
                 {"id": "foreign", "cwd": "/other"}]
         with Fixture([{"sessions": rows}]) as fixture:
             proc = run_cli("list", "--cwd", "/work", fixture=fixture)
-        self.result(proc, {"ok": True, "status": 200, "sessions": [{"id": "s1", "activeSessionId": "s1", "cwd": "/work", "archived": False}]})
+        self.result(proc, {"ok": True, "status": 200, "sessions": [{"id": "s1", "activeSessionId": "s1", "cwd": "/work", "archived": False}, {"id": "old", "cwd": "/work", "lifecycle": "archived", "archived": True}]})
         self.commands(fixture, [{"type": "list", "all": True, "cwd": "/work"}])
 
     def test_spawn(self):
         with Fixture([{"activeSessionId": "s1", "sessionId": "d1", "cwd": "/a b"}]) as fixture:
             proc = run_cli("spawn", "/a b", fixture=fixture)
         self.result(proc, {"ok": True, "status": 201, "session": {"id": "s1", "activeSessionId": "s1", "sessionId": "d1", "cwd": "/a b", "archived": False}})
-        self.commands(fixture, [{"type": "create", "cwd": "/a b", "lifecycle": "resident"}])
+        self.commands(fixture, [{"type": "create", "lifecycle": "resident", "telemetryDisabled": True, "config": {"cwd": "/a b"}}])
 
     def test_spawn_explicit_unlisted_model_readback(self):
         with Fixture([{"id": "s1", "cwd": "/work"}, self.state()]) as fixture:
             proc = run_cli("spawn", "/work", fixture=fixture, env={"PRIME_CLI_MODEL": "openai-codex/gpt-6.1-sol", "PRIME_CLI_THINKING": "xhigh"})
         self.result(proc, {"ok": True, "status": 201, "session": {"id": "s1", "cwd": "/work", "archived": False, "model": {"provider": "openai-codex", "id": "gpt-6.1-sol"}, "thinkingLevel": "xhigh"}})
-        self.commands(fixture, [{"type": "create", "cwd": "/work", "lifecycle": "resident", "provider": "openai-codex", "model": "gpt-6.1-sol", "thinking": "xhigh"}, {"type": "get_connection_state", "activeSessionId": "s1"}])
+        self.commands(fixture, [{"type": "create", "lifecycle": "resident", "telemetryDisabled": True, "config": {"cwd": "/work", "provider": "openai-codex", "model": "gpt-6.1-sol", "thinking": "xhigh"}}, {"type": "get_connection_state", "activeSessionId": "s1"}])
+
+    def test_spawn_exposes_effective_thinking_clamp(self):
+        with Fixture([{"id": "s1", "cwd": "/work"}, self.state(thinkingLevel="off")]) as fixture:
+            proc = run_cli("spawn", "/work", fixture=fixture, env={"PRIME_CLI_MODEL": "openai-codex/gpt-6.1-sol", "PRIME_CLI_THINKING": "xhigh"})
+        self.assertEqual(proc.returncode, 0, proc.stdout)
+        self.assertEqual(json.loads(proc.stdout)["session"]["thinkingLevel"], "off")
+        self.assertEqual(fixture.requests[0]["command"]["config"]["thinking"], "xhigh")
+
+    def test_spawn_cwd_drop_is_error_with_retained_session(self):
+        with Fixture([{"id": "s1", "cwd": "/wrong-default"}]) as fixture:
+            proc = run_cli("spawn", "/work", fixture=fixture)
+        data = json.loads(proc.stdout)
+        self.assertEqual((proc.returncode, data["error"], data["session"]["id"]), (1, "cwd_mismatch", "s1"))
+        self.assertEqual(len(fixture.requests), 1)
 
     def test_spawn_fallback_is_error_with_retained_session(self):
         with Fixture([{"id": "s1", "cwd": "/work"}, self.state(model={"provider": "other", "id": "wrong"})]) as fixture:
@@ -179,6 +193,15 @@ class PrimeCliTests(unittest.TestCase):
                 proc = run_cli("status", "s1", fixture=fixture)
             self.assertEqual((proc.returncode, json.loads(proc.stdout)["error"]), (1, error))
 
+    def test_status_rejects_nontext_queue_previews(self):
+        with Fixture([self.state(), {"steering": [{"text": "not a preview"}], "followUp": []}]) as fixture:
+            proc = run_cli("status", "s1", fixture=fixture)
+        self.assertEqual((proc.returncode, json.loads(proc.stdout)["error"]), (1, "invalid_response"))
+
+    def test_empty_stdin_rejected_without_daemon(self):
+        proc = run_cli("prompt", "s1", stdin=" \n")
+        self.result(proc, {"ok": False, "status": 400, "error": "usage", "message": "empty prompt"}, 1)
+
     def test_status_missing_cost_is_not_zero(self):
         with Fixture([self.state(), {"steering": [], "followUp": []}, {}]) as fixture:
             proc = run_cli("status", "s1", fixture=fixture)
@@ -201,7 +224,7 @@ class PrimeCliTests(unittest.TestCase):
                 proc = run_cli(verb, "s1", *args, fixture=fixture)
             result = reply if reply is not None else {}
             if verb == "stop":
-                result = {**result, "stopped": True, "runtimeClosed": False, "semantics": "abort-and-clear-resident-shim"}
+                result = {**result, "accepted": True, "runtimeClosed": False, "semantics": "abort-and-clear-resident-shim"}
             self.result(proc, {"ok": True, "status": 200, "result": result})
             self.commands(fixture, [{"type": kind, "activeSessionId": "s1", **fields}])
 
@@ -270,7 +293,7 @@ class PrimeCliTests(unittest.TestCase):
             self.assertEqual(fixture.requests, [])
 
     def test_malformed_replies(self):
-        cases = [b"not json\n", b"[]\n", b"{\"type\":\"response\"}\n", b"\xff\n", b"partial"]
+        cases = [b"not json\n", b"[]\n", b"{\"type\":\"response\"}\n", b"\xff\n", b"{\"bad\":NaN}\n", b"partial"]
         for raw in cases:
             with self.subTest(raw=raw), Fixture([None], raw=raw) as fixture:
                 proc = run_cli("abort", "s1", fixture=fixture)
