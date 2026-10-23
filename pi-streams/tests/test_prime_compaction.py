@@ -233,6 +233,16 @@ class CompactionTests(PrimeCase):
         self.assertEqual(self.events.count("prompt_and_wait"), 1)
         self.assertIn("release_session_input_pause", self.events)
 
+    def test_native_transcript_traversal_is_not_an_owned_disk_readback(self):
+        from engine import StreamsError
+        entry = {"id": "compact-escape", "parentId": None, "type": "compaction", "summary": self.summary}
+        outside = self.root / "outside-native.jsonl"
+        outside.write_text(json.dumps({"type": "session", "id": "durable"}) + "\n" + json.dumps(entry) + "\n")
+        tree = {"flatNodes": [{"entry": entry}], "leafId": entry["id"]}
+        with self.assertRaisesRegex(StreamsError, "traversal|outside|escape"):
+            read_compaction_entry(tree, set(), {"summary": self.summary}, self.native / "../outside-native.jsonl", self.native, self.identity)
+        self.assertEqual(outside.read_text().count("compact-escape"), 1)
+
     def test_settings_are_idempotent_and_conflicts_do_not_reconfigure(self):
         path = project.write_prime_settings(self.stream, 50)
         before = path.read_bytes()

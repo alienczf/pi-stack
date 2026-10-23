@@ -12,6 +12,7 @@
 - [x] Unit 6. Close only computed results and stage owned paths.
 - [x] Unit 7. Install stock Prime and pi-stack under an isolated external prefix.
 - [x] Unit 8. Implement the shared native verifier and offline proof-stage negatives.
+- [x] Parent review corrections. Explicit identity, product-artifact binding, traversal guards, worker-aware wake and assembled verifier checks.
 - [ ] Native gate. BLOCKED on operator Codex login. Final clean install, init and doctor passed. The verifier reached the real missing-auth reply and stopped its owned daemon. Native PASS remains unclaimed.
 - [x] Phase D: Keep the audit trail.
 - [x] Phase E: Verify and hand back. Offline and installation checks passed; native acceptance is explicitly BLOCKED.
@@ -23,7 +24,7 @@ The implementation and verification contract is in `PLAN.md`. The canonical deci
 
 The retained owner continues Units 2 through 8 without children or unit-only returns. The parent owns independent review. Each ordered commit still requires focused tests and both full suites. This supersedes the original fresh-per-unit workflow after runner `660682b8-9446-46d1-b39b-70d2122effb2` returned only a launch receipt.
 
-## Unit 1 verification
+## Unit checks and commits
 
 Commit `ea6ef52187a6b23a6ee68df7ae3b893881ff9f6c` has subject `state: implement the Z15 stream writer`. This full-SHA note is an unstaged post-commit report update.
 
@@ -58,5 +59,15 @@ The second native test ran at `491f1633ae1175a8952a5b8861d2c8febd8bfa2a` and rea
 Final native evidence is `evidence/unit-8-clean-{install,init,doctor,verify}.log`, `evidence/unit-8-native-summary.json` and `<prefix>/reports/weekend-poc-poc.json`. The native transcript records the requested model and `xhigh`. Observed usage crossed 0.1 percent to 4.4306 percent, but authentication failed before DCR or inference; no save/compact/resume or checked-close success is claimed. The native session and all fixture bytes remain retained, and the owned daemon was shut down and waited.
 
 Clean HOME is `/home/alphalab/.cache/pi-stack-track6/20261023T172837Z/home`. The operator alone may run `HOME=/home/alphalab/.cache/pi-stack-track6/20261023T172837Z/home /home/alphalab/.cache/pi-stack-track6/20261023T172837Z/home/pi-stack-merged-poc-test/bin/prime-agent`, then enter `/login` in the bare TUI. No login was automated. After login, use a newly initialized stream identifier rather than replaying or adopting the retained failed attempt. Native steer, worker kickoff, stale refusal, self-review and the complete percentage/save/compact/readback/resume/close sequence remain unproved. Independent review is still required.
+
+## Parent integration review
+
+The eight ordered source commits end at `7503ca426a7126ffa13a3af481c71140d942af9d`. A separate review-correction commit follows them. The parent counterexamples are retained in `evidence/parent-close-model-review.log` and `evidence/parent-path-traversal-review.log`.
+
+The correction requires explicit target artifact hashes, including untracked outputs, and checks them again after the actual test. Reports and incidental scratch remain separate. Identity validation uses the installed expected model/thinking, not Track 6 test literals. Installer, report and native-transcript boundaries reject `..` and symlinks. Wake decisions query independent assigned workers and their native children, require a captured matching result before dependent review, and preserve independent eligible Goals. Worker kickoff binds a current instruction snapshot through socket write. Unwired legacy commands cannot fall through to Pi on a Prime project.
+
+The full assembled public-socket verifier now executes actual state saves, paused pickup, direct compact, native transcript readback, continuation, stream review and a real subprocess closing check in OFFLINE fixtures. It also exercises actual missing/error/order/artifact cases, including an untracked output changed after a green check. These fixtures are not native inference evidence.
+
+Final correction checks passed 21 verifier tests, 95 focused Prime tests, 221 stream tests and 72 root tests. Exact commands and logs are `evidence/unit-9-{focused,streams,root}.log`. Red regressions are `integration-review-before.log`, `integration-thinking-alias-before.log`, `integration-steer-failure-before.log`, `integration-worker-children-before.log`, `integration-worker-stale-before.log` and `integration-dispatch-before.log`. The final branch clone/install/native preflight will be repeated after this commit; existing attempts will not be adopted or replayed.
 
 Existing-path corrections in Unit 8 have before-fix evidence in `unit-8-steer-before.log`, `unit-8-parked-before.log`, `unit-8-state-path-before.log` and `unit-8-worker-path-before.log`. They cover human steering while another prompt is pending, a genuinely parked continuation, and symlink ancestors at writer/worker boundaries. No staged runtime data or credentials are part of these commits.

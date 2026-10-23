@@ -12,6 +12,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -333,13 +334,20 @@ def create_worker_session(client, worktree, model, thinking):
     return _create_session(client, Path(worktree), model, thinking)
 
 
-def send_worker(client, stream, identity, text, original_entries):
-    from engine.state import append_log
+def send_worker(client, stream, identity, text, original_entries, *, expected=None):
+    from engine import state
+    from engine.project import stream_lock
+    stream = Path(stream)
     command = str(uuid.uuid4())
-    append_log(Path(stream), subject="Before clean worker kickoff", session_id=identity.session_id,
-               command_id=command, purpose="worker-before-send", body={"handover": text, "original_entries": list(original_entries), "result": "unknown until reply saved"})
-    client.write("prompt_and_wait", command_id=command, activeSessionId=identity.active_session_id,
-                 message=text, streamingBehavior="followUp")
+    with stream_lock(stream):
+        current = state.check_current_text(stream, expected) if expected is not None else state.check_state(stream)
+        if current.goals.status == "paused":
+            raise StreamsError("stream is paused; clean worker kickoff was not sent")
+        state.append_log(stream, subject="Before clean worker kickoff", session_id=identity.session_id,
+                         command_id=command, purpose="worker-before-send", locked=True,
+                         body={"handover": text, "original_entries": list(original_entries), "result": "unknown until reply saved"})
+        client.write("prompt_and_wait", command_id=command, activeSessionId=identity.active_session_id,
+                     message=text, streamingBehavior="followUp")
     return finish_message(client, stream, PendingMessage(command, identity, text, tuple(original_entries), "worker"))
 
 
@@ -363,18 +371,80 @@ def unresolved(entries):
     return before - replies
 
 
-def eligible(current, entries):
-    if current.goals.status != "active" or not current.goals.objective:
+class WorkerActivity(Enum):
+    running = "running"
+    idle = "idle without captured result"
+    unknown = "unknown"
+    returned = "idle with captured result"
+
+
+def worker_result_saved(entries, session_id, original_entry):
+    from engine.state import sha256
+    sends = [e for e in entries.values() if e.session == session_id and isinstance(e.body.get("handover"), str)
+             and original_entry in e.body.get("original_entries", [])]
+    if not sends:
+        return False
+    latest = max(sends, key=lambda e: e.timestamp)
+    return any(e.session == session_id and e.command == latest.command
+               and e.body.get("sent_text_sha256") == sha256(latest.body["handover"])
+               and e.body.get("success") is True for e in entries.values())
+
+
+def observe_workers(client, current, entries):
+    assignments = {}
+    for work in current.goals.work:
+        for worker in work.workers:
+            assignments.setdefault(worker["session"], set()).add(worker["worktree"])
+    observations = {}
+    for session_id, paths in assignments.items():
+        observations[session_id] = WorkerActivity.unknown
+        if len(paths) != 1:
+            continue
+        try:
+            identity, native = resolve_session(client, session_id)
+            if native.get("cwd") != str(Path(next(iter(paths))).resolve()):
+                continue
+            summary = object_data(client.query("get_state", activeSessionId=identity.active_session_id))
+            flags = [native.get(key) for key in ("isStreaming", "isCompacting", "isBashRunning")]
+            flags.append(summary.get("hasRunningSubagents"))
+            if any(type(value) is not bool for value in flags):
+                continue
+            running = any(flags) or bool(native.get("activeToolNames"))
+            observations[session_id] = WorkerActivity.running if running else WorkerActivity.idle
+            if not running and all(worker_result_saved(entries, session_id, work.original_entry)
+                                      for work in current.goals.work if any(w["session"] == session_id for w in work.workers)):
+                observations[session_id] = WorkerActivity.returned
+        except UsageQuotaError:
+            raise
+        except (StreamsError, OSError):
+            continue
+    return observations
+
+
+def eligible(current, entries, worker_activity=None):
+    if current.goals.status not in {"active", "waiting"} or not current.goals.objective:
         return False
     if unresolved(entries) or any(w.required is None for w in current.goals.work):
         return False
     replies = [e for e in entries.values() if "sent_text_sha256" in e.body]
     if replies and max(replies, key=lambda e: e.timestamp).body["success"] is not True:
         return False
-    return any(w.required and not w.waiting_for for w in current.goals.work)
+    for work in current.goals.work:
+        if not work.required:
+            continue
+        sessions = {worker["session"] for worker in work.workers}
+        if any((worker_activity or {}).get(sid, WorkerActivity.returned if worker_result_saved(entries, sid, work.original_entry)
+                else WorkerActivity.unknown) is not WorkerActivity.returned for sid in sessions):
+            continue
+        if work.waiting_for is not None and work.waiting_for not in sessions:
+            continue
+        if current.goals.status == "waiting" and work.waiting_for not in sessions:
+            continue
+        return True
+    return False
 
 
-def check_current_command(stream, identity, expected, *, mode="automatic"):
+def check_current_command(stream, identity, expected, *, mode="automatic", client=None):
     from engine import state
     from engine.prompts import render
     try:
@@ -382,7 +452,8 @@ def check_current_command(stream, identity, expected, *, mode="automatic"):
     except StreamsError as exc:
         raise StreamsError(render("stale", stream_id=Path(stream).name, command_name=mode).strip()) from exc
     _, entries = stream_entries(stream)
-    if coordinator_id(stream) != identity.session_id or mode not in {"human", "save", "input"} and not eligible(current, entries):
+    activity = observe_workers(client, current, entries) if client is not None and mode not in {"human", "save", "input"} else None
+    if coordinator_id(stream) != identity.session_id or mode not in {"human", "save", "input"} and not eligible(current, entries, activity):
         raise StreamsError(render("stale", stream_id=Path(stream).name, command_name=mode).strip())
     if current.goals.status == "paused" and mode != "human":
         raise StreamsError("operator stop supersedes automatic work")
@@ -422,7 +493,7 @@ def send_stream_message(client, stream, identity, *, body, command_id=None, send
         if prior:
             return {"sending_status": "Prime replied", "entry": prior[0].file}
         expected = expected or current.goals_rules_sha256
-        check_current_command(stream, identity, expected, mode=mode)
+        check_current_command(stream, identity, expected, mode=mode, client=client)
         resolve_session(client, identity.session_id, identity.active_session_id)
         note = {"command": {"type": "prompt_and_wait", "session": identity.session_id, "lane": lane},
                 "body": body, "original_entries": list(original_entries), "goals_rules_sha256": expected,
@@ -546,6 +617,8 @@ def read_compaction_entry(tree, before_ids, native_result, session_file, session
     if len(candidates) != 1 or candidates[0].get("summary") != summary:
         raise StreamsError("missing or ambiguous new matching current-branch compaction")
     path, root = Path(session_file), Path(sessions_dir)
+    if ".." in path.parts or ".." in root.parts:
+        raise StreamsError("native transcript traversal escapes owned session storage")
     if not path.is_absolute() or not root.is_absolute() or not path.is_relative_to(root) or path == root:
         raise StreamsError("native transcript is outside the owned session directory")
     if any(item.is_symlink() for item in (path, *path.parents, root, *root.parents)):

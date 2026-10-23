@@ -7,9 +7,10 @@ from pathlib import Path
 
 
 class StubPrime:
-    def __init__(self, handler, *, schema=30, protocol=7):
+    def __init__(self, handler, *, schema=30, protocol=7, path=None):
         self.tmp = tempfile.TemporaryDirectory(prefix="prime-owned-test-")
-        self.path = str(Path(self.tmp.name) / "owned.sock")
+        self.path = str(path if path is not None else Path(self.tmp.name) / "owned.sock")
+        Path(self.path).parent.mkdir(parents=True, exist_ok=True)
         self.server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.server.bind(self.path)
         self.server.listen()

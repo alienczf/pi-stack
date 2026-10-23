@@ -21,6 +21,35 @@ class WorkerTests(PrimeCase):
         self.assertEqual(stub.requests, [])
         self.assertFalse((product / "STATE.md").exists())
 
+    def test_pause_arriving_during_worker_creation_refuses_kickoff(self):
+        from dataclasses import replace
+        from engine import StreamsError
+        source = self.active()
+        worktree = self.root / "paused-product"
+        worktree.mkdir()
+        project.git(worktree, "init")
+        project.git(worktree, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "init")
+        def handler(stub, request):
+            if request["command"]["type"] == "create":
+                current = state.check_state(self.stream)
+                state.update_state(self.stream, expect=current.sha256, goals=replace(current.goals, status="paused"), rules=None,
+                    entry={"subject": "Operator pause during create", "body": {}, "original_entries": [source]})
+                data = {"sessionId": "worker-durable", "activeSessionId": "worker-routing"}
+            elif request["command"]["type"] == "get_connection_state":
+                data = {"sessionId": "worker-durable", "activeSessionId": "worker-routing", "cwd": str(worktree), "thinkingLevel": "xhigh", "model": {"provider": "openai-codex", "id": "gpt-6.1-sol"}}
+            elif request["command"]["type"] == "get_messages":
+                data = {"messages": []}
+            else:
+                data = None
+            return stub.response(request, data)
+        with StubPrime(handler) as stub, PrimeClient(stub.path, timeout=1) as client:
+            with self.assertRaisesRegex(StreamsError, "stale|paused|kickoff"):
+                spawn_prime_worker(client, self.stream, worktree=worktree, work="Implement A", original_entries=[source],
+                    poteto_path="/installed/poteto/SKILL.md", model="openai-codex/gpt-6.1-sol", thinking="xhigh")
+        self.assertFalse(any(r["command"]["type"] == "prompt_and_wait" for r in stub.requests))
+        self.assertEqual(state.check_state(self.stream).goals.status, "paused")
+        self.assertEqual(state.check_state(self.stream).goals.work[0].original_entry, source)
+
     def test_clean_worker_and_optional_reviewer_keep_product_instructions(self):
         source = self.active()
         for reviewer in (False, True):
@@ -41,6 +70,7 @@ class WorkerTests(PrimeCase):
                 else:
                     current = state.check_state(self.stream)
                     self.assertEqual(current.goals.work[0].workers[-1]["session"], "worker-durable")
+                    self.assertEqual(current.goals.work[0].waiting_for, "worker-durable")
                     text = request["command"]["message"]
                     self.assertTrue(text.startswith('Context handover for clean worker session "worker-durable".'))
                     self.assertIn('Read the installed process entry at "/installed/poteto/SKILL.md"', text)

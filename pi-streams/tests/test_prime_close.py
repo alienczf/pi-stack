@@ -6,7 +6,6 @@ from pathlib import Path
 from dataclasses import replace
 from unittest.mock import patch
 from prime_support import PrimeCase, project, state
-from checks.state import target_identity
 from engine import StreamsError
 
 
@@ -50,7 +49,11 @@ class ComputedCloseTests(PrimeCase):
         self.proofs = [{"entry": proof["entry"], "sha256": state.sha256(state.read_entry(self.stream, proof["entry"])), "representation": "full"}]
         self.report = self.product / "report.txt"
         self.report.write_text("Actual target and result report\n")
-        self.target = {"repo": str(self.product), "commit": project.git(self.product, "rev-parse", "HEAD").strip(), "diff_sha256": state.sha256(project.git(self.product, "diff", "--binary", "--no-ext-diff", "HEAD", "--"))}
+        output = self.product / "answer.json"
+        output.write_text('{"answer": 5}\n')
+        self.target = {"repo": str(self.product), "commit": project.git(self.product, "rev-parse", "HEAD").strip(),
+                       "diff_sha256": state.sha256(project.git(self.product, "diff", "--binary", "--no-ext-diff", "HEAD", "--")),
+                       "artifacts": {"answer.json": hashlib.sha256(output.read_bytes()).hexdigest()}}
 
     def close(self, **changes):
         args = {"expect": state.check_state(self.stream).sha256,
@@ -104,6 +107,39 @@ class ComputedCloseTests(PrimeCase):
         self.assertEqual(data["success"], True)
         self.assertEqual((self.product / "count").read_text(), "1")
         self.assertEqual(state.check_state(self.stream).goals.work, ())
+
+    def test_changed_untracked_product_after_passing_check_cannot_close(self):
+        from checks import state as checker
+        output = self.product / "answer.json"
+        output.write_text('{"answer": 5}\n')
+        actual = checker.run_check
+        def mutate(check, target):
+            result = actual(check, target)
+            self.assertEqual(result["exit"], 0)
+            output.write_text('{"answer": 6}\n')
+            return result
+        with patch.object(checker, "run_check", side_effect=mutate):
+            with self.assertRaisesRegex(StreamsError, "target.*artifact|artifact.*target"):
+                self.close()
+        self.assertEqual(len(state.check_state(self.stream).goals.work), 1)
+        self.assertEqual(output.read_text(), '{"answer": 6}\n')
+
+    def test_report_traversal_is_rejected_before_reading_outside_target(self):
+        from checks.state import report_bytes
+        outside = self.root / "outside-report.txt"
+        outside.write_text("outside target\n")
+        with self.assertRaisesRegex(StreamsError, "traversal|escape"):
+            report_bytes({"repo": str(self.product)}, {"path": str(self.product / "../outside-report.txt"), "sha256": hashlib.sha256(outside.read_bytes()).hexdigest()})
+        self.assertEqual(report_bytes(self.target, {"path": str(self.report), "sha256": hashlib.sha256(self.report.read_bytes()).hexdigest()}), self.report.read_bytes())
+
+    def test_target_output_manifest_is_required_and_cannot_traverse(self):
+        missing = {key: value for key, value in self.target.items() if key != "artifacts"}
+        with self.assertRaisesRegex(StreamsError, "target artifacts"):
+            self.close(target=missing)
+        with self.assertRaisesRegex(StreamsError, "traversal"):
+            self.close(target={**self.target, "artifacts": {"../outside.json": "0" * 64}})
+        self.assertEqual(len(state.check_state(self.stream).goals.work), 1)
+        self.assertFalse((self.product / "count").exists())
 
     def test_actual_failed_check_keeps_request_open(self):
         with self.assertRaisesRegex(StreamsError, "computed check failed"):

@@ -81,10 +81,13 @@ def doctor(root, stream_id):
                 raise StreamsError(f"doctor failed {label}")
         config = project.load_project(root / "index/projects/project.toml")
         checks["explicit_model_thinking"] = config.coordinator.model == installation["model"] and config.coordinator.thinking == installation["thinking"]
-        definition = root / "prime/agent/models.json"
-        if installation["model"] == "openai-codex/gpt-6.1-sol":
-            model = json.loads(confined(root, definition).read_text())["providers"]["openai-codex"]["models"][0]
-            checks["reasoning_metadata"] = model["id"] == "gpt-6.1-sol" and model["reasoning"] is True and model["thinkingLevelMap"][installation["thinking"]] == installation["thinking"]
+        definition_path = repo_root() / "scripts/prime-models" / (installation["model"].replace("/", "-") + ".json")
+        if definition_path.is_file():
+            definition = json.loads(definition_path.read_text())
+            expected_model = {key: value for key, value in definition.items() if key != "provider"}
+            models = json.loads(confined(root, root / "prime/agent/models.json").read_text())["providers"][definition["provider"]]["models"]
+            matching = [model for model in models if model.get("id") == definition["id"]]
+            checks["reasoning_metadata"] = matching == [expected_model] and installation["thinking"] in definition["thinkingLevelMap"]
         if not all(checks.values()):
             raise StreamsError("doctor model configuration differs")
         result = {"status": "PASS", "stream": stream_id, "checks": checks, "protocol": 7, "schema": 30}
@@ -118,7 +121,7 @@ class RecordingClient(prime.PrimeClient):
         return super().wait(command_id)
 
 
-def assess(report):
+def assess(report, expected_identity=None):
     failures = []
     for stage in STAGES:
         value = report.get("stages", {}).get(stage)
@@ -129,7 +132,12 @@ def assess(report):
     if (not isinstance(threshold, (int, float)) or not math.isfinite(threshold)
             or not any(isinstance(p, (int, float)) and not isinstance(p, bool) and math.isfinite(p) and threshold < p <= 100 for p in percentages)):
         failures.append("actual_percentage_crossing")
-    if report.get("prime_source_revision") != PRIME_REVISION or report.get("model") != "openai-codex/gpt-6.1-sol" or report.get("thinking") != "xhigh":
+    expected_identity = expected_identity if expected_identity is not None else report.get("expected_identity")
+    if not isinstance(expected_identity, dict):
+        failures.append("missing_installed_identity")
+    elif (report.get("prime_source_revision") != PRIME_REVISION
+          or report.get("model") != expected_identity.get("model")
+          or report.get("thinking") != expected_identity.get("thinking")):
         failures.append("stock_model_identity")
     if not report.get("session_id") or report.get("protocol") != 7 or report.get("schema") != 30:
         failures.append("native_session_contract")
@@ -241,6 +249,16 @@ def _run_native(root, stream, installation, report, client, product, marker):
     _stage(report, "steer", steer.command_id, "busy native observation")
     first = prime.finish_message(client, stream, pending, sessions_dir=session_dir)
     _native_failure(first)
+    while True:
+        if steer.command_id in client.replies and client.replies[steer.command_id]["success"] is False:
+            _native_failure(prime.finish_message(client, stream, steer, sessions_dir=session_dir))
+        idle, _ = prime.native_idle(client, identity)
+        if steer.command_id in client.replies:
+            if client.replies[steer.command_id]["success"] is False:
+                _native_failure(prime.finish_message(client, stream, steer, sessions_dir=session_dir))
+            if idle:
+                break
+        time.sleep(.05)
     refs = [w.original_entry for w in state.check_state(stream).goals.work]
     worker, worker_result = spawn_prime_worker(client, stream, worktree=product,
         work=f"Write answer.json with exactly marker={marker!r}, answer=5. Preserve protected.txt. Run python3 check_fixture.py, report actual target/invocation/result and uncertainty. Do not commit or create state files.",
@@ -280,7 +298,8 @@ def _run_native(root, stream, installation, report, client, product, marker):
         raise StreamsError("continuation was awaited before pause release")
     _stage(report, "continuation", resume_id, "write < release < await")
     previous = current.goals_rules_sha256
-    state.update_state(stream, expect=current.sha256, goals=replace(current.goals, objective="Review the handed-over fixture against original intent"), rules=None,
+    state.update_state(stream, expect=current.sha256,
+        goals=replace(current.goals, objective="Review the handed-over fixture against original intent. Stale probe " + str(uuid4())), rules=None,
         entry={"subject": "Authorized stale-command fixture", "body": {"findings": "Only the plan changes; the whole original remains requested"}, "original_entries": refs})
     sent_before = sum(e.get("command") == "prompt_and_wait" for e in trace)
     try:
@@ -305,7 +324,9 @@ def _run_native(root, stream, installation, report, client, product, marker):
     answer = (product / "answer.json").read_text()
     report_path = product / "report.txt"
     report_path.write_text(f"Actual target {product}\nOriginal marker {marker}\nExact answer bytes follow.\n{answer}\nStream review entry {review_entry.file}\n")
-    target = {"repo": str(product), "commit": project.git(product, "rev-parse", "HEAD").strip(), "diff_sha256": state.sha256(project.git(product, "diff", "--binary", "--no-ext-diff", "HEAD", "--"))}
+    target = {"repo": str(product), "commit": project.git(product, "rev-parse", "HEAD").strip(),
+              "diff_sha256": state.sha256(project.git(product, "diff", "--binary", "--no-ext-diff", "HEAD", "--")),
+              "artifacts": {name: digest(product / name) for name in ("answer.json", "protected.txt")}}
     payload = {"goals": None, "rules": None, "entry": {"subject": "Computed fixture close", "body": {"findings": "Whole marker, answer and protected behavior checked after native compaction and stream review"}, "original_entries": refs}, "target": target,
         "check": {"argv": ["python3", "check_fixture.py"], "cwd": str(product)}, "report": {"path": str(report_path), "sha256": digest(report_path)},
         "proof_entries": [{"entry": review_entry.file, "sha256": state.sha256(review_entry.text), "representation": "full"}], "review": review_entry.file}
@@ -340,6 +361,7 @@ def verify(root, stream_id):
     if report_path.exists():
         return {"status": "BLOCKED", "stream": stream_id, "reason": "retained verification already exists; inspect it and initialize a new stream instead of adopting or replaying", "report": str(report_path)}
     report = {**{key: installation[key] for key in ("pi_stack_revision", "prime_source_revision", "prime_version", "prime_binary_sha256", "prime_runtime_sha256", "pstack_revision", "model", "thinking", "threshold_percent")},
+              "expected_identity": {key: installation[key] for key in ("model", "thinking")},
               "status": "FAIL", "root": str(root), "stream": stream_id, "session_id": None, "protocol": 7, "schema": 30, "stages": {}, "observed_percentages": []}
     owned = None
     try:
@@ -362,7 +384,7 @@ def verify(root, stream_id):
             finally:
                 report["trace"] = client.trace
                 report["command_ids"] = [event["command_id"] for event in client.trace if event["operation"] == "write"]
-        missing = assess(report)
+        missing = assess(report, installation)
         if missing:
             raise StreamsError("missing native proof stages: " + ", ".join(missing))
         report["status"] = "PASS"

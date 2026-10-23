@@ -15,6 +15,8 @@ check_state = state.check_state
 
 def safe_path(root, path):
     root, path = Path(root), Path(path)
+    if ".." in root.parts or ".." in path.parts:
+        raise StreamsError("check, report or target artifact traversal is not allowed")
     if not root.is_absolute() or not path.is_absolute() or not path.is_relative_to(root):
         raise StreamsError("check or report path escapes actual target")
     if any(p.is_symlink() for p in (path, *path.parents)):
@@ -29,10 +31,22 @@ def target_identity(target):
     safe_path(root, root)
     if Path(git(root, "rev-parse", "--show-toplevel").strip()) != root:
         raise StreamsError("target is not the actual repository root")
+    artifacts = target.get("artifacts")
+    if not isinstance(artifacts, dict) or not artifacts:
+        raise StreamsError("target artifacts must explicitly bind the requested product outputs")
+    actual_artifacts = {}
+    for name, expected_hash in artifacts.items():
+        if not isinstance(name, str) or Path(name).is_absolute() or not isinstance(expected_hash, str):
+            raise StreamsError("target artifact needs a relative path and SHA-256")
+        path = safe_path(root, root / name)
+        if not path.is_file():
+            raise StreamsError("missing actual target artifact")
+        actual_artifacts[name] = hashlib.sha256(path.read_bytes()).hexdigest()
     actual = {"repo": str(root), "commit": git(root, "rev-parse", "HEAD").strip(),
-              "diff_sha256": state.sha256(git(root, "diff", "--binary", "--no-ext-diff", "HEAD", "--"))}
+              "diff_sha256": state.sha256(git(root, "diff", "--binary", "--no-ext-diff", "HEAD", "--")),
+              "artifacts": actual_artifacts}
     if actual != target:
-        raise StreamsError("target commit or diff does not match actual worktree")
+        raise StreamsError("target commit, diff or artifact bytes do not match actual worktree")
     return actual
 
 

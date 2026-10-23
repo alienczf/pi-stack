@@ -583,6 +583,9 @@ def spawn_prime_worker(client, stream, *, worktree, work, original_entries, pote
     git(worktree, "rev-parse", "--show-toplevel")
     with stream_lock(stream):
         current = state.check_state(stream)
+        if current.goals.status == "paused":
+            raise StreamsError("stream is paused; clean worker creation was not started")
+        prepared = current.goals_rules_sha256
         open_refs = {w.original_entry for w in current.goals.work}
         if not original_entries or not set(original_entries) <= open_refs:
             raise StreamsError("worker assignment needs open whole-message sources")
@@ -591,12 +594,17 @@ def spawn_prime_worker(client, stream, *, worktree, work, original_entries, pote
     handover = render_prime_handover(identity, worktree=worktree, work=work, sources=sources,
                                      findings=list(findings), poteto_path=poteto_path, reviewer=reviewer)
     with stream_lock(stream):
-        current = state.check_state(stream)
+        try:
+            current = state.check_current_text(stream, prepared)
+        except StreamsError as exc:
+            raise StreamsError(f"Worker {identity.session_id} created but kickoff was not sent: {exc}") from exc
         if not set(original_entries) <= {w.original_entry for w in current.goals.work}:
             raise StreamsError("worker assignment changed before kickoff")
         assignment = {"session": identity.session_id, "worktree": str(worktree), "work": work}
-        goals = replace(current.goals, work=tuple(replace(w, workers=w.workers + (assignment,))
-                        if w.original_entry in original_entries else w for w in current.goals.work))
+        goals = replace(current.goals, work=tuple(
+            replace(w, workers=w.workers + (assignment,), next=None,
+                    waiting_for=w.waiting_for if w.waiting_for is not None else identity.session_id)
+            if w.original_entry in original_entries else w for w in current.goals.work))
         state.update_state(stream, expect=current.sha256, goals=goals, rules=None,
             entry={"subject": "Clean worker assignment", "body": {"original_entries": list(original_entries),
                    "media_type": "text/plain", "text": handover, "sha256": state.sha256(handover)},
@@ -605,5 +613,6 @@ def spawn_prime_worker(client, stream, *, worktree, work, original_entries, pote
         rows.append(_thread_row(identity.session_id, "reviewer" if reviewer else "worker", worktree.name,
                     worktree, git(worktree, "branch", "--show-current").strip(), git(worktree, "rev-parse", "HEAD").strip(), model, thinking))
         save_threads(stream / "threads.tsv", rows)
-    result = send_worker(client, stream, identity, handover, original_entries)
+        prepared = state.check_state(stream).goals_rules_sha256
+    result = send_worker(client, stream, identity, handover, original_entries, expected=prepared)
     return identity, result
