@@ -62,3 +62,13 @@ Not clear to me what's involved in triggering C consistently
 No decisions for design yet. We're still iterating.
 
 Is the prime branch validated to be working?
+
+## t224u (2026-10-23 11:46 SGT, phone)
+
+For B, kick off independent session to see how it can be implemented over prime. Given that it's "durable" it might not be hard to setup hooks and such
+
+## t225u (2026-10-23 11:50 SGT, phone, reply to t223s977)
+
+In this case that's drop C and also do detailed design/planning for A. With exactly hooks, prompts and artifact storage details and any obvious important notes. Justify all of the components. Ask the B session to the the same. 
+
+When both are done, collect output and do a side by side comparison

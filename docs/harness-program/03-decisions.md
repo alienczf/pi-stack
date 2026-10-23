@@ -165,3 +165,26 @@ ZF's decisions, restated. His words are in `00b-zf-messages-verbatim.md`, sectio
 - The GO entry's line "track 3 defaults stand" is withdrawn. Proposal A is not chosen.
 - The Z11 delete-after-fork stays in the track 1 MVP only because ZF dictated it, not as a design ruling.
 - When the track 3 revision goes to ZF, frame its "blocking decisions" as open questions for the next iteration, with no defaults applied.
+
+## Z18 (ZF t224u, 2026-10-23 11:46 SGT): track 4, B over prime
+- ZF wants an independent session to check how proposal B (runtime-owned obligations and hooks) could be built on top of prime. Prime is durable, so hooks might be easy to set up.
+- G26 (Grok Bot): this becomes track 4. It's a feasibility and design spike, not a merge.
+  - Spawn a fresh pi session on options-01 in project pi-stack (openai-codex/gpt-6.1-sol, xhigh), in its own worktree on a new branch `spike/b-over-prime` off main.
+  - Inputs: 30-research-designs.md (proposal B), 20-prime-cli-design.md, the feat/prime-cli branch, and the prime-agent source and docs on options-01.
+  - Deliverable: `docs/harness-program/40-b-over-prime.md`. It covers which prime primitives exist (durable session store, events, hooks or extension points, turn ids and fork). It maps each B mechanism to a prime primitive or a gap, with a minimal hook prototype where cheap, verified against the local prime server without inference.
+  - It also gives an effort estimate and the risks, and reports whether B over prime is materially simpler than B over pi-web.
+  - Design is not locked (Z17); this is input to the next iteration.
+- Dispatch record (Grok Bot, 11:51 SGT): track 4 brief `briefs/track-4.md` (sha256 195ea3ad) written and copied to the docs worktree. Spawned session `01a166e0-220d-7dbc-8b1c-719e872dad2d` in `/home/alphalab/Projects/pi-stack/pi-stack` (project pi-stack, as tracks 1-3), set openai-codex/gpt-6.1-sol and xhigh, named it, then sent the brief. Consumed (sha match as last user message), streaming at 2.4% context. The brief has the session create worktree `/home/alphalab/Projects/worktrees/pi-stack-b-over-prime` on `spike/b-over-prime` off origin/main (3acf0f0) as its first step, per orchestrate-with-pi (pi creates worktrees). collect.sh now also pulls `40-b-over-prime.md`.
+
+## Z19 (ZF t225u, 2026-10-23 11:50 SGT): drop C, detailed A and B designs, then a side-by-side comparison
+- C is dropped. G24's A/C merge is withdrawn: A stands on its own, and parts of C go in only where A's design justifies them.
+- Track 3 writes a detailed design and plan for A in `docs/harness-program/31-design-a-detailed.md`. It must specify:
+  - every hook exactly: trigger event, layer, input and output, where the code lives, failure behaviour;
+  - every prompt exactly: the full text of each injected or template prompt, and when it fires;
+  - artifact storage exactly: paths, file formats and section schemas against the Z15 STATE.md plus history/ layout, plus who writes each, who reads each, rotation and retention;
+  - obvious important notes and risks;
+  - a justification for every component, tied to a corpus failure class and its layer;
+  - an implementation plan as stacked commits, each with its tests.
+- Track 4 does the same for B over prime in `docs/harness-program/41-design-b-prime-detailed.md`, alongside its 40 feasibility file, using the same section structure so the two line up side by side.
+- When both are done, Grok Bot produces `docs/harness-program/50-a-vs-b.md`, a side-by-side comparison with a per-component table and a pros/cons table, and sends it to ZF. Design stays unlocked (Z17).
+- **Steered (Grok Bot, 11:55 SGT).** Track 4: `briefs/track-4-steer-1.md` sent with `--steer` while streaming, consumed 11:52 (byte match, streaming 14.7%); the session had already created worktree `/home/alphalab/Projects/worktrees/pi-stack-b-over-prime` on `spike/b-over-prime` at 3acf0f0. Track 3: was idle at 68.2%, so `/compact` via `commands/run` first, then `briefs/track-3-steer-3.md` as a normal prompt, consumed 11:55 (byte match, streaming 11.3%). collect.sh now pulls 31, 40 and 41.

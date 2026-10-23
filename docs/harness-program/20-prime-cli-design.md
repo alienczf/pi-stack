@@ -2,7 +2,7 @@
 
 Track 2. Written before implementation on 2026-10-23. This session leaves its design edits uncommitted for Grok Bot to collect. Code belongs only to `feat/prime-cli` in `/home/alphalab/Projects/worktrees/pi-stack-prime-cli`, based on `3acf0f01e6084a317b89cef3a86f4781e60877cf`.
 
-Final result is **BLOCKED**, not full parity. The CLI implementation is locally committed at `bccf159aed76c121fd9df133cedb515b8bd38dd3`. Real Prime returned `No API key found for openai-codex.` Model attempts stopped at that refusal. No credentials, provider, existing stream, or other branch were changed. No push was made.
+Final result is **BLOCKED**, not full parity. Grok Bot pushed the initial implementation at `bccf159`. G20 code is locally committed through `84e551dfa27b53216d04b5b59319c241f4974831`. Native model metadata now matches the sourced definition and effective xhigh is retained. Model selection still requires Prime-owned authentication. Structured answers, exact resident disposal, and rich cross-session replay remain unavailable. This session made no login, credential import, provider change, existing-stream action, or push.
 
 ## Goal and boundary
 
@@ -138,7 +138,9 @@ Nothing in the CLI transport requires a Caladan-specific branch. A later pi-bot 
 
 ## Verification
 
-The full predicate is BLOCKED. Offline checks and real control operations passed within the disclosed shims, but real inference failed on missing Prime Codex credentials. The observations below distinguish admission, control results, and model completion.
+### Initial delivery through bccf159
+
+The following is the initial delivery record. G20 results below supersede its model-metadata and effective-thinking limitations. The full predicate is BLOCKED. Offline checks and real control operations passed within the disclosed shims, but real inference failed on missing Prime Codex credentials. The observations below distinguish admission, control results, and model completion.
 
 The unchanged pi-stack main baseline passed before final implementation verification:
 
@@ -271,11 +273,22 @@ LAYER 1. Exact model metadata can be supplied as secret-free configuration inste
 
 Observed cached facts are `api:openai-codex-responses`, `baseUrl:https://chatgpt.com/backend-api`, `reasoning:true`, input modes text and image, `contextWindow:500000`, and `maxTokens:128000`. Its exact `thinkingLevelMap` maps off to null, minimal and low to low, and medium, high, xhigh, and max to their matching strings. The source catalog had `checkedAt:1792721682314` and `lastModified:1792063872000`. These are cached provider facts, not proof of entitlement or successful inference.
 
-Prime's `crates/pa-core/src/models/custom.rs:106-153` accepts a matching custom model definition and thinking-level map. The proposed conversion copies only supported public metadata into the owned verification directory. Unsupported cost tiers or compatibility fields must be reported rather than silently represented as exact parity. No global Pi configuration, provider key, or native auth storage is changed.
+Prime's `crates/pa-core/src/models/custom.rs:106-153` accepts a matching custom model definition and thinking-level map. The implemented conversion temporarily registers only supported public metadata inside the owned verification directory. The committed snapshot excludes even the endpoint, relying on Prime's built-in Codex transport. Unsupported cost tiers, inputLimits, type, and compatibility fields are explicitly omitted. No global Pi configuration, provider key, or native auth storage is changed. Native flat costs cannot represent the observed pricing tier above 272000 tokens.
 
-LAYER 3. Any queue-resumption improvement must operate on Prime's own queued objects instead of recreating them from preview labels. `resume_queue` in `crates/pa-daemon/src/queue_commands.rs:151-169` is a candidate for same-session continuation. It is not evidence that cross-session replay can preserve custom-message provenance and attachments.
+LAYER 3. `queue-resume SID` now maps directly to `resume_queue` in `crates/pa-daemon/src/queue_commands.rs:151-169`. It wakes existing same-session objects without serialization or reconstruction. It can authorize queued model work and cannot recover cleared or withdrawn items. Empty queue failure is preserved, including the native fact that suspension has already cleared. Cross-session replay remains unsafe. `stop SID --require-runtime-close` and `queue-clear SID --require-replay-safe` refuse with 501 before connecting. Existing unflagged behavior remains unchanged.
 
 LAYER 2. Tests must distinguish a supported native operation from a safe unsupported result. They must also verify that non-inference checks enqueue no runnable input, never invoke login, and never replace an existing authenticated verification root.
+
+### Public capability verdicts
+
+The source investigation compared 26 relevant files at upstream `71beca9` with stable `8aac869`; they were byte-identical. This is source evidence, not successful model execution.
+
+- **Structured answers remain missing.** `crates/pa-types/src/daemon/command.rs:118-1267` contains 123 variants and no correlated user-answer submission. `side_question.rs:50-134,205-280` runs a model to answer a client's question instead. It cannot consume a user's answer to an outstanding agent question. `answer` therefore stays unsupported without prompt injection or a shadow registry.
+- **Exact resident stop remains missing.** `peer.rs:248-257` permits session-client tickets to issue only session-plane commands, while `daemon/plane.rs:17-102` makes shutdown control-plane. `worker/connection.rs:481-560` rejects that bypass, and `peer.rs:549-576` tests the refusal. Supervisor shutdown stops the whole daemon, kill archives the root, and `complete_owned_session` requires an owner that resident roots do not have. There is no safe retrofit through a short-lived CLI connection.
+- **Rich export and replay remain missing.** `worker/commands.rs:525-582` proves that get_queue returns previews but clear_queue returns raw strings. Those strings still lose images, provenance, admission identity, completion senders, and other fields in `worker/queue.rs:135-167`. Clearing can withdraw work and notify agent senders. Public restore_actions does not restore the complete object. Keep `queueReplaySafe:false`.
+- **Same-session resumption is implemented.** The native resume handler operates on retained objects, not a lossy snapshot. It does not release input-pause leases or restore anything removed by adapter abort or stop. Its nonempty wire path and error propagation pass fixtures. G20 exercised only an empty native queue. The ready inference verifier covers nonempty resumption while paused, but was not run against a model here.
+
+These are source-observed adapter capabilities, not a negotiated native capability list. A later stream port must honor them before destructive clearing. No stream or Caladan code was changed.
 
 ### Exact operator login command
 
@@ -287,6 +300,7 @@ ZF runs this one shell command in a real terminal on options-01. This session do
   root=/tmp/prime-cli-check-v5p3iz67
   test -d "$root/agent" && test -d "$root/work"
   test ! -e "$root/daemon.sock" && test ! -L "$root/daemon.sock"
+  test ! -e "$root/verification.lock" && test ! -L "$root/verification.lock"
   export PRIME_AGENT_CODING_AGENT_DIR="$root/agent"
   export PRIME_AGENT_SESSION_DIR="$root/agent/sessions"
   export PRIME_AGENT_DAEMON_SOCKET="$root/daemon.sock"
@@ -303,7 +317,69 @@ This is source-backed for the checksum-verified v0.10.1 binary. `crates/pa-cli/s
 
 The `--no-session` flag avoids a saved login-only transcript. Provider-auth storage selection is independent of session persistence. The explicit socket and agent directory scope the shutdown trap through `daemon_discovery/mod.rs:120-150`. Do not run another workflow against this root concurrently. Non-TTY stdin selects print mode, so do not pipe this command through an unallocated SSH session.
 
-The ready-to-run post-login runner, exact off-host wrapper command, final native capability dispositions, and non-inference execution results follow after implementation verification.
+### Ready post-login verification
+
+The committed runner reuses the original ZF login root. **Do not rerun prepare after login. Do not register models.json separately.** Verify creates that metadata file exclusively and removes only its own file after shutdown. It refuses any existing model file without reading or replacing it. Existing auth, transcripts, and settings are preserved. Model and thinking setters can change defaults, so the runner restores its saved nonsecret settings after its daemon exits.
+
+Control-only entry point on options-01:
+
+```bash
+python3 /home/alphalab/Projects/worktrees/pi-stack-prime-cli/scripts/check-prime-cli-live.py verify \
+  --root /tmp/prime-cli-check-v5p3iz67 \
+  --runtime /tmp/prime-t2.3qhjos6h/prime-agent --timeout 180
+```
+
+After ZF authenticates that root and a later operator authorizes inference:
+
+```bash
+python3 /home/alphalab/Projects/worktrees/pi-stack-prime-cli/scripts/check-prime-cli-live.py verify \
+  --root /tmp/prime-cli-check-v5p3iz67 \
+  --runtime /tmp/prime-t2.3qhjos6h/prime-agent --timeout 180 --inference
+```
+
+The explicit inference path runs control checks first, then tests paused prompt admission and same-session queue resumption, native completion, and manual compaction. It does not prove active-turn steering delivery. Full catalog metadata and effective xhigh must match before runnable input. Model-selection and typed usage failures stop without substitutions or retries. Socket, lock, directory, and settings checks prevent adopting another daemon. Cleanup archives only received created IDs, shuts down only the launched daemon, waits for it, and removes only matching owned files. Reports always retain `parityComplete:false` because missing native capabilities are not repaired by authentication.
+
+### Exact off-host wrapper verification
+
+Grok Bot can run this on his box after ZF's login runtime exits and inference is authorized. It needs the existing authenticated `options-01-ssh` and local Python 3. No local checkout or newly installed wrapper is assumed. The first SSH call reads the known wrapper source; Python runs that wrapper locally, and the wrapper invokes the host verifier through the same SSH route. The absolute Python override is deliberate. The helper never adds `--ensure-tg`.
+
+```bash
+(
+  set -euo pipefail
+  repo=/home/alphalab/Projects/worktrees/pi-stack-prime-cli
+  options-01-ssh "cat '$repo/bin/prime-cli-remote'" |
+    PRIME_CLI_REMOTE_BIN=/usr/bin/python3 python3 - \
+      "$repo/scripts/check-prime-cli-live.py" verify \
+      --root /tmp/prime-cli-check-v5p3iz67 \
+      --runtime /tmp/prime-t2.3qhjos6h/prime-agent --timeout 180 --inference
+)
+```
+
+Removing only `--inference` selects control-only verification. This command exercises prime-cli-remote's transport plus the verifier's host CLI calls and owns runtime cleanup. It remains **NOT EXECUTED** here. Local wrapper fixtures are not off-host evidence.
+
+### G20 executed evidence
+
+The parent reran the fixture suites and installer, then used a **new credential-free root** at `/tmp/prime-cli-check-vqui570y`. The original ZF login root was not replaced, inspected for credentials, or used for this G20 check. No login or inference was attempted.
+
+The first native check retained xhigh but exposed a verifier defect. get_connection_state returns a thin model summary, unlike the fixture's full object. Commit `1f84327` reproduces the real shape; `ed3e118` reads full metadata from public get_model_catalog instead. A second red/green pair, `9f99f62` and `84e551d`, requires the future inference verifier to exercise queue-resume before clearing. Its execution stayed fixture-only.
+
+The corrected real non-inference report is `/tmp/prime-cli-check-vqui570y/g20-native-control-catalog-fix.json`:
+
+```text
+inferenceRequested -> false
+full whitelisted native catalog metadata -> matched
+requested thinking xhigh -> effective xhigh
+model setter -> upstream_error
+errorInfo -> {code:model_provider_unauthenticated,provider:openai-codex}
+message -> Provider "openai-codex" is not signed in. Sign in to the provider (the TUI's /login command), then set the model again.
+retainedOwnedSessions -> []
+runtime -> {started:true,stopped:true,socketRemoved:true}
+exit -> 1, authentic prerequisite refusal before runnable input
+```
+
+A separate empty-session smoke check deliberately skipped model selection after that refusal. `/tmp/prime-cli-check-vqui570y/g20-empty-controls.json` records full sourced metadata, local xhigh, empty native resume's exact `No queued work to resume` error, both new 501 guards, empty queue clear and abort, thinking setter, empty messages, disclosed stop shim, and archive. All four G20 sessions are archived, with zero unarchived or retained owned sessions. The dedicated process exited, and its socket, lock, and temporary model definition are absent. No further model operation was attempted.
+
+The final code checks pass **71 Prime fixture tests**, **105 existing stream tests**, installer verification, shell/Python syntax, and whitespace checks. Logs are `/tmp/g20-parent-*.log`. Tests do not prove provider entitlement, inference, compaction, active-turn steering, or off-host connectivity. Those remain unverified. The real check fixes local metadata registration and xhigh retention, not provider-side capability or account access.
 
 ## Decisions
 
@@ -335,6 +411,12 @@ The ready-to-run post-login runner, exact off-host wrapper command, final native
 26. Use native `prompt_and_wait` in the authorized live completion probe after testing CLI admission. The real server did not persist its preflight error as an assistant message, so polling messages produced a timeout instead of the actual failure. Add a regression for the empty-transcript failure path.
 27. Stop at the native Codex credential refusal. Do not import Pi credentials, start a login, or switch provider. The implementation and real control evidence are delivered, but the full track end state is blocked.
 28. Shut down both owned daemons and retain no owned live sessions. The final list showed only archived owned sessions, and the final socket was removed. Runtime data remains outside git.
+29. G20 permits bounded non-inference fixes only. Authentication remains ZF-owned. Publish the proven bare TUI login entry point without executing it.
+30. Add native same-session queue resume and opt-in fail-closed capability requirements. Neither exact resident disposal nor rich cross-session replay can be fabricated from the public API.
+31. Use a strict endpoint-free catalog snapshot rather than unknown-model defaults. Native metadata now matches and local xhigh is retained. Omitted pricing tiers and compatibility semantics remain explicit losses.
+32. Preserve the existing login root with an exclusively owned verifier process and temporary metadata registration. Never prepare it again, merge unknown models.json, adopt a colliding daemon, or retain native setter changes to its settings.
+33. Verify full metadata through get_model_catalog, not the thin selected-model summary. The real daemon, failing regression, and corrected fixture establish the boundary.
+34. Test nonempty resume only under explicit inference authorization. G20 itself used no runnable input. All four new sessions were archived and the dedicated runtimes stopped.
 
 ## Gaps
 
@@ -343,7 +425,7 @@ The ready-to-run post-login runner, exact off-host wrapper command, final native
 - Exact replay of Prime internal queued inputs is not guaranteed by its preview-based queue API. Ordinary user input and arbitrary internal work must not be conflated.
 - Busy archive guards are covered offline and real idle archival passed. A native pause stops queued delivery, not every producer. `preflightAtomic:false` is not a quiescence guarantee.
 - Real inference is blocked by `No API key found for openai-codex.` Prime-owned Codex authentication is required in the selected agent directory. No authentication flow or credential import was attempted.
-- The requested model is absent from the stable bundled catalog. Create preserves its ID with generic metadata, but native `set_model` refused it and xhigh was clamped to off. Actual reasoning capability and context capacity need a correct model definition or catalog, not guessed limits.
+- The requested model remains absent from the stable bundled catalog, but G20's sourced custom definition fixes local metadata and xhigh retention. Native model selection now exposes the typed unauthenticated-provider gate. Provider acceptance and entitlement remain unverified. Flat native pricing cannot represent the observed above-272000-token tier, and unsupported compatibility flags are omitted.
 - Native preflight failures can exist only in awaited results or events, with no assistant error row. The diagnostic script now observes the awaited result, but the later stream port still needs an explicit completion or failure-observation contract. Current message-log inspection alone is insufficient.
 - No successful model completion, active-run steering delivery, or compaction was verified after the credential refusal.
 - Remote wrapper execution from the Grok Bot machine requires that machine and its authenticated `options-01-ssh`. Local wrapper quoting tests are not off-host evidence.
@@ -363,11 +445,12 @@ Final tested state. Done means the mapped operation worked on the owned real dae
 | prompt --follow-up | shimmed | Real queued admission passed. Delivery after an actual model run is not verified. |
 | status | shimmed | Real streaming, queue count, context metadata, effective model/thinking, and numeric cost worked. Reads are non-atomic and queue text is marked replay-unsafe. |
 | commands | done | Native command and skill discovery returned through the expected array envelope. Pi-only skills are not claimed installed. |
-| stop | shimmed | Real work-stop cleared input and retained the resident runtime. `runtimeClosed:false` discloses the difference from Pi disposal. |
+| stop | shimmed | Real work-stop retains the resident runtime. `runtimeClosed:false` discloses the difference. `--require-runtime-close` now refuses with 501 before mutation. |
 | abort | shimmed | Real queued inputs were cleared and abort acknowledged. Full runtime quiescence is not promised. |
-| queue-clear | done | Real queued admission count reached three, then native clearing removed the inputs. |
+| queue-clear | done | Native raw text is preserved, not rewritten from previews. It loses metadata. `--require-replay-safe` now refuses with 501 before mutation. |
+| queue-resume | shimmed | One native same-session request passes fixtures. Real empty queue failure is preserved. Nonempty model-backed execution was not run under G20. |
 | archive | shimmed | Real idle archival retained transcript and archived-list metadata. Busy guards pass offline. Native admission races remain disclosed. |
 | messages | done | Real native message payloads and empty lists were preserved. Ephemeral preflight errors are not fabricated as assistant messages. |
-| model | missing | The adapter exists and offline selector checks pass, but native `set_model` refused the requested live target. No substitute was selected. |
-| thinking-level | shimmed | Real setter acknowledged xhigh but effective status remained off because of generic model metadata. |
+| model | missing | The sourced definition now matches the full native catalog. Native set_model is blocked by typed model_provider_unauthenticated, not unknown metadata. No substitute was selected. |
+| thinking-level | shimmed | G20's real native create and setter retain xhigh with the explicit sourced map. Provider-side reasoning acceptance remains unverified. |
 | answer | missing | Explicit unsupported 501. No native correlated-question API exists in the inspected protocol. |
