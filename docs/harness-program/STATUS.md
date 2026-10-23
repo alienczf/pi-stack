@@ -9,7 +9,7 @@ tracking_issue: https://github.com/alienczf/pi-stack/issues/38
 box_mirror: /workspace/harness-program
 host_docs_worktree: /home/alphalab/Projects/worktrees/pi-stack-harness-program
 host_input_copy: /home/alphalab/Projects/pi-stack/streams/pi-streams-harness/context/harness-program
-updated: "2026-10-23T20:50+08:00 (T1 streaming at ~38% context on S2; 17efab2, a1bbdda committed; T2 still blocked on Prime login)"
+updated: "2026-10-23T21:28+08:00 (T1 streaming at ~43% context on S2, a1bbdda latest; T2 still blocked on Prime login)"
 tracks:
   - id: 1
     name: pi-streams must-fix catalog
