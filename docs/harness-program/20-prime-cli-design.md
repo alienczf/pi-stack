@@ -261,6 +261,50 @@ The native check found a public-supervisor versus worker-payload distinction tha
 
 The checksum-verified stable release's bundled catalog contains fixture-named models. Its unknown-ID fallback preserves `gpt-6.1-sol` but assigns generic metadata, including no reasoning support and a 128000-token configured window. That window is not evidence of the requested model's actual capacity. Correct reasoning and context metadata need an operator-provided model definition or an updated catalog. The client must report effective thinking rather than claim xhigh was applied.
 
+## G20 non-inference follow-up
+
+Grok Bot pushed `bccf159` and issued G20. The credential blocker remains ZF-owned. This session does not run a login, copy or import credentials, switch provider, or attempt further model inference. The original brief leaves design edits in place for Grok Bot to collect, so this session still makes no docs commit.
+
+The bounded follow-up examines structured answers, exact nonarchiving stop, internal queue replay, and model metadata against the public control plane. A native capability that does not exist will not be simulated with prompt injection, a shadow question registry, private child-close markers, or worker-protocol bypasses. Feasible fixes receive executable red/green tests and small local commits. Source-proven limitations remain visible.
+
+LAYER 1. Exact model metadata can be supplied as secret-free configuration instead of deriving capabilities from an unknown-model provider template. The installed Pi source `core/models-store.js` defines `~/.pi/agent/models-store.json` as a provider-catalog cache, and `pi-ai/dist/models-store.d.ts` defines its entries as model metadata. This is not an auth file. A read-only query selected only the exact `openai-codex/gpt-6.1-sol` row and whitelisted public model fields, excluding headers and auth data.
+
+Observed cached facts are `api:openai-codex-responses`, `baseUrl:https://chatgpt.com/backend-api`, `reasoning:true`, input modes text and image, `contextWindow:500000`, and `maxTokens:128000`. Its exact `thinkingLevelMap` maps off to null, minimal and low to low, and medium, high, xhigh, and max to their matching strings. The source catalog had `checkedAt:1792721682314` and `lastModified:1792063872000`. These are cached provider facts, not proof of entitlement or successful inference.
+
+Prime's `crates/pa-core/src/models/custom.rs:106-153` accepts a matching custom model definition and thinking-level map. The proposed conversion copies only supported public metadata into the owned verification directory. Unsupported cost tiers or compatibility fields must be reported rather than silently represented as exact parity. No global Pi configuration, provider key, or native auth storage is changed.
+
+LAYER 3. Any queue-resumption improvement must operate on Prime's own queued objects instead of recreating them from preview labels. `resume_queue` in `crates/pa-daemon/src/queue_commands.rs:151-169` is a candidate for same-session continuation. It is not evidence that cross-session replay can preserve custom-message provenance and attachments.
+
+LAYER 2. Tests must distinguish a supported native operation from a safe unsupported result. They must also verify that non-inference checks enqueue no runnable input, never invoke login, and never replace an existing authenticated verification root.
+
+### Exact operator login command
+
+ZF runs this one shell command in a real terminal on options-01. This session does not execute it. Prime opens its local login selector without sending a model prompt. Select **ChatGPT Plus/Pro (Codex Subscription)**, complete the displayed authentication flow, wait for the saved-login message, then enter `/quit`. Do not paste the authorization URL or redirect response into any artifact.
+
+```bash
+(
+  set -eu
+  root=/tmp/prime-cli-check-v5p3iz67
+  test -d "$root/agent" && test -d "$root/work"
+  test ! -e "$root/daemon.sock" && test ! -L "$root/daemon.sock"
+  export PRIME_AGENT_CODING_AGENT_DIR="$root/agent"
+  export PRIME_AGENT_SESSION_DIR="$root/agent/sessions"
+  export PRIME_AGENT_DAEMON_SOCKET="$root/daemon.sock"
+  export DO_NOT_TRACK=1 PI_OFFLINE=1
+  cd "$root/work"
+  trap '/tmp/prime-t2.3qhjos6h/prime-agent shutdown --force --json' EXIT
+  /tmp/prime-t2.3qhjos6h/prime-agent --cwd "$root/work" \
+    --daemon-socket "$root/daemon.sock" --provider openai-codex \
+    --model gpt-6.1-sol --thinking xhigh --no-session '/login'
+)
+```
+
+This is source-backed for the checksum-verified v0.10.1 binary. `crates/pa-cli/src/initial_message.rs:10-27` constructs the initial text. `crates/pa-tui/src/interactive/run.rs:759-762` submits it, and `session_ui/prompt.rs:440-443` sends slash-prefixed input to the local command handler. `session_ui/commands.rs:282-293` permits only bare `/login`. There is no CLI `login` subcommand, and `/login openai-codex` is invalid. `provider_login.rs:18-23` names the Codex subscription row. `codex_subscription_login.rs:64-110` saves the operator's login under the selected agent directory.
+
+The `--no-session` flag avoids a saved login-only transcript. Provider-auth storage selection is independent of session persistence. The explicit socket and agent directory scope the shutdown trap through `daemon_discovery/mod.rs:120-150`. Do not run another workflow against this root concurrently. Non-TTY stdin selects print mode, so do not pipe this command through an unallocated SSH session.
+
+The ready-to-run post-login runner, exact off-host wrapper command, final native capability dispositions, and non-inference execution results follow after implementation verification.
+
 ## Decisions
 
 1. Use the public supervisor JSONL socket and stable v0.10.1 for verification. The wire is explicit and the release is reproducible.
