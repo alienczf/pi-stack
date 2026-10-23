@@ -83,7 +83,6 @@ class PrimeClient:
         self.client_id = f"prime-cli:{uuid.uuid4()}"
         self.buffer = bytearray()
         self.stream = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.bindings: dict[str, str] = {}
 
     def __enter__(self) -> PrimeClient:
         try:
@@ -130,11 +129,6 @@ class PrimeClient:
         while True:
             frame = self.read_frame(deadline)
             frame_type = frame.get("type")
-            if frame_type == "session_binding":
-                previous, current = frame.get("previousActiveSessionId"), frame.get("activeSessionId")
-                if isinstance(previous, str) and isinstance(current, str):
-                    self.bindings[previous] = current
-                continue
             if frame_type != "response":
                 if not isinstance(frame_type, str):
                     raise CliError("invalid_response", "Prime daemon frame has no type")
@@ -163,18 +157,25 @@ class PrimeClient:
         active = state.get("activeSessionId")
         if not isinstance(active, str) or not active:
             raise CliError("invalid_response", "Prime connection state has no active session id")
-        if active not in (sid, self.bindings.get(sid)) and state.get("sessionId") != sid:
-            raise CliError("wrong_session", "Prime returned state for a different session")
+        if durable_session_id(state) != sid:
+            raise CliError("wrong_session", "Prime returned state for a different durable session")
         if type(state.get("isStreaming")) is not bool:
             raise CliError("invalid_response", "Prime connection state has no streaming flag")
         return state
 
 
+def durable_session_id(data: dict) -> str:
+    sid = data.get("sessionId")
+    if not isinstance(sid, str) or not sid:
+        raise CliError("invalid_response", "Prime response lacks a durable sessionId")
+    return sid
+
+
 def session_row(row: Any) -> dict:
     row = object_data(row)
-    sid = row.get("activeSessionId") or row.get("id")
-    if not isinstance(sid, str) or not sid or not isinstance(row.get("cwd"), str):
-        raise CliError("invalid_response", "Prime session row lacks id or cwd")
+    sid = durable_session_id(row)
+    if not isinstance(row.get("cwd"), str):
+        raise CliError("invalid_response", "Prime session row lacks cwd")
     state = row.get("state")
     archived = row.get("lifecycle") == "archived" or isinstance(state, dict) and state.get("status") == "archived"
     result = {**row, "id": sid, "archived": archived}
@@ -210,7 +211,7 @@ def spawn(client: PrimeClient, cwd: str) -> dict:
             if state.get("cwd") != cwd:
                 raise CliError("cwd_mismatch", "Prime connection state has a different cwd", 409)
             expect_model(state.get("model"), requested)
-            row.update(model=state["model"], thinkingLevel=state.get("thinkingLevel"))
+            row.update(activeSessionId=state["activeSessionId"], model=state["model"], thinkingLevel=state.get("thinkingLevel"))
         except (CliError, OSError) as exc:
             failure = exc if isinstance(exc, CliError) else transport_failure(exc)
             failure.output["session"] = row
@@ -230,7 +231,7 @@ def status(client: PrimeClient, sid: str) -> dict:
     if usage is not None and not isinstance(usage, dict):
         raise CliError("invalid_response", "Prime context usage is neither an object nor null")
     queued = [{"kind": kind, "text": text} for kind, lane in (("steer", steering), ("followUp", follow_up)) for text in lane]
-    session = {**state, "id": active, "pendingMessageCount": len(queued), "queuedMessages": queued,
+    session = {**state, "id": state["sessionId"], "pendingMessageCount": len(queued), "queuedMessages": queued,
                "queueRepresentation": "previews", "queueReplaySafe": False,
                "pendingAsk": None, "capabilities": {"interactiveAnswers": False},
                "contextUsage": usage, "cost": cost}
@@ -303,7 +304,7 @@ def execute(client: PrimeClient, args: argparse.Namespace) -> dict:
         state = client.session_state(args.sid)
         active = state["activeSessionId"]
         summary = object_data(client.request("get_state", activeSessionId=active))
-        if summary.get("activeSessionId") != active:
+        if summary.get("activeSessionId") != active or summary.get("sessionId") != args.sid:
             raise CliError("wrong_session", "Prime returned a different session during archive preflight")
         steering, follow_up = queue_lanes(client.request("get_queue", activeSessionId=active))
         flags = [state.get(name) for name in ("isStreaming", "isCompacting", "isBashRunning")]

@@ -303,7 +303,7 @@ os.execv("/bin/sh", ["sh", "-c", sys.argv[1]])
                 self.assertTrue(server.requests)
                 self.assertEqual([command["type"] for command in server.requests].count("create"), 1)
                 self.assertNotIn("shutdown", [command["type"] for command in server.requests])
-                self.assertTrue(all(command["activeSessionId"] == "owned-active" for command in server.requests if "activeSessionId" in command))
+                self.assertTrue(all(command["activeSessionId"] in ("owned-durable", "owned-active") for command in server.requests if "activeSessionId" in command))
 
     def test_control_only_never_admits_input_on_post_admission_fault(self):
         prepared = subprocess.run(["python3", str(ROOT / "scripts/check-prime-cli-live.py"), "prepare"], capture_output=True, text=True,

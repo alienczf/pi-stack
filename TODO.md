@@ -13,7 +13,7 @@ Throughput checkpoint. Establish clean c323b30 first. Reproduce and fix one defe
 
 - [x] P1. Default checks admit no runnable input; inference-only queue checks clear inside their pause scope on ordinary failure. The two disconnect-aware CLI regressions failed before the fix, exposing three runnable inputs, then passed. This supersedes the historical control-only safety claim below.
 - [x] P2. Spawn readback transport errors preserve the known created session. Timeout and reset regressions reproduced identity loss; timeout, reset, and EOF now preserve the received row without retry/deletion.
-- [ ] P2. Compatibility IDs use durable sessionId with no shim registry or binding-event dependency.
+- [x] P2. Compatibility IDs use durable sessionId with no shim registry or binding-event dependency. The replacement workflow regression now retains one durable ID across fresh prompt/status/list/archive connections and verifies durable pause acquisition.
 - [ ] P2. Dispatcher consumes only a leading backend selection and forwards backend options verbatim.
 
 ## Feature playbook
