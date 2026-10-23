@@ -9,7 +9,7 @@ tracking_issue: https://github.com/alienczf/pi-stack/issues/38
 box_mirror: /workspace/harness-program
 host_docs_worktree: /home/alphalab/Projects/worktrees/pi-stack-harness-program
 host_input_copy: /home/alphalab/Projects/pi-stack/streams/pi-streams-harness/context/harness-program
-updated: 2026-10-23T11:01+08:00
+updated: 2026-10-23T11:40+08:00
 tracks:
   - id: 1
     name: pi-streams must-fix catalog
@@ -41,10 +41,12 @@ tracks:
     code_branch: feat/prime-cli
     code_worktree: /home/alphalab/Projects/worktrees/pi-stack-prime-cli
     brief: docs/harness-program/briefs/track-2.md
+    steers: [docs/harness-program/briefs/track-2-steer-1.md, docs/harness-program/briefs/track-2-reentry-1.md]
+    steer_note: 11:31 context 84.5% (~422k) -> aborted, /compact via commands/run (G21), now 19.1%; session auto-continued its in-flight verification. reentry-1 queued 11:39 (pending 1) - next run confirm consumed, re-send if lost.
     brief_sha256_verified: true
     blocked_on: ZF interactive openai-codex login for Prime on options-01 (blocker note sent once, 11:01)
     open_questions: [caladan (pi-bot caladan bb39dc0; no pi-stack branch), non-blocking]
-    pushed: feat/prime-cli bccf159 (2026-10-23 10:58)
+    pushed: feat/prime-cli 29ff206 (2026-10-23 11:39)
     next_action: When idle, collect, push feat/prime-cli again. After ZF logs Prime in, run the inference verification script from the design doc and the off-host wrapper check from the box, then send the track-2-working milestone. Streams-on-prime port waits for track 1 to merge.
   - id: 3
     name: problem-state research + three designs
@@ -69,7 +71,7 @@ tracks:
 | Track | Session | Phase | Artifact | Next |
 |---|---|---|---|---|
 | 1 fix catalog | `01a16655` | awaiting ZF review (sent 11:01) | `10-pi-streams-fix-catalog.md` | ZF go-ahead, then implement S1-S6 |
-| 2 prime CLI | `01a16656` | blocked on Prime codex login; non-inference gaps in progress | `20-prime-cli-design.md` + `feat/prime-cli` (`bccf159` pushed) | ZF logs Prime in, then inference verification |
+| 2 prime CLI | `01a16656` | blocked on Prime codex login; non-inference gaps in progress | `20-prime-cli-design.md` + `feat/prime-cli` (`29ff206` pushed) | ZF logs Prime in, then inference verification |
 | 3 research | `01a16658` | done, designs sent 11:01 | `30-research-designs.md` | ZF answers two blocking decisions |
 
 The canonical copy is on GitHub. The box mirror is `/workspace/harness-program/STATUS.md`.
