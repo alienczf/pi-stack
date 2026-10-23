@@ -9,7 +9,7 @@ tracking_issue: https://github.com/alienczf/pi-stack/issues/38
 box_mirror: /workspace/harness-program
 host_docs_worktree: /home/alphalab/Projects/worktrees/pi-stack-harness-program
 host_input_copy: /home/alphalab/Projects/pi-stack/streams/pi-streams-harness/context/harness-program
-updated: "2026-10-23T15:10+08:00 (options-01 network outage 14:50-15:05 closed; all tracks resumed. T1 resumed 15:08 from 2696a3f on handovers, 68.2% ctx. T3 working A over Prime + naming. T4 working 42, 41 reference only. T5 standby for go)"
+updated: "2026-10-23T15:30+08:00 (driver run: T1 streaming S1 handovers at 68.5% ctx; T3 streaming 31 A over Prime at 65.0%; T4 streaming 42 at 68.1%; T2 idle blocked on Prime login; T5 idle standby. No steers pending, no compaction needed)"
 tracks:
   - id: 1
     name: pi-streams must-fix catalog
