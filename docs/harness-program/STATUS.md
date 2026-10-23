@@ -9,7 +9,7 @@ tracking_issue: https://github.com/alienczf/pi-stack/issues/38
 box_mirror: /workspace/harness-program
 host_docs_worktree: /home/alphalab/Projects/worktrees/pi-stack-harness-program
 host_input_copy: /home/alphalab/Projects/pi-stack/streams/pi-streams-harness/context/harness-program
-updated: "2026-10-23T18:25+08:00 (usage limit cleared - ZF reset 18:06, T3 compact succeeded 18:11; T3 done + 31 passed gate 18:22; T1 compacted + re-entered 18:19; T5 go 18:23; no provider switch)"
+updated: "2026-10-23T19:00+08:00 (T5 done 18:37; 51 + 50 v2 passed gate 18:58, G34; v2 summary handed to main chat 19:00; T1 streaming S1 done, next S2)"
 tracks:
   - id: 1
     name: pi-streams must-fix catalog
@@ -92,7 +92,7 @@ tracks:
     session: 01a1671a-01d1-7f51-b240-533efc527a61
     host: options-01
     model: openai-codex/gpt-6.1-sol@xhigh
-    phase: "working 51 merged + 50 v2 (GO track 5 steer 1 sent 18:23, accepted, streaming)"
+    phase: "done 18:37 (TRACK 5 STATUS: done (51 merged + 50 v2)); 51 and 50 v2 passed gate 18:58 (G34)"
     started: 2026-10-23T12:53+08:00
     expected_done: 2026-10-23T14:00+08:00
     artifact: docs/harness-program/50-a-vs-b.md
@@ -107,9 +107,11 @@ naming_cleanup_done:
   '31': true
   '41': "dropped - G29, 41 reference only"
   '42': true
+  '51': true
+  '50v2': true
 b_unchanged_done: true (2026-10-23T15:55+08:00, gate passed)
-merged_done: false
-comparison_v2_sent: false
+merged_done: true (2026-10-23T18:58+08:00, gate passed, G34)
+comparison_v2_sent: 2026-10-23T19:00+08:00 (handed to main chat via WakeParent; never resend)
 reference_only: [docs/harness-program/41-design-b-prime-detailed.md]
 usage_limit:
   open: 2026-10-23T16:14+08:00
@@ -131,11 +133,11 @@ env_failure:
 
 | Track | Session | Phase | Artifact | Next |
 |---|---|---|---|---|
-| 1 fix catalog | `01a16655` | implementing; S1 commits done (`6b2f1ab`), re-entered 18:19 on the after-S1 disposable check, then S2-S6 | `10-pi-streams-fix-catalog.md` + `feat/streams-must-fix` | S1-S6 done, then driver merges |
+| 1 fix catalog | `01a16655` | implementing; S1 done (`6b2f1ab`, suite and disposable check pass), now S2-S6 | `10-pi-streams-fix-catalog.md` + `feat/streams-must-fix` | S1-S6 done, then driver merges |
 | 2 prime CLI | `01a16656` | blocked on Prime codex login; non-inference gaps in progress | `20-prime-cli-design.md` + `feat/prime-cli` (`6bc1242` pushed) | ZF logs Prime in, then inference verification |
 | 3 research | `01a16658` | done 18:21; 31 (A over Prime) passed gate 18:22 | `31-design-a-detailed.md` | feeds 51 |
 | 4 B over prime | `01a166e0` | done; 42 passed gate 15:55 | `40`, `41` (reference), `42-design-b-prime-unchanged.md` | feeds 51 |
-| 5 merged + v2 | `01a1671a` | working (go 18:23) | `51-design-merged.md`, `50-a-vs-b.md` v2 | done line, then gate; then v2 to ZF once |
+| 5 merged + v2 | `01a1671a` | done 18:37; 51 and 50 v2 passed gate 18:58 | `51-design-merged.md`, `50-a-vs-b.md` v2 | v2 summary sent to ZF 19:00; nothing further |
 
 **Usage limit 16:14-18:11 (closed):** ChatGPT usage limit on openai-codex; ZF reset it at 18:06 and work resumed on the same provider.
 
