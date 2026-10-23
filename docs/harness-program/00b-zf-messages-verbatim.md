@@ -110,3 +110,7 @@ Oh for 6. Leave it for stream to provide guidance. We can spawn reviewers if nee
 ## t234u (2026-10-24 00:46 SGT)
 
 Going to leave you to drive and make this work over the weekend. Lmk when we have a working poc on branch. Update install so we can test the branch on a new external setup
+
+## t238u (2026-10-24 ~07:56 SGT, laptop, reply after completing the Prime Codex browser sign-in)
+
+http://localhost:1455/auth/callback?code=<redacted>&scope=openid+profile+email+offline_access&state=ccffcd17a0d1e1f9c1919c1fee6b8219
