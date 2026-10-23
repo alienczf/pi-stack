@@ -151,7 +151,10 @@ class VerificationRuntime:
             config.write("\n")
         self.process = subprocess.Popen(
             [str(self.executable), "--mode", "daemon", "--daemon-socket", str(self.socket)],
-            env={**os.environ, "PRIME_AGENT_CODING_AGENT_DIR": str(self.root / "agent")},
+            env={**os.environ, "PRIME_AGENT_CODING_AGENT_DIR": str(self.root / "agent"),
+                 "PRIME_AGENT_SESSION_DIR": str(self.root / "agent/sessions"),
+                 "PRIME_AGENT_DAEMON_SOCKET": str(self.socket), "DO_NOT_TRACK": "1", "PI_OFFLINE": "1"},
+            cwd=self.root / "work", umask=0o077,
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.evidence.update(started=True, stopped=False)
         deadline = time.monotonic() + self.timeout
@@ -174,11 +177,24 @@ class VerificationRuntime:
         try:
             if self.process is not None:
                 if self.process.poll() is None:
-                    self.process.terminate()
+                    try:
+                        info = self.socket.lstat()
+                        if (info.st_dev, info.st_ino) != self.socket_identity:
+                            raise OSError("Owned socket identity changed")
+                        with PrimeClient(str(self.socket), self.timeout) as wire:
+                            wire.request("shutdown", force=True)
+                    except (OSError, CliError):
+                        try:
+                            self.process.terminate()
+                        except ProcessLookupError:
+                            pass
                     try:
                         self.process.wait(timeout=self.timeout)
                     except subprocess.TimeoutExpired:
-                        self.process.kill()
+                        try:
+                            self.process.kill()
+                        except ProcessLookupError:
+                            pass
                         self.process.wait(timeout=self.timeout)
                 self.evidence["stopped"] = self.process.poll() is not None
                 if self.evidence["stopped"] and self.socket_identity is not None:
@@ -190,6 +206,8 @@ class VerificationRuntime:
                         if stat.S_ISSOCK(info.st_mode) and (info.st_dev, info.st_ino) == self.socket_identity:
                             self.socket.unlink()
                             self.evidence["socketRemoved"] = True
+                elif self.evidence["stopped"]:
+                    self.evidence["socketRemoved"] = not os.path.lexists(self.socket)
         finally:
             if self.evidence["stopped"] and self.model_identity is not None:
                 path = self.root / "agent/models.json"
@@ -209,6 +227,8 @@ class VerificationRuntime:
 class Check:
     def __init__(self, root: Path, timeout: float, definition: ModelDefinition | None = None):
         self.definition = definition
+        if root.is_symlink():
+            raise CliError("unsafe_verification_root", "Verification root must not be a symlink", 400)
         self.root = root.resolve()
         self.timeout = timeout
         self.socket = str(self.root / "daemon.sock")
@@ -216,12 +236,28 @@ class Check:
         self.created: list[str] = []
         self.evidence: list[dict] = []
         self.gaps: list[str] = []
-        marker = json.loads((self.root / MARKER).read_text())
-        settings = json.loads((self.root / "agent/settings.json").read_text())
-        if marker != {"model": MODEL, "thinking": THINKING}:
-            raise ValueError("Root was not prepared for this exact model")
-        if settings.get("allowedModels") != [MODEL] or settings.get("retry", {}).get("failover", {}).get("enabled") is not False:
-            raise ValueError("Owned settings must pin the exact model and disable provider failover")
+        try:
+            for directory in (self.root, self.root / "agent", self.root / "work"):
+                info = directory.lstat()
+                if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
+                    raise ValueError("Expected owned real directories")
+            for directory in (self.root, self.root / "agent"):
+                if directory.stat().st_mode & 0o077:
+                    raise ValueError("Expected private root and agent directories")
+            for path in (self.root / MARKER, self.root / "agent/settings.json"):
+                info = path.lstat()
+                if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
+                    raise ValueError("Expected owned regular configuration files")
+            marker = json.loads((self.root / MARKER).read_text())
+            settings = json.loads((self.root / "agent/settings.json").read_text())
+            retry = settings.get("retry", {})
+            usage = retry.get("provider", {}).get("waitForUsage", {})
+            if (marker != {"model": MODEL, "thinking": THINKING} or settings.get("allowedModels") != [MODEL]
+                    or retry.get("enabled") is not False or retry.get("failover", {}).get("enabled") is not False
+                    or usage.get("enabled") is not False or usage.get("pauseUntilReset") is not False):
+                raise ValueError("Expected exact model pinning with retry, failover, and quota waiting disabled")
+        except (OSError, ValueError, AttributeError, TypeError) as exc:
+            raise CliError("unsafe_verification_root", "Expected the existing private isolated root with safe nonsecret settings", 400) from exc
         self.env = {**os.environ, "PRIME_AGENT_DAEMON_SOCKET": self.socket,
                     "PRIME_CLI_MODEL": MODEL, "PRIME_CLI_THINKING": THINKING,
                     "PRIME_CLI_TIMEOUT": str(timeout), "PYTHONDONTWRITEBYTECODE": "1"}
@@ -368,6 +404,8 @@ def main() -> int:
     check = None
     runtime = None
     result = {"ok": False, "model": MODEL, "inferenceRequested": args.inference,
+              "parityComplete": False,
+              "unsupportedCapabilities": ["interactiveAnswers", "runtimeDisposal", "internalQueueReplay"],
               "retainedOwnedSessions": []}
     if args.mode == "verify":
         result["runtime"] = {"started": False, "stopped": True, "socketRemoved": True}
@@ -380,7 +418,12 @@ def main() -> int:
             result["modelMetadata"] = {"source": str(args.model_definition), "limitations": METADATA_LIMITATIONS}
             runtime = VerificationRuntime(check.root, args.runtime.resolve(), args.timeout, definition)
             runtime.start()
-        check.run(args.inference)
+        if args.mode == "verify":
+            check.run(False)
+            if args.inference:
+                check.run(True)
+        else:
+            check.run(args.inference)
         result["ok"] = True
     except (CliError, OSError, ValueError, StopIteration, subprocess.SubprocessError) as exc:
         result["error"] = exc.output if isinstance(exc, CliError) else str(exc)
