@@ -1,0 +1,25 @@
+#!/usr/bin/env python3
+"""Execute the host CLI through the existing userspace Twingate SSH wrapper."""
+import json
+import os
+import shlex
+import sys
+
+
+def main():
+    ssh = os.environ.get("OPTIONS_01_SSH", "options-01-ssh")
+    remote = os.environ.get("PRIME_CLI_REMOTE_BIN")
+    if remote is not None and not os.path.isabs(remote):
+        print(json.dumps({"ok": False, "status": 400, "error": "usage", "message": "PRIME_CLI_REMOTE_BIN must be an absolute path"}))
+        return 1
+    prefix = shlex.quote(remote) if remote is not None else '"$HOME"/.local/bin/prime-cli'
+    command = " ".join([prefix, *(shlex.quote(arg) for arg in sys.argv[1:])])
+    try:
+        os.execvp(ssh, [ssh, command])
+    except OSError as exc:
+        print(json.dumps({"ok": False, "status": 502, "error": "remote_unavailable", "message": exc.strerror}))
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
