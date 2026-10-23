@@ -8,7 +8,7 @@
 - [x] Unit 2. Expose public stock transport and owned sessions.
 - [x] Unit 3. Save and refresh messages, wake eligible work, and stop best effort.
 - [x] Unit 4. Dispatch clean poteto workers with handover and kickoff only.
-- [ ] Unit 5. Own percentage-triggered save, compact, readback, and resume.
+- [x] Unit 5. Own percentage-triggered save, compact, readback, and resume.
 - [ ] Unit 6. Close only computed results and stage owned paths.
 - [ ] Unit 7. Install stock Prime and pi-stack under an isolated external prefix.
 - [ ] Unit 8. Prove intake through compaction to checked close with the shared verifier.
@@ -42,4 +42,6 @@ Unit 2 commit is `ffbacff02fb2d2dc689ad216b6f3cfc5da3a779b`. Unit 3 passed 48 fo
 
 Unit 3 commit is `c3555ce4b8188e9d6962f1d5609e7ee9c11b3bbe`. Unit 4 passed 49 focused, 154 stream and 72 root tests in `evidence/unit-4-{focused,streams,root}.log`. Worker assignment and existing thread registry are saved before the exact unwrapped handover/kickoff. Native product instructions remain untouched; returned summaries are saved only in stream Log.
 
-Next is Unit 5. Prime creation currently takes an explicit `backend="prime"` and persists it in `stream.toml`. Project-level backend settings remain Unit 2. Writers accept `locked=True` for callers already holding the stream lock. Successful computed completion remains blocked until Unit 6 supplies its actual closing checks. Explicit cancellation or informational explanation uses a complete linked answer and later trusted human source. Broad legacy staging remains unchanged until Unit 6. No native inference or authentication check was attempted.
+Unit 4 commit is `e82609ec59be46d36fe9eccdd4c704827ac71d52`. Unit 5 passed 62 focused, 167 stream and 72 root tests in `evidence/unit-5-{focused,streams,root}.log`. Percentage and explicit requests share one controller. Checked save precedes pause, idle/queue recheck and direct compact. Readback verifies the current branch and exact owned disk entry. A parked-input fixture proves release-before-await. Native runtime proof remains pending.
+
+Next is Unit 6. Prime creation currently takes an explicit `backend="prime"` and persists it in `stream.toml`. Project-level backend settings remain Unit 2. Writers accept `locked=True` for callers already holding the stream lock. Successful computed completion remains blocked until Unit 6 supplies its actual closing checks. Explicit cancellation or informational explanation uses a complete linked answer and later trusted human source. Broad legacy staging remains unchanged until Unit 6. No native inference or authentication check was attempted.

@@ -26,7 +26,8 @@ class MessageTests(PrimeCase):
         with StubPrime(handler) as stub, PrimeClient(stub.path) as client:
             result = send_stream_message(client, self.stream, self.identity, body=text, sender="operator", lane="steer")
         self.assertEqual(result["sending_status"], "Prime replied")
-        self.assertEqual(stub.requests[1]["command"]["streamingBehavior"], "steer")
+        prompts = [r["command"] for r in stub.requests if r["command"]["type"] == "prompt_and_wait"]
+        self.assertEqual(prompts[0]["streamingBehavior"], "steer")
         self.assertEqual(len(observed), 1)
         self.assertEqual(len(state.check_state(self.stream).goals.work), 1)
 

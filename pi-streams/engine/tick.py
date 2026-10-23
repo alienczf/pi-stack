@@ -569,17 +569,20 @@ def tick_index(index: Path, now: datetime) -> bool:
             project = projects[row.project]
             with PrimeClient(project.info.prime_socket) as client:
                 identity, _ = resolve_session(client, coordinator_id(stream))
-                wake_prime_if_needed(client, stream, identity)
+                wake_prime_if_needed(client, stream, identity, sessions_dir=project.info.prime_sessions_dir)
         except (StreamsError, OSError) as exc:
             ok = False
             print(f"{row.path}: {exc}", file=sys.stderr, flush=True)
     return ok
 
 
-def wake_prime_if_needed(client, stream, identity):
+def wake_prime_if_needed(client, stream, identity, *, sessions_dir=None):
     from engine import state
-    from engine.prime import stream_entries, eligible, resolve_session, send_stream_message
+    from engine.prime import stream_entries, eligible, resolve_session, send_stream_message, check_compaction
     from engine.prompts import render
+    maintenance = check_compaction(client, stream, identity, sessions_dir=sessions_dir)
+    if maintenance["status"] in {"verified", "held", "deferred", "unknown"} and maintenance.get("reason") != "native percentage is unknown":
+        return None
     current, entries = stream_entries(stream)
     if not eligible(current, entries):
         return None
@@ -598,7 +601,7 @@ def wake_prime_if_needed(client, stream, identity):
         return None
     return send_stream_message(client, stream, identity, body=render("wake"), mode="automatic",
                                expected=current.goals_rules_sha256, metadata={"wake_key": key},
-                               original_entries=[w.original_entry for w in current.goals.work])
+                               original_entries=[w.original_entry for w in current.goals.work], sessions_dir=sessions_dir)
 
 
 def run_tick(indexes: list[Path]) -> int:

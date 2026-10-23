@@ -799,3 +799,22 @@ def upgrade_stream(repo: Path, stream_id: str) -> bool:
     if not path.is_file() or path.read_text(encoding="utf-8") != text:
         path.write_text(text, encoding="utf-8", newline="\n")
     return commit_repo(repo, f"pi-streams upgrade {stream_id}")
+
+
+def write_prime_settings(stream: Path, threshold_percent: float) -> Path:
+    import math
+    from engine.state import _publish
+    if isinstance(threshold_percent, bool) or not isinstance(threshold_percent, (int, float)) or not math.isfinite(threshold_percent) or not 0 < threshold_percent <= 100:
+        raise StreamsError("compaction percentage must be finite, greater than zero and at most 100")
+    path = stream / ".prime" / "agent" / "settings.json"
+    if any(item.is_symlink() for item in (stream, *stream.parents, path.parent, path.parent.parent, path)):
+        raise StreamsError("refusing symlink settings path")
+    data = {"compaction": {"enabled": False, "agentCallable": False, "thresholdPercent": threshold_percent}}
+    text = json.dumps(data, sort_keys=True, allow_nan=False) + "\n"
+    if path.exists():
+        if path.read_text() != text:
+            raise StreamsError("owned Prime settings conflict; never reconfigure a constructed session")
+        return path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _publish(path, text, immutable=True)
+    return path

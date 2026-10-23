@@ -27,5 +27,5 @@ class PrimeTickTests(PrimeCase):
                            entry={"subject": "Human wait", "body": {}, "original_entries": []})
         with StubPrime(self.handler) as stub, PrimeClient(stub.path) as client:
             self.assertEqual(wake_prime_if_needed(client, self.stream, self.identity), None)
-        self.assertEqual(stub.requests, [])
+        self.assertEqual([r["command"]["type"] for r in stub.requests], ["get_connection_state"])
         self.assertEqual(state.check_state(self.stream).goals.status, "waiting")
