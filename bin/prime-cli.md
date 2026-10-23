@@ -68,6 +68,14 @@ Spawn, list, and status consistently expose the real durable `sessionId` as comp
 
 Prime accepts an unlisted create model ID by copying a known provider's template. That can preserve `gpt-6.1-sol` without proving its entitlement, context limit, or supported reasoning level. Native `set_model` can still reject that unregistered ID. The client never substitutes another provider/model. An owned daemon must pin `allowedModels` and disable `retry.failover.enabled` before model-backed checks. Missing authentication is a blocker, not a reason to switch provider.
 
+## Verification model metadata
+
+`verify` uses `scripts/prime-models/openai-codex-gpt-6.1-sol.json` by default. The parent observed this exact metadata-only row in the installed Pi catalog cache on 2026-10-23. The cache timestamps were `checkedAt=1792721682314` and `lastModified=1792063872000`. This worker did not open the cache or any credential file.
+
+The snapshot preserves the observed name, API kind, reasoning flag, thinking-level map, text and image inputs, 500000-token context window, 128000-token maximum output, and four flat costs. These are catalog declarations, not measured inference capabilities. No value is inferred from the model name. Endpoints, headers, and authentication fields are excluded. The native `ModelDefinition` and `ModelCostConfig` in `crates/pa-core/src/models/custom.rs` accept these fields. Native flat costs do not represent the observed above-272000-token cost tier. Extra compatibility flags, `inputLimits`, and `type` are outside the whitelist. Exact tiered billing is not claimed.
+
+`--model-definition PATH` accepts a complete replacement metadata object with the same whitelisted fields and exact provider, model ID, and API kind. Missing fields, extra fields, invalid reasoning maps, nonpositive token limits, and nonfinite or negative costs fail before launch. Verification creates only native `agent/models.json` under the existing isolated root. It refuses an existing file without reading or replacing it. After its daemon stops, it removes only the file it created. It never loads auth files, custom provider keys, or provider endpoints.
+
 ## Verification
 
 ```sh

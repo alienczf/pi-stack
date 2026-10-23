@@ -17,11 +17,80 @@ import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "bin"))
-from prime_cli import CliError, PrimeClient
+from prime_cli import CliError, LEVELS, PrimeClient, reject_json_constant
 
 MODEL = "openai-codex/gpt-6.1-sol"
 THINKING = "xhigh"
 MARKER = "prime-cli-check-owner.json"
+MODEL_DEFINITION = ROOT / "scripts/prime-models/openai-codex-gpt-6.1-sol.json"
+METADATA_LIMITATIONS = [
+    "Tiered costs, inputLimits, type, and extra compatibility flags are not represented by this whitelist. "
+    "Reported native flat cost is not exact tiered billing.",
+    "Metadata declares capabilities; authentication, entitlement, effective reasoning, and inference require separate checks.",
+]
+
+
+@dataclass(frozen=True)
+class ModelDefinition:
+    provider: str
+    id: str
+    name: str
+    api: str
+    reasoning: bool
+    thinking_level_map: dict[str, str | None]
+    input: tuple[str, ...]
+    context_window: int
+    max_tokens: int
+    cost: dict[str, float]
+
+    @classmethod
+    def parse(cls, data: object) -> ModelDefinition:
+        expected = {"provider", "id", "name", "api", "reasoning", "thinkingLevelMap", "input",
+                    "contextWindow", "maxTokens", "cost"}
+        if not isinstance(data, dict) or set(data) != expected:
+            raise ValueError("Expected only the complete metadata whitelist")
+        if (data["provider"], data["id"], data["api"]) != ("openai-codex", "gpt-6.1-sol", "openai-codex-responses"):
+            raise ValueError("Metadata must describe the exact requested provider, model, and API")
+        if not isinstance(data["name"], str) or not data["name"].strip() or type(data["reasoning"]) is not bool:
+            raise ValueError("Invalid model name or reasoning flag")
+        mapping = data["thinkingLevelMap"]
+        if (not isinstance(mapping, dict) or set(mapping) != set(LEVELS)
+                or any(value is not None and value not in LEVELS for value in mapping.values())):
+            raise ValueError("Expected an explicit complete supported thinking-level map")
+        inputs = data["input"]
+        if (not isinstance(inputs, list) or not inputs or any(value not in ("text", "image") for value in inputs)
+                or len(set(inputs)) != len(inputs)):
+            raise ValueError("Expected unique supported model inputs")
+        context, output = data["contextWindow"], data["maxTokens"]
+        if type(context) is not int or type(output) is not int or not 0 < output <= context <= 2**64 - 1:
+            raise ValueError("Expected positive native token limits with maxTokens <= contextWindow")
+        cost = data["cost"]
+        if not isinstance(cost, dict) or set(cost) != {"input", "output", "cacheRead", "cacheWrite"}:
+            raise ValueError("Expected four explicit flat model costs")
+        for value in cost.values():
+            try:
+                valid = type(value) in (int, float) and math.isfinite(value) and value >= 0
+            except OverflowError:
+                valid = False
+            if not valid:
+                raise ValueError("Expected finite nonnegative model costs")
+        return cls(data["provider"], data["id"], data["name"], data["api"], data["reasoning"],
+                   dict(mapping), tuple(inputs), context, output, dict(cost))
+
+    @classmethod
+    def load(cls, path: Path) -> ModelDefinition:
+        try:
+            return cls.parse(json.loads(path.read_text(), parse_constant=reject_json_constant))
+        except (ValueError, OSError, TypeError) as exc:
+            raise CliError("invalid_model_definition", "Expected a complete validated secret-free model definition", 400) from exc
+
+    def model(self) -> dict:
+        return {"id": self.id, "name": self.name, "api": self.api, "reasoning": self.reasoning,
+                "thinkingLevelMap": self.thinking_level_map, "input": list(self.input),
+                "contextWindow": self.context_window, "maxTokens": self.max_tokens, "cost": self.cost}
+
+    def native_config(self) -> dict:
+        return {"providers": {self.provider: {"models": [self.model()]}}}
 
 
 def prepare() -> dict:
@@ -43,6 +112,8 @@ class VerificationRuntime:
     root: Path
     executable: Path
     timeout: float
+    definition: ModelDefinition
+    model_identity: tuple[int, int] | None = field(default=None, init=False)
     process: subprocess.Popen | None = field(default=None, init=False)
     lock_fd: int | None = field(default=None, init=False)
     socket_identity: tuple[int, int] | None = field(default=None, init=False)
@@ -59,6 +130,15 @@ class VerificationRuntime:
             raise CliError("runtime_collision", "Verification root is already locked", 409) from exc
         if os.path.lexists(self.socket):
             raise CliError("runtime_collision", "Dedicated daemon socket already exists; no daemon was contacted", 409)
+        try:
+            model_fd = os.open(self.root / "agent/models.json", os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        except FileExistsError as exc:
+            raise CliError("model_registration_collision", "Native models.json already exists; it was not read or replaced", 409) from exc
+        with os.fdopen(model_fd, "w") as config:
+            info = os.fstat(config.fileno())
+            self.model_identity = (info.st_dev, info.st_ino)
+            json.dump(self.definition.native_config(), config, allow_nan=False)
+            config.write("\n")
         self.process = subprocess.Popen(
             [str(self.executable), "--mode", "daemon", "--daemon-socket", str(self.socket)],
             env={**os.environ, "PRIME_AGENT_CODING_AGENT_DIR": str(self.root / "agent")},
@@ -101,7 +181,16 @@ class VerificationRuntime:
                             self.socket.unlink()
                             self.evidence["socketRemoved"] = True
         finally:
-            if self.lock_fd is not None:
+            if self.evidence["stopped"] and self.model_identity is not None:
+                path = self.root / "agent/models.json"
+                try:
+                    info = path.lstat()
+                except FileNotFoundError:
+                    pass
+                else:
+                    if stat.S_ISREG(info.st_mode) and (info.st_dev, info.st_ino) == self.model_identity:
+                        path.unlink()
+            if self.evidence["stopped"] and self.lock_fd is not None:
                 os.close(self.lock_fd)
                 self.lock_fd = None
                 (self.root / "verification.lock").unlink()
@@ -255,6 +344,7 @@ def main() -> int:
         run.add_argument("--inference", action="store_true")
         if mode == "verify":
             run.add_argument("--runtime", type=Path, required=True)
+            run.add_argument("--model-definition", type=Path, default=MODEL_DEFINITION)
     args = parser.parse_args()
     if args.mode == "prepare":
         print(json.dumps(prepare(), indent=2))
@@ -270,7 +360,9 @@ def main() -> int:
             raise CliError("usage", "timeout must be finite and positive", 400)
         check = Check(args.root, args.timeout)
         if args.mode == "verify":
-            runtime = VerificationRuntime(check.root, args.runtime.resolve(), args.timeout)
+            definition = ModelDefinition.load(args.model_definition)
+            result["modelMetadata"] = {"source": str(args.model_definition), "limitations": METADATA_LIMITATIONS}
+            runtime = VerificationRuntime(check.root, args.runtime.resolve(), args.timeout, definition)
             runtime.start()
         check.run(args.inference)
         result["ok"] = True
