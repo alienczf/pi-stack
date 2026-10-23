@@ -256,6 +256,35 @@ class PrimeCliTests(unittest.TestCase):
         self.result(proc, {"ok": True, "status": 200, "commands": [{"name": "skill:test", "source": "skill"}]})
         self.commands(fixture, [{"type": "get_commands", "activeSessionId": "s1"}])
 
+    def test_queue_resume_wakes_native_items_without_clear_or_reconstruction(self):
+        with Fixture([None]) as fixture:
+            proc = run_cli("queue-resume", "durable-1", fixture=fixture)
+        self.result(proc, {"ok": True, "status": 200, "result": {}})
+        self.commands(fixture, [{"type": "resume_queue", "activeSessionId": "durable-1"}])
+
+    def test_queue_resume_native_failure_has_no_prompt_fallback_or_retry(self):
+        with Fixture([lambda _: {"success": False, "error": "No queued work to resume"}]) as fixture:
+            proc = run_cli("queue-resume", "durable-1", fixture=fixture)
+        self.result(proc, {"ok": False, "status": 502, "error": "upstream_error",
+                           "message": "No queued work to resume"}, 1)
+        self.commands(fixture, [{"type": "resume_queue", "activeSessionId": "durable-1"}])
+
+    def test_exact_stop_and_replay_requirements_fail_closed_without_daemon(self):
+        for args, capability in [(('stop', 'durable-1', '--require-runtime-close'), 'runtimeDisposal'),
+                                 (('queue-clear', 'durable-1', '--require-replay-safe'), 'internalQueueReplay')]:
+            with self.subTest(args=args):
+                proc = run_cli(*args)
+                data = json.loads(proc.stdout)
+                self.assertEqual((proc.returncode, data["status"], data["error"]), (1, 501, "unsupported"))
+                self.assertEqual(data["capability"], capability)
+
+    def test_clear_returns_native_raw_text_not_the_status_preview(self):
+        raw = {"steering": ["<raw internal payload>", "same", "same"], "followUp": ["next"]}
+        with Fixture([raw]) as fixture:
+            proc = run_cli("queue-clear", "durable-1", fixture=fixture)
+        self.result(proc, {"ok": True, "status": 200, "result": raw})
+        self.commands(fixture, [{"type": "clear_queue", "activeSessionId": "durable-1"}])
+
     def test_all_simple_verbs(self):
         cases = [("stop", (), "abort_and_clear_queue", {}, {"steering": ["discard"], "followUp": []}),
                  ("abort", (), "abort_and_clear_queue", {}, None), ("queue-clear", (), "clear_queue", {}, {"steering": [], "followUp": ["discard"]}),
@@ -289,6 +318,15 @@ class PrimeCliTests(unittest.TestCase):
                 proc = run_cli("archive", "durable-1", fixture=fixture)
             self.assertEqual((proc.returncode, json.loads(proc.stdout)["error"]), (1, "session_busy"))
             self.assertNotIn("kill", [request["command"]["type"] for request in fixture.requests])
+
+    def test_status_reports_observed_capability_limits_not_native_parity(self):
+        with Fixture([self.state(), {"steering": [], "followUp": []}, {"cost": 0}]) as fixture:
+            proc = run_cli("status", "durable-1", fixture=fixture)
+        self.assertEqual(proc.returncode, 0, proc.stdout)
+        session = json.loads(proc.stdout)["session"]
+        self.assertEqual(session["capabilities"], {"interactiveAnswers": False, "runtimeDisposal": False,
+                         "internalQueueReplay": False, "sameSessionQueueResume": True})
+        self.assertEqual((session["queueRepresentation"], session["queueReplaySafe"]), ("previews", False))
 
     def test_queue_preview_duplicates_and_provenance_survive(self):
         state = self.state(sessionActions={"injectedPrompts": {"steering": [0]}})
