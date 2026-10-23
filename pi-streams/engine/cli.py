@@ -24,10 +24,12 @@ from engine.project import (
     upgrade_stream,
 )
 from engine.threads import (
+    Status,
     adopt_thread,
     close_stream,
     ensure_coordinator,
     format_status,
+    load_threads,
     rotate_coordinator,
     spawn_thread,
     status_report,
@@ -180,8 +182,13 @@ def cmd_close(args: argparse.Namespace) -> int:
         project = resolve_project(index)
         stream_dir = _open_stream(index, project.info.name, args.stream)
         with stream_lock(stream_dir):
+            handovers = tuple(
+                f"handover/{row.role}.md"
+                for row in load_threads(stream_dir / "threads.tsv")
+                if row.role != "coordinator" and row.status is not Status.archived
+            )
             report = close_stream(index, project, args.stream)
-            commit_repo(stream_dir, f"pi-streams close {args.stream}")
+            commit_repo(stream_dir, f"pi-streams close {args.stream}", paths=handovers)
     sys.stdout.write("".join(f"{line}\n" for line in report))
     return 0
 

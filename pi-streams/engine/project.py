@@ -8,6 +8,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import tomllib
 from collections.abc import Iterator
 from dataclasses import dataclass, field
@@ -190,7 +191,7 @@ def project_file(index: Path, name: str) -> Path:
 def save_project(index: Path, project: Project) -> None:
     path = project_file(index, project.info.name)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(dump_project(project), encoding="utf-8", newline="\n")
+    _write(path, dump_project(project))
 
 
 def load_projects(index: Path) -> list[Project]:
@@ -218,17 +219,31 @@ def load_stream_config(path: Path) -> StreamConfig:
 
 
 def save_stream_config(repo: Path, config: StreamConfig) -> None:
-    (repo / "stream.toml").write_text(dump_stream_config(config), encoding="utf-8", newline="\n")
+    _write(repo / "stream.toml", dump_stream_config(config))
 
 
 def _write(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.tmp")
+    fd, name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    tmp = Path(name)
     try:
+        if path.exists():
+            os.fchmod(fd, path.stat().st_mode & 0o777)
         tmp.write_text(text, encoding="utf-8", newline="\n")
+        os.fsync(fd)
         os.replace(tmp, path)
+        _sync_directory(path.parent)
     finally:
+        os.close(fd)
         tmp.unlink(missing_ok=True)
+
+
+def _sync_directory(path: Path) -> None:
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
 
 
 def load_stream_rows(index: Path) -> list[StreamRow]:
@@ -271,19 +286,21 @@ def upsert_stream_row(index: Path, row: StreamRow) -> None:
     save_stream_rows(index, rows)
 
 
-def _git_env() -> dict[str, str]:
+def _git_env(index: Path | None = None) -> dict[str, str]:
     env = os.environ.copy()
     env["GIT_TERMINAL_PROMPT"] = "0"
+    if index is not None:
+        env["GIT_INDEX_FILE"] = os.fspath(index)
     return env
 
 
-def git(cwd: Path, *args: str) -> str:
+def git(cwd: Path, *args: str, index: Path | None = None) -> str:
     proc = subprocess.run(
         ["git", "-C", os.fspath(cwd), *args],
         capture_output=True,
         text=True,
         encoding="utf-8",
-        env=_git_env(),
+        env=_git_env(index),
         check=False,
     )
     if proc.returncode != 0:
@@ -383,7 +400,7 @@ def register_home(index: Path) -> None:
     if resolved in seen:
         return
     current.append(resolved)
-    path.write_text("".join(f"{line}\n" for line in current), encoding="utf-8", newline="\n")
+    _write(path, "".join(f"{line}\n" for line in current))
 
 
 def _inside(child: Path, parent: Path) -> bool:
@@ -519,12 +536,110 @@ def stream_locks(repos: list[Path]) -> Iterator[None]:
             handle.close()
 
 
-def commit_repo(repo: Path, message: str) -> bool:
-    git(repo, "add", "-A")
-    if git(repo, "status", "--porcelain").strip() == "":
-        return False
-    git(repo, "commit", "-m", message)
-    return True
+_TEXT_SUFFIXES = frozenset({
+    ".md", ".rst", ".txt", ".py", ".sh", ".js", ".mjs", ".cjs", ".ts", ".tsx",
+    ".css", ".html", ".toml", ".yaml", ".yml",
+})
+
+
+def _commit_paths(repo: Path, head: str, paths: tuple[str, ...] | None) -> list[str]:
+    templates = templates_dir() / "stream"
+    seeded = {path.relative_to(templates).as_posix() for path in templates.rglob("*") if path.is_file()}
+    records = seeded | {"stream.toml"}
+    tracked = set(git(repo, "ls-tree", "-r", "--name-only", "-z", head).split("\0")) - {""} if head else set()
+
+    def allowed(name: str) -> bool:
+        return (
+            Path(name).suffix in _TEXT_SUFFIXES
+            or name in records
+            or Path(name).name in {"README", ".gitkeep", ".gitignore"}
+        )
+
+    approved = set(paths or ())
+    selected = records | {name for name in tracked if allowed(name)} | approved
+    result: list[str] = []
+    for name in sorted(selected):
+        relative = Path(name)
+        full = repo / relative
+        if (
+            relative.is_absolute() or not relative.parts or ".." in relative.parts
+            or ".git" in relative.parts or not allowed(name)
+            or not full.resolve().is_relative_to(repo.resolve()) or full.is_symlink()
+            or (full.exists() and not full.is_file())
+        ):
+            raise StreamsError(f"not an approved text file: {name}")
+        if full.is_file():
+            data = full.read_bytes()
+            try:
+                data.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                raise StreamsError(f"refusing binary candidate: {name}") from exc
+            if b"\0" in data:
+                raise StreamsError(f"refusing binary candidate: {name}")
+        if full.exists() or name in tracked:
+            result.append(name)
+        elif name in approved:
+            raise StreamsError(f"no approved file: {name}")
+    return result
+
+
+def commit_repo(repo: Path, message: str, *, paths: tuple[str, ...] | None = None) -> bool:
+    index = Path(git(repo, "rev-parse", "--path-format=absolute", "--git-path", "index").strip())
+    lock = index.with_name(index.name + ".lock")
+    try:
+        fd = os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError as exc:
+        raise StreamsError(f"Git index is locked: {index}") from exc
+    try:
+        try:
+            head = git(repo, "rev-parse", "--verify", "--quiet", "HEAD").strip()
+        except StreamsError:
+            git(repo, "symbolic-ref", "--quiet", "HEAD")
+            head = ""
+        selected = _commit_paths(repo, head, paths)
+        if not selected:
+            return False
+        with tempfile.TemporaryDirectory(prefix="pi-streams-commit-", dir=index.parent) as directory:
+            snapshot = Path(directory) / "snapshot"
+            merged = Path(directory) / "merged"
+            git(repo, "read-tree", head or "--empty", index=snapshot)
+            git(repo, "--literal-pathspecs", "add", "--all", "--", *selected, index=snapshot)
+            changed = git(repo, "diff", "--cached", "--no-renames", "--name-only", "-z", index=snapshot).split("\0")
+            changed = [name for name in changed if name]
+            if not changed:
+                return False
+            staged = set(git(repo, "diff", "--cached", "--no-renames", "--name-only", "-z").split("\0"))
+            overlap = staged.intersection(changed)
+            if overlap:
+                raise StreamsError("refusing overlapping staged edits: " + ", ".join(sorted(overlap)))
+            stats = git(repo, "diff", "--cached", "--no-renames", "--numstat", "-z", index=snapshot)
+            if any(record.startswith("-\t-\t") for record in stats.split("\0")):
+                raise StreamsError("refusing binary staged candidate")
+            tree = git(repo, "write-tree", index=snapshot).strip()
+            if index.exists():
+                shutil.copyfile(index, merged)
+                os.fchmod(fd, index.stat().st_mode & 0o777)
+            else:
+                git(repo, "read-tree", "--empty", index=merged)
+            git(repo, "--literal-pathspecs", "restore", "--staged", f"--source={tree}", "--", *changed, index=merged)
+            with os.fdopen(fd, "wb") as handle:
+                fd = -1
+                handle.write(merged.read_bytes())
+                handle.flush()
+                os.fsync(handle.fileno())
+            parents = ("-p", head) if head else ()
+            commit = git(repo, "commit-tree", tree, *parents, "-m", message).strip()
+            git(repo, "update-ref", "-m", message, "HEAD", commit, head or "0" * len(commit))
+            try:
+                os.replace(lock, index)
+                _sync_directory(index.parent)
+            except OSError as exc:
+                raise StreamsError(f"commit {commit} exists but index publication is unconfirmed: {exc}") from exc
+        return True
+    finally:
+        if fd != -1:
+            os.close(fd)
+        lock.unlink(missing_ok=True)
 
 
 def push_repo(repo: Path, remote: str) -> None:
@@ -547,10 +662,10 @@ def _ensure_index_files(index: Path) -> None:
     (index / "projects").mkdir(parents=True, exist_ok=True)
     streams = index / "streams.tsv"
     if not streams.exists():
-        streams.write_text("id\tpath\tproject\n", encoding="utf-8", newline="\n")
+        _write(streams, "id\tpath\tproject\n")
     alerts = index / "ALERTS"
     if not alerts.exists():
-        alerts.write_bytes(b"")
+        _write(alerts, "")
 
 
 def init_project(
@@ -696,7 +811,7 @@ def create_stream(index: Path, project: Project, stream_id: str) -> Path:
             StreamConfig(project=project.info.name, pi_stack_revision=pi_stack_revision()),
         )
         seed_context(dest, project.repos)
-        upsert_stream_row(index, StreamRow(id=stream_id, path=str(dest), project=project.info.name))
+    upsert_stream_row(index, StreamRow(id=stream_id, path=str(dest), project=project.info.name))
     return dest
 
 
@@ -745,5 +860,5 @@ def upgrade_stream(repo: Path, stream_id: str) -> bool:
     text = dump_stream_config(config)
     path = repo / "stream.toml"
     if not path.is_file() or path.read_text(encoding="utf-8") != text:
-        path.write_text(text, encoding="utf-8", newline="\n")
+        save_stream_config(repo, config)
     return commit_repo(repo, f"pi-streams upgrade {stream_id}")

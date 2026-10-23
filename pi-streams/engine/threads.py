@@ -7,7 +7,7 @@ from pathlib import Path
 
 from engine import StreamsError, clock, repo_root
 from engine import piweb
-from engine.project import Project, Repo, git, require_stream, stream_rows
+from engine.project import Project, Repo, _write, git, require_stream, stream_rows
 
 _ROLE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
@@ -121,7 +121,7 @@ def save_threads(path: Path, rows: list[Thread]) -> None:
             if "\t" in field or "\n" in field or "\r" in field:
                 raise StreamsError("a thread field contains a tab or newline")
         lines.append("\t".join(fields))
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
+    _write(path, "\n".join(lines) + "\n")
 
 
 def is_ratified(text: str) -> bool:
