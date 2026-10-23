@@ -9,7 +9,7 @@ tracking_issue: https://github.com/alienczf/pi-stack/issues/38
 box_mirror: /workspace/harness-program
 host_docs_worktree: /home/alphalab/Projects/worktrees/pi-stack-harness-program
 host_input_copy: /home/alphalab/Projects/pi-stack/streams/pi-streams-harness/context/harness-program
-updated: 2026-10-23T14:52+08:00 (driver run: T1 streaming 66.0% ctx, S1 commit 4 2696a3f (templates, 183 tests pass), next full-SID handovers then disposable check; no compact while streaming; T2 idle 31.9% blocked on Prime login, feat/prime-cli 6bc1242 unchanged; T3-T5 done; comparison already sent; no new ZF calls)
+updated: 2026-10-23T15:06+08:00 (Z20-Z23 logged; steers recorded on T3/T4/T5 but every inference call fails with fetch failed; options-01 has no outbound internet since ~14:50 (curl to chatgpt.com/github.com times out). Last good turns - T1 337a07cf 14:49:44, T3 e8fc7a93 12:27:44, T4 d92ba0f9 12:32:59, T5 2142b033 13:06:50. Once the network is back, send a one-line resume to T3, T4 and T1; T5 waits for its go)
 tracks:
   - id: 1
     name: pi-streams must-fix catalog
@@ -57,29 +57,29 @@ tracks:
     session: 01a16658-09d0-7fcc-9815-7ac75f2cbb29
     host: options-01
     model: openai-codex/gpt-6.1-sol@xhigh
-    phase: done (TRACK 3 STATUS done 12:27; 31 passed driver gate 12:55: 8 headings, no placeholder prompts, no retired names)
+    phase: "A-over-Prime rewrite + Z21 naming cleanup (steer-4 recorded 14:58:50, not yet worked - host network outage). Comparison v1 superseded (Z20)."
     milestones_sent: [track-3-designs-ready 2026-10-23T11:01+08:00]
     started: 2026-10-23T09:21+08:00
     expected_done: 2026-10-23T13:30+08:00
     artifact: docs/harness-program/31-design-a-detailed.md (after 30-research-designs.md)
     inputs: [docs/harness-program/31-x-corpus-seed.md]
     brief: docs/harness-program/briefs/track-3.md
-    steers: [docs/harness-program/briefs/track-3-steer-1.md, docs/harness-program/briefs/track-3-steer-2.md, docs/harness-program/briefs/track-3-steer-3.md]
+    steers: [docs/harness-program/briefs/track-3-steer-1.md, docs/harness-program/briefs/track-3-steer-2.md, docs/harness-program/briefs/track-3-steer-3.md, docs/harness-program/briefs/track-3-steer-4.md]
     brief_sha256_verified: true
     steer_note: steer-1 consumed (09:53). steer-2 (Z12 five inputs, coverage table, three proposals, blocking decisions) consumed 10:11 (sha match, streaming, pending 0).
-    next_action: Z19 - C dropped, G24 withdrawn. Wait for TRACK 3 STATUS done on 31-design-a-detailed.md (8 headings, Z15 layout); compact via commands/run if > 60% at idle. When both 31 and 41 are done, Grok Bot writes 50-a-vs-b.md and sends it to ZF (design unlocked, Z17).
+    next_action: "Z20+Z21. Wait for 'TRACK 3 STATUS: done (A over Prime)'. Gate - first line 'Runtime: Prime (Z20)', 8 headings, New concepts table near the top (fewest rows), hooks name Prime extension points, native Prime changes listed, no retired names or H/P codes. When 31 and 42 both pass, send track 5 'GO track 5 steer 1'."
   - id: 4
     name: proposal B over prime (feasibility spike)
     session: 01a166e0-220d-7dbc-8b1c-719e872dad2d
     host: options-01
     model: openai-codex/gpt-6.1-sol@xhigh
-    phase: done (TRACK 4 STATUS done 12:32; 40 verdict partly; 41 passed driver gate 12:55)
+    phase: "42 B-over-stock-Prime (Z22); 41 reference only (G29, Z21 rename stopped). steer-2 recorded 14:58:51, steer-3 15:00:09, steer-4 15:02:49; not yet worked (host network outage)"
     pushed: spike/b-over-prime 8811a7a (2026-10-23 12:53, driver)
     started: 2026-10-23T11:51+08:00
     expected_done: 2026-10-23T15:30+08:00
-    artifact: docs/harness-program/40-b-over-prime.md, then docs/harness-program/41-design-b-prime-detailed.md
+    artifact: docs/harness-program/40-b-over-prime.md, docs/harness-program/41-design-b-prime-detailed.md (reference only), docs/harness-program/42-design-b-prime-unchanged.md
     brief: docs/harness-program/briefs/track-4.md
-    steers: [docs/harness-program/briefs/track-4-steer-1.md]
+    steers: [docs/harness-program/briefs/track-4-steer-1.md, docs/harness-program/briefs/track-4-steer-2.md, docs/harness-program/briefs/track-4-steer-3.md, docs/harness-program/briefs/track-4-steer-4.md]
     brief_sha256_verified: true (195ea3ad, byte match as last user message)
     code_branch: spike/b-over-prime (off origin/main 3acf0f0; worktree created by the session, confirmed 11:52)
     code_worktree: /home/alphalab/Projects/worktrees/pi-stack-b-over-prime
@@ -92,14 +92,28 @@ tracks:
     session: 01a1671a-01d1-7f51-b240-533efc527a61
     host: options-01
     model: openai-codex/gpt-6.1-sol@xhigh
-    phase: done (TRACK 5 STATUS done ~13:20; 50 passed driver gate 13:25)
+    phase: "standby for 51 merged + 50 v2 (standby 14:59:16, steer-1 recorded 15:02:49; do not start until driver go)"
     started: 2026-10-23T12:53+08:00
     expected_done: 2026-10-23T14:00+08:00
     artifact: docs/harness-program/50-a-vs-b.md
     brief: docs/harness-program/briefs/track-5.md (sha256 e546f734)
+    steers: [docs/harness-program/briefs/track-5-standby.md, docs/harness-program/briefs/track-5-steer-1.md]
     gate: TRACK 5 STATUS done; 50 has core difference, per-component side-by-side, pros/cons, effort and risk, corpus coverage, open questions without defaults.
-    next_action: When done and gate passes, collect, push docs branch, send ZF the A vs B comparison (core difference paragraph, side-by-side table, pros/cons table, open questions, links to 31, 41, 50), then set comparison_sent below. Never resend.
-comparison_sent: 2026-10-23T13:25+08:00 (handed to main chat via WakeParent; never resend)
+    next_action: "Z23/G29. When 31 and 42 pass the gate, send 'GO track 5 steer 1' (briefs/track-5-steer-1.md, sha 17846bc9, recorded 15:02:49). Gate - 51 first line, 8 headings, New concepts table (target zero), Not handled section; 50 v2 covers losses vs 31 and 42, uncovered F-numbers, real vs artificial, open questions with no defaults."
+comparison_sent: 2026-10-23T13:25+08:00 (v1, handed to main chat via WakeParent; never resend; superseded by Z20)
+comparison_v1_superseded: true
+a_over_prime_done: false
+naming_cleanup_done:
+  '31': false
+  '41': "dropped - G29, 41 reference only"
+b_unchanged_done: false
+merged_done: false
+comparison_v2_sent: false
+reference_only: [docs/harness-program/41-design-b-prime-detailed.md]
+env_failure:
+  open: 2026-10-23T14:50+08:00
+  kind: "options-01 outbound network outage - every inference call returns fetch failed"
+  last_good_turn: {T1: 337a07cf, T2: 7705e817, T3: e8fc7a93, T4: d92ba0f9, T5: 2142b033}
 ---
 
 # Harness program status
@@ -108,8 +122,10 @@ comparison_sent: 2026-10-23T13:25+08:00 (handed to main chat via WakeParent; nev
 |---|---|---|---|---|
 | 1 fix catalog | `01a16655` | implementing, S1 commit 4 `2696a3f` (66.0% ctx) | `10-pi-streams-fix-catalog.md` + `feat/streams-must-fix` | S1-S6 done, then driver merges |
 | 2 prime CLI | `01a16656` | blocked on Prime codex login; non-inference gaps in progress | `20-prime-cli-design.md` + `feat/prime-cli` (`6bc1242` pushed) | ZF logs Prime in, then inference verification |
-| 3 research | `01a16658` | done (31 gate passed 12:55) | `30-research-designs.md`, `31-design-a-detailed.md` | none; feeds track 5 |
-| 4 B over prime | `01a166e0` | done (41 gate passed 12:55) | `40-b-over-prime.md`, `41-design-b-prime-detailed.md` + `spike/b-over-prime` (`8811a7a` pushed) | none; feeds track 5 |
-| 5 A vs B | `01a1671a` | done (50 gate passed 13:25) | `50-a-vs-b.md` | A vs B comparison sent 13:25; never resend |
+| 3 research | `01a16658` | A-over-Prime rewrite + naming cleanup (Z20, Z21) | `31-design-a-detailed.md` | done line, then gate; feeds 51 |
+| 4 B over prime | `01a166e0` | 42 B over stock Prime (Z22); 41 reference only | `40`, `41` (reference), `42-design-b-prime-unchanged.md` | done line, then gate; feeds 51 |
+| 5 merged + v2 | `01a1671a` | standby (Z23) | `51-design-merged.md`, `50-a-vs-b.md` v2 | go after 31 and 42 pass |
+
+**Open env failure (14:50):** options-01 has no outbound internet, so every inference call returns `fetch failed`. Steers are recorded but not yet worked.
 
 The canonical copy is on GitHub. The box mirror is `/workspace/harness-program/STATUS.md`.
