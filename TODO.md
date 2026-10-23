@@ -1,5 +1,21 @@
 # Track 2 progress
 
+## Bounded review fixes
+
+1. [ ] Reproduce it yourself on the matching surface via the control skill. Offline CLI/socket fixtures only; control-cli is unavailable and the real daemon is prohibited.
+2. [ ] Binary-search the cause. Confirm each reviewed boundary with a failing executable regression; no broader source survey.
+3. [ ] Plan the fix. Durable session identity, local readback-error normalization, inference-only runnable checks, and leading backend selection. Inline ownership replaces forbidden subagents.
+4. [ ] Verify on the same surface. Run each original regression and the offline suites.
+5. [ ] Stage the commits so the failing repro lands before the fix in git history. Record failing-then-passing output and commit each tested fix as a local unit.
+6. [x] Run Opening a PR. Skipped under the explicit no-push/no-PR handoff.
+
+Throughput checkpoint. Establish clean c323b30 first. Reproduce and fix one defect at a time. This worker owns this worktree; the parent owns artifact 20 and live checks. Four independently tested commits avoid overlapping code ownership.
+
+- [x] P1. Default checks admit no runnable input; inference-only queue checks clear inside their pause scope on ordinary failure. The two disconnect-aware CLI regressions failed before the fix, exposing three runnable inputs, then passed. This supersedes the historical control-only safety claim below.
+- [ ] P2. Spawn readback transport errors preserve the known created session.
+- [ ] P2. Compatibility IDs use durable sessionId with no shim registry or binding-event dependency.
+- [ ] P2. Dispatcher consumes only a leading backend selection and forwards backend options verbatim.
+
 ## Feature playbook
 
 1. [x] `how` over the affected subsystem.

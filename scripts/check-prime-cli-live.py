@@ -111,22 +111,29 @@ class Check:
             if selection.get("error") != "upstream_error":
                 raise CliError("model_check_failed", "Exact native model selection failed unexpectedly")
             self.gaps.append("Native set_model rejected the exact requested selector. No substitute was selected.")
-        with PrimeClient(self.socket, self.timeout) as wire:
-            pause = wire.request("acquire_session_input_pause", activeSessionId=sid, leaseKey=str(uuid.uuid4()))
-            for mode in ((), ("--steer",), ("--follow-up",)):
-                self.call("prompt", sid, *mode, text="Owned queue check. Do not execute.")
-            queued = self.call("status", sid)["session"]
-            if queued["pendingMessageCount"] != 3:
-                raise CliError("queue_mismatch", "The paused owned session did not retain three inputs")
+        if inference:
+            with PrimeClient(self.socket, self.timeout) as wire:
+                pause = wire.request("acquire_session_input_pause", activeSessionId=sid, leaseKey=str(uuid.uuid4()))
+                try:
+                    for mode in ((), ("--steer",), ("--follow-up",)):
+                        self.call("prompt", sid, *mode, text="Owned inference-enabled queue check.")
+                    queued = self.call("status", sid)["session"]
+                    if queued["pendingMessageCount"] != 3:
+                        raise CliError("queue_mismatch", "The paused owned session did not retain three inputs")
+                    self.call("queue-clear", sid)
+                    self.call("prompt", sid, "--steer", text="Owned inference-enabled abort check.")
+                    self.call("abort", sid)
+                    if self.call("status", sid)["session"]["pendingMessageCount"] != 0:
+                        raise CliError("abort_mismatch", "Abort did not clear the owned queue")
+                finally:
+                    wire.request("abort_and_clear_queue", activeSessionId=sid)
+                wire.request("release_session_input_pause", activeSessionId=sid, pauseId=pause["pauseId"])
+        else:
             self.call("queue-clear", sid)
-            self.call("prompt", sid, "--steer", text="Owned abort check. Do not execute.")
             self.call("abort", sid)
-            if self.call("status", sid)["session"]["pendingMessageCount"] != 0:
-                raise CliError("abort_mismatch", "Abort did not clear the owned queue")
-            stopped = self.call("stop", sid)["result"]
-            if stopped.get("runtimeClosed") is not False:
-                raise CliError("stop_gap_hidden", "Stop must disclose the resident-retaining shim")
-            wire.request("release_session_input_pause", activeSessionId=sid, pauseId=pause["pauseId"])
+        stopped = self.call("stop", sid)["result"]
+        if stopped.get("runtimeClosed") is not False:
+            raise CliError("stop_gap_hidden", "Stop must disclose the resident-retaining shim")
         self.call("thinking-level", sid, THINKING)
         effective = self.call("status", sid)["session"]["thinkingLevel"]
         self.evidence.append({"thinkingSetterAccepted": True, "effectiveThinking": effective})
