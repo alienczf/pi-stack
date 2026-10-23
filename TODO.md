@@ -4,9 +4,9 @@
 
 - [x] Phase A: Frame. Continue from pushed bccf159. No Prime login, credential access/import/copy, provider switch, or model inference is authorized in this follow-up.
 - [x] Phase B: Design the workflow. Read both completed investigations. Public same-session queue resumption is feasible. Correlated answers, resident-root disposal without archive, and rich cross-session replay remain unavailable.
-- [x] Phase C: Run the loop. Commit failing regressions before each feasible fix. All 69 Prime fixture tests pass. No push, auth, inference, real daemon, or SSH call by this writer.
-- [ ] Phase D: Keep the audit trail. Code decisions and adjacent reference are updated. Parent owns the uncommitted artifact 20 update for Grok Bot.
-- [ ] Phase E: Verify and hand back. Worker passed 69 Prime tests, 105 stream tests, the installer fixture, shell/Python syntax, and whitespace checks. Parent owns real non-inference checks and independent acceptance review.
+- [x] Phase C: Run the loop. Commit failing regressions before each feasible fix. Parent's final suite passes 71 Prime fixture tests. The implementation worker made no push, auth, inference, real daemon, or SSH call.
+- [x] Phase D: Keep the audit trail. Code decisions and adjacent reference are updated. Artifact 20 contains the operator login, post-login runner, exact off-host command, native findings, and remaining gaps. Its edits remain uncommitted for Grok Bot.
+- [x] Phase E: Verify and hand back. Parent reviewed the worker diff, reran 71 Prime tests, 105 stream tests, installer and syntax checks, and verified the real non-inference path. Provider-auth and unsupported native parity gates remain blocked.
 
 Throughput checkpoint for G20:
 
@@ -26,6 +26,16 @@ G20 worker result at code revision `b7c326d`:
 - Verification checks complete metadata and effective xhigh before input. Native model/usage failures remain typed and stop without provider switches or uncertain retries. Cleanup archives only known created IDs, shuts down only the owned dedicated process/socket, restores its saved nonsecret settings, and removes only its owned metadata file.
 - All runtime tests use fake executables and owned socket fixtures. No successful authentication, inference, active-turn steering, compaction, off-host access, exact stop, or rich replay is claimed. The verifier always reports `parityComplete:false`.
 - Manual cleanup replaced unavailable control-cli/deslop and forbidden child review. No new line comments, suppressions, workflow service, HTTP gateway, private close markers, or worker-protocol calls were introduced.
+
+## G20 parent acceptance
+
+Code revision `84e551d` adds the two real-boundary follow-ups. Commit `1f84327` reproduces Prime's thin connection-state model summary; `ed3e118` checks full metadata through public get_model_catalog. Commit `9f99f62` requires future inference verification to exercise queue-resume; `84e551d` does so while input delivery is paused. Neither parent nor worker executed inference under G20.
+
+The fresh credential-free root `/tmp/prime-cli-check-vqui570y` leaves the original ZF login root untouched. Native full metadata matches the sourced definition and effective xhigh is retained. Native set_model now returns typed model_provider_unauthenticated before any runnable input. No substitute, login, credential read/import, or retry followed.
+
+The separate empty-session smoke passed queue-resume's exact empty-queue error, both pre-mutation 501 guards, empty clear and abort, xhigh setter, empty messages, the stop shim, and archive. All four G20 sessions are archived. No owned live sessions, daemon, socket, lock, or temporary model registration remain. Native nonsecret setter changes were restored after shutdown.
+
+Evidence remains outside git at `/tmp/prime-cli-check-vqui570y/g20-native-control-catalog-fix.json`, `g20-empty-controls.json`, and `/tmp/g20-parent-*.log`. The model-backed runner and off-host command are ready but deliberately unexecuted. Full track status remains BLOCKED on operator authentication and missing native APIs. Grok Bot owns pushing the local commits.
 
 ## Bounded review fixes
 
@@ -79,7 +89,7 @@ Final review was manual because this assignment prohibits subagents and the inst
 - [x] Manual deslop and complete offline verification. 40 Prime tests and 18 existing pi-web-cli tests passed. Shell syntax and diff whitespace checks passed. Removed dead/duplicate paths. Installed control-cli/deslop skills are unavailable; neither ran.
 - [x] Return commit IDs and evidence in the managed report. Parent owns actual daemon/model verification.
 
-## Current limits
+## Initial delivery limits
 
 Structured answers return 501. Stop does not dispose the resident runtime. Queue previews are not mechanically replay-safe. Archive holds a native input pause but does not claim atomicity against every producer. Unknown-model provider templates can clamp xhigh to off; native set_model can reject an unregistered ID. Status uses three non-atomic reads. No actual Prime authentication, inference, active-run steering, compaction, or off-host connection was tested by this worker.
 
@@ -98,7 +108,7 @@ Structured answers return 501. Stop does not dispose the resident runtime. Queue
 - [x] Archive every owned session and stop both owned daemons through their dedicated sockets. The final check reported zero retained sessions and the final daemon socket was removed.
 - [x] Record the final blocked result in artifact 20. Keep this session's design edits uncommitted and code commits local. No pushes or STATUS.md edits.
 
-## Final result
+## Initial delivery result at bccf159
 
 BLOCKED, not full parity. The exact native inference error was `No API key found for openai-codex.` The stable catalog also clamped requested xhigh to off and rejected native model selection for gpt-6.1-sol. Structured answers, exact runtime-disposing stop, safe internal queue replay, atomic archive, and real off-host connectivity remain documented gaps. No successful inference, active-run steering delivery, or compaction is claimed.
 
