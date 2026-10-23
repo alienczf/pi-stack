@@ -11,7 +11,7 @@ import tempfile
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 PROTOCOL = {"name": "prime-agent.daemon", "version": 7}
 LEVELS = ("off", "minimal", "low", "medium", "high", "xhigh", "max")
@@ -51,12 +51,50 @@ def array_field(data: dict, name: str) -> list:
     return value
 
 
-def queue_lanes(value: Any) -> tuple[list, list]:
-    queue = object_data(value)
-    steering, follow_up = array_field(queue, "steering"), array_field(queue, "followUp")
-    if any(not isinstance(text, str) for text in [*steering, *follow_up]):
-        raise CliError("invalid_response", "Prime queue previews must be strings")
-    return steering, follow_up
+@dataclass(frozen=True)
+class QueuePreview:
+    steering: tuple[str, ...]
+    follow_up: tuple[str, ...]
+    representation: Literal["previews"] = "previews"
+    replay_safe: Literal[False] = False
+
+    @classmethod
+    def parse(cls, value: Any) -> QueuePreview:
+        queue = object_data(value)
+        steering, follow_up = array_field(queue, "steering"), array_field(queue, "followUp")
+        if any(not isinstance(text, str) for text in [*steering, *follow_up]):
+            raise CliError("invalid_response", "Prime queue previews must be strings")
+        return cls(tuple(steering), tuple(follow_up))
+
+    def messages(self) -> list[dict]:
+        return [{"kind": kind, "text": text} for kind, lane in (("steer", self.steering), ("followUp", self.follow_up)) for text in lane]
+
+
+@dataclass(frozen=True)
+class ObservedCapabilities:
+    interactive_answers: Literal[False] = False
+    runtime_disposal: Literal[False] = False
+    internal_queue_replay: Literal[False] = False
+    same_session_queue_resume: Literal[True] = True
+
+    def projection(self) -> dict:
+        return {"interactiveAnswers": self.interactive_answers, "runtimeDisposal": self.runtime_disposal,
+                "internalQueueReplay": self.internal_queue_replay, "sameSessionQueueResume": self.same_session_queue_resume}
+
+
+@dataclass(frozen=True)
+class SessionIdentity:
+    session_id: str
+    active_session_id: str | None
+
+    @classmethod
+    def parse(cls, data: dict, *, require_active: bool = False) -> SessionIdentity:
+        sid, active = data.get("sessionId"), data.get("activeSessionId")
+        if not isinstance(sid, str) or not sid:
+            raise CliError("invalid_response", "Prime response lacks a durable sessionId")
+        if require_active and (not isinstance(active, str) or not active):
+            raise CliError("invalid_response", "Prime connection state has no active session id")
+        return cls(sid, active if isinstance(active, str) and active else None)
 
 
 def split_model(selector: str) -> tuple[str, str]:
@@ -154,26 +192,17 @@ class PrimeClient:
 
     def session_state(self, sid: str) -> dict:
         state = object_data(self.request("get_connection_state", activeSessionId=sid))
-        active = state.get("activeSessionId")
-        if not isinstance(active, str) or not active:
-            raise CliError("invalid_response", "Prime connection state has no active session id")
-        if durable_session_id(state) != sid:
+        identity = SessionIdentity.parse(state, require_active=True)
+        if identity.session_id != sid:
             raise CliError("wrong_session", "Prime returned state for a different durable session")
         if type(state.get("isStreaming")) is not bool:
             raise CliError("invalid_response", "Prime connection state has no streaming flag")
         return state
 
 
-def durable_session_id(data: dict) -> str:
-    sid = data.get("sessionId")
-    if not isinstance(sid, str) or not sid:
-        raise CliError("invalid_response", "Prime response lacks a durable sessionId")
-    return sid
-
-
 def session_row(row: Any) -> dict:
     row = object_data(row)
-    sid = durable_session_id(row)
+    sid = SessionIdentity.parse(row).session_id
     if not isinstance(row.get("cwd"), str):
         raise CliError("invalid_response", "Prime session row lacks cwd")
     state = row.get("state")
@@ -222,7 +251,7 @@ def spawn(client: PrimeClient, cwd: str) -> dict:
 def status(client: PrimeClient, sid: str) -> dict:
     state = client.session_state(sid)
     active = state["activeSessionId"]
-    steering, follow_up = queue_lanes(client.request("get_queue", activeSessionId=active))
+    queue = QueuePreview.parse(client.request("get_queue", activeSessionId=active))
     stats = object_data(client.request("get_session_stats", activeSessionId=active))
     cost = stats.get("cost")
     if isinstance(cost, bool) or not isinstance(cost, (int, float)) or not math.isfinite(cost):
@@ -230,10 +259,10 @@ def status(client: PrimeClient, sid: str) -> dict:
     usage = state.get("contextUsage")
     if usage is not None and not isinstance(usage, dict):
         raise CliError("invalid_response", "Prime context usage is neither an object nor null")
-    queued = [{"kind": kind, "text": text} for kind, lane in (("steer", steering), ("followUp", follow_up)) for text in lane]
+    queued = queue.messages()
     session = {**state, "id": state["sessionId"], "pendingMessageCount": len(queued), "queuedMessages": queued,
-               "queueRepresentation": "previews", "queueReplaySafe": False,
-               "pendingAsk": None, "capabilities": {"interactiveAnswers": False},
+               "queueRepresentation": queue.representation, "queueReplaySafe": queue.replay_safe,
+               "pendingAsk": None, "capabilities": ObservedCapabilities().projection(),
                "contextUsage": usage, "cost": cost}
     return {"ok": True, "status": 200, "session": session}
 
@@ -242,6 +271,7 @@ SIMPLE_VERBS = {
     "stop": ("abort_and_clear_queue", ()),
     "abort": ("abort_and_clear_queue", ()),
     "queue-clear": ("clear_queue", ()),
+    "queue-resume": ("resume_queue", ()),
     "archive": ("kill", ()),
     "messages": ("get_messages", ()),
     "model": ("set_model", ("model",)),
@@ -264,6 +294,10 @@ def parser() -> Parser:
     for name in ("status", "commands", *SIMPLE_VERBS):
         verb = sub.add_parser(name)
         verb.add_argument("sid")
+        if name == "stop":
+            verb.add_argument("--require-runtime-close", action="store_true")
+        elif name == "queue-clear":
+            verb.add_argument("--require-replay-safe", action="store_true")
         if name in SIMPLE_VERBS:
             for positional in SIMPLE_VERBS[name][1]:
                 verb.add_argument(positional, **({"choices": LEVELS} if positional == "level" else {}))
@@ -306,12 +340,12 @@ def execute(client: PrimeClient, args: argparse.Namespace) -> dict:
         summary = object_data(client.request("get_state", activeSessionId=active))
         if summary.get("activeSessionId") != active or summary.get("sessionId") != args.sid:
             raise CliError("wrong_session", "Prime returned a different session during archive preflight")
-        steering, follow_up = queue_lanes(client.request("get_queue", activeSessionId=active))
+        queue = QueuePreview.parse(client.request("get_queue", activeSessionId=active))
         flags = [state.get(name) for name in ("isStreaming", "isCompacting", "isBashRunning")]
         flags.append(summary.get("hasRunningSubagents"))
         if any(type(flag) is not bool for flag in flags):
             raise CliError("invalid_response", "Prime archive preflight lacks activity flags")
-        if any(flags) or steering or follow_up:
+        if any(flags) or queue.steering or queue.follow_up:
             raise CliError("session_busy", "Cannot archive a session with active or queued work", 409)
         fields["activeSessionId"] = active
     requested = None
@@ -338,6 +372,12 @@ def main(argv: list[str] | None = None) -> int:
         args = parser().parse_args(argv)
         if args.cmd == "answer":
             raise CliError("unsupported", "Prime has no correlated interactive-answer API", 501)
+        if args.cmd == "stop" and args.require_runtime_close:
+            raise CliError("unsupported", "Prime cannot dispose an existing resident root without archival", 501,
+                           capability="runtimeDisposal")
+        if args.cmd == "queue-clear" and args.require_replay_safe:
+            raise CliError("unsupported", "Prime cannot export replay-safe internal queue items", 501,
+                           capability="internalQueueReplay")
         if args.cmd == "model":
             split_model(args.model)
         if args.cmd == "prompt":

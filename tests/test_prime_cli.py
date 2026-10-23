@@ -218,7 +218,7 @@ class PrimeCliTests(unittest.TestCase):
         state = self.state(sessionActions={"queuedCount": 99})
         with Fixture([state, {"steering": ["one", "two"], "followUp": ["three"]}, {"cost": 1.25}]) as fixture:
             proc = run_cli("status", "durable-1", fixture=fixture)
-        self.result(proc, {"ok": True, "status": 200, "session": {**state, "id": "durable-1", "pendingMessageCount": 3, "queuedMessages": [{"kind": "steer", "text": "one"}, {"kind": "steer", "text": "two"}, {"kind": "followUp", "text": "three"}], "queueRepresentation": "previews", "queueReplaySafe": False, "pendingAsk": None, "capabilities": {"interactiveAnswers": False}, "contextUsage": None, "cost": 1.25}})
+        self.result(proc, {"ok": True, "status": 200, "session": {**state, "id": "durable-1", "pendingMessageCount": 3, "queuedMessages": [{"kind": "steer", "text": "one"}, {"kind": "steer", "text": "two"}, {"kind": "followUp", "text": "three"}], "queueRepresentation": "previews", "queueReplaySafe": False, "pendingAsk": None, "capabilities": {"interactiveAnswers": False, "runtimeDisposal": False, "internalQueueReplay": False, "sameSessionQueueResume": True}, "contextUsage": None, "cost": 1.25}})
         self.commands(fixture, [{"type": "get_connection_state", "activeSessionId": "durable-1"},
                                 {"type": "get_queue", "activeSessionId": "s1"}, {"type": "get_session_stats", "activeSessionId": "s1"}])
 
