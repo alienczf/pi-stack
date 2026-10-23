@@ -1,30 +1,35 @@
 #!/usr/bin/env python3
 """Select a backend without changing the child CLI's arguments or streams."""
-import argparse
 import json
 import os
 from pathlib import Path
 import sys
 
 
-class Parser(argparse.ArgumentParser):
-    def error(self, message):
-        print(json.dumps({"ok": False, "status": 400, "error": "usage", "message": message}))
-        raise SystemExit(1)
+def usage_error(message):
+    print(json.dumps({"ok": False, "status": 400, "error": "usage", "message": message}))
+    return 1
 
 
 def main():
-    parser = Parser(description="Select pi or prime. Pi remains the default.")
-    parser.add_argument("--backend", choices=("pi", "prime"), default=os.environ.get("PI_STACK_BACKEND", "pi"))
-    parser.add_argument("arguments", nargs=argparse.REMAINDER)
-    args = parser.parse_args()
-    if args.backend not in ("pi", "prime"):
-        parser.error("PI_STACK_BACKEND must be pi or prime")
-    if not args.arguments:
-        parser.error("a backend command is required")
-    executable = Path(__file__).resolve().parent / ("pi-web-cli" if args.backend == "pi" else "prime-cli")
+    arguments = sys.argv[1:]
+    if arguments in (["--help"], ["-h"]):
+        print("usage: agent-cli [--backend pi|prime] COMMAND [ARG ...]\nSelect pi or prime. Pi remains the default.")
+        return 0
+    backend = os.environ.get("PI_STACK_BACKEND", "pi")
+    if arguments and arguments[0] == "--backend":
+        if len(arguments) < 2:
+            return usage_error("--backend requires pi or prime")
+        backend, arguments = arguments[1], arguments[2:]
+    elif arguments and arguments[0].startswith("--backend="):
+        backend, arguments = arguments[0].partition("=")[2], arguments[1:]
+    if backend not in ("pi", "prime"):
+        return usage_error("backend must be pi or prime")
+    if not arguments:
+        return usage_error("a backend command is required")
+    executable = Path(__file__).resolve().parent / ("pi-web-cli" if backend == "pi" else "prime-cli")
     try:
-        os.execv(executable, [str(executable), *args.arguments])
+        os.execv(executable, [str(executable), *arguments])
     except OSError as exc:
         print(json.dumps({"ok": False, "status": 502, "error": "backend_unavailable", "message": exc.strerror}))
         return 1

@@ -201,6 +201,18 @@ class PrimeToolsTests(unittest.TestCase):
                 self.assertEqual(proc.returncode, 7, proc.stdout)
                 self.assertEqual(json.loads(proc.stdout), {"tool": "prime-cli", "argv": backend_args, "stdin": "exact\nstdin 雪"})
 
+    def test_dispatcher_forwards_explicit_socket_to_real_prime_cli(self):
+        state = {"activeSessionId": "current-active", "sessionId": "durable-1", "cwd": "/work", "isStreaming": False}
+        for selection in [("--backend", "prime"), ("--backend=prime",)]:
+            with self.subTest(selection=selection):
+                with Fixture([state, {"steering": [], "followUp": []}, {"cost": 0}]) as fixture:
+                    proc = self.run_tool(ROOT / "bin/agent-cli", *selection, "--socket", fixture.path, "status", "durable-1",
+                                         env={"PRIME_AGENT_DAEMON_SOCKET": "/no-such-prime-dispatch-test.sock"})
+                self.assertEqual(proc.returncode, 0, proc.stdout)
+                self.assertEqual(json.loads(proc.stdout)["session"]["id"], "durable-1")
+                self.assertEqual(fixture.requests[0]["command"], {"type": "get_connection_state", "activeSessionId": "durable-1"})
+                self.assertEqual(fixture.requests[1]["command"], {"type": "get_queue", "activeSessionId": "current-active"})
+
     def test_dispatcher_validation_and_help(self):
         for args, env in [((), {}), (("--backend", "other", "list"), {}), (("list",), {"PI_STACK_BACKEND": "other"})]:
             with self.subTest(args=args):
