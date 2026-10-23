@@ -9,7 +9,7 @@ tracking_issue: https://github.com/alienczf/pi-stack/issues/38
 box_mirror: /workspace/harness-program
 host_docs_worktree: /home/alphalab/Projects/worktrees/pi-stack-harness-program
 host_input_copy: /home/alphalab/Projects/pi-stack/streams/pi-streams-harness/context/harness-program
-updated: 2026-10-23T14:25+08:00 (driver run: T1 streaming 62.4% ctx, active 14:12, S1 commit 4 (templates) in worktree after d1d4602, no compact while streaming; T2 idle blocked on Prime login, feat/prime-cli 6bc1242 unchanged; T3-T5 done; comparison already sent; no unsteered Z entries)
+updated: 2026-10-23T14:52+08:00 (driver run: T1 streaming 66.0% ctx, S1 commit 4 2696a3f (templates, 183 tests pass), next full-SID handovers then disposable check; no compact while streaming; T2 idle 31.9% blocked on Prime login, feat/prime-cli 6bc1242 unchanged; T3-T5 done; comparison already sent; no new ZF calls)
 tracks:
   - id: 1
     name: pi-streams must-fix catalog
@@ -106,7 +106,7 @@ comparison_sent: 2026-10-23T13:25+08:00 (handed to main chat via WakeParent; nev
 
 | Track | Session | Phase | Artifact | Next |
 |---|---|---|---|---|
-| 1 fix catalog | `01a16655` | implementing, S1 commit 3 `d1d4602` (61.7% ctx) | `10-pi-streams-fix-catalog.md` + `feat/streams-must-fix` | S1-S6 done, then driver merges |
+| 1 fix catalog | `01a16655` | implementing, S1 commit 4 `2696a3f` (66.0% ctx) | `10-pi-streams-fix-catalog.md` + `feat/streams-must-fix` | S1-S6 done, then driver merges |
 | 2 prime CLI | `01a16656` | blocked on Prime codex login; non-inference gaps in progress | `20-prime-cli-design.md` + `feat/prime-cli` (`6bc1242` pushed) | ZF logs Prime in, then inference verification |
 | 3 research | `01a16658` | done (31 gate passed 12:55) | `30-research-designs.md`, `31-design-a-detailed.md` | none; feeds track 5 |
 | 4 B over prime | `01a166e0` | done (41 gate passed 12:55) | `40-b-over-prime.md`, `41-design-b-prime-detailed.md` + `spike/b-over-prime` (`8811a7a` pushed) | none; feeds track 5 |
