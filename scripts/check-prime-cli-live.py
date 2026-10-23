@@ -139,7 +139,10 @@ class Check:
         self.evidence.append({"thinkingSetterAccepted": True, "effectiveThinking": effective})
         if inference:
             token = f"PRIME_CLI_VERIFIED_{uuid.uuid4().hex}"
-            self.call("prompt", sid, text=f"Reply with exactly {token}. Do not use tools.")
+            self.evidence.append({"command": "prompt_and_wait", "transport": "native-completion-probe"})
+            with PrimeClient(self.socket, self.timeout) as wire:
+                wire.request("prompt_and_wait", activeSessionId=sid,
+                             message=f"Reply with exactly {token}. Do not use tools.", streamingBehavior="followUp")
             self.wait(sid, lambda state, rows: not state["isStreaming"] and state["pendingMessageCount"] == 0 and any(
                 row.get("role") == "assistant" and token in json.dumps(row.get("content"), ensure_ascii=False) for row in rows))
             before = self.call("status", sid)["session"]["compactionCount"]

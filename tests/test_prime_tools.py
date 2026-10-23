@@ -354,6 +354,23 @@ os.execv("/bin/sh", ["sh", "-c", sys.argv[1]])
         self.assertEqual(json.loads(proc.stdout)["retainedOwnedSessions"], [])
         self.assertTrue(server.archived)
 
+    def test_inference_probe_reports_native_failure_without_waiting_for_a_message(self):
+        prepared = subprocess.run(["python3", str(ROOT / "scripts/check-prime-cli-live.py"), "prepare"], capture_output=True, text=True,
+                                  env={**self.env, "TMPDIR": str(self.root)}, timeout=10)
+        owned = Path(json.loads(prepared.stdout)["root"])
+        with OwnedSupervisor(owned, fail_command="prompt_and_wait") as server:
+            proc = subprocess.run(["python3", str(ROOT / "scripts/check-prime-cli-live.py"), "run", "--root", str(owned), "--timeout", "2", "--inference"],
+                                  capture_output=True, text=True, env=self.env, timeout=20)
+        result = json.loads(proc.stdout)
+        self.assertEqual(proc.returncode, 1, proc.stdout)
+        self.assertEqual(result["error"]["error"], "upstream_error")
+        self.assertEqual(result["error"]["message"], "Explicit owned fixture refusal")
+        self.assertEqual(result["retainedOwnedSessions"], [])
+        self.assertTrue(server.archived)
+        kinds = [command["type"] for command in server.requests]
+        self.assertEqual(kinds.count("prompt_and_wait"), 1)
+        self.assertEqual(kinds.count("get_messages"), 1)
+
     def test_durable_id_survives_active_replacement_without_binding_events(self):
         owned = self.root / "owned"
         owned.mkdir()
