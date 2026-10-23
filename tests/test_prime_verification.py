@@ -39,7 +39,18 @@ sys.path.insert(0, {str(ROOT / "tests")!r})
 from test_prime_tools import OwnedSupervisor
 root = Path(sys.argv[sys.argv.index("--daemon-socket") + 1]).parent
 Path({str(self.log)!r}).write_text(json.dumps({{"argv": sys.argv[1:], "agentDir": os.environ.get("PRIME_AGENT_CODING_AGENT_DIR")}}))
-with OwnedSupervisor(root) as server:
+class MetadataSupervisor(OwnedSupervisor):
+    def response(self, command, owner):
+        result = super().response(command, owner)
+        if result.get("success") and command["type"] in ("get_connection_state", "set_model"):
+            definition = json.loads((root / "agent/models.json").read_text())["providers"]["openai-codex"]["models"][0]
+            model = {{"provider": "openai-codex", **definition}}
+            if command["type"] == "get_connection_state":
+                result["data"]["model"] = model
+            else:
+                result["data"] = model
+        return result
+with MetadataSupervisor(root) as server:
     signal.signal(signal.SIGTERM, lambda *_: server.stopped.set())
     server.stopped.wait(15)
 ''')
@@ -95,7 +106,7 @@ with OwnedSupervisor(root) as server:
         self.assertFalse(self.log.exists())
 
     def test_launcher_stops_fake_runtime_after_check_failure(self):
-        text = self.runtime.read_text().replace("OwnedSupervisor(root)", 'OwnedSupervisor(root, fail_command="get_commands")')
+        text = self.runtime.read_text().replace("MetadataSupervisor(root)", 'MetadataSupervisor(root, fail_command="get_commands")')
         self.runtime.write_text(text)
         proc = self.verify()
         self.assertEqual(proc.returncode, 1, proc.stdout)
@@ -135,6 +146,18 @@ with OwnedSupervisor(root) as server:
                 self.assertFalse(self.log.exists())
                 self.assertFalse((self.owned / "agent/models.json").exists())
                 self.assertFalse((self.owned / "verification.lock").exists())
+
+    def test_metadata_mismatch_blocks_inference_and_cleans_owned_runtime(self):
+        text = self.runtime.read_text().replace('model = {"provider": "openai-codex", **definition}',
+            'model = {"provider": "openai-codex", **definition, "contextWindow": 128000}')
+        self.runtime.write_text(text)
+        proc = self.verify("--inference")
+        self.assertEqual(proc.returncode, 1, proc.stderr + proc.stdout)
+        result = json.loads(proc.stdout)
+        self.assertEqual(result["error"]["error"], "model_metadata_mismatch")
+        self.assertEqual(result["retainedOwnedSessions"], [])
+        self.assertEqual(result["runtime"]["stopped"], True)
+        self.assertNotIn("prompt_and_wait", [row.get("command") for row in result["checks"]])
 
     def test_registration_refuses_existing_native_config_without_replacing_it(self):
         config = self.owned / "agent/models.json"
