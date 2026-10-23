@@ -42,6 +42,7 @@ class OwnedSupervisor:
         self.requests = []
         self.queue = {"steering": [], "followUp": []}
         self.archived = False
+        self.active_id = "owned-active"
         self.lock = threading.Lock()
 
     def __enter__(self):
@@ -93,14 +94,14 @@ class OwnedSupervisor:
 
     def response(self, command, owner):
         kind = command["type"]
-        if "activeSessionId" in command and command["activeSessionId"] != "owned-active":
+        if "activeSessionId" in command and command["activeSessionId"] not in (self.active_id, "owned-durable"):
             return {"success": False, "error": "Wrong session"}
         if kind == self.fail_command:
             return {"success": False, "error": "Explicit owned fixture refusal"}
         if kind == "get_queue" and self.fail_after_admission and self.admitted_inputs and not self.admission_failure_sent:
             self.admission_failure_sent = True
             return {"success": False, "error": "Injected post-admission failure"}
-        row = {"id": "owned-active", "activeSessionId": "owned-active", "sessionId": "owned-durable",
+        row = {"id": self.active_id, "activeSessionId": self.active_id, "sessionId": "owned-durable",
                "cwd": str(self.root / "work"), "sessionFile": str(self.root / "owned.jsonl"),
                "messageCount": 0, "modified": "2026-10-23", "lifecycle": "archived" if self.archived else "live"}
         model = {"provider": "openai-codex", "id": "gpt-6.1-sol"}
@@ -329,6 +330,38 @@ os.execv("/bin/sh", ["sh", "-c", sys.argv[1]])
         self.assertLess(server.events.index("abort_and_clear_queue"), server.events.index("pause_owner_disconnected"))
         self.assertEqual(json.loads(proc.stdout)["retainedOwnedSessions"], [])
         self.assertTrue(server.archived)
+
+    def test_durable_id_survives_active_replacement_without_binding_events(self):
+        owned = self.root / "owned"
+        owned.mkdir()
+        with OwnedSupervisor(owned) as server:
+            env = {"PRIME_AGENT_DAEMON_SOCKET": str(owned / "daemon.sock")}
+            spawned = self.run_tool(ROOT / "bin/prime-cli", "spawn", str(owned / "work"), env=env)
+            sid = json.loads(spawned.stdout)["session"]["id"]
+            with server.lock:
+                server.active_id = "replacement-active"
+            results = {}
+            for name, args in [("prompt", ("prompt", sid, "Owned fixture input")), ("status", ("status", sid)),
+                               ("list", ("list", "--cwd", str(owned / "work"))), ("archive", ("archive", sid)),
+                               ("archived-list", ("list", "--cwd", str(owned / "work")))]:
+                results[name] = self.run_tool(ROOT / "bin/prime-cli", *args, env=env)
+        with self.subTest(operation="spawn"):
+            self.assertEqual(sid, "owned-durable")
+        for name, proc in results.items():
+            with self.subTest(operation=name):
+                self.assertEqual(proc.returncode, 0, proc.stdout)
+                data = json.loads(proc.stdout)
+                if name == "status":
+                    self.assertEqual(data["session"]["id"], "owned-durable")
+                    self.assertEqual(data["session"]["activeSessionId"], "replacement-active")
+                if name in ("list", "archived-list"):
+                    self.assertEqual(data["sessions"][0]["id"], "owned-durable")
+                    self.assertEqual(data["sessions"][0]["activeSessionId"], "replacement-active")
+                    self.assertEqual(data["sessions"][0]["archived"], name == "archived-list")
+        pauses = [command for command in server.requests if command["type"] == "acquire_session_input_pause"]
+        self.assertEqual(pauses[0]["activeSessionId"], "owned-durable")
+        self.assertEqual(server.requests[-2], {"type": "kill", "activeSessionId": "replacement-active"})
+        self.assertNotIn("attach", [command["type"] for command in server.requests])
 
     def test_live_check_refuses_unprepared_root(self):
         proc = subprocess.run(["python3", str(ROOT / "scripts/check-prime-cli-live.py"), "run", "--root", str(self.root)],
