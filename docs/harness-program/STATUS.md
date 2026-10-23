@@ -9,7 +9,7 @@ tracking_issue: https://github.com/alienczf/pi-stack/issues/38
 box_mirror: /workspace/harness-program
 host_docs_worktree: /home/alphalab/Projects/worktrees/pi-stack-harness-program
 host_input_copy: /home/alphalab/Projects/pi-stack/streams/pi-streams-harness/context/harness-program
-updated: 2026-10-23T12:55+08:00 (driver run: T1 streaming 53.6% at S1 commit 1ce9504, suite pass; T2 idle blocked on Prime login; T3 done 31 (gate pass); T4 done 40+41 (gate pass), spike/b-over-prime 8811a7a pushed; T5 spawned 01a1671a to write 50-a-vs-b.md; no unsteered Z entries)
+updated: 2026-10-23T13:25+08:00 (driver run: T1 streaming 56.8% at S1 commit 21e823f (2 of S1 commits), suite 145 pass; T2 idle blocked on Prime login, feat/prime-cli 6bc1242 = remote; T5 done, 50 gate pass; A vs B comparison handed to Grok Bot main chat for ZF; docs 94d9b61, spike 8811a7a pushed; no unsteered Z entries)
 tracks:
   - id: 1
     name: pi-streams must-fix catalog
@@ -92,24 +92,24 @@ tracks:
     session: 01a1671a-01d1-7f51-b240-533efc527a61
     host: options-01
     model: openai-codex/gpt-6.1-sol@xhigh
-    phase: writing 50-a-vs-b.md (brief consumed 12:53, streaming 4.5%)
+    phase: done (TRACK 5 STATUS done ~13:20; 50 passed driver gate 13:25)
     started: 2026-10-23T12:53+08:00
     expected_done: 2026-10-23T14:00+08:00
     artifact: docs/harness-program/50-a-vs-b.md
     brief: docs/harness-program/briefs/track-5.md (sha256 e546f734)
     gate: TRACK 5 STATUS done; 50 has core difference, per-component side-by-side, pros/cons, effort and risk, corpus coverage, open questions without defaults.
     next_action: When done and gate passes, collect, push docs branch, send ZF the A vs B comparison (core difference paragraph, side-by-side table, pros/cons table, open questions, links to 31, 41, 50), then set comparison_sent below. Never resend.
-comparison_sent: false
+comparison_sent: 2026-10-23T13:25+08:00 (handed to main chat via WakeParent; never resend)
 ---
 
 # Harness program status
 
 | Track | Session | Phase | Artifact | Next |
 |---|---|---|---|---|
-| 1 fix catalog | `01a16655` | implementing (ZF go 11:35, steer consumed 11:39) | `10-pi-streams-fix-catalog.md` + `feat/streams-must-fix` | S1-S6 done, then driver merges |
+| 1 fix catalog | `01a16655` | implementing, S1 commit 2 `21e823f` (56.8% ctx) | `10-pi-streams-fix-catalog.md` + `feat/streams-must-fix` | S1-S6 done, then driver merges |
 | 2 prime CLI | `01a16656` | blocked on Prime codex login; non-inference gaps in progress | `20-prime-cli-design.md` + `feat/prime-cli` (`6bc1242` pushed) | ZF logs Prime in, then inference verification |
 | 3 research | `01a16658` | done (31 gate passed 12:55) | `30-research-designs.md`, `31-design-a-detailed.md` | none; feeds track 5 |
 | 4 B over prime | `01a166e0` | done (41 gate passed 12:55) | `40-b-over-prime.md`, `41-design-b-prime-detailed.md` + `spike/b-over-prime` (`8811a7a` pushed) | none; feeds track 5 |
-| 5 A vs B | `01a1671a` | writing 50 (12:53) | `50-a-vs-b.md` | done, then send ZF the comparison once |
+| 5 A vs B | `01a1671a` | done (50 gate passed 13:25) | `50-a-vs-b.md` | A vs B comparison sent 13:25; never resend |
 
 The canonical copy is on GitHub. The box mirror is `/workspace/harness-program/STATUS.md`.
