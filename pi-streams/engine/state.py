@@ -207,8 +207,8 @@ def _parse_goals(text: str) -> Goals:
     _string(objective, nullable=True)
     if original is not None:
         _name(original)
-    if status not in STATUSES or (objective is None) != (status == "unset"):
-        raise StreamsError("invalid objective/status")
+    if status not in STATUSES:
+        raise StreamsError("invalid objective status")
     work = []
     for start in range(7, len(lines), 6):
         block = lines[start:start + 6]
@@ -365,8 +365,8 @@ def render_state(state: State) -> str:
 
 
 def _path(stream: Path, *parts: str) -> Path:
-    if stream.is_symlink():
-        raise StreamsError("symlink stream is not supported")
+    if any(path.is_symlink() for path in (stream, *stream.parents)):
+        raise StreamsError("symlink stream or ancestor is not supported")
     path = stream
     for part in parts:
         path = path / part

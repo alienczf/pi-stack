@@ -467,6 +467,18 @@ class NewStateTests(unittest.TestCase):
         result = z15.append_log(self.stream, subject="Valid proof", body={"media_type": "text/plain", "original_entries": [], "text": "exact proof", "sha256": hashlib.sha256(b"exact proof").hexdigest()})
         self.assertIn('"text": "exact proof"', z15.read_entry(self.stream, result["entry"]))
 
+    def test_state_writer_rejects_symlink_ancestor(self):
+        child = self.stream / "actual-stream"
+        child.mkdir()
+        project.git(child, "init")
+        project.copy_missing(project.templates_dir() / "prime", child)
+        alias = self.stream / "alias"
+        alias.symlink_to(self.stream, target_is_directory=True)
+        before = (child / "STATE.md").read_bytes()
+        with self.assertRaisesRegex(StreamsError, "symlink"):
+            z15.save_message(alias / "actual-stream", text="must not escape", command_id=str(UUID(int=3)), session_id="durable", sender="operator", send_as="steer")
+        self.assertEqual((child / "STATE.md").read_bytes(), before)
+
     def test_missing_agents_blocks_write(self):
         before = self.current()
         (self.stream / "AGENTS.md").unlink()

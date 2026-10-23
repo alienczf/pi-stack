@@ -572,7 +572,9 @@ def spawn_prime_worker(client, stream, *, worktree, work, original_entries, pote
     from engine.project import stream_lock
     from engine.prime import create_worker_session, send_worker
     stream, worktree = Path(stream), Path(worktree)
-    if not worktree.is_absolute() or worktree.is_symlink() or not worktree.is_dir():
+    if any(path.is_symlink() for path in (worktree, *worktree.parents)):
+        raise StreamsError("worker worktree or ancestor is a symlink")
+    if not worktree.is_absolute() or not worktree.is_dir():
         raise StreamsError("worker needs an existing absolute assigned worktree")
     if worktree.resolve() == stream.resolve() or worktree.resolve().is_relative_to(stream.resolve()):
         raise StreamsError("worker cannot run inside its stream")
