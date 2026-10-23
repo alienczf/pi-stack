@@ -123,14 +123,19 @@ def set_automatic_admission(sid: str, allowed: bool) -> dict[str, object]:
     return result
 
 
-def prompt(sid: str, text: str, behavior: str | None = None, *, delivery_id: str | None = None, automatic: dict[str, str] | None = None) -> dict[str, object]:
+def prompt(sid: str, text: str, behavior: str | None = None, *, delivery_id: str | None = None, automatic: dict[str, str] | None = None, poteto_goal: str | None = None) -> dict[str, object]:
     # On argv, a text that starts with a dash would parse as a flag.
     flags = [] if behavior is None else [f"--{behavior}"]
     if delivery_id is not None:
         flags += ["--delivery-id", delivery_id]
     if automatic is not None:
         flags += ["--automatic-admission", json.dumps(automatic, ensure_ascii=False)]
-    return call(["prompt", sid, *flags], stdin=text)
+    payload = text
+    if poteto_goal is not None:
+        require_poteto(sid)
+        payload = _poteto_payload(text, poteto_goal)
+        flags.append("--poteto")
+    return call(["prompt", sid, *flags], stdin=payload)
 
 
 def command_run(sid: str, text: str) -> dict:
@@ -153,6 +158,24 @@ def require_maintenance(sid: str) -> dict[str, object]:
     if status.get("maintenanceSupport") != "checkpoint-input-v1":
         raise StreamsError("receiving maintenance capability is unavailable; automatic DCR is disabled")
     return status
+
+
+def require_poteto(sid: str) -> dict[str, object]:
+    status = session_status(sid)
+    require_identity(status, sid)
+    if status.get("potetoInvocationSupport") != "exact-goal-v1":
+        raise StreamsError("recipient-loaded exact poteto invocation capability is unavailable")
+    return status
+
+
+def _poteto_payload(text: str, goal: str) -> str:
+    invocation = "/poteto-mode " + goal
+    if not goal.strip() or not text.endswith(invocation):
+        raise StreamsError("poteto invocation body does not match its exact goal")
+    prefix = text[:-len(invocation)]
+    if prefix and not prefix.endswith("\n") or prefix.lstrip().startswith("/"):
+        raise StreamsError("poteto invocation prefix is not a separate non-command prefix")
+    return json.dumps({"text": text, "goal": goal}, ensure_ascii=False)
 
 
 def _maintenance_result(data: dict, sid: str, identity: str, cwd: str) -> dict:
@@ -192,13 +215,19 @@ def reconcile_maintenance(cwd: str, sid: str, identity: str) -> dict:
     return _maintenance_result(data, sid, identity, cwd)
 
 
-def resume_maintenance(sid: str, identity: str, compaction_entry: str, input_sequence: int, automatic: dict[str, str], delivery_id: str, text: str) -> dict:
+def resume_maintenance(sid: str, identity: str, compaction_entry: str, input_sequence: int, automatic: dict[str, str], delivery_id: str, text: str, *, poteto_goal: str | None = None) -> dict:
     if automatic.get("sessionId") != sid or automatic.get("kind") != "resume" or type(input_sequence) is not int or input_sequence < 0:
         raise StreamsError("RESUME requires its saved exact session/generation/input sequence")
-    data = call(["maintenance-resume", sid, identity, "--compaction-entry", compaction_entry, "--input-sequence", str(input_sequence), "--delivery-id", delivery_id, "--automatic-admission", json.dumps(automatic)], stdin=text)
+    flags = ["maintenance-resume", sid, identity, "--compaction-entry", compaction_entry, "--input-sequence", str(input_sequence), "--delivery-id", delivery_id, "--automatic-admission", json.dumps(automatic)]
+    payload = text
+    if poteto_goal is not None:
+        require_poteto(sid)
+        flags.append("--poteto")
+        payload = _poteto_payload(text, poteto_goal)
+    data = call(flags, stdin=payload)
     result = _maintenance_result(data, sid, identity, automatic["cwd"])
     receipt = result.get("resume")
-    if not isinstance(receipt, dict) or receipt.get("deliveryId") != delivery_id or receipt.get("text") != text or receipt.get("generation") != automatic.get("generation") or receipt.get("inputSequence") != input_sequence:
+    if not isinstance(receipt, dict) or receipt.get("deliveryId") != delivery_id or receipt.get("text") != text or receipt.get("generation") != automatic.get("generation") or receipt.get("inputSequence") != input_sequence or receipt.get("potetoGoal") != poteto_goal:
         raise StreamsError("RESUME admission intent is unconfirmed or changed")
     return result
 

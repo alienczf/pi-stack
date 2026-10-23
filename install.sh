@@ -22,7 +22,7 @@ usage() {
 	cat <<'EOF'
 usage: install.sh [-y] [--project <root>] [--pi-web-url <url>]
                   [--coordinator-model <provider/id>] [--coordinator-thinking <level>]
-                  [--print-pstack-skills]
+                  [--print-pstack-skills] [--check-streams-capabilities]
 
 Copies the pi-stack overlay into $HOME/.pi/agent.
 Installs poteto-agent and retires the six old role profiles in $HOME/.pi/agent/agents/.
@@ -63,6 +63,8 @@ Options
   --coordinator-thinking <level>
                 thinking level coordinators use
   --print-pstack-skills  print the pstack skill roots selected by pi-stack
+  --check-streams-capabilities
+                read-only receiving maintenance/mode preflight; no install or timer action
 
 Environment
   HOME          install target (default is your home)
@@ -124,6 +126,7 @@ update_decision="ask"
 original_args=("$@")
 assume_yes=0
 print_skills=0
+check_streams=0
 have_project=0
 project_root=""
 have_pi_web_url=0
@@ -154,6 +157,10 @@ while [[ $# -gt 0 ]]; do
 		;;
 	--print-pstack-skills)
 		print_skills=1
+		shift
+		;;
+	--check-streams-capabilities)
+		check_streams=1
 		shift
 		;;
 	--project)
@@ -188,7 +195,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ "$print_skills" == 1 ]]; then
-	if [[ "$assume_yes" == 1 || "$have_project" == 1 || "$have_pi_web_url" == 1 || "$have_coordinator_model" == 1 || "$have_coordinator_thinking" == 1 ]]; then
+	if [[ "$assume_yes" == 1 || "$have_project" == 1 || "$have_pi_web_url" == 1 || "$have_coordinator_model" == 1 || "$have_coordinator_thinking" == 1 || "$check_streams" == 1 ]]; then
 		usage >&2
 		exit 2
 	fi
@@ -205,6 +212,27 @@ src="${BASH_SOURCE[0]:-}"
 here=""
 if [[ -n "$src" && -f "$src" ]]; then
 	here="$(cd "$(dirname "$src")" && pwd)"
+fi
+
+check_streams_capabilities() {
+	if [[ -z "$here" || ! -f "$here/bin/pi-web-cli" ]]; then
+		printf 'Receiving capability preflight needs an adjacent pi-stack checkout.\n' >&2
+		return 1
+	fi
+	if [[ "$have_pi_web_url" == 1 ]]; then
+		PI_WEB_URL="$pi_web_url" python3 "$here/bin/pi-web-cli" capabilities
+	else
+		python3 "$here/bin/pi-web-cli" capabilities
+	fi
+}
+
+if [[ "$check_streams" == 1 ]]; then
+	if [[ "$assume_yes" == 1 || "$have_project" == 1 || "$have_coordinator_model" == 1 || "$have_coordinator_thinking" == 1 ]]; then
+		usage >&2
+		exit 2
+	fi
+	check_streams_capabilities
+	exit 0
 fi
 
 default_pi_stack="${HOME}/.pi-stack"
@@ -926,6 +954,10 @@ else
 fi
 if [[ "$streams_in_use" == 1 ]]; then
 	ensure_pi_web
+	if [[ "${PI_STACK_SKIP_SYSTEMD:-}" != 1 ]] && command -v systemctl >/dev/null 2>&1 && ! check_streams_capabilities; then
+		printf 'Receiving maintenance/mode capability is missing. Deploy the tested pi-web artifact and restart its daemon before enabling the tick.\n' >&2
+		exit 1
+	fi
 	install_tick_units
 fi
 cat <<EOF

@@ -59,8 +59,10 @@ def cmd_spawn(cwd: str) -> int:
     return out({"ok": ok, "status": code, "session": data}, ok)
 
 
-def cmd_prompt(sid: str, text: str, streaming: str | None = None, delivery_id: str | None = None, automatic: dict | None = None) -> int:
+def cmd_prompt(sid: str, text: str, streaming: str | None = None, delivery_id: str | None = None, automatic: dict | None = None, poteto_goal: str | None = None) -> int:
     body = {"text": text} if streaming is None else {"text": text, "streamingBehavior": streaming}
+    if poteto_goal is not None:
+        body["potetoGoal"] = poteto_goal
     if delivery_id is not None:
         body["deliveryId"] = delivery_id
     if automatic is not None:
@@ -103,6 +105,23 @@ def _json_object(text: str, label: str) -> dict:
     return value
 
 
+def _invocation_input(args: argparse.Namespace) -> tuple[str, str | None]:
+    if not args.poteto:
+        return _text_input(args.text), None
+    if args.text is not None:
+        raise UsageError("--poteto uses stdin JSON with exact text and goal, not argv goal splitting")
+    value = _json_object(_text_input(None), "poteto invocation")
+    if set(value) != {"text", "goal"} or not isinstance(value["text"], str) or not isinstance(value["goal"], str) or not value["goal"].strip():
+        raise UsageError("poteto invocation requires exact text and nonempty goal strings")
+    invocation = "/poteto-mode " + value["goal"]
+    if not value["text"].endswith(invocation):
+        raise UsageError("poteto invocation text does not match its exact goal")
+    prefix = value["text"][:-len(invocation)]
+    if prefix and not prefix.endswith("\n") or prefix.lstrip().startswith("/"):
+        raise UsageError("poteto invocation must preserve a separate non-command prefix")
+    return value["text"], value["goal"]
+
+
 def cmd_maintenance(args: argparse.Namespace) -> int:
     sid = urllib.parse.quote(args.sid, safe="")
     if args.cmd == "command-run":
@@ -121,7 +140,10 @@ def cmd_maintenance(args: argparse.Namespace) -> int:
         if automatic.get("sessionId") != args.sid or not isinstance(automatic.get("cwd"), str) or automatic.get("kind") != "resume":
             raise UsageError("RESUME requires the saved exact session/cwd/resume generation")
         path = f"/api/sessions/{sid}/maintenance/resume"
-        body = {"cwd": automatic["cwd"], "id": args.operation_id, "compactionEntryId": args.compaction_entry, "inputSequence": args.input_sequence, "automaticAdmission": automatic, "deliveryId": args.delivery_id, "text": _text_input(args.text)}
+        text, goal = _invocation_input(args)
+        body = {"cwd": automatic["cwd"], "id": args.operation_id, "compactionEntryId": args.compaction_entry, "inputSequence": args.input_sequence, "automaticAdmission": automatic, "deliveryId": args.delivery_id, "text": text}
+        if goal is not None:
+            body["potetoGoal"] = goal
         method = "POST"
     else:
         operation = urllib.parse.quote(args.operation_id, safe="")
@@ -185,6 +207,7 @@ def main(argv: list[str]) -> int:
     pr.add_argument("text", nargs="?")
     pr.add_argument("--delivery-id", help="caller-persisted correlation identity; acceptance is not application")
     pr.add_argument("--automatic-admission", help="caller-persisted exact session/cwd/generation/kind JSON; never renewed by this CLI")
+    pr.add_argument("--poteto", action="store_true", help="stdin JSON carries exact text/goal for recipient-loaded poteto invocation")
     behavior = pr.add_mutually_exclusive_group()
     behavior.add_argument("--steer", action="store_true")
     behavior.add_argument("--follow-up", action="store_true")
@@ -196,6 +219,7 @@ def main(argv: list[str]) -> int:
     control.add_argument("sid")
     control.add_argument("mode", choices=("on", "off"))
     sub.add_parser("runtime")
+    sub.add_parser("capabilities")
     command = sub.add_parser("command-run")
     command.add_argument("sid")
     command.add_argument("text", nargs="?")
@@ -216,6 +240,7 @@ def main(argv: list[str]) -> int:
     resume.add_argument("--input-sequence", type=int, required=True)
     resume.add_argument("--delivery-id", required=True)
     resume.add_argument("--automatic-admission", required=True)
+    resume.add_argument("--poteto", action="store_true", help="stdin JSON retains exact fixed-prefix text and goal arguments")
     resume.add_argument("text", nargs="?")
     for name, (_method, _suffix, positionals, _build) in VERBS.items():
         verb = sub.add_parser(name)
@@ -225,9 +250,13 @@ def main(argv: list[str]) -> int:
         if name == "archive":
             verb.add_argument("--expected-idle", help="exact session/cwd/logical entry/generation JSON; refuse stale or busy replacement")
     args = p.parse_args(argv)
-    if args.cmd == "runtime":
+    if args.cmd in ("runtime", "capabilities"):
         code, data = req("GET", "/api/sessiond/runtime")
-        ok = code == 200 and isinstance(data, dict) and data.get("component") == "sessiond" and isinstance(data.get("capabilities"), list)
+        ok = code == 200 and isinstance(data, dict) and data.get("component") == "sessiond" and isinstance(data.get("capabilities"), list) and all(isinstance(capability, str) for capability in data["capabilities"])
+        missing = [capability for capability in ("sessions.maintenanceCheckpoint", "prompt.potetoArguments") if not ok or capability not in data["capabilities"]]
+        if args.cmd == "capabilities":
+            ok = ok and not missing
+            return out({"ok": ok, "status": code, "runtime": data, "missing": missing}, ok)
         return out({"ok": ok, "status": code, "runtime": data}, ok)
     if args.cmd in ("command-run", "compact", "maintenance", "maintenance-resume"):
         try:
@@ -239,7 +268,10 @@ def main(argv: list[str]) -> int:
     if args.cmd == "spawn":
         return cmd_spawn(args.cwd)
     if args.cmd == "prompt":
-        text = args.text if args.text is not None else sys.stdin.read()
+        try:
+            text, poteto_goal = _invocation_input(args)
+        except (UsageError, UnicodeError) as exc:
+            return out({"ok": False, "error": str(exc)}, False)
         if not text.strip():
             return out({"ok": False, "error": "empty prompt"}, False)
         streaming = "steer" if args.steer else "followUp" if args.follow_up else None
@@ -251,7 +283,7 @@ def main(argv: list[str]) -> int:
                 return out({"ok": False, "error": "automatic admission must be a JSON object"}, False)
             if not isinstance(automatic, dict):
                 return out({"ok": False, "error": "automatic admission must be a JSON object"}, False)
-        return cmd_prompt(args.sid, text, streaming, args.delivery_id, automatic)
+        return cmd_prompt(args.sid, text, streaming, args.delivery_id, automatic, poteto_goal)
     if args.cmd == "status":
         return cmd_status(args.sid)
     if args.cmd == "commands":
