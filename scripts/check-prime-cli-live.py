@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass, field
 import json
+import math
 import os
 from pathlib import Path
+import stat
 import subprocess
 import sys
 import tempfile
@@ -33,6 +36,75 @@ def prepare() -> dict:
     return {"ok": True, "root": str(root), "launchEnv": {"PRIME_AGENT_CODING_AGENT_DIR": str(agent)},
             "daemonArgv": ["prime-agent", "--mode", "daemon", "--daemon-socket", str(root / "daemon.sock")],
             "note": "Launch separately. No runtime was started and no credentials were accessed."}
+
+
+@dataclass
+class VerificationRuntime:
+    root: Path
+    executable: Path
+    timeout: float
+    process: subprocess.Popen | None = field(default=None, init=False)
+    lock_fd: int | None = field(default=None, init=False)
+    socket_identity: tuple[int, int] | None = field(default=None, init=False)
+    evidence: dict = field(default_factory=lambda: {"started": False, "stopped": True, "socketRemoved": True})
+
+    @property
+    def socket(self) -> Path:
+        return self.root / "daemon.sock"
+
+    def start(self) -> None:
+        try:
+            self.lock_fd = os.open(self.root / "verification.lock", os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        except FileExistsError as exc:
+            raise CliError("runtime_collision", "Verification root is already locked", 409) from exc
+        if os.path.lexists(self.socket):
+            raise CliError("runtime_collision", "Dedicated daemon socket already exists; no daemon was contacted", 409)
+        self.process = subprocess.Popen(
+            [str(self.executable), "--mode", "daemon", "--daemon-socket", str(self.socket)],
+            env={**os.environ, "PRIME_AGENT_CODING_AGENT_DIR": str(self.root / "agent")},
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.evidence.update(started=True, stopped=False)
+        deadline = time.monotonic() + self.timeout
+        while time.monotonic() < deadline:
+            if self.process.poll() is not None:
+                raise CliError("runtime_start_failed", "Dedicated daemon exited before becoming ready")
+            try:
+                info = self.socket.lstat()
+            except FileNotFoundError:
+                time.sleep(0.05)
+                continue
+            if not stat.S_ISSOCK(info.st_mode):
+                raise CliError("runtime_collision", "Dedicated socket path is not a socket", 409)
+            self.socket_identity = (info.st_dev, info.st_ino)
+            self.evidence["socketRemoved"] = False
+            return
+        raise CliError("runtime_start_failed", "Dedicated daemon did not create its socket", 504)
+
+    def close(self) -> None:
+        try:
+            if self.process is not None:
+                if self.process.poll() is None:
+                    self.process.terminate()
+                    try:
+                        self.process.wait(timeout=self.timeout)
+                    except subprocess.TimeoutExpired:
+                        self.process.kill()
+                        self.process.wait(timeout=self.timeout)
+                self.evidence["stopped"] = self.process.poll() is not None
+                if self.evidence["stopped"] and self.socket_identity is not None:
+                    try:
+                        info = self.socket.lstat()
+                    except FileNotFoundError:
+                        self.evidence["socketRemoved"] = True
+                    else:
+                        if stat.S_ISSOCK(info.st_mode) and (info.st_dev, info.st_ino) == self.socket_identity:
+                            self.socket.unlink()
+                            self.evidence["socketRemoved"] = True
+        finally:
+            if self.lock_fd is not None:
+                os.close(self.lock_fd)
+                self.lock_fd = None
+                (self.root / "verification.lock").unlink()
 
 
 class Check:
@@ -176,18 +248,30 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="mode", required=True)
     sub.add_parser("prepare")
-    run = sub.add_parser("run")
-    run.add_argument("--root", type=Path, required=True)
-    run.add_argument("--timeout", type=float, default=60)
-    run.add_argument("--inference", action="store_true")
+    for mode in ("run", "verify"):
+        run = sub.add_parser(mode)
+        run.add_argument("--root", type=Path, required=True)
+        run.add_argument("--timeout", type=float, default=60)
+        run.add_argument("--inference", action="store_true")
+        if mode == "verify":
+            run.add_argument("--runtime", type=Path, required=True)
     args = parser.parse_args()
     if args.mode == "prepare":
         print(json.dumps(prepare(), indent=2))
         return 0
     check = None
-    result = {"ok": False, "model": MODEL, "inferenceRequested": args.inference}
+    runtime = None
+    result = {"ok": False, "model": MODEL, "inferenceRequested": args.inference,
+              "retainedOwnedSessions": []}
+    if args.mode == "verify":
+        result["runtime"] = {"started": False, "stopped": True, "socketRemoved": True}
     try:
+        if not math.isfinite(args.timeout) or args.timeout <= 0:
+            raise CliError("usage", "timeout must be finite and positive", 400)
         check = Check(args.root, args.timeout)
+        if args.mode == "verify":
+            runtime = VerificationRuntime(check.root, args.runtime.resolve(), args.timeout)
+            runtime.start()
         check.run(args.inference)
         result["ok"] = True
     except (CliError, OSError, ValueError, StopIteration, subprocess.SubprocessError) as exc:
@@ -197,9 +281,16 @@ def main() -> int:
             result["retainedOwnedSessions"] = check.cleanup()
             result["checks"] = check.evidence
             result["knownGaps"] = check.gaps
-            if check.gaps:
+            if check.gaps or result["retainedOwnedSessions"]:
                 result["ok"] = False
-            if result["retainedOwnedSessions"]:
+        if runtime:
+            try:
+                runtime.close()
+            except (OSError, subprocess.SubprocessError):
+                result["error"] = CliError("runtime_cleanup_failed", "Owned runtime cleanup failed").output
+                result["ok"] = False
+            result["runtime"] = runtime.evidence
+            if not runtime.evidence["stopped"] or not runtime.evidence["socketRemoved"]:
                 result["ok"] = False
     print(json.dumps(result, indent=2))
     return 0 if result["ok"] else 1
