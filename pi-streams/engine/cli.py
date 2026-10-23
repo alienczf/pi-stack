@@ -5,15 +5,17 @@ import json
 import sys
 from pathlib import Path
 
-from engine import StreamsError
+from engine import StreamsError, artifacts, clock
 from engine.doctor import run_doctor
 from engine.project import (
+    STATE_SCHEMA,
     commit_repo,
     create_stream,
     ensure_git,
     index_lock,
     init_project,
     load_projects,
+    load_stream_config,
     read_homes,
     require_stream,
     resolve_index,
@@ -93,6 +95,22 @@ def _parser() -> argparse.ArgumentParser:
 
     tick = sub.add_parser("tick")
     tick.add_argument("--home")
+
+    state = sub.add_parser("state")
+    state_sub = state.add_subparsers(dest="state_cmd", required=True)
+    for name in ("append", "ruling", "objective"):
+        operation = state_sub.add_parser(name)
+        operation.add_argument("stream")
+        operation.add_argument("--home")
+        operation.add_argument("--body-file", required=True, help="UTF-8 input file, or - for stdin")
+        if name != "objective":
+            operation.add_argument("--subject", required=True)
+            operation.add_argument("--at", help="arrival time with ISO timezone; defaults to now")
+        if name == "append":
+            operation.add_argument("--request-id", required=True)
+        if name == "ruling":
+            operation.add_argument("--notice-id", required=True, help="human ruling provenance, not an authentication receipt")
+            operation.add_argument("--supersedes-file", help="exact retired Rules text; no automatic classification")
     return parser
 
 
@@ -193,6 +211,42 @@ def cmd_close(args: argparse.Namespace) -> int:
     return 0
 
 
+def _state_body(path: str) -> str:
+    try:
+        data = sys.stdin.buffer.read() if path == "-" else Path(path).read_bytes()
+        return data.decode("utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise StreamsError(f"could not read artifact input: {exc}") from exc
+
+
+def cmd_state(args: argparse.Namespace) -> int:
+    body = _state_body(args.body_file)
+    retired = _state_body(args.supersedes_file) if getattr(args, "supersedes_file", None) else None
+    index = resolve_index(args.home)
+    with index_lock(index):
+        project = resolve_project(index)
+        stream_dir = require_stream(index, project.info.name, args.stream)
+        if load_stream_config(stream_dir / "stream.toml").state_schema != STATE_SCHEMA:
+            raise StreamsError("canonical STATE schema required; explicit migration is needed")
+        try:
+            if args.state_cmd == "objective":
+                result = {"changed": artifacts.update_current_objective(stream_dir, body)}
+            else:
+                at = args.at or clock.stamp(clock.now())
+                if args.state_cmd == "append":
+                    occurrence = artifacts.append_log(stream_dir, at, args.subject, body, request_id=args.request_id)
+                    request = args.request_id
+                else:
+                    occurrence = artifacts.record_ruling(stream_dir, at, args.subject, body,
+                                                         notice_id=args.notice_id, supersedes=retired)
+                    request = "ruling:" + args.notice_id
+                result = {"occurrence": occurrence, "request_id": request}
+        except OSError as exc:
+            raise StreamsError(f"artifact publication failed; reconcile the same request ID: {exc}") from exc
+    print(json.dumps(result, sort_keys=True))
+    return 0
+
+
 def cmd_tick(args: argparse.Namespace) -> int:
     indexes = [resolve_index(args.home)] if args.home else read_homes()
     return run_tick(indexes)
@@ -244,6 +298,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_close(args)
         if args.cmd == "tick":
             return cmd_tick(args)
+        if args.cmd == "state":
+            return cmd_state(args)
         if args.cmd == "thread" and args.thread_cmd == "spawn":
             return cmd_thread_spawn(args)
         if args.cmd == "thread" and args.thread_cmd == "adopt":

@@ -1,17 +1,17 @@
 from __future__ import annotations
 
 import json
-import os
 import sys
 from collections import Counter
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from engine import StreamsError, clock, piweb, sessionlog
+from engine import StreamsError, artifacts, clock, piweb, sessionlog
 from engine.project import (
     Project,
     StreamRow,
+    _write as write_atomic,
     commit_repo,
     index_lock,
     load_projects,
@@ -73,16 +73,6 @@ class TickState:
     claims: list[str] = field(default_factory=list)
 
 
-def write_atomic(path: Path, text: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.tmp")
-    try:
-        tmp.write_text(text, encoding="utf-8", newline="\n")
-        os.replace(tmp, path)
-    finally:
-        tmp.unlink(missing_ok=True)
-
-
 def load_state(path: Path) -> TickState:
     if not path.exists():
         return TickState()
@@ -101,14 +91,20 @@ def load_state(path: Path) -> TickState:
 
 
 def save_state(path: Path, state: TickState) -> None:
-    data = {
+    try:
+        data = json.loads(path.read_bytes()) if path.exists() else {}
+        if not isinstance(data, dict):
+            raise ValueError("expected tick-state object")
+    except (OSError, ValueError) as exc:
+        raise StreamsError(f"{path}: {exc}") from exc
+    data.update({
         "sessions": {sid: asdict(seen) for sid, seen in state.sessions.items()},
         "pending": [asdict(event) for event in state.pending],
         "outages": state.outages,
         "rotating": state.rotating,
         "subscriptions": {sub: asdict(mark) for sub, mark in state.subscriptions.items()},
         "claims": state.claims,
-    }
+    })
     write_atomic(path, json.dumps(data, indent=2, sort_keys=True) + "\n")
 
 
@@ -229,7 +225,7 @@ class StreamTick:
             self.fail(str(exc))
         try:
             self.flush()
-        except OSError as exc:
+        except (StreamsError, OSError) as exc:
             if str(exc) not in self.errors:
                 self.errors.append(str(exc))
 
@@ -530,7 +526,14 @@ def tick_index(index: Path, now: datetime) -> bool:
                 grouped.setdefault(row.project, []).append(row)
             claims = {stream_id: mine for group in grouped.values() for stream_id, mine in _claims_for(group).items()}
             runs: list[tuple[StreamRow, StreamTick]] = []
+            history_paths: dict[str, list[str]] = {}
             for row in ordered:
+                try:
+                    history_paths[row.path] = artifacts._rotate_log_locked(Path(row.path))
+                except (StreamsError, OSError) as exc:
+                    ok = False
+                    print(f"{row.path}: {exc}", file=sys.stderr, flush=True)
+                    continue
                 project = projects.get(row.project)
                 if project is None:
                     ok = False
@@ -549,8 +552,10 @@ def tick_index(index: Path, now: datetime) -> bool:
             for row, _run in runs:
                 repo = Path(row.path)
                 try:
-                    commit_repo(repo, "pi-streams tick")
-                except StreamsError as exc:
+                    commit_repo(repo, "pi-streams tick", paths=tuple(history_paths[row.path]))
+                    if history_paths[row.path]:
+                        artifacts._acknowledge_history_locked(repo)
+                except (StreamsError, OSError) as exc:
                     ok = False
                     print(f"{row.path}: {exc}", file=sys.stderr, flush=True)
             alerts.save()

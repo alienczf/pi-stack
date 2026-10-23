@@ -22,7 +22,9 @@ DEFAULT_PI_WEB_URL = "http://127.0.0.1:8504"
 STREAM_ID = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 PROJECT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 STREAM_COLUMNS = ("id", "path", "project")
-PROTECTED_STREAM_FILES = frozenset({"STREAM.md", "STATE.md", "DECISIONS.md", "threads.tsv"})
+PROTECTED_STREAM_FILES = frozenset({"STREAM.md", "STATE.md", "DECISIONS.md", "GOAL.md", "ACTIONS.md", "threads.tsv"})
+STATE_SCHEMA = 1
+TEMPLATE_STATE_SCHEMA = 0
 
 
 @dataclass
@@ -82,6 +84,7 @@ class StreamConfig:
     project: str
     pi_stack_revision: str
     remote: str = ""
+    state_schema: int = 0
 
 
 def _q(value: str) -> str:
@@ -134,6 +137,8 @@ def dump_stream_config(config: StreamConfig) -> str:
     ]
     if config.remote != "":
         lines.append(f"remote = {_q(config.remote)}")
+    if config.state_schema:
+        lines.append(f"state_schema = {config.state_schema}")
     return "\n".join(lines) + "\n"
 
 
@@ -208,10 +213,14 @@ def load_stream_config(path: Path) -> StreamConfig:
         raise StreamsError(f"{path}: {exc}") from exc
     try:
         remote = data.get("remote", "")
+        schema = data.get("state_schema", 0)
+        if type(schema) is not int or schema not in (0, STATE_SCHEMA):
+            raise ValueError("unsupported STATE schema")
         config = StreamConfig(
             project=str(data["project"]),
             pi_stack_revision=str(data["pi_stack_revision"]),
             remote=str(remote),
+            state_schema=schema,
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise StreamsError(f"{path}: {exc}") from exc
@@ -224,7 +233,7 @@ def save_stream_config(repo: Path, config: StreamConfig) -> None:
 
 def _write(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd, name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    fd, name = tempfile.mkstemp(prefix=".pi-streams-", suffix=".tmp", dir=path.parent)
     tmp = Path(name)
     try:
         if path.exists():
@@ -306,6 +315,18 @@ def git(cwd: Path, *args: str, index: Path | None = None) -> str:
     if proc.returncode != 0:
         detail = proc.stderr.strip() or proc.stdout.strip() or f"git {args[0]} failed"
         raise StreamsError(detail)
+    return proc.stdout
+
+
+def git_blob(cwd: Path, object_name: str) -> bytes:
+    proc = subprocess.run(
+        ["git", "-C", os.fspath(cwd), "cat-file", "blob", object_name],
+        capture_output=True,
+        env=_git_env(),
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise StreamsError(proc.stderr.decode("utf-8", errors="replace").strip() or "git blob read failed")
     return proc.stdout
 
 
@@ -804,11 +825,13 @@ def create_stream(index: Path, project: Project, stream_id: str) -> Path:
     fresh = not (dest / "stream.toml").is_file()
     dest.mkdir(parents=True, exist_ok=True)
     ensure_git(dest)
+    if not fresh and load_stream_config(dest / "stream.toml").state_schema != TEMPLATE_STATE_SCHEMA:
+        raise StreamsError("stream/template STATE schema mismatch; explicit migration is required")
     copy_missing(templates_dir() / "stream", dest)
     if fresh:
         save_stream_config(
             dest,
-            StreamConfig(project=project.info.name, pi_stack_revision=pi_stack_revision()),
+            StreamConfig(project=project.info.name, pi_stack_revision=pi_stack_revision(), state_schema=TEMPLATE_STATE_SCHEMA),
         )
         seed_context(dest, project.repos)
     upsert_stream_row(index, StreamRow(id=stream_id, path=str(dest), project=project.info.name))
@@ -816,7 +839,7 @@ def create_stream(index: Path, project: Project, stream_id: str) -> Path:
 
 
 def _protected(relative: Path) -> bool:
-    return relative.parts[:1] == ("context",) or relative.as_posix() in PROTECTED_STREAM_FILES
+    return relative.parts[:1] in {("context",), ("history",), ("failures",)} or relative.as_posix() in PROTECTED_STREAM_FILES
 
 
 def _template_bytes(revision: str, relative: str) -> bytes | None:
@@ -834,6 +857,8 @@ def _template_bytes(revision: str, relative: str) -> bytes | None:
 
 def upgrade_stream(repo: Path, stream_id: str) -> bool:
     config = load_stream_config(repo / "stream.toml")
+    if config.state_schema != TEMPLATE_STATE_SCHEMA:
+        raise StreamsError("stream/template STATE schema mismatch; explicit migration is required")
     recorded = config.pi_stack_revision
     current = pi_stack_revision()
     source_root = templates_dir() / "stream"
