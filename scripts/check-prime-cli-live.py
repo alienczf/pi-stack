@@ -92,6 +92,16 @@ class ModelDefinition:
     def native_config(self) -> dict:
         return {"providers": {self.provider: {"models": [self.model()]}}}
 
+    def expect(self, data: object) -> None:
+        if isinstance(data, dict):
+            projected = {"provider": data.get("provider"), **{key: data.get(key) for key in self.model()}}
+            try:
+                if self.parse(projected) == self:
+                    return
+            except (ValueError, TypeError):
+                pass
+        raise CliError("model_metadata_mismatch", "Native model metadata differs from the supplied definition", 409)
+
 
 def prepare() -> dict:
     root = Path(tempfile.mkdtemp(prefix="prime-cli-check-"))
@@ -197,7 +207,8 @@ class VerificationRuntime:
 
 
 class Check:
-    def __init__(self, root: Path, timeout: float):
+    def __init__(self, root: Path, timeout: float, definition: ModelDefinition | None = None):
+        self.definition = definition
         self.root = root.resolve()
         self.timeout = timeout
         self.socket = str(self.root / "daemon.sock")
@@ -258,6 +269,11 @@ class Check:
         if state["thinkingLevel"] != THINKING:
             self.gaps.append(f"Requested xhigh was clamped to {state['thinkingLevel']}. No xhigh inference is claimed.")
         self.evidence.append({"requestedThinking": THINKING, "effectiveThinking": state["thinkingLevel"]})
+        if self.definition:
+            self.definition.expect(state["model"])
+            if state["thinkingLevel"] != THINKING:
+                raise CliError("model_thinking_mismatch", "Native thinking level differs from the requested level", 409)
+            self.evidence.append({"modelMetadataMatched": True})
         sessions = self.call("list", "--cwd", self.cwd)["sessions"]
         own = next(row for row in sessions if row["id"] == sid)
         if own.get("archived") is not False or not all(key in own for key in ("path", "messageCount", "modified")):
@@ -267,11 +283,9 @@ class Check:
         answer = self.call("answer", sid, "owned-ask", "owned-question", "not injected", expected=1)
         if answer.get("status") != 501 or answer.get("error") != "unsupported":
             raise CliError("answer_gap_hidden", "Interactive answer must be explicitly unsupported")
-        selection = self.call("model", sid, MODEL, expected=None)
-        if not selection.get("ok"):
-            if selection.get("error") != "upstream_error":
-                raise CliError("model_check_failed", "Exact native model selection failed unexpectedly")
-            self.gaps.append("Native set_model rejected the exact requested selector. No substitute was selected.")
+        selection = self.call("model", sid, MODEL)
+        if self.definition:
+            self.definition.expect(selection["result"])
         if inference:
             with PrimeClient(self.socket, self.timeout) as wire:
                 pause = wire.request("acquire_session_input_pause", activeSessionId=sid, leaseKey=str(uuid.uuid4()))
@@ -298,6 +312,8 @@ class Check:
         self.call("thinking-level", sid, THINKING)
         effective = self.call("status", sid)["session"]["thinkingLevel"]
         self.evidence.append({"thinkingSetterAccepted": True, "effectiveThinking": effective})
+        if self.definition and effective != THINKING:
+            raise CliError("model_thinking_mismatch", "Native thinking setter did not retain the requested level", 409)
         if inference:
             token = f"PRIME_CLI_VERIFIED_{uuid.uuid4().hex}"
             self.evidence.append({"command": "prompt_and_wait", "transport": "native-completion-probe"})
@@ -358,9 +374,9 @@ def main() -> int:
     try:
         if not math.isfinite(args.timeout) or args.timeout <= 0:
             raise CliError("usage", "timeout must be finite and positive", 400)
-        check = Check(args.root, args.timeout)
+        definition = ModelDefinition.load(args.model_definition) if args.mode == "verify" else None
+        check = Check(args.root, args.timeout, definition)
         if args.mode == "verify":
-            definition = ModelDefinition.load(args.model_definition)
             result["modelMetadata"] = {"source": str(args.model_definition), "limitations": METADATA_LIMITATIONS}
             runtime = VerificationRuntime(check.root, args.runtime.resolve(), args.timeout, definition)
             runtime.start()
