@@ -2,9 +2,9 @@
 
 ## Contract and resume point
 
-GO at 2026-10-23 11:35 SGT authorizes implementation. Z15 wins over earlier artifact layouts. Source base is pi-stack 3acf0f01e6084a317b89cef3a86f4781e60877cf. Code worktree is /home/alphalab/Projects/worktrees/pi-stack-streams-must-fix on feat/streams-must-fix. Its current head is 1ce95048c30f51d38e62c5165e3e1261363dd1f5, the first S1 implementation commit. Docs stay uncommitted for Grok Bot.
+GO at 2026-10-23 11:35 SGT authorizes implementation. Z15 wins over earlier artifact layouts. Source base is pi-stack 3acf0f01e6084a317b89cef3a86f4781e60877cf. Code worktree is /home/alphalab/Projects/worktrees/pi-stack-streams-must-fix on feat/streams-must-fix. Its current head is 21e823fbfac6e6b991b189f39d4ffccb498c4afa, the second S1 implementation commit. Docs stay uncommitted for Grok Bot.
 
-Resume here after compaction, not from the old catalog summary. Parent acknowledged the docs/105-test baseline checkpoint and supplied the matching pi-web tag. Source pin/compatibility is now verified. Exactly one implementation commit is complete, `streams: publish snapshots and scope automatic commits`, at 1ce95048c30f51d38e62c5165e3e1261363dd1f5. Its immediate parent red, focused green, and full offline suite are recorded below. No subagent_supervisor tool is available, so this continuation returns the required one-commit checkpoint. After parent acknowledgement, the next commit is `streams: parse STATE Goals and update the current objective only`, with its new regression first on parent 1ce9504. S1 and S1-S6 are not complete.
+Resume here after compaction, not from the old catalog summary. Parent acknowledged the first S1 commit after source/test/evidence review and reports an independent 16-test pass at `/tmp/pi-streams-parent-review.ph8AzM/focused.log`. This continuation implements exactly the second S1 commit, `streams: parse STATE Goals and update the current objective only`, at 21e823fbfac6e6b991b189f39d4ffccb498c4afa. Its parent-red API-absence result, 24 focused green tests, and 145-test full offline pass are recorded below. No subagent_supervisor tool is available, so return this one-commit checkpoint. After parent acknowledgement, the next exact title is `streams: append STATE Log and rotate overflow under the stream lock`, with its regression first on parent 21e823f. S1 and S1-S6 are not complete.
 
 ## Designed workflow
 
@@ -12,7 +12,7 @@ Resume here after compaction, not from the old catalog summary. Parent acknowled
 - [x] Phase A: Frame. Done means S1, S2, S2a, S3, S4, S5, S6 committed locally with a parent-red regression and green/full-suite evidence per commit, plus isolated disposable checks and an F-DCR round trip. Partial or blocked verification is not completion.
 - [x] Phase B: Design the workflow. Catalog/artifact tiers and baseline checked; matching pi-web source pinned and compatibility verified. One writer owns each isolated checkout. The approved boundaries remain the implementation contract.
 - [ ] Phase C: Run the loop. Each catalog commit starts with its regression on the parent, then the smallest fix, focused green, full offline suite, diff review, and local commit with evidence.
-- [ ] S1. First of five catalog commits complete for snapshots/scoped staging. STATE parsing, Log/rule operations, templates/defaults, and full-SID handovers remain.
+- [ ] S1. Two of five catalog commits complete for snapshots/scoped staging and STATE parsing/objective-only updates. Log/rule operations, templates/defaults, and full-SID handovers remain.
 - [ ] S2. Identity, evidence, applied receipts, receiver stop safety and safe replacement.
 - [ ] S2a. Lossless explicit stream-root migration, once, without worker writes.
 - [ ] S3. Fixed same-session DCR and receiving-side maintenance support.
@@ -38,7 +38,7 @@ Validation passed for row/detail identity, the 11+6 partition, seven detail fiel
 
 ## Source pins and companion changes
 
-- pi-stack base: 3acf0f01e6084a317b89cef3a86f4781e60877cf. Current feat/streams-must-fix head: 1ce95048c30f51d38e62c5165e3e1261363dd1f5. Only the exact authorized worktree received source/test/commit writes. TODO.md and PLAN.md remain untracked process artifacts. Main remains clean at the base.
+- pi-stack base: 3acf0f01e6084a317b89cef3a86f4781e60877cf. Current feat/streams-must-fix head: 21e823fbfac6e6b991b189f39d4ffccb498c4afa. Only the exact authorized worktree received source/test/commit writes. TODO.md and PLAN.md remain untracked process artifacts. Main remains clean at the base.
 - pi-web source: https://github.com/jmfederico/pi-web.git tag v1.202607.3 at 9b8728a5d626dbc69e321e563b970d44f4000a68. Checkout is /home/alphalab/Projects/worktrees/pi-web-streams-must-fix on local feat/streams-must-fix, clean at that revision with no source edits or commits. Clone used GIT_TERMINAL_PROMPT=0 and an empty credential helper. No npm install or runtime provisioning was needed for this unit.
 - Compatibility: source and installed package.json are identical, version 1.202607.3. Installed maps for piSessionService, sessionCommandService, sessionRoutes, and sessionArchiveStore point to the matching source paths. Every mapped source line/column is valid, and maximum mapped lines match the tagged files exactly at 4184, 377, 675, and 297. Maps omit sourcesContent, so an initial embedded-source comparison failed with KeyError and was replaced by the supported path/position check. This is source-map/package compatibility, not a reproducible-build byte comparison. Installed files remained read-only.
 - Bot deployment: locate source without guessing. If unavailable on options-01, store exact companion patch files in this progress folder and record them here.
@@ -48,6 +48,7 @@ Validation passed for row/detail identity, the 11+6 partition, seven detail fiel
 | Stack | Title | SHA | Parent red test | Focused green | Full offline suite | Disposable check |
 |---|---|---|---|---|---|---|
 | S1, commit 1 of 5 | streams: publish snapshots and scope automatic commits | 1ce95048c30f51d38e62c5165e3e1261363dd1f5 | `python3 -m unittest discover -s pi-streams/tests -p test_persistence_git.py -v` on unchanged parent 3acf0f0, exit 1. 11 tests, 21 failures and 1 unsupported-API error. | Same command, final 16 tests OK, exit 0. Focused close suite also 3 tests OK. | `python3 -m unittest discover -s pi-streams/tests`, final 121 tests OK, exit 0. | Pending. S1 stack incomplete. No real pi-web/model task effects or F-DCR check yet. |
+| S1, commit 2 of 5 | streams: parse STATE Goals and update the current objective only | 21e823fbfac6e6b991b189f39d4ffccb498c4afa | `python3 -m unittest discover -s pi-streams/tests -p test_state_artifacts.py -v` on unchanged parent 1ce9504, exit 1. One loader error, ModuleNotFoundError for engine.artifacts. Behavior tests did not run on the parent. | Same command, final 24 tests OK, exit 0. | `python3 -m unittest discover -s pi-streams/tests`, final 145 tests OK, exit 0. | Pending. S1 stack incomplete; no actual runtime task-effect or F-DCR result. |
 
 ## Historical docs and baseline checkpoint evidence
 
@@ -85,6 +86,22 @@ TRACK 1 STATUS: implementing | stack=S1 | commit=1ce9504 streams: publish snapsh
 
 Progress-file update is complete. This continuation contains exactly one local implementation commit and returns its checkpoint for parent review/reporting. No next commit has started.
 
+## S1 second-commit checkpoint
+
+Parent acknowledged 1ce9504 and authorized exactly one next commit. The new test module ran on unchanged immediate parent 1ce95048c30f51d38e62c5165e3e1261363dd1f5 before engine-source edits. Actual red was one unittest loader error because engine.artifacts did not exist. This proves API absence, not 24 behavioral failures. Output is `/tmp/pi-streams-s1-goals.JpsaYQ/red.log`. No historical red was reconstructed.
+
+The commit adds only engine/artifacts.py and tests/test_state_artifacts.py. Immutable ByteSpan, Section, and StreamState records retain the original UTF-8 bytes and structural spans. The shared parser validates Goals, Rules, optional intervening extras, then Log. It requires one North Star, Current objective, and Charter in that order, and the ratified marker on Goals' first line. Backtick/tilde fences, indentation, and closing ATX hashes are recognized so example or disguised duplicate headers do not silently change authority. Invalid UTF-8, NUL, empty North Star, duplicate/missing sections, bad ordering, unscoped preamble, and unterminated fences fail without mutation. Extra sections stay opaque; no Asks feature was implemented.
+
+One resolver selects nonempty current objective, otherwise North Star. It trims surrounding whitespace only, preserving internal newlines, indentation, Unicode, and punctuation. Objective replacement changes only that body's byte span, adds the existing heading's LF/CRLF terminator when needed, reparses the result, and requires the objective boundary to match the exact replacement span. A regression demonstrates that parsing alone can succeed after a crafted fence hides the original Charter heading; the boundary check rejects that candidate. All authority, North Star, Charter, Rules, Log, and extra-section bytes outside the editable body remain identical. No goal-completion flag or budget was added.
+
+The stream-file update acquires the existing stream lock before reading current STATE and uses the first commit's durable atomic writer. Identical replacement is a no-op. Symlink STATE paths are refused. Invalid updates, malformed sources, and an injected pre-replace publication failure retain the original bytes. These are internal engine APIs for later callers, not CLI/template activation, migration, rule edits, or Log rotation.
+
+Focused command was `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s pi-streams/tests -p test_state_artifacts.py -v`. Final result was 24 tests OK, exit 0, retained in `/tmp/pi-streams-s1-goals.JpsaYQ/green-final.log`. Full command was `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s pi-streams/tests`. Final result was 145 tests OK, exit 0, retained in `/tmp/pi-streams-s1-goals.JpsaYQ/full-suite.log`. HOME and all three XDG paths were private. No existing test was edited or weakened. Relevant manual source/test review and exact staged-diff whitespace checks passed. Untouched repository scripts, source discovery/clone, and skill research were not rerun, as directed.
+
+TRACK 1 STATUS: implementing | stack=S1 | commit=21e823f streams: parse STATE Goals and update the current objective only | red=yes green=yes suite=pass | disposable=pending
+
+Progress-file update is complete. This continuation has exactly one new local commit and returns before the third commit. Parent independent review/reporting is required. Main and installed paths remain untouched. Pi-web remains clean at the previously recorded source pin.
+
 ## Current limitations
 
-Only the first S1 commit is implemented. The rest of S1, S2, S2a, S3, S4, S5, and S6 remain. No actual isolated pi-web task-effect check or F-DCR round trip has run. Pi-web source is pinned and compatible but unbuilt/unmodified; native maintenance/recovery capabilities are not yet implemented or verified. Bot owning source/route discovery and companion patches remain pending. No production activation, deployment, installed edit, credential operation, Slack send, existing-stream/session mutation, push, PR, merge, or other-branch rebase occurred. Parent review is still required.
+Only the first two S1 commits are implemented. Log/rule operations, templates/defaults, full-SID handovers, S2, S2a, S3, S4, S5, and S6 remain. The new parser/update APIs are not wired into runtime admissions or generated stream templates yet. They accept the canonical approved STATE layout, not automatic legacy conversion or arbitrary Markdown. Authority-marker syntax is parsed and preserved; that alone does not authenticate ratification or authorize worker spawn. No actual isolated pi-web task-effect check or F-DCR round trip has run. Pi-web is pinned but unbuilt/unmodified. Bot owning source/route discovery and companion patches remain pending. No production activation, deployment, installed edit, credential operation, Slack send, existing-stream/session mutation, push, PR, merge, or other-branch rebase occurred. Parent review remains required.
