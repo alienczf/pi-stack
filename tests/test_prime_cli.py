@@ -373,6 +373,11 @@ class PrimeCliTests(unittest.TestCase):
             self.assertEqual((proc.returncode, json.loads(proc.stdout)["error"]), (1, "protocol_mismatch"))
             self.assertEqual(fixture.requests, [])
 
+    def test_schema_mismatch(self):
+        with Fixture([None], hello={"type": "daemon_hello", "protocol": PROTOCOL, "schemaRevision": 29}) as fixture:
+            proc = run_cli("abort", "s1", fixture=fixture)
+        self.assertEqual((proc.returncode, json.loads(proc.stdout).get("error")), (1, "protocol_mismatch"))
+
     def test_malformed_replies(self):
         cases = [b"not json\n", b"[]\n", b"{\"type\":\"response\"}\n", b"\xff\n", b"{\"bad\":NaN}\n", b"partial"]
         for raw in cases:

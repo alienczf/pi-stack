@@ -33,6 +33,35 @@ class ExistingPathTests(unittest.TestCase):
             project.create_stream(index, config, "one", backend="prime")
             self.assertEqual((stream / "STATE.md").read_text(), current)
 
+    def test_prime_creation_rejects_symlink_destination_ancestors_and_registered_escape(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "project"
+            root.mkdir()
+            foreign = Path(tmp) / "foreign"
+            foreign.mkdir()
+            index = Path(tmp) / "index"
+            index.mkdir()
+            info = project.ProjectSection("product", str(root), "", "", "")
+            settings = project.ModelSettings("openai-codex/gpt-6.1-sol", "xhigh")
+            config = project.Project(info, settings, settings, project.Caps(), [])
+            streams = root / "streams"
+            streams.mkdir()
+            (streams / "escape").symlink_to(foreign, target_is_directory=True)
+            with self.assertRaisesRegex(StreamsError, "symlink|escape"):
+                project.create_stream(index, config, "escape", backend="prime")
+            self.assertEqual(list(foreign.iterdir()), [])
+            (streams / "escape").unlink()
+            streams.rmdir()
+            streams.symlink_to(foreign, target_is_directory=True)
+            with self.assertRaisesRegex(StreamsError, "symlink|escape"):
+                project.create_stream(index, config, "escape", backend="prime")
+            self.assertEqual(list(foreign.iterdir()), [])
+            streams.unlink()
+            project.upsert_stream_row(index, project.StreamRow("escape", str(foreign), "product"))
+            with self.assertRaisesRegex(StreamsError, "escape"):
+                project.create_stream(index, config, "escape", backend="prime")
+            self.assertEqual(list(foreign.iterdir()), [])
+
     def test_prime_upgrade_preserves_current_work_history_and_custom_role(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
