@@ -507,18 +507,18 @@ The existing offline suite is `python3 -m unittest discover -s pi-streams/tests`
 
 This companion change does not go into the pi-stack PR or generic host CLI.
 
-### Stack S1. Remove bad seeds and accidental Git capture
+### Stack S1. Code-owned artifact operations, then their callers
 
 | Commit title | Files | Test and real-stream check |
 |---|---|---|
-| `streams: remove default caps and unauthorized fallback text` | `skills/{stream,stream-kickoff}/SKILL.md`, stream/thread templates, `docs/design/pi-streams.md`, template/prose tests. | Items 4 and 10. New disposable kickoff with no caps and an artifact-only goal. |
-| `streams: reject unratified worker dispatch` | `engine/threads.py`, spawn/adopt/status tests. | First-line marker fixture and no side effects before ratification. Attempt dispatch in the new unratified stream. |
-| `streams: separate current state from checkpoint history` | `templates/stream/{STATE,DECISIONS,AGENTS}.md`, `context/README.md`, a narrow current-view check and tests. | Item 6's frozen-shape fixture. Disposable pickup with current work and separately retained history. |
-| `streams: bind handovers to the full session identity` | Thread brief/rendering, close checks, `skills/stream/SKILL.md`, brief/close tests. | Item 14's predecessor/successor case and owned helper-report reference. |
-| `streams: publish snapshots atomically and repair create retries` | `engine/{project,threads}.py`, create/persistence tests. | Item 15's interrupted write, concurrent read, and config-present/index-absent retry. |
-| `streams: stage records explicitly instead of git add -A` | `engine/project.py`, ignore template, new/upgrade/tick Git tests. | Item 13's DLL/package/CSV and staged-index cases. Inspect actual disposable-stream commits. |
+| `streams: publish snapshots and scope automatic commits` | `engine/{project,threads}.py`, create/persistence/Git tests. | Items 13/15. Short-write, retry, unrelated staged files, binary/data exclusion. |
+| `streams: parse the charter and update CURRENT only` | Proposed `engine/artifacts.py`, `project.py`, charter tests. | Item 10. Real bare-label format, CURRENT/GOAL fallback, duplicate rejection, unchanged protected section bytes. |
+| `streams: append and rotate ACTIONS under the stream lock` | Artifact helper, `engine/{cli,tick,project}.py`, protected-file/schema changes, proposed `test_action_rotation.py`. | Item 6. 30/31, identical occurrences, collisions, append races, crash durability, rotation on paused/outage/eventless ticks. |
+| `streams: archive completed views and inventory bulk outputs` | Artifact helper, proposed artifact-health tests. | Items 12/17. Open-task preservation, index-only README, duplicate-ledger import, zero unauthorized data deletion. |
+| `streams: teach the new artifact contract and remove bad defaults` | ACTIONS/history/STREAM templates, remove STATE template, AGENTS steps 1/5, kickoff Interview/Ratify/Plan, stream skill, stream-scoped overlay, design docs, literal tests. | Code already exists. New kickoff has no caps, CURRENT-only exception, real append command, no active STATE read, and unchanged non-stream overlay behavior. |
+| `streams: bind handovers to full session identity` | Brief/rendering, close checks, stream skill, brief/close tests. | Item 14's predecessor/successor case and owned report reference. |
 
-This stack can land independently. It must not migrate or resume existing streams.
+The ACTIONS/charter/health code precedes the template/skill commit. Do not activate legacy streams with a mixed STATE/ACTIONS layout. This stack does not itself migrate or resume an existing stream.
 
 ### Stack S2. Correct identity, receipts, archive reads, and rotation
 
@@ -532,14 +532,24 @@ This stack can land independently. It must not migrate or resume existing stream
 
 Update the bot relay's receipt handling in its owning deployment source alongside this stack. It must stop claiming a transport receipt is delivery. Land the CLI response semantics and caller changes together or version the added fields without breaking the caller.
 
-### Stack S3. One dump, compact, resume operation
+### Stack S2a. Explicit existing-stream migration
+
+| Commit title | Files | Test and real-stream check |
+|---|---|---|
+| `streams: plan a lossless stream-root artifact migration` | `engine/{cli,project}.py`, artifact helper, proposed `test_artifact_migration.py`. | Item 16. Exact STATE section reconstruction, section Git timestamps/fallback, charter extraction map, path/symlink fence. |
+| `streams: apply migration once with one scoped commit` | Migration journal/schema marker, scoped Git helper, tests. | Crash before/after delete/commit, one seed, second-run zero commits, no duplicate amendments/history, unchanged worker-worktree hashes. |
+
+Run this on the disposable stream before enabling DCR there. Real existing-stream migration is explicit after the first-pass go-ahead, per-stream evidence review, and tested code deployment. It never writes worker worktrees.
+
+### Stack S3. Fixed-template DCR, code before instructions
 
 | Commit title | Files | Test and real-stream check |
 |---|---|---|
 | `pi-web: compact only at the expected idle checkpoint and retain maintenance input` | `jmfederico/pi-web` source `src/server/sessions/{sessionCommandService,piSessionService}.ts`, narrow persisted maintenance record, capability/result fields, and focused tests. No installed `dist` edits. | Busy/direct-input races, accepted input across a restart during compaction, and newer input before saved RESUME. A command-start reply must not pass as compaction completion. |
 | `streams: add native command-run and compaction-result observation` | `bin/pi-web-cli`, `engine/{piweb,sessionlog,doctor}.py`, CLI/doctor tests. | Call the real command endpoint and identify one successful compaction entry. |
-| `streams: dump compact and resume coordinators at tick-observed 150k` | `engine/tick.py`, maintenance phase persistence, coordinator/dump template, new maintenance tests. | Item 3's direct-prompt, active-tool, threshold, crash, failure, and same-session cases. |
-| `streams: review current records and rules during dump` | Current/history templates and dump instruction/receipt, maintenance tests. | Item 12. Inspect STATE, TODO, DECISIONS, loaded-rule revisions, and the agent-authored resume prompt before compaction. |
+| `streams: implement argument-preserving poteto-mode invocation` | Engine/receiving adapter and installer capability checks, actual prompt-expansion tests. | Exact goal punctuation/newlines and loaded skill; fixed DCR read-path prefix survives the non-leading invocation. |
+| `streams: sync compact and resume with the fixed 150k DCR template` | `engine/tick.py`, small code-owned prompt renderer, maintenance state/adapter tests. | Item 3. CURRENT/GOAL resolution, real artifact reads, no agent-written resume, same SID, no active-tool abort, changed CURRENT/stop/input races. |
+| `streams: describe the implemented DCR sync in coordinator instructions` | AGENTS/skills and literal tests only after code is present. | SYNC updates CURRENT/ACTIONS/TODO/PLAN/index; no new failure-driven rules or skills. |
 
 Build and install the exact tested pi-web artifact before enabling this stack, then require its maintenance capability in doctor. The current installer skips an existing pi-web, so merely reinstalling pi-stack is not this deployment step. Do not revive the superseded 252k native-hook work. Real verification must show no interruption of the running tool and actual resumed task progress.
 
@@ -547,20 +557,32 @@ Build and install the exact tested pi-web artifact before enabling this stack, t
 
 | Commit title | Files | Test and real-stream check |
 |---|---|---|
-| `streams: persist stream drive disposition and continue due work` | `engine/{project,cli,tick}.py`, current-state template, tick tests. | Item 1's two-step no-human-nudge case and stop/wait/done suppression. |
-| `streams: isolate observations and report per-stream tick health` | `engine/{tick,doctor,piweb}.py`, tick-failure/doctor tests, systemd unit only if needed for completed-pass reporting. | One unavailable worker must not starve ready work. One healthy stream must not hide another failing pass. Run through the disposable systemd unit. |
+| `streams: re-inject the current goal whenever driven and stalled` | `engine/{project,cli,tick,piweb}.py`, shared goal/prompt renderer, tick tests. | Item 1. Identical injection across stall reasons and missing dispositions; no `out()`/pending-event veto; CURRENT fallback, worker-to-stream routing, preserved human ask. |
+| `streams: isolate observations and report per-stream tick health` | `engine/{tick,doctor,piweb}.py`, failure/doctor tests, systemd pass reporting if needed. | One unavailable worker does not skip another reinjection or ACTIONS rotation. One healthy stream cannot hide a failed pass. |
+| `streams: align generated drive instructions with the coded rule` | Coordinator/skill wording and literal tests after the reinjection code. | No next-action/disposition requirement, no session-level stall-remedy classifier, no North Star done flag. |
 
 Reuse S2's receiving-side generation check for all driver admissions. Native stop/cancel invalidation is already present before S3, not postponed until this stack. Test the sender-check/stop/receiver-admission race before enabling automatic execution wakes. Tick receipt, maintenance, and registry prerequisites must already be present.
 
-### Stack S5. Same-provider recovery and quiet Slack notifications
+### Stack S5. Usage-reset recovery and quiet Slack notifications
 
 | Commit title | Files | Test and real-stream check |
 |---|---|---|
-| `streams: retain typed blockers and allow due recovery probes` | `engine/{tick,sessionlog}.py`, provider/pi-web metadata adapter, outage/failure tests. | All five G5 cases while the old assistant error remains unchanged. One reset retry, then re-park on failure. |
+| `streams: retry a saved usage-limited step once at reset` | `engine/{tick,sessionlog}.py`, provider metadata adapter, outage tests. | Item 2. Unchanged assistant error, one saved-step reset trial, failed-trial restart does not replenish it. Other classes hand off to Z11, not automatic readiness resumes. |
 | `bot: deliver blocker and recovery episodes to ZF DM` | Owning bot deployment's ALERTS reader, completed-pass observer, Slack delivery state/tests. `systemd/pi-streams-tick.service` only if the existing observer needs an exit-status signal. | Exact `<stream-id>:: <message>`, ZF only, no BossOps, one blocker and at most one recovery. ENOSPC notification originates off-host. |
-| `streams: preserve stops and uncertain jobs across recovery` | Focused recovery tests and small integration fixes in existing adapters. | Cancel during outage, gated lane, already-submitted job, unrepaired auth, and failed write probe. Inspect the real disposable task after recovery. |
+| `streams: preserve stops and uncertain jobs across recovery` | Focused tests and existing adapters. | Cancelled/gated work and uncertain submitted jobs are not replayed by reinjection, reset retry, or the later fork. Auth/write readiness without ratification does not release Z11 parking. |
 
 No automatic retries are enabled until both the retained recovery state and off-host notification path pass. Simulated failures in a real disposable stream are labelled fault-injection results, not claims that real accounts expired or quota was exhausted.
+
+### Stack S6. Ratified environment-failure F-DCR
+
+| Commit title | Files | Test and real-stream check |
+|---|---|---|
+| `streams: persist affected-session last-good failure markers` | Failure boundary/session reader, `failures/` protection, engine metadata and tests. | Item 18. Exact safe turn boundary, multiple simultaneous sessions, ENOSPC reporting, no environmental/rule/skill changes. |
+| `pi-web: expose exact-point fork and single-original deletion` | Owning session adapter/CLI, backend capability and scope tests. | Verify Pi entry/turn mapping and tool-pair integrity. Prime needs its own capability proof before its port. No subtree deletion or worker-worktree writes. |
+| `streams: run ratified fork DCR and wipe only after the fork streams` | Failure operation state, shared fixed DCR renderer, registry/receipt adapters, fault tests. | Human ratification, exact prefix, same fork through DCR, observed streaming before original wipe/marker removal, crashes and cancellation at every boundary. |
+| `streams: teach park-and-log failure behavior` | Generated stream prompt and skills after the code contract. | No self-remedy of the harness environment; only explicitly ratified additional instructions enter continuation. |
+
+No destructive operation is executed by this catalog task. The implementation must pass item 18's exact-scope and evidence-preservation tests on disposable sessions before production F-DCR is enabled.
 
 ### Rollout and rebase
 

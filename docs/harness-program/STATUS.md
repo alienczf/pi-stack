@@ -9,24 +9,24 @@ tracking_issue: https://github.com/alienczf/pi-stack/issues/38
 box_mirror: /workspace/harness-program
 host_docs_worktree: /home/alphalab/Projects/worktrees/pi-stack-harness-program
 host_input_copy: /home/alphalab/Projects/pi-stack/streams/pi-streams-harness/context/harness-program
-updated: 2026-10-23T10:12+08:00
+updated: 2026-10-23T10:35+08:00
 tracks:
   - id: 1
     name: pi-streams must-fix catalog
     session: 01a16655-5cfd-78c2-bf5f-e08c47e1665e
     host: options-01
     model: openai-codex/gpt-6.1-sol@xhigh
-    phase: catalog-amending (v1 done 09:5x with Z1-Z5; amending for Z6-Z11)
+    phase: catalog-amending post-compaction (Z6-Z10 edits on disk; finishing pass + Z11 from re-entry-1)
     started: 2026-10-23T09:17+08:00
     expected_done: 2026-10-23T11:30+08:00
     artifact: docs/harness-program/10-pi-streams-fix-catalog.md
     brief: docs/harness-program/briefs/track-1.md
-    steers: [docs/harness-program/briefs/track-1-steer-1.md, docs/harness-program/briefs/track-1-steer-2.md, docs/harness-program/briefs/track-1-steer-3.md]
-    steer_note: steer-2 (Z6-Z10, G17, 11-artifact-map) consumed 10:00 (sha match, turn started). steer-3 (Z11) queued as follow-up 10:06 while busy (pendingMessageCount=1); confirm it is consumed next run. Context 387k/500k at 10:10.
+    steers: [docs/harness-program/briefs/track-1-steer-1.md, docs/harness-program/briefs/track-1-steer-2.md, docs/harness-program/briefs/track-1-steer-3.md, docs/harness-program/briefs/track-1-reentry-1.md]
+    steer_note: 10:27 context 86.8% -> aborted, cleared unconsumed steer-3, /compact via PI WEB commands/run (G19). 10:34 re-entry-1 (brief + phase + steer-3 folded in, sha 742d71f3) consumed, streaming, context 9.8%. Compact recipe - curl -X POST 127.0.0.1:8504/api/sessions/<sid>/commands/run -d {"text":"/compact"} on the host; pi-web-cli prompt "/compact" does NOT compact.
     inputs: [docs/harness-program/11-artifact-map.md]
     brief_sha256_verified: true
     gate: ZF first-pass review of the catalog. ZF finished dictating at 10:01 (Z1-Z11). Send once the catalog reflects Z1-Z11; per G18 mark each Z-derived fix with track 3's verdict if one exists, never wait for track 3.
-    next_action: When the session goes idle with "TRACK 1 STATUS", confirm steer-3 consumed, pull the artifact, check it against Z1-Z11 and G17/G18, commit it to the docs branch, then send it to ZF for review.
+    next_action: When the session goes idle with "TRACK 1 STATUS" (re-entry-1 already carries steer-3), pull the artifact, check it against Z1-Z11 and G17/G18, commit it to the docs branch, then send it to ZF for review.
   - id: 2
     name: prime-agent CLI (design + feat/prime-cli)
     session: 01a16656-ddcb-76c7-a44b-c7298bcb0198
