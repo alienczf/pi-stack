@@ -6,7 +6,7 @@
 - [ ] Phase C: Run the loop.
 - [x] Unit 1. Implement the Z15 stream writer and focused behavior tests.
 - [x] Unit 2. Expose public stock transport and owned sessions.
-- [ ] Unit 3. Save and refresh messages, wake eligible work, and stop best effort.
+- [x] Unit 3. Save and refresh messages, wake eligible work, and stop best effort.
 - [ ] Unit 4. Dispatch clean poteto workers with handover and kickoff only.
 - [ ] Unit 5. Own percentage-triggered save, compact, readback, and resume.
 - [ ] Unit 6. Close only computed results and stage owned paths.
@@ -38,4 +38,6 @@ Evidence is under `/home/alphalab/.cache/pi-stack-track6/20261023T172837Z/eviden
 
 Unit 2 passed 39 focused tests, 144 stream tests and 72 root tests. Logs are `evidence/unit-2-{focused,streams,root}.log`. The shared transport owns protocol 7/schema 30, pending commands and interleaved events. The thin CLI preserves compatibility projections and error outcomes. Prime session creation refuses thinking clamps. The parent-reported path escape has a failing regression and now rejects destination/ancestor symlinks and registered Prime paths outside the project stream directory.
 
-Next is Unit 3. Prime creation currently takes an explicit `backend="prime"` and persists it in `stream.toml`. Project-level backend settings remain Unit 2. Writers accept `locked=True` for callers already holding the stream lock. Successful computed completion remains blocked until Unit 6 supplies its actual closing checks. Explicit cancellation or informational explanation uses a complete linked answer and later trusted human source. Broad legacy staging remains unchanged until Unit 6. No native inference or authentication check was attempted.
+Unit 2 commit is `ffbacff02fb2d2dc689ad216b6f3cfc5da3a779b`. Unit 3 passed 48 focused, 153 stream and 72 root tests in `evidence/unit-3-{focused,streams,root}.log`.
+
+Next is Unit 4. Prime creation currently takes an explicit `backend="prime"` and persists it in `stream.toml`. Project-level backend settings remain Unit 2. Writers accept `locked=True` for callers already holding the stream lock. Successful computed completion remains blocked until Unit 6 supplies its actual closing checks. Explicit cancellation or informational explanation uses a complete linked answer and later trusted human source. Broad legacy staging remains unchanged until Unit 6. No native inference or authentication check was attempted.

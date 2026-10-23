@@ -278,3 +278,144 @@ def stop_owned_daemon(owned):
         owned.process.terminate()
     owned.process.wait()
     owned.log_handle.close()
+
+
+@dataclass(frozen=True)
+class PendingMessage:
+    command_id: str
+    identity: SessionIdentity
+    text: str
+    original_entries: tuple[str, ...]
+    mode: str
+
+
+def stream_entries(stream):
+    from engine import state
+    current = state.check_state(stream)
+    return current, state._entries(stream, current)
+
+
+def coordinator_id(stream):
+    from engine.threads import load_threads, Status
+    rows = [row for row in load_threads(Path(stream) / "threads.tsv") if row.role == "coordinator" and row.status is Status.active]
+    if len(rows) != 1:
+        raise StreamsError("stream needs exactly one current coordinator")
+    return rows[0].session
+
+
+def unresolved(entries):
+    before = {e.command for e in entries.values() if "goals_rules_sha256" in e.body}
+    replies = {e.command for e in entries.values() if "sent_text_sha256" in e.body}
+    return before - replies
+
+
+def eligible(current, entries):
+    if current.goals.status != "active" or not current.goals.objective:
+        return False
+    if unresolved(entries) or any(w.required is None for w in current.goals.work):
+        return False
+    replies = [e for e in entries.values() if "sent_text_sha256" in e.body]
+    if replies and max(replies, key=lambda e: e.timestamp).body["success"] is not True:
+        return False
+    return any(w.required and not w.waiting_for for w in current.goals.work)
+
+
+def check_current_command(stream, identity, expected, *, mode="automatic"):
+    from engine import state
+    from engine.prompts import render
+    current = state.check_current_text(stream, expected)
+    _, entries = stream_entries(stream)
+    if coordinator_id(stream) != identity.session_id or mode not in {"human", "save"} and not eligible(current, entries):
+        raise StreamsError(render("stale", stream_id=Path(stream).name, command_name=mode).strip())
+    if current.goals.status == "paused" and mode != "human":
+        raise StreamsError("operator stop supersedes automatic work")
+    return current
+
+
+def send_stream_message(client, stream, identity, *, body, command_id=None, sender=None,
+                        lane="followUp", mode="human", expected=None, original_entries=(),
+                        attachments=(), wait_result=True, metadata=None):
+    from engine import state
+    from engine.project import stream_lock
+    from engine.prompts import render
+    stream = Path(stream)
+    if attachments:
+        raise StreamsError("attachments are not supported")
+    if lane not in {"steer", "followUp"}:
+        raise StreamsError("invalid streaming lane")
+    command = command_id or str(uuid.uuid4())
+    with stream_lock(stream):
+        current, entries = stream_entries(stream)
+        if mode == "human":
+            saved = state.save_message(stream, text=body, command_id=command, session_id=identity.session_id,
+                                       sender=sender, send_as=lane, locked=True)
+            original_entries = (saved["entry"],)
+            current, entries = stream_entries(stream)
+        prior = [e for e in entries.values() if e.command == command and "goals_rules_sha256" in e.body]
+        if prior:
+            replies = [e for e in entries.values() if e.command == command and "sent_text_sha256" in e.body]
+            return {"sending_status": "Prime replied" if replies else "unknown after connection loss", "entry": replies[0].file if replies else prior[0].file}
+        expected = expected or current.goals_rules_sha256
+        check_current_command(stream, identity, expected, mode=mode)
+        resolve_session(client, identity.session_id, identity.active_session_id)
+        note = {"command": {"type": "prompt_and_wait", "session": identity.session_id, "lane": lane},
+                "body": body, "original_entries": list(original_entries), "goals_rules_sha256": expected,
+                "result": "unknown until reply saved"}
+        if metadata:
+            note.update(metadata)
+        state.append_log(stream, subject="Before send", body=note, session_id=identity.session_id,
+                         command_id=command, purpose="before-send", locked=True)
+        current = state.check_state(stream)
+        agents = state._read(state._path(stream, "AGENTS.md"))
+        text = render("stream", stream_id=stream.name, session_id=identity.session_id, command_id=command,
+                      agents_path=str(stream / "AGENTS.md"), agents_sha256=state.sha256(agents), agents_text=agents,
+                      state_path=str(stream / "STATE.md"), state_sha256=current.sha256, state_text=current.text,
+                      original_entries=list(original_entries), body_text=body)
+        client.write("prompt_and_wait", command_id=command, activeSessionId=identity.active_session_id,
+                     message=text, streamingBehavior=lane)
+    pending = PendingMessage(command, identity, text, tuple(original_entries), mode)
+    return finish_message(client, stream, pending) if wait_result else pending
+
+
+def finish_message(client, stream, pending):
+    frame = client.wait(pending.command_id)
+    data = object_data(client.query("get_messages", activeSessionId=pending.identity.active_session_id))
+    messages = array_field(data, "messages")
+    saved = save_reply(stream, session_id=pending.identity.session_id, command_id=pending.command_id,
+                       sent_text=pending.text, frame=frame, messages=messages)
+    return {"sending_status": "Prime replied", "frame": frame, "entry": saved["entry"], "pending": pending}
+
+
+def stop_session(client, stream, identity, *, sender=None, command_id=None):
+    from dataclasses import replace
+    from datetime import datetime, timezone
+    from engine import state
+    from engine.project import stream_lock
+    command = command_id or str(uuid.uuid4())
+    storage_error = None
+    try:
+        with stream_lock(Path(stream)):
+            current = state.check_state(Path(stream))
+            state.append_log(Path(stream), subject="Operator stop", body={"text": None,
+                "command": {"type": "abort", "session": identity.session_id}, "sender": sender,
+                "received_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")},
+                command_id=command, session_id=identity.session_id, purpose="stop", locked=True)
+            current = state.check_state(Path(stream))
+            if current.goals.objective is not None:
+                state.update_state(Path(stream), expect=current.sha256, goals=replace(current.goals, status="paused"), rules=None,
+                    entry={"subject": "Paused by operator stop", "body": {"command": "abort"}, "original_entries": []}, locked=True)
+    except (StreamsError, OSError) as exc:
+        storage_error = str(exc)
+    try:
+        sent = client.write("abort", command_id=command, activeSessionId=identity.active_session_id)
+        frame = client.wait(sent)
+        observed = client.query("get_connection_state", activeSessionId=identity.active_session_id)
+        result = {"frame": frame, "observed": observed, "termination_guaranteed": False, "storage_error": storage_error}
+    except (StreamsError, OSError) as exc:
+        result = {"result": "unknown", "error": str(exc), "termination_guaranteed": False, "storage_error": storage_error}
+    try:
+        state.append_log(Path(stream), subject="Abort observation", body=result, session_id=identity.session_id,
+                         command_id=command, purpose="abort-result")
+    except (StreamsError, OSError):
+        result["unsaved"] = True
+    return result
