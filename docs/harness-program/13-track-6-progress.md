@@ -38,8 +38,8 @@ Run directory is `/home/alphalab/.cache/pi-stack-track6/20261023T172837Z/`.
 | 3. Messages, wake and stop | `c3555ce4b8188e9d6962f1d5609e7ee9c11b3bbe` | 48 focused, 153 stream and 72 root tests passed. `evidence/unit-3-{focused,streams,root}.log`. |
 | 4. Clean workers | `e82609ec59be46d36fe9eccdd4c704827ac71d52` | 49 focused, 154 stream and 72 root tests passed. `evidence/unit-4-{focused,streams,root}.log`. |
 | 5. Owned compaction | `064e65dc27951395c2509a51182191701dd8e615` | 62 focused, 167 stream and 72 root tests passed. `evidence/unit-5-{focused,streams,root}.log`. Offline only. |
-| 6. Computed close | awaiting commit | 70 focused, 175 stream and 72 root tests passed. `evidence/unit-6-{focused,streams,root}.log`. |
-| 7. Isolated install | pending | pending |
+| 6. Computed close | `4d5dfc3954128aded35b63af3d21b8b4315b1c13` | 70 focused, 175 stream and 72 root tests passed. `evidence/unit-6-{focused,streams,root}.log`. |
+| 7. Isolated install | awaiting commit | 76 focused, 181 stream and 72 root tests passed. `evidence/unit-7-{focused,streams,root}.log`. Actual stock build remains a final gate. |
 | 8. PoC verifier | pending | pending |
 
 ## Decisions
@@ -87,6 +87,11 @@ Run directory is `/home/alphalab/.cache/pi-stack-track6/20261023T172837Z/`.
 | 2026-10-23T18:03:04Z | Support unittest or one tracked `check_`/`test_` Python script, not shell or scheduler replay. | The new check boundary must reject uncertain job submission rather than execute arbitrary claimed tests. | `checks/state.py::run_check`; `evidence/unit-6-focused.log` | Safe local checks and a valid alternative pass; this is validation, not an OS sandbox. |
 | 2026-10-23T18:03:04Z | Define excerpt proof ranges as inclusive one-based LF line ranges and verify their exact bytes. | An excerpt cannot silently stand for an unretained full proof. | `test_prime_close.py` | Incorrect range rejected; exact Unicode excerpt accepted. |
 | 2026-10-23T18:03:04Z | Stage only enumerated owned files or explicit authorized paths and refuse foreign staged content before index writes. | The old broad staging captured scratch and Prime settings in a behavioral reproduction. | `evidence/unit-6-before.log`; `evidence/unit-6-focused.log` | Legacy suites remain green; scratch and runtime data stay untracked. |
+
+| 2026-10-23T18:59:34Z | Dispatch `--merged-poc` before the ordinary installer and confine every managed runtime path to the supplied prefix. | The PoC must not reach Pi overlay, global links, services, existing sessions or authentication. | `engine/install_prime.py`; `evidence/unit-7-focused.log` | Offline isolation, conflict and idempotence checks pass. |
+| 2026-10-23T18:59:34Z | Install unchanged pinned Prime with its complete hashed runtime sidecar and reject unrecorded existing binaries. | A version string alone cannot prove that kernel startup has the matching runtime. | `engine/install_prime.py::install_prime`; `evidence/unit-7-focused.log` | Missing and mismatched sidecars rejected. |
+| 2026-10-23T18:59:34Z | Reuse the existing secret-free model definition to preserve explicit xhigh rather than accepting native reasoning-off fallback. | Requested model identity alone does not guarantee the requested reasoning behavior. | `scripts/prime-models/openai-codex-gpt-6.1-sol.json`; installer test | Metadata recorded in the owned agent directory; creation rechecks thinking. |
+| 2026-10-23T18:59:34Z | Run the newly documented private Rust prerequisite commands under the clean HOME and prefix. | Cargo/rustc were absent, and the brief forbids hidden global provisioning. | `README.md`; `evidence/unit-7-private-prerequisites.log` | Cargo 1.99.1 and rustc 1.99.1 installed only under `<prefix>/build`. |
 
 ## Orchestration correction
 
