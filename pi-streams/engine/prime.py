@@ -289,6 +289,20 @@ class PendingMessage:
     mode: str
 
 
+def create_worker_session(client, worktree, model, thinking):
+    return _create_session(client, Path(worktree), model, thinking)
+
+
+def send_worker(client, stream, identity, text, original_entries):
+    from engine.state import append_log
+    command = str(uuid.uuid4())
+    append_log(Path(stream), subject="Before clean worker kickoff", session_id=identity.session_id,
+               command_id=command, purpose="worker-before-send", body={"handover": text, "original_entries": list(original_entries), "result": "unknown until reply saved"})
+    client.write("prompt_and_wait", command_id=command, activeSessionId=identity.active_session_id,
+                 message=text, streamingBehavior="followUp")
+    return finish_message(client, stream, PendingMessage(command, identity, text, tuple(original_entries), "worker"))
+
+
 def stream_entries(stream):
     from engine import state
     current = state.check_state(stream)
