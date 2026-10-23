@@ -37,7 +37,8 @@ prime-cli-remote status SESSION
 | `thinking-level SID LEVEL` | Calls native `set_thinking_level`. Prime may clamp unsupported levels and changes its default. Check effective status afterward. |
 | `abort SID` | Uses `abort_and_clear_queue`, matching the actual Pi Web server's queue-clearing abort. It leaves the resident session and suspends native admission. A later explicit prompt resumes it. |
 | `stop SID` | Uses the same work-stop operation. Returns `runtimeClosed:false` and `semantics:"abort-and-clear-resident-shim"`. Unlike Pi Web stop, this does not dispose the session runtime. |
-| `queue-clear SID` | Clears pending native lanes without aborting the active run. Returns removed lane text. |
+| `queue-clear SID` | Clears pending native lanes without aborting the active run. Returns removed raw lane text, not status previews. This loses native metadata and can notify agent senders of withdrawal. |
+| `queue-resume SID` | Calls public `resume_queue` once. Wakes existing same-session queue objects without serializing, clearing, or reconstructing them. This can start queued model work or goal continuation. Success is not completion. |
 | `archive SID` | Acquires a native connection-scoped input pause, rejects observed streaming, compaction, bash, queued input, or running descendants, then calls native `kill`. Retains the transcript, cancels schedules, and closes descendants. |
 | `answer SID ASK_ID QUESTION_ID TEXT` | Returns unsupported status 501 without connecting. Never injects the answer as a prompt. |
 
@@ -60,7 +61,11 @@ Status has `id`, `cwd`, `isStreaming`, `pendingMessageCount`, `contextUsage`, `m
 
 `queuedMessages` is an ordered array of `{kind:"steer"|"followUp",text:...}` entries. Duplicate text remains duplicated. `pendingMessageCount` counts both authoritative arrays. Native internal messages can have preview labels rather than replayable raw prompts. Status therefore reports `queueRepresentation:"previews"` and `queueReplaySafe:false`. It preserves native `sessionActions`, including optional `injectedPrompts` and `rlmChildStatus` provenance. Do not mechanically replay arbitrary Prime queues during rotation.
 
-Status reports `pendingAsk:null` together with `capabilities.interactiveAnswers:false`. Null does not claim interactive parity. Stop runtime disposal and structured answers remain gaps. This client does not imitate Caladan's restricted metadata-only CLI or alter its capability policy.
+Status reports `pendingAsk:null` together with `capabilities.interactiveAnswers:false`. It also reports `runtimeDisposal:false`, `internalQueueReplay:false`, and `sameSessionQueueResume:true`. These are source-observed adapter capabilities, not a daemon-negotiated capability list. Null does not claim interactive parity. Stop runtime disposal and structured answers remain gaps. This client does not imitate Caladan's restricted metadata-only CLI or alter its capability policy.
+
+`stop SID --require-runtime-close` and `queue-clear SID --require-replay-safe` return unsupported 501 before connecting or mutating anything. Existing unflagged command grammar and behavior remain unchanged. These opt-in guards do not protect stream callers that ignore capability limits. The current streams are not ported to Prime.
+
+`queue-resume` cannot restore work removed by `queue-clear`, adapter `abort`, or adapter `stop`. It preserves only native objects that remain queued in that same session. It does not release input-pause leases. An empty queue returns the native error `No queued work to resume` after native suspension has already been cleared. There is no automatic retry, prompt fallback, or cross-session replay.
 
 Archive's pause prevents queued delivery but does not stop every producer, in-flight tool, model action, or concurrent administrative operation. The reply explicitly reports `preflightAtomic:false`. A producer can still add work after the check. Disconnect releases the pause after both success and rejection. This is safer preflight, not a server-side atomic archive-if-idle operation.
 
