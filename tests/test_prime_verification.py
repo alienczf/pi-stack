@@ -127,6 +127,19 @@ Path({str(self.events_log)!r}).write_text(json.dumps({{"requests": server.reques
         self.assertNotIn("prompt_and_wait", events["events"])
         self.assertEqual(events["events"][-1], "shutdown")
 
+    def test_observed_quota_parking_stops_before_runnable_input(self):
+        text = self.runtime.read_text().replace('result["data"]["model"] = model',
+            'result["data"]["model"] = model\n                result["data"]["isQuotaParked"] = True')
+        self.runtime.write_text(text)
+        proc = self.verify("--inference")
+        self.assertEqual(proc.returncode, 1, proc.stderr + proc.stdout)
+        result = json.loads(proc.stdout)
+        self.assertEqual((result["error"]["error"], result["error"]["status"]), ("quota", 429))
+        events = json.loads(self.events_log.read_text())
+        self.assertEqual(events["admitted"], [])
+        self.assertNotIn("prompt_and_wait", events["events"])
+        self.assertEqual(events["events"][-1], "shutdown")
+
     def test_root_safety_and_no_retry_settings_are_checked_before_launch(self):
         settings = self.owned / "agent/settings.json"
         original = settings.read_bytes()
