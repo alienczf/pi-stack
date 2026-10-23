@@ -1,6 +1,8 @@
 # Prime CLI for pi-stack
 
-Track 2. Written before implementation on 2026-10-23. This file remains uncommitted for Grok Bot to collect. Code belongs only to `feat/prime-cli` in `/home/alphalab/Projects/worktrees/pi-stack-prime-cli`, based on `3acf0f01e6084a317b89cef3a86f4781e60877cf`.
+Track 2. Written before implementation on 2026-10-23. This session leaves its design edits uncommitted for Grok Bot to collect. Code belongs only to `feat/prime-cli` in `/home/alphalab/Projects/worktrees/pi-stack-prime-cli`, based on `3acf0f01e6084a317b89cef3a86f4781e60877cf`.
+
+Final result is **BLOCKED**, not full parity. The CLI implementation is locally committed at `bccf159aed76c121fd9df133cedb515b8bd38dd3`. Real Prime returned `No API key found for openai-codex.` Model attempts stopped at that refusal. No credentials, provider, existing stream, or other branch were changed. No push was made.
 
 ## Goal and boundary
 
@@ -65,14 +67,14 @@ Every row is LAYER 3. The CLI executes the translation on every invocation. A re
 | `prompt SID --follow-up` | Deliver after the current turn | `follow_up` with `activeSessionId` and `message` | Same acknowledgement distinction | Normalize admission and preserve lane semantics. |
 | `status SID` | `session.isStreaming`, pending count, context usage, numeric cost | `get_connection_state`, `get_queue`, and `get_session_stats` | No single Pi-shaped response | Add ID, count both `steering` and `followUp`, and use native stats cost. Preserve unknown context as null. |
 | `commands SID` | Array in `commands` | `get_commands` | Prime command discovery differs from Pi extensions | Unwrap `data.commands`. Do not pretend Pi-only tools or skills are installed. |
-| `stop SID` | Close and dispose the active runtime without archiving its transcript | `abort_and_clear_queue` is a work-stop approximation | No safe public per-root stop-without-archive equivalent found | Label the shim `runtimeClosed:false`. Do not claim native disposal or use private child-close markers. |
-| `abort SID` | Clear pending input and abort current operations, retaining runtime | `abort_and_clear_queue`, plus operation-specific aborts as needed | Prime's plain `abort` would preserve queues and is not equivalent | Clear queues and report abort admission. A later explicit prompt resumes suspended admission. |
+| `stop SID` | Close runtime without archival, `{ok,status,result:{stopped:true}}` | `abort_and_clear_queue` is a work-stop approximation | No safe public per-root stop-without-archive equivalent found | Return `{ok,status,result:{accepted:true,runtimeClosed:false,semantics:...}}`. This is an explicit payload and lifecycle difference, not exact parity. |
+| `abort SID` | Clear pending input and abort current operations, `{ok,status,result:{aborted:true}}` | `abort_and_clear_queue` | Prime's plain `abort` preserves queues and is not equivalent | Clear queues and return removed native lanes under `result`. A later explicit prompt resumes suspended admission. The result payload differs from Pi's marker. |
 | `queue-clear SID` | Clear pending input | `clear_queue` | Reply uses native lane fields | Preserve those fields under `result`. |
-| `archive SID` | Reject active work, then archive while retaining transcript | Work check followed by `kill` | Native kill does not itself reject busy work and also closes children and cancels schedules | Use native connection-scoped input pause where feasible, inspect work and queues, reject busy state, then kill. Never delete transcripts. Concurrency guarantees need live evidence. |
+| `archive SID` | Reject active work, then retain transcript, `{ok,status,result:{archived:true}}` | Work check followed by `kill` | Native kill does not itself reject busy work and also closes children and cancels schedules | Inspect work and queues while holding a native delivery pause, reject busy state, then kill. Return `archived:true` plus `preflightAtomic:false`. Never delete transcripts. |
 | `messages SID` | `result.messages` with role and content blocks | `get_messages` | Saved/windowed history can differ | Preserve message data. Do not manufacture Pi tool rows. |
 | `model SID PROVIDER/ID` | Select model, result envelope | `set_model` with provider and modelId | Available catalog and auth govern selection | Validate selector, forward selection, and return upstream errors. No fallback model. |
 | `thinking-level SID LEVEL` | Select reasoning level | `set_thinking_level` with `level` | Prime may clamp unsupported levels | Preserve native behavior. Read status to observe effective level. |
-| `answer SID ASK_ID QUESTION_ID TEXT` | Submit correlated interactive answer | No equivalent found in public daemon command union | Pi Web's ask registry has no native Prime counterpart | Return explicit unsupported error. Sending arbitrary prompt text is not an answer implementation. |
+| `answer SID ASK_ID QUESTION_ID TEXT` | Submit `{askId,answers:[{id,values:[],otherText}]}`, return `{ok,status,result}` | No equivalent found in public daemon command union | Pi Web's ask registry has no native Prime counterpart | Return `{ok:false,status:501,error:unsupported,...}`. Sending arbitrary prompt text is not an answer implementation. |
 
 `prompt SID '/compact ...'` uses Prime's native session slash command. It is not a separate pi-web-cli verb. Future stream integration needs this path and `isCompacting`, without adding an automatic 252k policy here. Track 1 owns that policy.
 
@@ -87,7 +89,7 @@ The caller audit also found these required fields and non-CLI dependencies:
 - `pi-streams/engine/piweb.py:18` runs the checkout's `bin/pi-web-cli` with Python. Changing a PATH executable alone does not port streams.
 - `pi-streams/engine/sessionlog.py` expects native JSONL assistant-message entries at the listed host transcript path. A gateway cache is not a replacement transcript.
 
-LAYER 3. Prime's `acquire_session_input_pause` and `release_session_input_pause` offer a native connection-owned admission lease for archive checks. This belongs in the runtime because code layout and tests cannot stop another client from submitting live work. The public protocol is preferable to a shim-only mutex, but its precise protection against work already in flight must be verified.
+LAYER 3. Prime's `acquire_session_input_pause` and `release_session_input_pause` offer a native connection-owned delivery-pause lease for archive checks. This belongs in the runtime because code layout and tests cannot pause live queued delivery. The lease does not exclude other producers or already running work, so the client reports `preflightAtomic:false` rather than claim atomic archive-if-idle behavior.
 
 ## Competing designs and chosen data shape
 
@@ -96,7 +98,7 @@ LAYER 3. Prime's `acquire_session_input_pause` and `release_session_input_pause`
 | A. Direct socket adapter | Small Python standard-library transport plus command adapter and thin executables | No extra daemon, port, dependency, auth database, or duplicated lifecycle state | Tied to a versioned upstream wire protocol. Chosen because the public supervisor protocol already carries the required operations. |
 | B. Local HTTP gateway | Persistent process translating Pi-shaped HTTP requests into Prime socket commands | Existing HTTP-only callers could keep their URL client | Adds another service, service auth, request lifecycle, and shared session state without fixing missing interactive questions. Rejected for this track. |
 
-The central data shape is a command envelope and its correlated response. A command registry owns simple verb translations. Explicit functions own the composite list, spawn, prompt, status, and command-discovery projections. `PrimeClient.request(command)` owns the socket connection, hello validation, LF framing, correlation, and errors. CLI parsers validate external arguments. There is no event cache, background polling service, workflow engine, or durable shim state.
+The central data shape is a command envelope and its correlated response. A command registry owns simple verb translations. Explicit functions own the composite list, spawn, prompt, status, and command-discovery projections. `PrimeClient.request(kind, **fields)` owns command correlation and errors. Its client object owns the socket, hello validation, and LF framing. CLI parsers validate external arguments. There is no event cache, background polling service, workflow engine, or durable shim state.
 
 Model the Domain shaped this command/response boundary. Build the Lever requires the committed offline and real-server check scripts. Prove It Works means the real-daemon and inference verdicts are separate.
 
@@ -118,7 +120,7 @@ LAYER 1. The adjacent CLI reference names stable envelopes, ID rules, command se
 
 LAYER 2. Subprocess tests exercise every verb against an in-process Unix-socket fixture, including interleaved events, malformed responses, unknown sessions, framing, stdin, quoting, protocol mismatch, errors, and model selector validation. The real-server script exercises only sessions it creates. These checks fail on wrong results rather than trusting source inspection.
 
-LAYER 5. Existing skills can later replace the literal binary name with `agent-cli --backend prime`, while retaining cwd, prompt modes, session identifiers, response keys, and native `/compact`. They must treat null context as unknown, `accepted` as admission only, and unsupported answers as missing capability. A skill cannot repair a missing daemon API. This track documents that contract but does not edit stream, cross-repo, or loop behavior before P2.
+LAYER 5. Existing skills can later select `agent-cli --backend prime`, retaining cwd, prompt modes, opaque durable session identifiers, response keys, and native `/compact`. They must treat null context as unknown, `accepted` as admission only, and unsupported answers as missing capability. The port is not yet mechanical. It also needs correlated questions, replayable internal queue data, accepted lifecycle differences, and a durable failure or completion channel. Prime can return a preflight error without persisting an assistant error row, so the current tick's transcript inspection alone is insufficient. A skill cannot repair a missing daemon API. This track documents those requirements but does not edit stream, cross-repo, or loop behavior before P2.
 
 LAYER 3. Packaging follows pi-stack's `bin/` tools and installer-managed user links. Installing these small clients does not install Prime, change provider credentials, start a service, or select a different stream backend. Tests cover isolated installation without running the full host installer.
 
@@ -136,7 +138,7 @@ Nothing in the CLI transport requires a Caladan-specific branch. A later pi-bot 
 
 ## Verification
 
-Not yet complete. This section records actual commands and observations as execution proceeds, not predicted transcripts.
+The full predicate is BLOCKED. Offline checks and real control operations passed within the disclosed shims, but real inference failed on missing Prime Codex credentials. The observations below distinguish admission, control results, and model completion.
 
 The unchanged pi-stack main baseline passed before final implementation verification:
 
@@ -159,9 +161,9 @@ stable bundled model catalog contains gpt-6.1-sol -> false
 provider environment variable names -> none found
 ```
 
-No credential file was opened, copied, or changed. Source inspection found that `resolve_cli_model` accepts an unknown model ID within a known provider and keeps that custom ID. Catalog absence is therefore not itself a spawn blocker. Native `set_model` still resolves through the available catalog, so selecting a custom ID may require a model definition.
+No credential file was manually opened, copied, or edited. No login or credential import was attempted. Prime created its own storage in the isolated runtime directory. That storage was not inspected. Source inspection found that `resolve_cli_model` accepts an unknown model ID within a known provider and keeps that custom ID. Catalog absence is therefore not itself a spawn blocker. Native `set_model` still resolves through the available catalog, so selecting a custom ID may require a model definition.
 
-The owned real supervisor is running in tmux session `prime-cli-t2-01a16656`, PID `3133971`, using `/tmp/prime-t2.3qhjos6h/agent` and `/tmp/prime-t2.3qhjos6h/daemon.sock`. No system service was installed. A raw-protocol baseline check, before exercising the new client, returned:
+The initial owned real supervisor ran in tmux session `prime-cli-t2-01a16656`, PID `3133971`, using `/tmp/prime-t2.3qhjos6h/agent` and `/tmp/prime-t2.3qhjos6h/daemon.sock`. No system service was installed. A raw-protocol baseline check, before exercising the new client, returned:
 
 ```text
 daemon_hello -> prime-agent.daemon version=7 schemaRevision=30 appVersion=0.10.1
@@ -204,9 +206,56 @@ retainedOwnedSessions -> []
 overall exit 1 because requested model-set and reasoning parity are not available
 ```
 
-The small full report is `/tmp/prime-cli-check-v5p3iz67/control-check.json`. The owned check daemon is PID `3149674` in tmux session `prime-cli-t2-check-01a16656`, with a separate agent directory and socket. The initial baseline daemon PID `3133971` was shut down through its own socket before starting this one.
+The small full report is `/tmp/prime-cli-check-v5p3iz67/control-check.json`. The owned check daemon ran as PID `3149674` in tmux session `prime-cli-t2-check-01a16656`, with a separate agent directory and socket. The initial baseline daemon PID `3133971` was shut down through its own socket before starting this one.
 
-Independent same-model review reproduced four defects in that revision. A control-only check could release queued text on a failure, known spawn IDs were lost on readback transport errors, old active-selector status could reject legitimate native rebinds, and the dispatcher rejected leading backend `--socket`. These are accepted findings, not waived risks. Corrections and final verification are recorded below when complete.
+Independent same-model review reproduced four defects in that revision. A control-only check could release queued text on a failure, known spawn IDs were lost on readback transport errors, old active-selector status could reject legitimate native rebinds, and the dispatcher rejected leading backend `--socket`. Each received a failing regression commit followed by a fix. The independent recheck verified all four at `8ff0b597027022adeec00fce082435c88037853a`. No accepted finding was waived.
+
+Final implementation checks were executed, not inferred from the worker report:
+
+```text
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -p 'test_prime*.py'
+Ran 49 tests. OK.
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s pi-streams/tests
+Ran 105 tests. OK.
+bash scripts/check-overlay.sh
+check-overlay ok
+bash -n install.sh scripts/install-agent-clis.sh scripts/check-overlay.sh
+passed
+git diff --check
+passed
+```
+
+The full installer test used temporary homes, synthetic local repositories, and disabled system-service operations. It did not install onto the real user's home. The focused installer was additionally run with a temporary HOME, and its installed `agent-cli --backend prime --socket ... list --cwd ...` successfully queried the real owned server. Durable IDs and archived metadata were preserved. The report is `/tmp/prime-cli-check-v5p3iz67/installed-dispatch-check.json`.
+
+After the durable-ID fix, the final default control run admitted no prompt text. Its model and thinking gaps remained explicit in `/tmp/prime-cli-check-v5p3iz67/final-control-check.json`. The explicitly authorized inference run then exercised stdin prompt, steer, follow-up, queue clearing, and abort while a native pause held delivery. The inputs were cleared before release. Actual active-model steering delivery is not claimed.
+
+The first inference completion check timed out because Prime wrote only the user message, not an assistant error row. Inspection was limited to that owned transcript. The verification script was corrected to use native `prompt_and_wait` for its model-completion probe after CLI admission tests. This makes the native failure response observable without fabricating transcript messages. The new offline regression passed, bringing the Prime suite from 48 to 49 tests.
+
+LAYER 3. The completion probe uses a native awaited result because a live provider refusal cannot be observed through code layout or tests alone. LAYER 2. Its executable regression checks that an upstream failure is reported immediately even with an empty message list.
+
+The corrected real inference transcript is small and decisive:
+
+```text
+python3 scripts/check-prime-cli-live.py run --root /tmp/prime-cli-check-v5p3iz67 --inference
+spawn -> requested provider=openai-codex model=gpt-6.1-sol retained
+requested xhigh -> effective off
+stdin prompt, steer, follow-up -> admitted while paused
+pendingMessageCount -> 3
+queue-clear, queued steer, abort -> pendingMessageCount 0
+stop -> runtimeClosed false
+native prompt_and_wait completion probe -> upstream_error
+No API key found for openai-codex.
+retainedOwnedSessions -> []
+exit -> 1
+```
+
+The exact report is `/tmp/prime-cli-check-v5p3iz67/final-inference-check-exact.json`. Prime directs the operator to `/login` for provider authentication. A Pi login does not configure the isolated Prime daemon. The missing requirement is Prime-owned OpenAI Codex authentication under the selected `PRIME_AGENT_CODING_AGENT_DIR`, plus model metadata that correctly describes `gpt-6.1-sol`. No login was attempted, no auth file was inspected or edited, and no provider or model substitute was used for inference.
+
+All model attempts stopped at that native credential refusal. Successful inference, active-run steering, and compaction remain NOT VERIFIED. The off-host Grok Bot route also remains NOT VERIFIED because its SSH helper is not installed on this host.
+
+Cleanup used only the owned sockets. The final owned cwd contained four archived sessions and zero unarchived sessions. The check daemon acknowledged shutdown, its tmux session ended, and its socket was removed. The initial baseline daemon was already stopped. There are no retained owned sessions or running owned Prime daemons.
+
+Only code, tests, and small docs were committed. Runtime binaries, sessions, logs, and JSON reports stay outside git in `/tmp/`. The final implementation HEAD is `bccf159aed76c121fd9df133cedb515b8bd38dd3`. Main remains `3acf0f0`. This session made no docs commit, push, PR, STATUS.md edit, or existing-stream action.
 
 The native check found a public-supervisor versus worker-payload distinction that source inspection had missed. The implementation must test the exact nested request and validate the returned cwd and requested model. The default model in the failed baseline was not used for any inference.
 
@@ -239,36 +288,42 @@ The checksum-verified stable release's bundled catalog contains fixture-named mo
 23. Preserve a known created session in spawn errors even when model readback times out or the connection resets. An uncertain readback must not discard an already received identity or cause a second create.
 24. Parse only the neutral dispatcher's leading backend choice. Backend endpoint flags such as `--socket` must retain their original order.
 25. Fix the installer verification fixture rather than skip it. Its synthetic clone omitted the newly required helper. Adding the helper made the full installer check pass.
+26. Use native `prompt_and_wait` in the authorized live completion probe after testing CLI admission. The real server did not persist its preflight error as an assistant message, so polling messages produced a timeout instead of the actual failure. Add a regression for the empty-transcript failure path.
+27. Stop at the native Codex credential refusal. Do not import Pi credentials, start a login, or switch provider. The implementation and real control evidence are delivered, but the full track end state is blocked.
+28. Shut down both owned daemons and retain no owned live sessions. The final list showed only archived owned sessions, and the final socket was removed. Runtime data remains outside git.
 
 ## Gaps
 
 - Interactive `answer` has no native correlated-question API in the inspected daemon union. This is a parity gap, not a completed shim.
 - Exact Pi stop-without-archive disposal has no demonstrated public Prime equivalent. Work-stop can retain the resident runtime only as a labeled shim.
 - Exact replay of Prime internal queued inputs is not guaranteed by its preview-based queue API. Ordinary user input and arbitrary internal work must not be conflated.
-- Busy archive refusal and native input-pause coverage need direct testing. A non-atomic preflight check is not a quiescence guarantee.
-- The requested model is absent from the stable bundled catalog, but create-time custom-ID resolution preserves it with generic metadata. Actual reasoning capability and context capacity require a correct model definition or catalog. Prime credentials are absent on this host. Live checks must determine the exact inference failure without changing provider.
+- Busy archive guards are covered offline and real idle archival passed. A native pause stops queued delivery, not every producer. `preflightAtomic:false` is not a quiescence guarantee.
+- Real inference is blocked by `No API key found for openai-codex.` Prime-owned Codex authentication is required in the selected agent directory. No authentication flow or credential import was attempted.
+- The requested model is absent from the stable bundled catalog. Create preserves its ID with generic metadata, but native `set_model` refused it and xhigh was clamped to off. Actual reasoning capability and context capacity need a correct model definition or catalog, not guessed limits.
+- Native preflight failures can exist only in awaited results or events, with no assistant error row. The diagnostic script now observes the awaited result, but the later stream port still needs an explicit completion or failure-observation contract. Current message-log inspection alone is insufficient.
+- No successful model completion, active-run steering delivery, or compaction was verified after the credential refusal.
 - Remote wrapper execution from the Grok Bot machine requires that machine and its authenticated `options-01-ssh`. Local wrapper quoting tests are not off-host evidence.
 - Stream ticks, coordinator compaction policy, skill installation into Prime, and Caladan adaptation are outside this implementation under P2.
 - Prime's executable Python skills are not automatically equivalent to Pi's Markdown process skills. Command discovery must report only what the target runtime actually loads.
 
 ## Parity checklist
 
-Initial state before implementation. The final revision records tested status rather than intent.
+Final tested state. Done means the mapped operation worked on the owned real daemon. Shimmed names an explicit semantic or verification limit. No row claims successful inference.
 
 | pi-web-cli command | State | Evidence |
 | --- | --- | --- |
-| list | missing | Implementation pending. |
-| spawn | missing | Implementation pending. |
-| prompt, argv and stdin | missing | Implementation pending. |
-| prompt --steer | missing | Implementation pending. |
-| prompt --follow-up | missing | Implementation pending. |
-| status | missing | Implementation pending. |
-| commands | missing | Implementation pending. |
-| stop | missing | Implementation pending. |
-| abort | missing | Implementation pending. |
-| queue-clear | missing | Implementation pending. |
-| archive | missing | Implementation pending. |
-| messages | missing | Implementation pending. |
-| model | missing | Implementation pending. |
-| thinking-level | missing | Implementation pending. |
-| answer | missing | No upstream correlated-question API found. |
+| list | done | Real cwd list preserved durable IDs, transcript paths, timestamps, message counts, and archived rows. |
+| spawn | done | Real nested-config create retained the requested cwd and exact provider/model ID. Authentication is a separate failed gate. |
+| prompt, argv and stdin | shimmed | Offline argv and stdin byte checks passed. Real stdin admission passed. Model completion was blocked by native credential refusal. |
+| prompt --steer | shimmed | Real queued admission and clearing passed. Delivery during an actual model run is not verified. |
+| prompt --follow-up | shimmed | Real queued admission passed. Delivery after an actual model run is not verified. |
+| status | shimmed | Real streaming, queue count, context metadata, effective model/thinking, and numeric cost worked. Reads are non-atomic and queue text is marked replay-unsafe. |
+| commands | done | Native command and skill discovery returned through the expected array envelope. Pi-only skills are not claimed installed. |
+| stop | shimmed | Real work-stop cleared input and retained the resident runtime. `runtimeClosed:false` discloses the difference from Pi disposal. |
+| abort | shimmed | Real queued inputs were cleared and abort acknowledged. Full runtime quiescence is not promised. |
+| queue-clear | done | Real queued admission count reached three, then native clearing removed the inputs. |
+| archive | shimmed | Real idle archival retained transcript and archived-list metadata. Busy guards pass offline. Native admission races remain disclosed. |
+| messages | done | Real native message payloads and empty lists were preserved. Ephemeral preflight errors are not fabricated as assistant messages. |
+| model | missing | The adapter exists and offline selector checks pass, but native `set_model` refused the requested live target. No substitute was selected. |
+| thinking-level | shimmed | Real setter acknowledged xhigh but effective status remained off because of generic model metadata. |
+| answer | missing | Explicit unsupported 501. No native correlated-question API exists in the inspected protocol. |
