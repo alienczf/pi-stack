@@ -7,7 +7,7 @@
 - [x] Unit 1. Implement the Z15 stream writer and focused behavior tests.
 - [x] Unit 2. Expose public stock transport and owned sessions.
 - [x] Unit 3. Save and refresh messages, wake eligible work, and stop best effort.
-- [ ] Unit 4. Dispatch clean poteto workers with handover and kickoff only.
+- [x] Unit 4. Dispatch clean poteto workers with handover and kickoff only.
 - [ ] Unit 5. Own percentage-triggered save, compact, readback, and resume.
 - [ ] Unit 6. Close only computed results and stage owned paths.
 - [ ] Unit 7. Install stock Prime and pi-stack under an isolated external prefix.
@@ -40,4 +40,6 @@ Unit 2 passed 39 focused tests, 144 stream tests and 72 root tests. Logs are `ev
 
 Unit 2 commit is `ffbacff02fb2d2dc689ad216b6f3cfc5da3a779b`. Unit 3 passed 48 focused, 153 stream and 72 root tests in `evidence/unit-3-{focused,streams,root}.log`.
 
-Next is Unit 4. Prime creation currently takes an explicit `backend="prime"` and persists it in `stream.toml`. Project-level backend settings remain Unit 2. Writers accept `locked=True` for callers already holding the stream lock. Successful computed completion remains blocked until Unit 6 supplies its actual closing checks. Explicit cancellation or informational explanation uses a complete linked answer and later trusted human source. Broad legacy staging remains unchanged until Unit 6. No native inference or authentication check was attempted.
+Unit 3 commit is `c3555ce4b8188e9d6962f1d5609e7ee9c11b3bbe`. Unit 4 passed 49 focused, 154 stream and 72 root tests in `evidence/unit-4-{focused,streams,root}.log`. Worker assignment and existing thread registry are saved before the exact unwrapped handover/kickoff. Native product instructions remain untouched; returned summaries are saved only in stream Log.
+
+Next is Unit 5. Prime creation currently takes an explicit `backend="prime"` and persists it in `stream.toml`. Project-level backend settings remain Unit 2. Writers accept `locked=True` for callers already holding the stream lock. Successful computed completion remains blocked until Unit 6 supplies its actual closing checks. Explicit cancellation or informational explanation uses a complete linked answer and later trusted human source. Broad legacy staging remains unchanged until Unit 6. No native inference or authentication check was attempted.
