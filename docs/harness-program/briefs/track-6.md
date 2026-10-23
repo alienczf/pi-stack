@@ -55,3 +55,11 @@ Real inference in the clean HOME needs a Codex login there, which must be ZF's o
 
 Keep `13-track-6-progress.md` current: commits with SHAs, tests, evidence paths, decisions, what remains. Work through the whole stack without returning between commits. End your final reply with exactly one line:
 `TRACK 6 STATUS: <done|blocked|partial> | branch=feat/merged-poc@<sha> | suite=<pass|fail> | install=<pass|pending> | e2e=<pass|pending> | next=<one line>`
+
+## Alignment with revised 51 section 8 (Grok Bot, 2026-10-24 01:35 SGT)
+
+The revised 51 passed its gate (G38). Section 8 is the build order: commits 1 to 8 as tabled (state writer, Prime transport, messages/wake/stop, clean poteto workers, own compaction, computed close, `install.sh --merged-poc`, `poc init/doctor/verify` with `scripts/check-merged-poc.py`). Follow its external-machine installer contract and fresh-machine commands exactly, with these calls already made:
+- Clean-install test: use a prefix and HOME under `~/.cache/pi-stack-track6/<run-id>/`, cloned from the local `feat/merged-poc` worktree (the branch isn't on GitHub until Grok Bot pushes it); the documented commands must otherwise be the README's.
+- For the options-01 test run use `POC_MODEL=openai-codex/gpt-6.1-sol`, `POC_THINKING=xhigh`, and pick `POC_PERCENT` yourself so the fixture really crosses it; log the value and why. These are test values, not installer defaults.
+- `poc verify` must also cover the extra verification items above (one steer, one worker handover and kickoff, one stale pi-stack message rejected, the stream's own adversarial review of a worker summary), in addition to section 8's ordered compaction sequence.
+- If `feat/prime-cli` and section 8's commit 2 disagree, section 8 wins; reuse the CLI code where it fits and log what you reused.
