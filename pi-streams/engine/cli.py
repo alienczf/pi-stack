@@ -251,7 +251,7 @@ def cmd_state(args):
                 result = state.close_work(stream, expect=args.expect, **payload)
             else:
                 result = state.update_state(stream, expect=args.expect, **payload)
-    except (StreamsError, OSError, ValueError, TypeError) as exc:
+    except (StreamsError, OSError, ValueError, TypeError, KeyError) as exc:
         result = {"success": False, "reason": str(exc), "state_sha256": None, "history_files": []}
     print(json.dumps(result, ensure_ascii=False, sort_keys=True, allow_nan=False))
     return 0 if result["success"] else 1

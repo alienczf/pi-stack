@@ -539,9 +539,32 @@ def stream_locks(repos: list[Path]) -> Iterator[None]:
             handle.close()
 
 
-def commit_repo(repo: Path, message: str) -> bool:
-    git(repo, "add", "-A")
-    if git(repo, "status", "--porcelain").strip() == "":
+def commit_repo(repo: Path, message: str, *, paths: list[str] | None = None) -> bool:
+    if paths is None:
+        owned = {"AGENTS.md", "STATE.md", "STREAM.md", "DECISIONS.md", "threads.tsv",
+                 "subscriptions.tsv", "stream.toml", ".gitignore"}
+        for directory in ("context", "handover", "checks", "history"):
+            root = repo / directory
+            if root.is_symlink():
+                raise StreamsError("refusing symlink publication directory")
+            if root.is_dir():
+                owned.update(str(path.relative_to(repo)) for path in root.rglob("*") if path.is_file())
+        paths = sorted(path for path in owned if (repo / path).exists() or git(repo, "ls-files", "--", path).strip())
+    normalized = []
+    for name in paths:
+        path = Path(name)
+        if path.is_absolute() or ".." in path.parts or not path.parts or path.parts[0] in {".git", ".prime", ".pi", "log", "sessions"}:
+            raise StreamsError("unauthorized publication path")
+        target = repo / path
+        if any(item.is_symlink() for item in (target, *target.parents)):
+            raise StreamsError("refusing symlink publication path")
+        normalized.append(path.as_posix())
+    staged = set(git(repo, "diff", "--cached", "--name-only", "-z").split("\0")) - {""}
+    if staged - set(normalized):
+        raise StreamsError("refusing unrelated staged paths: " + ", ".join(sorted(staged - set(normalized))))
+    if normalized:
+        git(repo, "add", "--all", "--", *normalized)
+    if not git(repo, "diff", "--cached", "--name-only").strip():
         return False
     git(repo, "commit", "-m", message)
     return True

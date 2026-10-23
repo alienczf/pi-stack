@@ -420,6 +420,14 @@ def _explained(original: Entry, entries: dict[str, Entry]) -> bool:
         if not fields <= body.keys() or original.file not in body["original_entries"]:
             continue
         result = body["result"]
+        if isinstance(result, dict) and result.get("status") == "complete":
+            computed = result.get("computed")
+            if (isinstance(computed, dict) and computed.get("exit") == 0
+                    and body["invocation"] == {"argv": computed.get("argv"), "cwd": computed.get("cwd")}
+                    and result.get("source_hashes", {}).get(original.file) == sha256(original.text)
+                    and isinstance(result.get("binding_sha256"), str) and len(result["binding_sha256"]) == 64
+                    and body["proof_entries"] and body["findings"]):
+                return True
         if not isinstance(result, dict) or result.get("status") not in {"cancelled", "informational"}:
             continue
         if not isinstance(body["findings"], str) or not body["findings"].strip():
@@ -636,6 +644,8 @@ def append_log(
         entry = _entry(subject, body, session=session_id, command=command_id, prime_entry=prime_entry, purpose=purpose)
         if _original(entry):
             raise StreamsError("original messages must use save_message")
+        if isinstance(body.get("result"), dict) and body["result"].get("status") == "complete":
+            raise StreamsError("computed completion must use close_work")
         repeated = _repeat(_entries(stream, state), entry)
         if repeated:
             return _result(state, [], repeated)
@@ -674,6 +684,8 @@ def update_state(
                 if _name(ref) not in entries or not _original(entries[ref]):
                     raise StreamsError("missing original update source")
             note_body = dict(entry["body"])
+            if isinstance(note_body.get("result"), dict) and note_body["result"].get("status") == "complete":
+                raise StreamsError("whole original message requires computed close_work")
             if "original_entries" in note_body and note_body["original_entries"] != refs:
                 raise StreamsError("conflicting original update sources")
             note_body["original_entries"] = refs
@@ -727,3 +739,56 @@ def rotate_log(stream: Path, *, expect: str | None = None, locked: bool = False)
         if expect is not None and state.sha256 != expect:
             raise StreamsError("stale STATE hash")
         return _write_state(stream, state, state)
+
+
+def close_work(stream: Path, *, expect: str, entry: dict, target: dict, check: dict,
+               report: dict, proof_entries: list, review=None, goals=None, rules=None) -> dict:
+    from checks.state import check_close, run_check, target_identity, report_bytes
+    originals = entry["original_entries"]
+    findings = entry["body"].get("findings")
+    if not isinstance(findings, str) or not findings.strip():
+        raise StreamsError("close needs actual findings by whole original request")
+    binding = sha256(_json({"original_entries": originals, "target": target, "check": check,
+                           "report": report, "proof_entries": proof_entries, "review": review, "findings": findings}))
+    with stream_lock(stream):
+        current = check_state(stream)
+        for saved in _entries(stream, current).values():
+            result = saved.body.get("result")
+            if isinstance(result, dict) and result.get("binding_sha256") == binding and result.get("status") == "complete":
+                target_identity(target)
+                report_bytes(target, report)
+                return _result(current, [], saved)
+        if current.sha256 != expect:
+            raise StreamsError("stale STATE hash")
+        verified = check_close(stream, current, originals=originals, target=target, check=check,
+                               report=report, proof_entries=proof_entries, review=review)
+        expected_text = current.goals_rules_sha256
+    computed = run_check(check, target)
+    if computed["exit"] != 0:
+        raise StreamsError("computed check failed: " + _json(computed))
+    with stream_lock(stream):
+        current = check_current_text(stream, expected_text)
+        fresh = check_close(stream, current, originals=originals, target=target, check=check,
+                            report=report, proof_entries=proof_entries, review=review)
+        if fresh != verified:
+            raise StreamsError("source, target, report or proof changed during check")
+        remaining = tuple(w for w in current.goals.work if w.original_entry not in originals)
+        proposed_goals = _goals_input(goals) if goals is not None else replace(current.goals, work=remaining)
+        if (proposed_goals.work != remaining or proposed_goals.north_star != current.goals.north_star
+                or proposed_goals.original_entry != current.goals.original_entry or rules not in (None, current.rules)):
+            raise StreamsError("close must preserve unrelated work, North Star and Rules")
+        report_text = report_bytes(target, report).decode("utf-8")
+        proof = _entry("Checked report", {"original_entries": originals, "media_type": "text/plain",
+                        "text": report_text, "sha256": sha256(report_text)}, purpose="checked-report")
+        proofs = [*proof_entries, {"entry": proof.file, "sha256": sha256(proof.text), "representation": "full"}]
+        answer = _entry(entry["subject"], {"original_entries": originals,
+            "later_instruction_entries": entry["body"].get("later_instruction_entries", []),
+            "target": target, "invocation": {"argv": computed["argv"], "cwd": computed["cwd"]},
+            "result": {"status": "complete", "computed": computed, "binding_sha256": binding,
+                       "source_hashes": verified["originals"], "report": report},
+            "findings": findings, "proof_entries": proofs, "review": review}, purpose="checked-answer")
+        proposed = replace(current, goals=proposed_goals, goals_text=_render_goals(proposed_goals),
+                           log=current.log + (proof, answer))
+        result = _write_state(stream, current, proposed)
+        result["entry"] = answer.file
+        return result
