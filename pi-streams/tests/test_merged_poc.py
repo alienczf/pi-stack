@@ -1,5 +1,6 @@
 """New shared verifier negatives. Offline fixtures do not establish native PASS."""
 import copy
+import io
 import json
 import sys
 import tempfile
@@ -10,11 +11,14 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from engine import poc, project, state, prime
 from engine.install_prime import prepare_project, write_wrappers, tree_hash, digest, PRIME_REVISION
+from stub_prime import StubPrime
+from prime_poc_fixture import PocScenario
 
 
 class EvidenceTests(unittest.TestCase):
     def sample(self):
         return {"prime_source_revision": PRIME_REVISION, "model": "openai-codex/gpt-6.1-sol", "thinking": "xhigh", "threshold_percent": .1, "observed_percentages": [.2],
+                "expected_identity": {"model": "openai-codex/gpt-6.1-sol", "thinking": "xhigh"},
                 "stream": "one", "session_id": "durable", "active_session_id": "routing", "protocol": 7, "schema": 30,
                 "stages": {name: {"verified": True, "evidence": ["offline fixture reference"]} for name in poc.STAGES},
                 "trace": [{"operation": "write", "command": "prompt_and_wait", "command_id": "command", "fields": {"message": 'Current files for stream "one", Prime session "durable", command "command".', "activeSessionId": "routing", "streamingBehavior": "steer"}},
@@ -29,6 +33,12 @@ class EvidenceTests(unittest.TestCase):
                 report = copy.deepcopy(full)
                 report["stages"][name] = replacement
                 self.assertIn(name, poc.assess(report))
+
+    def test_explicit_alternative_identity_is_not_a_default_model_violation(self):
+        report = self.sample()
+        report.update(model="explicit-provider/explicit-model", thinking="high",
+                      expected_identity={"model": "explicit-provider/explicit-model", "thinking": "high"})
+        self.assertEqual(poc.assess(report), [])
 
     def test_equal_unknown_percentage_wrong_identity_and_duplicate_compact_cannot_pass(self):
         full = self.sample()
@@ -106,6 +116,120 @@ class SharedPocTests(unittest.TestCase):
         self.assertIn("existing test socket", result["reason"])
         self.assertEqual(path.read_text(), "foreign socket stand-in")
         self.assertEqual(poc.verify(self.root, "one")["status"], "BLOCKED")
+
+    def assembled(self, mode="success"):
+        poc.init(self.root, "one")
+        scenario = PocScenario(self.root, mode)
+        socket = self.root / "prime/poc-one.sock"
+        self.actual_git = project.git
+        class FixtureClient(poc.RecordingClient):
+            def __init__(self, path, stream):
+                super().__init__(path, stream)
+                self.timeout = 2
+        stub = None
+        def start(binary, path, log, **kwargs):
+            nonlocal stub
+            self.assertEqual(path, socket)
+            stub = StubPrime(scenario.handle, path=socket)
+            stub.__enter__()
+            return prime.OwnedDaemon(scenario.process, path, io.BytesIO())
+        def stop(owned):
+            self.assertIs(owned.process, scenario.process)
+            scenario.process.returncode = 0
+            owned.process.wait()
+            owned.log_handle.close()
+            scenario.stopped = True
+        with patch.object(project, "git", side_effect=self.doctor_git), patch.object(prime, "start_owned_daemon", side_effect=start), patch.object(prime, "stop_owned_daemon", side_effect=stop), patch.object(poc, "RecordingClient", FixtureClient):
+            try:
+                report = poc.verify(self.root, "one")
+            finally:
+                if stub is not None:
+                    stub.__exit__(None, None, None)
+        self.assertIsNotNone(stub, report.get("reason"))
+        self.assertEqual(report["owned_daemon_stopped"], True)
+        self.assertEqual(scenario.stopped, True)
+        return report, scenario, stub.requests
+
+    def test_offline_assembled_verifier_completes_actual_socket_and_artifact_sequence(self):
+        report, scenario, requests = self.assembled()
+        self.assertEqual(report["status"], "PASS", report.get("reason"))
+        self.assertEqual(poc.assess(report, self.installation), [])
+        self.assertEqual(state.check_state(scenario.stream).goals.work, ())
+        self.assertEqual(report["check"]["argv"], ["python3", "check_fixture.py"])
+        self.assertEqual(report["check"]["exit"], 0)
+        self.assertIn("marker, answer and protected behavior verified", report["check"]["stdout"])
+        self.assertEqual(json.loads((scenario.product / "answer.json").read_text())["answer"], 5)
+        self.assertFalse((scenario.product / "STATE.md").exists())
+        self.assertLess(scenario.events.index("checked-save"), scenario.events.index("compact"))
+        self.assertLess(scenario.events.index("resume-parked"), scenario.events.index("release"))
+        self.assertLess(scenario.events.index("release"), scenario.events.index("resume-result"))
+        self.assertEqual([r["command"]["type"] for r in requests].count("compact"), 1)
+        self.assertIn("busy-steer", scenario.events)
+        self.assertIn("self-review", scenario.events)
+
+    def failed_assembled(self, mode, reason):
+        report, scenario, requests = self.assembled(mode)
+        self.assertNotEqual(report["status"], "PASS")
+        self.assertIn(reason, report["reason"])
+        self.assertEqual(len(state.check_state(scenario.stream).goals.work), 2)
+        self.assertNotIn("computed_close", report["stages"])
+        return report, scenario, requests
+
+    def test_assembled_waits_for_delayed_steer_before_worker_snapshot(self):
+        report, scenario, requests = self.assembled("delayed_steer_state")
+        self.assertEqual(report["status"], "PASS", report.get("reason"))
+        self.assertLess(scenario.events.index("delayed-steer-finished"), scenario.events.index("worker"))
+        self.assertEqual(state.check_state(scenario.stream).goals.work, ())
+
+    def test_assembled_native_intake_failure_stops_before_steer_or_worker(self):
+        report, scenario, requests = self.assembled("intake_failure")
+        self.assertEqual(report["status"], "BLOCKED")
+        self.assertIn("native intake refused", report["reason"])
+        self.assertEqual(len(state.check_state(scenario.stream).goals.work), 1)
+        self.assertNotIn("busy-steer", scenario.events)
+        self.assertNotIn("worker", scenario.events)
+
+    def test_assembled_native_steer_failure_stops_before_worker_dispatch(self):
+        report, scenario, requests = self.failed_assembled("steer_failure", "native steer refused")
+        self.assertNotIn("worker", scenario.events)
+        self.assertEqual([r["command"]["type"] for r in requests].count("create"), 1)
+
+    def test_assembled_worker_failure_cannot_start_compaction(self):
+        report, scenario, requests = self.failed_assembled("worker_failure", "worker check failed")
+        self.assertNotIn("compact", scenario.events)
+        self.assertNotIn("computed_close", report["stages"])
+
+    def test_assembled_save_after_compact_is_refused_before_any_compact(self):
+        report, scenario, requests = self.failed_assembled("save_after_compact", "checked update")
+        self.assertNotIn("compact", [r["command"]["type"] for r in requests])
+
+    def test_assembled_compact_error_has_no_resume(self):
+        report, scenario, requests = self.failed_assembled("compact_failure", "compact refused")
+        self.assertNotIn("resume-parked", scenario.events)
+        self.assertIn("release", scenario.events)
+
+    def test_assembled_in_memory_only_compaction_has_no_resume(self):
+        report, scenario, requests = self.failed_assembled("missing_disk", "persisted")
+        self.assertNotIn("resume-parked", scenario.events)
+        self.assertIn("release", scenario.events)
+
+    def test_assembled_wrong_native_summary_has_no_resume(self):
+        report, scenario, requests = self.failed_assembled("wrong_summary", "matching")
+        self.assertNotIn("resume-parked", scenario.events)
+
+    def test_assembled_release_failure_cannot_be_a_successful_continuation(self):
+        self.failed_assembled("release_failure", "release refused")
+
+    def test_assembled_missing_resume_result_is_unknown_not_success(self):
+        self.failed_assembled("missing_resume_result", "timed out")
+
+    def test_assembled_missing_stream_review_cannot_close(self):
+        self.failed_assembled("missing_review", "adversarial self-review")
+
+    def test_assembled_changed_untracked_output_after_green_check_cannot_close(self):
+        report, scenario, requests = self.failed_assembled("changed_output_after_check", "artifact bytes")
+        self.assertEqual(json.loads((scenario.product / "answer.json").read_text())["answer"], 6)
+        self.assertTrue((scenario.product / "report.txt").exists())
 
     def test_shutdown_does_not_contact_a_replacement_socket(self):
         import io

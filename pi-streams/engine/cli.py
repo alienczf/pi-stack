@@ -500,6 +500,10 @@ def cmd_prime_state(args):
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
+        if args.cmd in {"new", "status", "thread", "rotate", "close"}:
+            selected = resolve_index(args.home)
+            if any(project.info.backend != "pi" for project in load_projects(selected)):
+                raise StreamsError("legacy Pi command is not wired for a Prime project; use the explicit poc/state commands")
         if args.cmd == "state":
             return cmd_prime_state(args) if args.state_cmd in {"check", "read-entry", "update", "close"} else cmd_state(args)
         if args.cmd == "poc":

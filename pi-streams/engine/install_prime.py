@@ -26,6 +26,8 @@ RUNTIME_FILES = ("pyproject.toml", "src/rlm/__init__.py", "src/rlm/repl.py")
 
 def confined(root, path):
     root, path = Path(root), Path(path)
+    if ".." in root.parts or ".." in path.parts:
+        raise StreamsError("installation path traversal is not allowed")
     if not root.is_absolute() or not path.is_absolute() or not path.is_relative_to(root):
         raise StreamsError("installation path escapes prefix")
     if any(p.is_symlink() for p in (path, *path.parents)):
@@ -207,8 +209,10 @@ def prepare_project(root, project, model, thinking, percent, poteto):
     metadata_path = repo_root() / "scripts/prime-models" / (model.replace("/", "-") + ".json")
     if metadata_path.is_file():
         definition = json.loads(metadata_path.read_text())
-        if definition.get("provider") + "/" + definition.get("id") != model or definition.get("reasoning") is not True or definition.get("thinkingLevelMap", {}).get(thinking) != thinking:
-            raise StreamsError("explicit model metadata does not preserve requested reasoning")
+        levels = definition.get("thinkingLevelMap", {})
+        supported = thinking in levels and (thinking == "off" or definition.get("reasoning") is True and levels[thinking] is not None)
+        if definition.get("provider") + "/" + definition.get("id") != model or not supported:
+            raise StreamsError("explicit model metadata does not support the requested thinking level")
         native = {"providers": {definition["provider"]: {"models": [{key: value for key, value in definition.items() if key != "provider"}]}}}
         install_bytes(root, root / "prime/agent/models.json", (json.dumps(native, sort_keys=True) + "\n").encode())
     return config

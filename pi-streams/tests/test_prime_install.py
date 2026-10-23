@@ -112,6 +112,24 @@ class InstallTests(unittest.TestCase):
         self.assertFalse((self.home / ".pi").exists())
         self.assertFalse((self.home / ".local/bin").exists())
 
+    def test_explicit_thinking_keys_may_have_provider_api_aliases(self):
+        for level, api_value in (("off", None), ("minimal", "low")):
+            root = self.home / level
+            root.mkdir()
+            config = installer.prepare_project(root, root / "project", "openai-codex/gpt-6.1-sol", level, .1, root / "poteto/SKILL.md")
+            stored = json.loads((root / "prime/agent/models.json").read_text())["providers"]["openai-codex"]["models"][0]
+            self.assertEqual(config.coordinator.thinking, level)
+            self.assertEqual(stored["thinkingLevelMap"][level], api_value)
+
+    def test_traversal_cannot_write_outside_the_owned_prefix(self):
+        self.root.mkdir()
+        outside = self.home / "outside-owned-prefix.txt"
+        with self.assertRaisesRegex(StreamsError, "traversal|escape"):
+            installer.install_bytes(self.root, self.root / "../outside-owned-prefix.txt", b"must not escape")
+        self.assertFalse(outside.exists())
+        installer.install_bytes(self.root, self.root / "valid.txt", b"owned bytes")
+        self.assertEqual((self.root / "valid.txt").read_bytes(), b"owned bytes")
+
     def test_foreign_symlink_and_conflicting_owned_file_are_not_overwritten(self):
         foreign = self.home / "foreign"
         foreign.mkdir()

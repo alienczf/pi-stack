@@ -169,6 +169,10 @@ Only the operator performs login. Start the bare TUI with `"$POC_ROOT/bin/prime-
 "$POC_ROOT/bin/pi-streams" poc verify --root "$POC_ROOT" --stream weekend-poc
 ```
 
+Computed close targets contain `repo`, `commit`, `diff_sha256` and a nonempty `artifacts` map of relative product-output paths to SHA-256 values. The checker binds those exact outputs, including untracked files, before and after the actual check. It does not silently include generated scratch or reports in that map. Reports have their separate exact path/hash binding. Paths containing `..` or symlink escapes are refused.
+
+Model and thinking values are compared with the explicit installation settings. The Track 6 model and `xhigh` are test selections, not installer defaults. Native construction must still return the requested model and thinking level.
+
 The same driver is `python3 scripts/check-merged-poc.py --root "$POC_ROOT" --stream weekend-poc`. It owns a new daemon on a dedicated socket and never adopts an existing session or socket. Native PASS requires actual steer, clean worker handover/kickoff, stale refusal, stream self-review, percentage crossing, checked save, direct compact, persisted native readback, one continuation and computed close. Offline fixtures cannot establish native PASS. Missing authentication is BLOCKED. An uncrossed percentage is INCONCLUSIVE. Reports and native transcripts remain under the prefix. Do not change the threshold or substitute explicit DCR to pass the percentage test.
 
 ## Verify the repository
