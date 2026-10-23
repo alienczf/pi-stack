@@ -34,3 +34,11 @@ I mentioned that there are three things I wanted to address. I think I handled t
 ## t214u (2026-10-23 10:04 SGT, phone), paraphrased by Grok Bot
 
 The design session is the track 3 session (01a16658-09d0-7fcc-9815-7ac75f2cbb29). ZF wants the high-level design session to receive five inputs and produce three proposals with pros and cons, plus any blocking decisions for him. His remedies are not golden truth. They get the same rigor as everything else, and the design session decides whether any proposal incorporates them.
+
+## t215u (2026-10-23 11:26 SGT, phone, reply to the artifact map)
+
+This is way too heavy I think? But how much of it belongs to pstack/pistack. Only those are really in scope.
+
+## t216u (2026-10-23 11:29 SGT, phone)
+
+In some ways I have no contentions, but to spend time fixing nomenclature, things like stream and actions is very poor in token space, and we really do want, like obvious things like state and history. Like, you, you can't have stream and state coexisting, you can't have actions and stream coexisting, like it's kind of impossible to tell from the language perspective, like pay attention to that.

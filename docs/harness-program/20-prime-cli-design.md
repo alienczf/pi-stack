@@ -76,7 +76,7 @@ Every row is LAYER 3. The CLI executes the translation on every invocation. A re
 | `thinking-level SID LEVEL` | Select reasoning level | `set_thinking_level` with `level` | Prime may clamp unsupported levels | Preserve native behavior. Read status to observe effective level. |
 | `answer SID ASK_ID QUESTION_ID TEXT` | Submit `{askId,answers:[{id,values:[],otherText}]}`, return `{ok,status,result}` | No equivalent found in public daemon command union | Pi Web's ask registry has no native Prime counterpart | Return `{ok:false,status:501,error:unsupported,...}`. Sending arbitrary prompt text is not an answer implementation. |
 
-`prompt SID '/compact ...'` uses Prime's native session slash command. It is not a separate pi-web-cli verb. Future stream integration needs this path and `isCompacting`, without adding an automatic 252k policy here. Track 1 owns that policy.
+`prompt SID '/compact ...'` uses Prime's native session slash command. It is not a separate pi-web-cli verb. Future stream integration needs this path and `isCompacting`. Current Z3 and Z8 replace the former 252k policy with same-session dump, compact, and resume at 150k. This CLI does not implement that policy. Track 1 owns it.
 
 The installed PI WEB implementation, not just its thin client, supplies the lifecycle oracle. `dist/server/sessions/piSessionService.js:1767` clears queues during abort. Line 1793 closes the active runtime during stop. Line 1519 rejects active work before archive. `closeActive` at line 1992 disposes runtime without adding archive state. Initial assumptions that abort preserves Pi queues and stop retains the Pi runtime were wrong and are superseded below.
 
