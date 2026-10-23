@@ -38,6 +38,18 @@
 
 Structured answers return 501. Stop does not dispose the resident runtime. Queue previews are not mechanically replay-safe. Archive holds a native input pause but does not claim atomicity against every producer. Unknown-model provider templates can clamp xhigh to off; native set_model can reject an unregistered ID. Status uses three non-atomic reads. No actual Prime authentication, inference, active-run steering, compaction, or off-host connection was tested by this worker.
 
+## Parent verification
+
+- [x] The design was written first at `docs/harness-program/20-prime-cli-design.md` in the shared docs worktree and remains uncommitted.
+- [x] Repeat all 40 Prime offline tests and all 105 existing stream tests on the implementation branch.
+- [x] Run the real stable v0.10.1 daemon under this user with a dedicated socket and agent directory. No sudo or service installation.
+- [x] Exercise every mapped command against owned sessions. Queue tests hold a native input pause and clear inputs before release, so admission tests do not invoke an unintended model.
+- [x] Record explicit model-set refusal, unsupported answer, and xhigh-to-off metadata clamp rather than claim parity.
+- [x] Run the full installer fixture. It initially failed because its synthetic source clone omitted the new installer helper. Add the helper to that fixture and rerun successfully.
+- [ ] Consume independent same-model final review.
+- [ ] Attempt inference only with openai-codex/gpt-6.1-sol. Stop on missing credentials or quota. Record exact error and clean up owned sessions.
+- [ ] Stop the owned daemon, finalize artifact 20, and hand back local commits without pushing.
+
 ## Constraints
 
-No real daemon/model calls, auth reads/writes, existing session or stream mutations, pushes, PRs, provider switches, or resource budgets. The CLI never starts a runtime. Missing capabilities return errors. Admission is not completion. Stop/report on a quota error.
+The worker made no real daemon/model calls or auth/session mutations. The parent may run the explicitly authorized isolated real-server checks. No existing sessions or streams, auth files, other branches, pushes, PRs, provider switches, or resource budgets are permitted. The CLI never starts a runtime. Missing capabilities return errors. Admission is not completion. Stop/report on a quota error.

@@ -615,8 +615,9 @@ git -C "$fake" -c user.email=t@t -c user.name=t commit -qm stub
 initial_pstack_head="$(git -C "$fake" rev-parse HEAD)"
 
 seed="$tmp/seed"
-mkdir -p "$seed"
+mkdir -p "$seed/scripts"
 cp -a "$root/install.sh" "$root/overlay" "$root/prompts" "$root/bin" "$root/skills" "$root/systemd" "$root/.gitignore" "$seed/"
+cp -a "$root/scripts/install-agent-clis.sh" "$seed/scripts/"
 git init -q "$seed"
 git -C "$seed" add .
 git -C "$seed" -c user.email=t@t -c user.name=t commit -qm seed

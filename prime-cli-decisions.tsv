@@ -8,3 +8,4 @@ T2-6	Return interactive answer unsupported 501; label all queue text as previews
 T2-7	Keep parent as live-verification owner and this worker as the sole code writer.	No shared docs/worktree writes, real daemon/model calls, credential access, or provider switching by this worker.
 T2-8	Keep archived cwd-matching list rows with native metadata and an explicit archived boolean.	Parent traced actual Pi Web list behavior; filtering archived rows would break caller history/discovery.
 T2-9	Use a quoted remote HOME prefix by default and quote every argument separately.	Remote execution must not assume a username, interpolate caller text, restart Twingate per call, or consume stdin.
+T2-10	Include the new installer helper in the synthetic bootstrap clone.	The full check-overlay.sh run failed without scripts/install-agent-clis.sh; after copying that runtime dependency into the fixture the check passes.
