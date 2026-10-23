@@ -24,7 +24,7 @@ prime-cli-remote status SESSION
 
 | Command | Meaning |
 | --- | --- |
-| `list --cwd PATH` | Lists matching saved and resident sessions, including archived rows. `id` is the active selector, `path` aliases native `sessionFile`, and `archived` reflects native lifecycle. Native `messageCount` and `modified` remain unchanged when present. |
+| `list --cwd PATH` | Lists matching saved and resident sessions, including archived rows. `id` is the durable `sessionId`, `activeSessionId` remains separate, `path` aliases native `sessionFile`, and `archived` reflects native lifecycle. Native `messageCount` and `modified` remain unchanged when present. |
 | `spawn PATH` | Creates a resident session that survives CLI disconnect. `PRIME_CLI_MODEL=provider/modelId` and `PRIME_CLI_THINKING=xhigh` set explicit fields inside the supervisor command's `config` object. Cwd is checked against the create result. An explicit model is read back; a mismatch fails and includes the retained session identity. Without these variables, Prime chooses its configured defaults. |
 | `prompt SID [TEXT]` | Reads exact stdin when TEXT is absent. Ordinary input explicitly uses follow-up behavior so it resumes native suspended admission. Success is admission only. |
 | `prompt SID --steer [TEXT]` | Queues steering for the next active-run boundary. Acknowledgement does not prove execution. |
@@ -48,7 +48,7 @@ Success exits 0. Failure exits 1 with JSON on stdout. Usage failures also use JS
 
 ```json
 {"ok":true,"status":200,"sessions":[]}
-{"ok":true,"status":201,"session":{"id":"active-selector","cwd":"/work","archived":false}}
+{"ok":true,"status":201,"session":{"id":"durable-id","sessionId":"durable-id","activeSessionId":"runtime-id","cwd":"/work","archived":false}}
 {"ok":true,"status":200,"result":{"accepted":true}}
 {"ok":false,"status":501,"error":"unsupported","message":"Prime has no correlated interactive-answer API"}
 ```
@@ -63,7 +63,7 @@ Status reports `pendingAsk:null` together with `capabilities.interactiveAnswers:
 
 Archive's pause prevents queued delivery but does not stop every producer, in-flight tool, model action, or concurrent administrative operation. The reply explicitly reports `preflightAtomic:false`. A producer can still add work after the check. Disconnect releases the pause after both success and rejection. This is safer preflight, not a server-side atomic archive-if-idle operation.
 
-Runtime selectors differ from durable `sessionId` and `sessionFile`. Keep those native fields. Status follows an explicit native binding event or a durable-ID match; it rejects an unexplained different session. An uncertain create can have created a session even if its reply was lost. Do not retry it blindly. An explicit spawn-model readback failure includes the known `session` after protocol refusal, timeout, reset, or EOF. The client does not retry create, delete the session, or discard its received identity.
+Spawn, list, and status consistently expose the real durable `sessionId` as compatibility `id`. They preserve native `activeSessionId` separately and reject a missing durable identity rather than substituting a runtime selector. Pass the compatibility ID to later commands, including archive's pause acquisition. Status validates the returned durable identity, then routes its composite queue/stats reads through the validated current active ID. Archive also checks the preflight summary's durable identity. A runtime replacement can change the active ID without changing the compatibility ID. Fresh CLI connections do not depend on attachment-only binding events or a shim registry. An uncertain create can have created a session even if its reply was lost. Do not retry it blindly. An explicit spawn-model readback failure includes the known `session` after protocol refusal, timeout, reset, or EOF. The client does not retry create, delete the session, or discard its received identity.
 
 Prime accepts an unlisted create model ID by copying a known provider's template. That can preserve `gpt-6.1-sol` without proving its entitlement, context limit, or supported reasoning level. Native `set_model` can still reject that unregistered ID. The client never substitutes another provider/model. An owned daemon must pin `allowedModels` and disable `retry.failover.enabled` before model-backed checks. Missing authentication is a blocker, not a reason to switch provider.
 
