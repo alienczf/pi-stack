@@ -9,7 +9,7 @@ tracking_issue: https://github.com/alienczf/pi-stack/issues/38
 box_mirror: /workspace/harness-program
 host_docs_worktree: /home/alphalab/Projects/worktrees/pi-stack-harness-program
 host_input_copy: /home/alphalab/Projects/pi-stack/streams/pi-streams-harness/context/harness-program
-updated: 2026-10-23T11:39+08:00
+updated: 2026-10-23T11:56+08:00
 tracks:
   - id: 1
     name: pi-streams must-fix catalog
@@ -57,17 +57,35 @@ tracks:
     session: 01a16658-09d0-7fcc-9815-7ac75f2cbb29
     host: options-01
     model: openai-codex/gpt-6.1-sol@xhigh
-    phase: done (designs sent)
+    phase: design-A-detailed (Z19 steer-3 consumed 11:55 after /compact 68%->compacted, streaming 11.3%)
     milestones_sent: [track-3-designs-ready 2026-10-23T11:01+08:00]
     started: 2026-10-23T09:21+08:00
     expected_done: 2026-10-23T13:30+08:00
-    artifact: docs/harness-program/30-research-designs.md
+    artifact: docs/harness-program/31-design-a-detailed.md (after 30-research-designs.md)
     inputs: [docs/harness-program/31-x-corpus-seed.md]
     brief: docs/harness-program/briefs/track-3.md
-    steers: [docs/harness-program/briefs/track-3-steer-1.md, docs/harness-program/briefs/track-3-steer-2.md]
+    steers: [docs/harness-program/briefs/track-3-steer-1.md, docs/harness-program/briefs/track-3-steer-2.md, docs/harness-program/briefs/track-3-steer-3.md]
     brief_sha256_verified: true
     steer_note: steer-1 consumed (09:53). steer-2 (Z12 five inputs, coverage table, three proposals, blocking decisions) consumed 10:11 (sha match, streaming, pending 0).
-    next_action: None until ZF answers the two blocking decisions (defaults A, and no auto-delete). Leave session idle.
+    next_action: Z19 - C dropped, G24 withdrawn. Wait for TRACK 3 STATUS done on 31-design-a-detailed.md (8 headings, Z15 layout); compact via commands/run if > 60% at idle. When both 31 and 41 are done, Grok Bot writes 50-a-vs-b.md and sends it to ZF (design unlocked, Z17).
+  - id: 4
+    name: proposal B over prime (feasibility spike)
+    session: 01a166e0-220d-7dbc-8b1c-719e872dad2d
+    host: options-01
+    model: openai-codex/gpt-6.1-sol@xhigh
+    phase: feasibility (40) then design-B-detailed (41); steer-1 (Z19) consumed 11:52 via --steer, streaming 14.7%
+    started: 2026-10-23T11:51+08:00
+    expected_done: 2026-10-23T15:30+08:00
+    artifact: docs/harness-program/40-b-over-prime.md, then docs/harness-program/41-design-b-prime-detailed.md
+    brief: docs/harness-program/briefs/track-4.md
+    steers: [docs/harness-program/briefs/track-4-steer-1.md]
+    brief_sha256_verified: true (195ea3ad, byte match as last user message)
+    code_branch: spike/b-over-prime (off origin/main 3acf0f0; worktree created by the session, confirmed 11:52)
+    code_worktree: /home/alphalab/Projects/worktrees/pi-stack-b-over-prime
+    session_cwd: /home/alphalab/Projects/pi-stack/pi-stack (same as tracks 1-3; pi creates the worktree per orchestrate-with-pi)
+    inputs: [docs/harness-program/30-research-designs.md, docs/harness-program/20-prime-cli-design.md, feat/prime-cli, /home/alphalab/Projects/prime-agent, docs/harness-program/02-principles.md]
+    gate: TRACK 4 STATUS done line with 40 covering (a)-(d) and 41 with the Z19 8 headings; spike commits local only. Design not locked (Z17), input only.
+    next_action: Each run, read the latest TRACK 4 STATUS line; confirm the worktree and branch exist; compact via commands/run if context > 60% at an idle boundary. When done, collect 40 and 41, push spike/b-over-prime from a bundle; with 31 also done, write 50-a-vs-b.md and send ZF (no decision framing).
 ---
 
 # Harness program status
@@ -76,6 +94,7 @@ tracks:
 |---|---|---|---|---|
 | 1 fix catalog | `01a16655` | implementing (ZF go 11:35, steer consumed 11:39) | `10-pi-streams-fix-catalog.md` + `feat/streams-must-fix` | S1-S6 done, then driver merges |
 | 2 prime CLI | `01a16656` | blocked on Prime codex login; non-inference gaps in progress | `20-prime-cli-design.md` + `feat/prime-cli` (`29ff206` pushed) | ZF logs Prime in, then inference verification |
-| 3 research | `01a16658` | done, designs sent 11:01 | `30-research-designs.md` | ZF answers two blocking decisions |
+| 3 research | `01a16658` | design-A-detailed (Z19 steer consumed 11:55) | `30-research-designs.md`, `31-design-a-detailed.md` | 31 done, then 50-a-vs-b with track 4 |
+| 4 B over prime | `01a166e0` | feasibility, then design-B-detailed (Z19 steer consumed 11:52) | `40-b-over-prime.md`, `41-design-b-prime-detailed.md` + `spike/b-over-prime` | 40 and 41 done, then 50-a-vs-b with track 3 |
 
 The canonical copy is on GitHub. The box mirror is `/workspace/harness-program/STATUS.md`.
