@@ -9,7 +9,7 @@ tracking_issue: https://github.com/alienczf/pi-stack/issues/38
 box_mirror: /workspace/harness-program
 host_docs_worktree: /home/alphalab/Projects/worktrees/pi-stack-harness-program
 host_input_copy: /home/alphalab/Projects/pi-stack/streams/pi-streams-harness/context/harness-program
-updated: 2026-10-23T13:55+08:00 (driver run: T1 streaming 61.7% ctx after S1 commit 3 d1d4602 (Log append/rotate), suite pass, compact at next idle if >60%; T2 idle blocked on Prime login, feat/prime-cli 6bc1242 = remote; spike 8811a7a = remote; T3-T5 done; comparison already sent; no unsteered Z entries)
+updated: 2026-10-23T14:25+08:00 (driver run: T1 streaming 62.4% ctx, active 14:12, S1 commit 4 (templates) in worktree after d1d4602, no compact while streaming; T2 idle blocked on Prime login, feat/prime-cli 6bc1242 unchanged; T3-T5 done; comparison already sent; no unsteered Z entries)
 tracks:
   - id: 1
     name: pi-streams must-fix catalog
