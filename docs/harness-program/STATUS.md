@@ -9,7 +9,7 @@ tracking_issue: https://github.com/alienczf/pi-stack/issues/38
 box_mirror: /workspace/harness-program
 host_docs_worktree: /home/alphalab/Projects/worktrees/pi-stack-harness-program
 host_input_copy: /home/alphalab/Projects/pi-stack/streams/pi-streams-harness/context/harness-program
-updated: "2026-10-24T03:20+08:00 (driver run: T1 streaming 31.4%, S2 at ae32edd; T6 streaming 30.7% waiting on its own worker, install commit 35bcb64 pushed, end-to-end check remaining; T2 idle 31.9%, Prime login not recorded)"
+updated: "2026-10-24T03:52+08:00 (driver run: T1 streaming 32.4%, S2 at ae32edd; T6 streaming 30.7%, unit 8 committed 491f163 and pushed, fresh documented install from a clean HOME in progress; T2 idle 31.9%, Prime login not recorded)"
 tracks:
   - id: 1
     name: pi-streams must-fix catalog
@@ -108,7 +108,7 @@ tracks:
     model: openai-codex/gpt-6.1-sol@xhigh
     phase: "building - units through install committed (35bcb64); end-to-end PoC check (poc.py, uncommitted) in progress via its own worker; streaming 30.7% at 03:20"
     started: 2026-10-24T01:26+08:00
-    pushed: feat/merged-poc 35bcb64 (2026-10-24 03:20, driver; through install commit)
+    pushed: feat/merged-poc 491f163 (2026-10-24 03:51, driver; through unit 8 end-to-end verifier)
     code_branch: feat/merged-poc (session creates worktree /home/alphalab/Projects/worktrees/pi-stack-merged-poc off local main + feat/prime-cli)
     deadline: 2026-10-26T09:00+08:00
     brief: docs/harness-program/briefs/track-6.md (final sha256 4ec99908, aligned to revised 51 section 8)
@@ -164,7 +164,7 @@ env_failure:
 | 3 research | `01a16658` | done 18:21; 31 (A over Prime) passed gate 18:22 | `31-design-a-detailed.md` | feeds 51 |
 | 4 B over prime | `01a166e0` | done; 42 passed gate 15:55 | `40`, `41` (reference), `42-design-b-prime-unchanged.md` | feeds 51 |
 | 5 merged + v2 | `01a1671a` | done; revised 51 and 50 passed the Z25 gate 01:30 | `51-design-merged.md`, `50-a-vs-b.md` v2 | gate merged_revision_z25, then one short note to ZF |
-| 6 merged PoC | `01a169cc` | building from 51 section 8 (started 01:26) | `feat/merged-poc` + install for a fresh external setup | build 51 section 8; tell ZF once when the PoC works (deadline Mon 26 Oct 09:00) |
+| 6 merged PoC | `01a169cc` | all 8 units committed (491f163 pushed); fresh clean-HOME install and native end-to-end run in progress | `feat/merged-poc` + install for a fresh external setup | build 51 section 8; tell ZF once when the PoC works (deadline Mon 26 Oct 09:00) |
 
 **Usage limit 16:14-18:11 (closed):** ChatGPT usage limit on openai-codex; ZF reset it at 18:06 and work resumed on the same provider.
 
