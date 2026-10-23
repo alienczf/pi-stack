@@ -9,21 +9,21 @@ tracking_issue: https://github.com/alienczf/pi-stack/issues/38
 box_mirror: /workspace/harness-program
 host_docs_worktree: /home/alphalab/Projects/worktrees/pi-stack-harness-program
 host_input_copy: /home/alphalab/Projects/pi-stack/streams/pi-streams-harness/context/harness-program
-updated: "2026-10-23T19:00+08:00 (T5 done 18:37; 51 + 50 v2 passed gate 18:58, G34; v2 summary handed to main chat 19:00; T1 streaming S1 done, next S2)"
+updated: "2026-10-23T19:30+08:00 (options-01 rebooted 19:11, /tmp wiped; T1 re-entered on S2 with reentry-4 at 19:29, G35)"
 tracks:
   - id: 1
     name: pi-streams must-fix catalog
     session: 01a16655-5cfd-78c2-bf5f-e08c47e1665e
     host: options-01
     model: openai-codex/gpt-6.1-sol@xhigh
-    phase: "implementing - re-entered 18:19 after usage-limit reset (compact 73.8% -> re-entry-3 sha bb4ab9ba, byte match); after-S1 disposable check then S2-S6"
+    phase: "implementing - S1 done (6b2f1ab, native pass); S2 uncommitted in worktree; re-entered 19:29 after options-01 reboot (reentry-4 sha f56bbe58), then S2a-S6"
     milestones_sent: [track-1-review-ready 2026-10-23T11:01+08:00]
     go_ahead: 2026-10-23T11:35+08:00 (ZF t221u, GO in 03)
     started: 2026-10-23T09:17+08:00
     expected_done: 2026-10-23T18:00+08:00
     artifact: docs/harness-program/10-pi-streams-fix-catalog.md
     brief: docs/harness-program/briefs/track-1.md
-    steers: [docs/harness-program/briefs/track-1-steer-1.md, docs/harness-program/briefs/track-1-steer-2.md, docs/harness-program/briefs/track-1-steer-3.md, docs/harness-program/briefs/track-1-reentry-1.md, docs/harness-program/briefs/track-1-go.md, docs/harness-program/briefs/track-1-reentry-2.md, docs/harness-program/briefs/track-1-reentry-3.md]
+    steers: [docs/harness-program/briefs/track-1-steer-1.md, docs/harness-program/briefs/track-1-steer-2.md, docs/harness-program/briefs/track-1-steer-3.md, docs/harness-program/briefs/track-1-reentry-1.md, docs/harness-program/briefs/track-1-go.md, docs/harness-program/briefs/track-1-reentry-2.md, docs/harness-program/briefs/track-1-reentry-3.md, docs/harness-program/briefs/track-1-reentry-4.md]
     steer_note: 10:27 context 86.8% -> aborted, cleared unconsumed steer-3, /compact via PI WEB commands/run (G19). 10:34 re-entry-1 (brief + phase + steer-3 folded in, sha 742d71f3) consumed, streaming, context 9.8%. Compact recipe - curl -X POST 127.0.0.1:8504/api/sessions/<sid>/commands/run -d {"text":"/compact"} on the host; pi-web-cli prompt "/compact" does NOT compact. 11:38 go steer (briefs/track-1-go.md, sha aaa62d2f; Z13-Z15 amendments + implement S1-S6) sent while idle at 33.9%, consumed (byte match), streaming at 35.7%.
     inputs: [docs/harness-program/11-artifact-map.md]
     code_branch: feat/streams-must-fix (off main 3acf0f0; pi-web source gets a same-named local branch)
@@ -122,6 +122,11 @@ usage_limit:
   policy: "(closed) never switch provider; normal driving resumed 18:11"
   parked_at: {T1: "idle 73.8%, S1 6b2f1ab done, disposable check pending, async subagent 7f6b0202 was running", T2: "idle 31.9%, blocked on Prime login", T3: "idle 87.3%, mid-edit of 31 (uncommitted, last check assertion failed) - compact before re-entry", T4: "done, 77.5%", T5: "standby 30.1%"}
   after_reset: "T3 compact via commands/run then re-enter on 31; T1 re-enter from 12-track-1-progress.md (compact first if over 60%); then normal gates"
+env_failure_2:
+  open: 2026-10-23T19:11+08:00
+  closed: 2026-10-23T19:11+08:00 (host reboot; PI WEB back; found 19:25)
+  kind: "options-01 reboot - /tmp wiped, T1 turn and S2 subagent 1e2140ca killed"
+  action: "T1 reentry-4 19:29 (G35); T2 unaffected"
 env_failure:
   open: 2026-10-23T14:50+08:00
   closed: 2026-10-23T15:05+08:00 (all tracks resumed by 15:09; no fork)
@@ -133,7 +138,7 @@ env_failure:
 
 | Track | Session | Phase | Artifact | Next |
 |---|---|---|---|---|
-| 1 fix catalog | `01a16655` | implementing; S1 done (`6b2f1ab`, suite and disposable check pass), now S2-S6 | `10-pi-streams-fix-catalog.md` + `feat/streams-must-fix` | S1-S6 done, then driver merges |
+| 1 fix catalog | `01a16655` | implementing; S1 done (`6b2f1ab`); re-entered on S2 at 19:29 after options-01 rebooted at 19:11 | `10-pi-streams-fix-catalog.md` + `feat/streams-must-fix` | S1-S6 done, then driver merges |
 | 2 prime CLI | `01a16656` | blocked on Prime codex login; non-inference gaps in progress | `20-prime-cli-design.md` + `feat/prime-cli` (`6bc1242` pushed) | ZF logs Prime in, then inference verification |
 | 3 research | `01a16658` | done 18:21; 31 (A over Prime) passed gate 18:22 | `31-design-a-detailed.md` | feeds 51 |
 | 4 B over prime | `01a166e0` | done; 42 passed gate 15:55 | `40`, `41` (reference), `42-design-b-prime-unchanged.md` | feeds 51 |
