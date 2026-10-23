@@ -2,11 +2,11 @@
 
 ## Bounded review fixes
 
-1. [ ] Reproduce it yourself on the matching surface via the control skill. Offline CLI/socket fixtures only; control-cli is unavailable and the real daemon is prohibited.
-2. [ ] Binary-search the cause. Confirm each reviewed boundary with a failing executable regression; no broader source survey.
-3. [ ] Plan the fix. Durable session identity, local readback-error normalization, inference-only runnable checks, and leading backend selection. Inline ownership replaces forbidden subagents.
-4. [ ] Verify on the same surface. Run each original regression and the offline suites.
-5. [ ] Stage the commits so the failing repro lands before the fix in git history. Record failing-then-passing output and commit each tested fix as a local unit.
+1. [x] Reproduce it yourself on the matching surface via the control skill. Reproduced all four through offline CLI/socket fixtures. Control-cli is unavailable; no real daemon was contacted.
+2. [x] Binary-search the cause. Failing executable regressions confirmed the four reviewed boundary mechanisms. No broader source survey was needed.
+3. [x] Plan the fix. Durable session identity, local readback-error normalization, inference-only runnable checks, and leading backend selection. Inline ownership replaced forbidden subagents.
+4. [x] Verify on the same surface. Original regressions pass. Full validation passed with 48 Prime tests, 105 existing stream tests, check-overlay.sh, shell syntax, and diff whitespace checks.
+5. [x] Stage the commits so the failing repro lands before the fix in git history. Each failing regression commit precedes its tested fix. Failing-then-passing evidence is in the managed report.
 6. [x] Run Opening a PR. Skipped under the explicit no-push/no-PR handoff.
 
 Throughput checkpoint. Establish clean c323b30 first. Reproduce and fix one defect at a time. This worker owns this worktree; the parent owns artifact 20 and live checks. Four independently tested commits avoid overlapping code ownership.
@@ -14,7 +14,9 @@ Throughput checkpoint. Establish clean c323b30 first. Reproduce and fix one defe
 - [x] P1. Default checks admit no runnable input; inference-only queue checks clear inside their pause scope on ordinary failure. The two disconnect-aware CLI regressions failed before the fix, exposing three runnable inputs, then passed. This supersedes the historical control-only safety claim below.
 - [x] P2. Spawn readback transport errors preserve the known created session. Timeout and reset regressions reproduced identity loss; timeout, reset, and EOF now preserve the received row without retry/deletion.
 - [x] P2. Compatibility IDs use durable sessionId with no shim registry or binding-event dependency. The replacement workflow regression now retains one durable ID across fresh prompt/status/list/archive connections and verifies durable pause acquisition.
-- [ ] P2. Dispatcher consumes only a leading backend selection and forwards backend options verbatim.
+- [x] P2. Dispatcher consumes only a leading backend selection and forwards backend options verbatim. Both backend-selection spellings now forward --socket, later backend tokens, Unicode/newlines, and stdin unchanged.
+
+Final review was manual because this assignment prohibits subagents and the installed control-cli/deslop skills are unavailable. Removed the binding-event cache rather than adding a shim registry. No new line comments or suppressions were introduced. The parent must rerun live checks after the durable-ID change. Inference-enabled connection loss can still release queued work; default checks admit none.
 
 ## Feature playbook
 

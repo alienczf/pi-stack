@@ -9,12 +9,13 @@ Install the user links with `bash scripts/install-agent-clis.sh`, or the regular
 ```sh
 agent-cli list --cwd /work
 agent-cli --backend prime list --cwd /work
+agent-cli --backend=prime --socket /owned/daemon.sock status SESSION
 PRIME_AGENT_DAEMON_SOCKET=/owned/daemon.sock prime-cli status SESSION
 prime-cli --socket /owned/daemon.sock status SESSION
 prime-cli-remote status SESSION
 ```
 
-`agent-cli` defaults to Pi. `PI_STACK_BACKEND=prime` opts into Prime. The dispatcher preserves arguments, standard streams, and exit status. It uses sibling `pi-web-cli` or `prime-cli` executables. It does not modify stream configuration.
+`agent-cli` defaults to Pi. `PI_STACK_BACKEND=prime` opts into Prime. The dispatcher consumes only a leading `--backend pi|prime` or `--backend=prime` selection. Every remaining token, including a leading backend `--socket` option or later `--backend` token, passes unchanged to the child. It preserves standard streams and exit status. It uses sibling `pi-web-cli` or `prime-cli` executables. It does not modify stream configuration.
 
 `PRIME_AGENT_DAEMON_SOCKET` selects the host-side Unix socket. Without it, the default is `${TMPDIR:-/tmp}/prime-agent-UID/daemon.sock`. Packaged Rust launchers can use a different endpoint, so select it explicitly. `PRIME_CLI_TIMEOUT` is a positive response timeout in seconds, default 20. The client never retries an uncertain mutation.
 
