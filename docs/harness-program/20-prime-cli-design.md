@@ -24,7 +24,7 @@ Source anchors under the upstream checkout:
 - `crates/pa-types/src/daemon/command.rs` defines create, prompt, queues, and lifecycle command shapes.
 - `crates/pa-daemon/src/protocol.rs` defines supervisor envelopes and response constructors.
 - `crates/pa-daemon/src/supervisor/clients.rs` sends the hello and multiplexes events and responses.
-- `crates/pa-daemon/src/worker/create.rs` consumes top-level `cwd`, `provider`, `model`, and `thinking`.
+- `crates/pa-daemon/src/supervisor/worker_lifecycle.rs:105-211` consumes public `create.config.cwd`, `provider`, `model`, and `thinking`. It converts those fields into the top-level worker payload consumed by `worker/create.rs`. The client must not send worker payloads directly to the supervisor.
 - `crates/pa-daemon/src/worker/summary.rs` builds `get_connection_state`, including context usage.
 - `crates/pa-daemon/src/worker/input.rs` distinguishes prompt admission, steering, and follow-up queues.
 - `crates/pa-daemon/src/worker/commands.rs` implements messages, queues, abort, and kill. Kill durably records archived state and closes children.
@@ -58,23 +58,36 @@ Every row is LAYER 3. The CLI executes the translation on every invocation. A re
 
 | Command | Pi semantics and JSON | Prime equivalent | Gap | Shim |
 | --- | --- | --- | --- | --- |
-| `list --cwd PATH` | Cwd-scoped roster in `sessions` | `list` with `cwd` | Different row identifiers | Preserve native row data and add compatible `id` and `cwd`. Exclude archived rows. |
-| `spawn PATH` | Resident session in `session`, including `id` | `create` with top-level `cwd`, `lifecycle: resident` | Active and durable IDs differ | Return active ID as `id`. Optional environment model selection is sent during create. |
+| `list --cwd PATH` | Cwd-scoped roster in `sessions`, including saved and archived rows | `list` with `cwd` and `all:true` | Different row identifiers and path key | Preserve native data, map `sessionFile` to `path`, preserve timestamps and message count, and derive `archived` from lifecycle. |
+| `spawn PATH` | Resident session in `session`, including `id` | `create` with `config.cwd` and `lifecycle: resident` | Active and durable IDs differ | Return active ID as `id`. Optional environment model selection goes inside `config`, and returned cwd and explicit model identity must match. |
 | `prompt SID [TEXT]` | Accept argv or stdin, `result.accepted` | `prompt` with `activeSessionId` and `message` | Prime can suspend admission after abort | Send an explicit follow-up behavior for ordinary input so a new user prompt resumes a stopped queue without replaying a failed request. |
 | `prompt SID --steer` | Steer an active turn | `steer` with `activeSessionId` and `message` | Acknowledgement is queue admission, not completion | Normalize successful admission to `accepted:true`. Keep native acknowledgement fields. |
 | `prompt SID --follow-up` | Deliver after the current turn | `follow_up` with `activeSessionId` and `message` | Same acknowledgement distinction | Normalize admission and preserve lane semantics. |
 | `status SID` | `session.isStreaming`, pending count, context usage, numeric cost | `get_connection_state`, `get_queue`, and `get_session_stats` | No single Pi-shaped response | Add ID, count both `steering` and `followUp`, and use native stats cost. Preserve unknown context as null. |
 | `commands SID` | Array in `commands` | `get_commands` | Prime command discovery differs from Pi extensions | Unwrap `data.commands`. Do not pretend Pi-only tools or skills are installed. |
-| `stop SID` | Stop active work and clear pending input while retaining the session | `abort_and_clear_queue` | Native command differs | Keep the resident session. Do not use daemon shutdown. |
-| `abort SID` | Abort active work without clearing queued messages | `abort` | Prime suspends queue admission | Preserve suspension. A later explicit prompt resumes it. |
+| `stop SID` | Close and dispose the active runtime without archiving its transcript | `abort_and_clear_queue` is a work-stop approximation | No safe public per-root stop-without-archive equivalent found | Label the shim `runtimeClosed:false`. Do not claim native disposal or use private child-close markers. |
+| `abort SID` | Clear pending input and abort current operations, retaining runtime | `abort_and_clear_queue`, plus operation-specific aborts as needed | Prime's plain `abort` would preserve queues and is not equivalent | Clear queues and report abort admission. A later explicit prompt resumes suspended admission. |
 | `queue-clear SID` | Clear pending input | `clear_queue` | Reply uses native lane fields | Preserve those fields under `result`. |
-| `archive SID` | Remove the live session while retaining its transcript | `kill` | Kill also cancels session schedules and closes its children | Return explicit archived result after native success. Never delete transcript files. |
+| `archive SID` | Reject active work, then archive while retaining transcript | Work check followed by `kill` | Native kill does not itself reject busy work and also closes children and cancels schedules | Use native connection-scoped input pause where feasible, inspect work and queues, reject busy state, then kill. Never delete transcripts. Concurrency guarantees need live evidence. |
 | `messages SID` | `result.messages` with role and content blocks | `get_messages` | Saved/windowed history can differ | Preserve message data. Do not manufacture Pi tool rows. |
 | `model SID PROVIDER/ID` | Select model, result envelope | `set_model` with provider and modelId | Available catalog and auth govern selection | Validate selector, forward selection, and return upstream errors. No fallback model. |
 | `thinking-level SID LEVEL` | Select reasoning level | `set_thinking_level` with `level` | Prime may clamp unsupported levels | Preserve native behavior. Read status to observe effective level. |
 | `answer SID ASK_ID QUESTION_ID TEXT` | Submit correlated interactive answer | No equivalent found in public daemon command union | Pi Web's ask registry has no native Prime counterpart | Return explicit unsupported error. Sending arbitrary prompt text is not an answer implementation. |
 
 `prompt SID '/compact ...'` uses Prime's native session slash command. It is not a separate pi-web-cli verb. Future stream integration needs this path and `isCompacting`, without adding an automatic 252k policy here. Track 1 owns that policy.
+
+The installed PI WEB implementation, not just its thin client, supplies the lifecycle oracle. `dist/server/sessions/piSessionService.js:1767` clears queues during abort. Line 1793 closes the active runtime during stop. Line 1519 rejects active work before archive. `closeActive` at line 1992 disposes runtime without adding archive state. Initial assumptions that abort preserves Pi queues and stop retains the Pi runtime were wrong and are superseded below.
+
+The caller audit also found these required fields and non-CLI dependencies:
+
+- `sessions[].messageCount`, `archived`, `modified`, and `path` drive recovery, coordinator selection, and transcript inspection in `pi-streams/engine/threads.py` and `tick.py`.
+- `status.queuedMessages` carries exact `{kind:steer|followUp,text}` records, including duplicate texts. Current tick clears and replays that queue.
+- Native `get_queue` can contain display previews for internal Prime input, not replayable raw text. `sessionActions.rlmChildStatus` and `injectedPrompts` identify some internal classes. Ordinary human prompts can retain exact text, but arbitrary internal queue replay remains a gap unless the adapter can prove or reject it.
+- `pendingAsk.askId` and question text trigger human-decision events. A null ask alongside an unsupported-answer capability is honest absence, not full question parity.
+- `pi-streams/engine/piweb.py:18` runs the checkout's `bin/pi-web-cli` with Python. Changing a PATH executable alone does not port streams.
+- `pi-streams/engine/sessionlog.py` expects native JSONL assistant-message entries at the listed host transcript path. A gateway cache is not a replacement transcript.
+
+LAYER 3. Prime's `acquire_session_input_pause` and `release_session_input_pause` offer a native connection-owned admission lease for archive checks. This belongs in the runtime because code layout and tests cannot stop another client from submitting live work. The public protocol is preferable to a shim-only mutex, but its precise protection against work already in flight must be verified.
 
 ## Competing designs and chosen data shape
 
@@ -113,11 +126,27 @@ LAYER 3. Packaging follows pi-stack's `bin/` tools and installer-managed user li
 
 The source is pi-bot `caladan` at `bb39dc0fc61d514b590f5d5de82ba7b603ec06a5`, not a pi-stack branch. It remains read-only. The open question is whether its later Prime adaptation stays in pi-bot or is intentionally transplanted. The default here is to leave it in pi-bot and expose a swappable CLI contract. No backup, rebase, branch mutation, or push is part of track 2.
 
-Detailed caller findings are added after the independent read-only inspection. Nothing in the CLI transport requires a Caladan-specific branch.
+The read-only inspection found that Caladan's `skills/pi-web-access/pi-web-cli.py` is a different, restricted bot-facing CLI. It blocks raw spawn and prompt, strips list and status to metadata, and does not expose transcript content. `skills/bot-streams/pi_web_cli_access.py` requires an exact `pi-web-cli-v1` capability identity and strict response-key sets. The host pi-stack client is not a drop-in replacement for that restricted binding.
+
+Caladan's `stream-spawn/lifecycle_core.py` additionally requires keyed admission, verified pause and retirement, and exclusive claims. Those stronger lifecycle guarantees are not supplied by ordinary pi-web-cli parity. Keep Caladan's admission policy in pi-bot rather than bypass it through the new generic client.
+
+The existing remote wrapper is at `pi-bot@bb39dc0:skills/pi-web-access/pi-web-cli-remote`. It invokes `/home/box/.local/bin/options-01-ssh --ensure-tg /home/alphalab/.local/bin/pi-web-cli "$@"`. Its shell quoting does not protect eventual SSH command parsing. The new wrapper uses one shell-quoted command and retains stdin. It avoids unconditional `--ensure-tg` under G15. Generic code makes the SSH helper and host executable configurable rather than hardcoding a username or private network.
+
+Nothing in the CLI transport requires a Caladan-specific branch. A later pi-bot adapter must deliberately preserve or migrate its restricted capability contract.
 
 ## Verification
 
 Not yet complete. This section records actual commands and observations as execution proceeds, not predicted transcripts.
+
+The unchanged pi-stack main baseline passed before final implementation verification:
+
+```text
+cd /home/alphalab/Projects/pi-stack/pi-stack
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s pi-streams/tests
+Ran 105 tests. OK.
+```
+
+The log is `/tmp/prime-t2.3qhjos6h/pi-stack-baseline-tests.log`. This suite uses fixtures and does not prove Prime behavior.
 
 Initial observations on options-01:
 
@@ -143,6 +172,22 @@ This proves the real server and protocol identity, not the CLI or model. The iso
 
 The host identifies itself as `hpc180-options-01`. Neither `options-01-ssh` nor `pi-web-cli-remote` is on its PATH. Off-host wrapper verification cannot be claimed from this host alone.
 
+The first native create baseline intentionally tested the draft wire assumption before relying on it. The result disproved that assumption:
+
+```text
+create with top-level cwd/provider/model -> cwd=/home/alphalab and default model, not requested values
+no prompt or provider request was sent to that session
+owned baseline session archived immediately
+create with config={cwd,provider,model,thinking} -> cwd=/tmp/prime-t2.3qhjos6h/work
+model -> provider=openai-codex id=gpt-6.1-sol api=openai-codex-responses
+requested xhigh -> effective off, reasoning=false on custom-ID fallback
+owned corrected baseline session archived
+```
+
+The native check found a public-supervisor versus worker-payload distinction that source inspection had missed. The implementation must test the exact nested request and validate the returned cwd and requested model. The default model in the failed baseline was not used for any inference.
+
+The checksum-verified stable release's bundled catalog contains fixture-named models. Its unknown-ID fallback preserves `gpt-6.1-sol` but assigns generic metadata, including no reasoning support and a 128000-token configured window. That window is not evidence of the requested model's actual capacity. Correct reasoning and context metadata need an operator-provided model definition or an updated catalog. The client must report effective thinking rather than claim xhigh was applied.
+
 ## Decisions
 
 1. Use the public supervisor JSONL socket and stable v0.10.1 for verification. The wire is explicit and the release is reproducible.
@@ -151,7 +196,7 @@ The host identifies itself as `hpc180-options-01`. Neither `options-01-ssh` nor 
 4. Keep SSH remote execution rather than exposing a network listener. Existing machine access already provides authentication.
 5. Keep credentials Prime-owned. This task does not authorize importing Pi or Codex credentials or running a login flow.
 6. Preserve unknown context as null and distinguish admission from completion. Fabricated zero usage or delivery success would reproduce corpus F5 and F8.
-7. Map archive to native kill and stop to abort-and-clear. These preserve the difference between ending a resident session and stopping its current work.
+7. Initial mapping, superseded by decision 16. The first draft mapped archive to native kill, stop to abort-and-clear, and abort to plain abort. Actual PI WEB source disproved the assumed abort and stop semantics.
 8. Return unsupported for interactive answers until Prime has a correlated question API or an explicitly scoped question extension. Plain prompt injection would be false parity.
 9. Keep Pi as the neutral dispatcher's default. P2 forbids silently porting existing streams now.
 10. Leave Caladan in its own repository and defer its migration. Its cross-repository destination is non-blocking for this CLI.
@@ -160,11 +205,19 @@ The host identifies itself as `hpc180-options-01`. Neither `options-01-ssh` nor 
 13. Reuse the still-running upstream investigator as the single implementation writer after writing this design. Its costly source context is directly needed for the adapter. The parent owns only artifact 20 and isolated live verification during that write phase.
 14. Disable Prime provider failover and quota parking in the owned live-check configuration. Upstream otherwise enables failover, which conflicts with the program's stop-and-report rule.
 15. Include numeric cost from native session statistics. Actual pi-stack code requires it even though the abbreviated task list did not name it.
+16. Correct the lifecycle mapping against the installed PI WEB implementation. Abort clears queues. Stop closes runtime without archival. Archive refuses active work. Native Prime abort is not Pi abort, and the work-stop shim must advertise that it retains the resident runtime.
+17. Keep the full host CLI contract separate from Caladan's restricted metadata-only contract. Substituting one for the other would either break strict validators or bypass bot admission policy.
+18. Preserve host transcript paths and queue replay requirements in the later port contract. Display previews are not safe replay text, so internal Prime queue behavior stays an explicit gap rather than fabricated compatibility.
+19. Correct public create to use `config`, not top-level worker fields. The real daemon ignored the top-level fields and returned the wrong cwd and model. Add response validation so this failure cannot be called a successful spawn.
+20. Report the stable catalog's generic custom-model metadata rather than invent model facts. Real create preserved the requested ID but clamped thinking to off. No inference was sent to the accidentally default-selected baseline session.
 
 ## Gaps
 
 - Interactive `answer` has no native correlated-question API in the inspected daemon union. This is a parity gap, not a completed shim.
-- The requested model is absent from the stable bundled catalog, but create-time custom-ID resolution can preserve it. Prime credentials are absent on this host. Live checks must determine the exact inference failure without changing provider.
+- Exact Pi stop-without-archive disposal has no demonstrated public Prime equivalent. Work-stop can retain the resident runtime only as a labeled shim.
+- Exact replay of Prime internal queued inputs is not guaranteed by its preview-based queue API. Ordinary user input and arbitrary internal work must not be conflated.
+- Busy archive refusal and native input-pause coverage need direct testing. A non-atomic preflight check is not a quiescence guarantee.
+- The requested model is absent from the stable bundled catalog, but create-time custom-ID resolution preserves it with generic metadata. Actual reasoning capability and context capacity require a correct model definition or catalog. Prime credentials are absent on this host. Live checks must determine the exact inference failure without changing provider.
 - Remote wrapper execution from the Grok Bot machine requires that machine and its authenticated `options-01-ssh`. Local wrapper quoting tests are not off-host evidence.
 - Stream ticks, coordinator compaction policy, skill installation into Prime, and Caladan adaptation are outside this implementation under P2.
 - Prime's executable Python skills are not automatically equivalent to Pi's Markdown process skills. Command discovery must report only what the target runtime actually loads.
