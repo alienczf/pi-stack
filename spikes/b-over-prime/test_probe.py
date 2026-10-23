@@ -5,7 +5,9 @@ import sqlite3
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 
+import live_check
 from probe import Intake, Journal, Wire, dispatch
 
 
@@ -113,6 +115,57 @@ class WireTests(unittest.TestCase):
                 thread.join(timeout=3)
                 self.assertFalse(thread.is_alive())
                 self.assertEqual(errors, [])
+
+
+class LiveCleanupTests(unittest.TestCase):
+    def test_failure_clears_paused_fixture_before_connection_releases_lease(self):
+        pending = []
+        pending_at_disconnect = []
+
+        class FixtureWire:
+            def __init__(self, *args, **kwargs):
+                self.hello = dict.fromkeys(("type", "protocol", "schemaId", "schemaRevision", "appVersion",
+                                          "supervisorGeneration", "supervisorPid", "serverCapabilities"))
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_):
+                pending_at_disconnect.append(list(pending))
+
+            def request(self, kind, **fields):
+                data = None
+                if kind == "list":
+                    data = {"sessions": []}
+                elif kind == "create":
+                    data = {"sessionId": "fixture-session"}
+                elif kind == "get_connection_state":
+                    data = {"cwd": str(root / "work"), "model": {"provider": "openai-codex", "id": "gpt-6.1-sol"}}
+                elif kind == "acquire_session_input_pause":
+                    data = {"pauseId": "fixture-pause"}
+                elif kind == "follow_up":
+                    pending.append(fields["message"])
+                elif kind == "get_queue":
+                    data = {"steering": [], "followUp": ["unexpected queue projection"]}
+                elif kind in {"clear_queue", "abort_and_clear_queue"}:
+                    pending.clear()
+                return {"type": "response", "command": kind, "success": True, "data": data}
+
+        with tempfile.TemporaryDirectory(prefix="prime-t4.") as directory:
+            root = Path(directory)
+            (root / "agent").mkdir()
+            (root / "work").mkdir()
+            (root / "track4-owned").write_text(live_check.OWNER + "\n")
+            (root / "agent/settings.json").write_text(json.dumps({
+                "allowedModels": ["openai-codex/gpt-6.1-sol"], "retry": {"enabled": False,
+                    "failover": {"enabled": False}, "provider": {
+                        "waitForUsage": {"enabled": False, "pauseUntilReset": False}}}}))
+            with socket.socket(socket.AF_UNIX) as owned_socket:
+                owned_socket.bind(str(root / "daemon.sock"))
+                with patch.object(live_check, "Wire", FixtureWire), self.assertRaises(AssertionError):
+                    live_check.check(root, 3)
+            self.assertEqual(pending_at_disconnect, [[], []])
+            self.assertEqual(json.loads((root / "live-check.json").read_text())["result"], "FAIL")
 
 
 if __name__ == "__main__":
