@@ -9,21 +9,21 @@ tracking_issue: https://github.com/alienczf/pi-stack/issues/38
 box_mirror: /workspace/harness-program
 host_docs_worktree: /home/alphalab/Projects/worktrees/pi-stack-harness-program
 host_input_copy: /home/alphalab/Projects/pi-stack/streams/pi-streams-harness/context/harness-program
-updated: "2026-10-24T00:56+08:00 (driver run: T5 streaming ~63% on Z25 revision, steer-2 and steer-3 both confirmed in transcript; T1 idle ~61% waiting on its own running async writer 81e8a51a (process alive), no re-prompt; T2 idle, Prime login not recorded; track 6 brief drafted; collect.sh now also pulls 43 and 13)"
+updated: "2026-10-24T01:45+08:00 (driver run: T5 done, revised 51+50 passed merged_revision_z25 gate (G38); track 6 spawned 01a169cc, brief sha 4ec99908 consumed, streaming; T1 idle at 65.7% since 01:12 -> compacted 01:38-01:41 (now ~15%), auto-continued, reentry-5 sha c604f050 queued pending 1 - confirm next run; T2 idle, Prime login not recorded)"
 tracks:
   - id: 1
     name: pi-streams must-fix catalog
     session: 01a16655-5cfd-78c2-bf5f-e08c47e1665e
     host: options-01
     model: openai-codex/gpt-6.1-sol@xhigh
-    phase: "implementing - S1 done (6b2f1ab, native pass); S2 in progress (7b37d41, 17efab2, a1bbdda, pi-web 65cdaa4, pi-streams 916d1e0 receipts; suite 249 pass); streaming 22:29 at ~51% context; remaining S2 units stop-generation safety + reuse/rotation, then S2a-S6"
+    phase: "implementing - S1 done (6b2f1ab); S2 nearly done (stop/cancel admission d2a378b pi-web + dfd9ab6 streams; suites 254 pi-streams / 2324 pi-web pass); last S2 unit safe coordinator rotation, then S2a-S6. Compacted 01:38-01:41 (65.7% -> ~15%); reentry-5 c604f050 queued"
     milestones_sent: [track-1-review-ready 2026-10-23T11:01+08:00]
     go_ahead: 2026-10-23T11:35+08:00 (ZF t221u, GO in 03)
     started: 2026-10-23T09:17+08:00
     expected_done: 2026-10-23T18:00+08:00
     artifact: docs/harness-program/10-pi-streams-fix-catalog.md
     brief: docs/harness-program/briefs/track-1.md
-    steers: [docs/harness-program/briefs/track-1-steer-1.md, docs/harness-program/briefs/track-1-steer-2.md, docs/harness-program/briefs/track-1-steer-3.md, docs/harness-program/briefs/track-1-reentry-1.md, docs/harness-program/briefs/track-1-go.md, docs/harness-program/briefs/track-1-reentry-2.md, docs/harness-program/briefs/track-1-reentry-3.md, docs/harness-program/briefs/track-1-reentry-4.md]
+    steers: [docs/harness-program/briefs/track-1-steer-1.md, docs/harness-program/briefs/track-1-steer-2.md, docs/harness-program/briefs/track-1-steer-3.md, docs/harness-program/briefs/track-1-reentry-1.md, docs/harness-program/briefs/track-1-go.md, docs/harness-program/briefs/track-1-reentry-2.md, docs/harness-program/briefs/track-1-reentry-3.md, docs/harness-program/briefs/track-1-reentry-4.md, docs/harness-program/briefs/track-1-reentry-5.md]
     steer_note: 10:27 context 86.8% -> aborted, cleared unconsumed steer-3, /compact via PI WEB commands/run (G19). 10:34 re-entry-1 (brief + phase + steer-3 folded in, sha 742d71f3) consumed, streaming, context 9.8%. Compact recipe - curl -X POST 127.0.0.1:8504/api/sessions/<sid>/commands/run -d {"text":"/compact"} on the host; pi-web-cli prompt "/compact" does NOT compact. 11:38 go steer (briefs/track-1-go.md, sha aaa62d2f; Z13-Z15 amendments + implement S1-S6) sent while idle at 33.9%, consumed (byte match), streaming at 35.7%.
     inputs: [docs/harness-program/11-artifact-map.md]
     code_branch: feat/streams-must-fix (off main 3acf0f0; pi-web source gets a same-named local branch)
@@ -92,7 +92,7 @@ tracks:
     session: 01a1671a-01d1-7f51-b240-533efc527a61
     host: options-01
     model: openai-codex/gpt-6.1-sol@xhigh
-    phase: "revising 51 + 50 per Z25 (steer-2 sent 2026-10-24 00:46, sha e9ac4de5, byte match; steer-3 Z26 follow-up 00:48:20, sha 609ab238, byte match; streaming at ~61% - compact at next idle boundary if still > 60%). Earlier: done 18:37, 51 and 50 v2 passed gate 18:58 (G34)"
+    phase: "done 01:15 (TRACK 5 STATUS: done (51 + 50 revised per Z25)); gate passed 01:30 (G38). Earlier: revising 51 + 50 per Z25 (steer-2 sent 2026-10-24 00:46, sha e9ac4de5, byte match; steer-3 Z26 follow-up 00:48:20, sha 609ab238, byte match; streaming at ~61% - compact at next idle boundary if still > 60%). Earlier: done 18:37, 51 and 50 v2 passed gate 18:58 (G34)"
     started: 2026-10-23T12:53+08:00
     expected_done: 2026-10-23T14:00+08:00
     artifact: docs/harness-program/50-a-vs-b.md
@@ -103,17 +103,18 @@ tracks:
     gate_z25: "51 first line unchanged; 8 headings; empty New concepts table; no H/P codes or retired STREAM/ACTIONS/GOAL/DECISIONS names; zero open questions; Not handled worded as permanently out of scope; stock automatic compaction disabled (compaction.enabled=false before session build) with one pi-stack-owned percentage check -> save STATE -> direct compact -> readback -> resume (no stock compact-at-threshold hook, no duplicate DCR hook); workers have no state files (handover + kickoff only, no shared coordinator/worker pair); no per-internal-request freshness or per-tool stop gap reported; stale pi-stack messages rejected and running tool calls stopped best-effort; attachments rejected; result review is the stream's own adversarial review against original intent in AGENTS.md text with reviewer spawned only when judged needed (no hook); 50 updated with Z25 answers and no open questions; section 8 concrete enough to code the PoC from (files, functions, stacked commits with tests, end-to-end PoC check) and includes an install commit for a fresh external machine (stock Prime v0.10.1, compaction.enabled=false, hooks, templates, fresh-machine test commands; login left to the user)."
   - id: 6
     name: merged-design proof of concept (Z26)
-    session: null
+    session: 01a169cc-9519-7411-bf2f-51073758fc53
     host: options-01
     model: openai-codex/gpt-6.1-sol@xhigh
-    phase: "waiting - starts when merged_revision_z25 passes"
-    code_branch: feat/merged-poc (off origin/main; not created yet)
+    phase: "building - spawned 01:26, model/xhigh set, /poteto then brief (sha 4ec99908) consumed 01:28, streaming"
+    started: 2026-10-24T01:26+08:00
+    code_branch: feat/merged-poc (session creates worktree /home/alphalab/Projects/worktrees/pi-stack-merged-poc off local main + feat/prime-cli)
     deadline: 2026-10-26T09:00+08:00
-    brief: docs/harness-program/briefs/track-6.md (drafted 00:55, sha256 80e8ef66; finalize against revised 51 section 8 before spawn)
+    brief: docs/harness-program/briefs/track-6.md (final sha256 4ec99908, aligned to revised 51 section 8)
     progress: docs/harness-program/13-track-6-progress.md
     source: "ZF t234u 00:46 SGT (Z26/G37): drive over the weekend; tell ZF when a working PoC is on the branch; update install for a new external setup"
     gate: "Branch feat/merged-poc pushed; revised 51 section 8 commits implemented with their tests passing; end-to-end PoC check (one stream on stock Prime v0.10.1: intake -> own percentage compaction (save, compact, resume) -> ask close) passes; install updated and verified from a fresh external-style setup (clean HOME/dir) with the documented commands; login is the user's own step."
-    next_action: "When merged_revision_z25 is done, spawn the track 6 session (poteto, Codex same provider), brief from revised 51 section 8, record session id here. On gate pass, send ZF one message with the branch and the fresh-setup test commands, set poc_sent."
+    next_action: "Each run read the latest TRACK 6 STATUS line and 13-track-6-progress.md; bundle-push feat/merged-poc when commits exist; compact if > 85% (or > 60% at idle). On gate pass, send ZF one message with the branch and the fresh-setup test commands, set poc_sent."
 comparison_sent: 2026-10-23T13:25+08:00 (v1, handed to main chat via WakeParent; never resend; superseded by Z20)
 comparison_v1_superseded: true
 a_over_prime_done: true (2026-10-23T18:22+08:00, gate passed, G33)
@@ -125,9 +126,9 @@ naming_cleanup_done:
   '50v2': true
 b_unchanged_done: true (2026-10-23T15:55+08:00, gate passed)
 merged_done: true (2026-10-23T18:58+08:00, gate passed, G34)
-merged_revision_z25: pending (steer-2 sent 2026-10-24T00:46+08:00; ZF answers t232u/t233u in 00b; evidence docs/harness-program/43-prime-compaction-hooks.md)
+merged_revision_z25: done (2026-10-24T01:30+08:00, gate passed, G38; T5 reported done 01:15)
 merged_revision_z25_sent: null
-track_6_session: null
+track_6_session: 01a169cc-9519-7411-bf2f-51073758fc53
 poc_sent: false
 poc_deadline: 2026-10-26T09:00+08:00
 comparison_v2_sent: 2026-10-23T19:00+08:00 (handed to main chat via WakeParent; never resend)
@@ -157,12 +158,12 @@ env_failure:
 
 | Track | Session | Phase | Artifact | Next |
 |---|---|---|---|---|
-| 1 fix catalog | `01a16655` | implementing; S1 done (`6b2f1ab`); S2 in progress (up to `916d1e0`, suite 249 pass) | `10-pi-streams-fix-catalog.md` + `feat/streams-must-fix` | S1-S6 done, then driver merges |
+| 1 fix catalog | `01a16655` | implementing; S1 done; S2 last unit (rotation) after `d2a378b`/`dfd9ab6`, suites pass; compacted 01:41 | `10-pi-streams-fix-catalog.md` + `feat/streams-must-fix` | S1-S6 done, then driver merges |
 | 2 prime CLI | `01a16656` | blocked on Prime codex login; non-inference gaps in progress | `20-prime-cli-design.md` + `feat/prime-cli` (`6bc1242` pushed) | ZF logs Prime in, then inference verification |
 | 3 research | `01a16658` | done 18:21; 31 (A over Prime) passed gate 18:22 | `31-design-a-detailed.md` | feeds 51 |
 | 4 B over prime | `01a166e0` | done; 42 passed gate 15:55 | `40`, `41` (reference), `42-design-b-prime-unchanged.md` | feeds 51 |
-| 5 merged + v2 | `01a1671a` | revising 51 and 50 per Z25 (steer-2 00:46) | `51-design-merged.md`, `50-a-vs-b.md` v2 | gate merged_revision_z25, then one short note to ZF |
-| 6 merged PoC | not started | waits for revised 51 to pass | `feat/merged-poc` + install for a fresh external setup | build 51 section 8; tell ZF once when the PoC works (deadline Mon 26 Oct 09:00) |
+| 5 merged + v2 | `01a1671a` | done; revised 51 and 50 passed the Z25 gate 01:30 | `51-design-merged.md`, `50-a-vs-b.md` v2 | gate merged_revision_z25, then one short note to ZF |
+| 6 merged PoC | `01a169cc` | building from 51 section 8 (started 01:26) | `feat/merged-poc` + install for a fresh external setup | build 51 section 8; tell ZF once when the PoC works (deadline Mon 26 Oct 09:00) |
 
 **Usage limit 16:14-18:11 (closed):** ChatGPT usage limit on openai-codex; ZF reset it at 18:06 and work resumed on the same provider.
 
