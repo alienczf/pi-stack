@@ -1,8 +1,8 @@
 # Harness program track 3. Problem-state research and competing designs
 
-Status. BLOCKED at step (c), 2026-10-23. GitHub public issue-search quota was exceeded in delegated research. No Codex usage limit occurred. The program's quota stop rule applies, so research stopped without switching provider or model.
+Status. Design synthesis resumed under Z12 on 2026-10-23. The new steer authorizes using the evidence already gathered. No further GitHub search request or quota probe will be made. Earlier stop details below are historical checkpoints.
 
-The requested three-design proposal table is not produced. Writing designs before the merged-corpus interrogation would violate the requested order. This file is a partial research checkpoint, not a finished recommendation or an implementation plan.
+Z1-Z11 are candidates to evaluate, not fixed design constraints. Track 1 continues its MVP independently under G18. This draft retains the existing inventory while the remedy-balance table, combined interrogation, and three proposals are completed.
 
 | Required stage | Checkpoint |
 |---|---|
@@ -13,7 +13,7 @@ The requested three-design proposal table is not produced. Writing designs befor
 | (e) Three holistic designs | Not performed. |
 | (f) Comparison, coverage matrix, recommendation | Not performed. |
 
-Resume from step (c) only after the quota blocker is released. Then merge and interrogate before designing.
+Resume by merging the saved evidence and interrogating its causes. Do not restart the internet sweep. The earlier stage table records the first checkpoint, not the resumed deliverable status.
 
 ## Work sequence
 
@@ -35,11 +35,11 @@ throughput checkpoint: n/a, read-only investigation
 
 `K` is `context/stall-corpus-2026-10-22.md`. `A`, `B`, and `C` are the mechanical, goal-integrity, and control-loop interrogations dated 2026-10-22. `R` is `context/research/deep-research-2026-10-23.md`. Those paths are under `/home/alphalab/Projects/pi-stack/streams/pi-streams-harness/`. `Cat` is [track 1's catalog](10-pi-streams-fix-catalog.md). Source code is pi-stack main `3acf0f01e6084a317b89cef3a86f4781e60877cf`.
 
-The [current decisions](03-decisions.md) govern. Z3 supersedes D2 and G4. All designs must use tick-observed, non-interrupting dump, compact, resume in the same coordinator session at >=150k. Z2 assigns ask lifecycle, self-grading, and constraint lifetimes to this track. Z4 fixes quiet ZF-only Slack DM, formatted `<stream-id>:: <message>`. G5's five runtime recovery classes remain adopted. This research session still stops on a usage limit.
+The [current decisions](03-decisions.md), especially Z12, govern the resumed task. Evaluate Z1-Z11, G5 as narrowed by Z11, and G17 with equal rigor. Z3's 150k same-session cycle, Z8's fixed resume prompt, Z9/G17's action log, and Z11's fork-and-delete recovery are candidates here. Track 1 implements them as its MVP regardless of this report's timing. Per-ask lifecycle remains a required topic. The operator's model-usage stop rule is unchanged.
 
 D1 excludes default budgets. D6 excludes contested-authority precedence machinery and puts retained artifacts in stream-owned worktrees. D7 asks when and how to compact state and review rules, not when to delete transcripts. D8 requires each ask, its status, and concatenated findings. D9 requires a minimal workflow shape before a recurring-review policy. The old ranked build plan and old acceptance scripts are withdrawn.
 
-The 4,482-character gap remains unknown. The later t211u update is explicitly a paraphrased relay in `00-brief-verbatim.md`, not a recovered verbatim quotation.
+The newly supplied [00b-zf-messages-verbatim.md](00b-zf-messages-verbatim.md) contains the full t209u text and t211u-t213u messages, and takes precedence over older paraphrases. The original transport gap is therefore no longer the only available account. Its t214u section remains explicitly paraphrased.
 
 ## Unresolved problem statements
 
