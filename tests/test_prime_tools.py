@@ -23,9 +23,15 @@ raise SystemExit(int(os.environ.get("ECHO_EXIT", "0")))
 
 
 class OwnedSupervisor:
-    def __init__(self, root, fail_command=None):
+    def __init__(self, root, fail_command=None, *, fail_after_admission=False):
         self.root = root
         self.fail_command = fail_command
+        self.fail_after_admission = fail_after_admission
+        self.admission_failure_sent = False
+        self.pauses = set()
+        self.admitted_inputs = []
+        self.runnable_inputs = []
+        self.events = []
         self.server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.server.bind(str(root / "daemon.sock"))
         self.server.listen()
@@ -60,23 +66,40 @@ class OwnedSupervisor:
             worker.start()
 
     def connection(self, stream):
+        owner = object()
         with stream:
             reader = stream.makefile("rb")
-            stream.sendall(b'{"type":"daemon_hello","protocol":{"name":"prime-agent.daemon","version":7}}\n')
-            for line in reader:
-                request = json.loads(line)
+            try:
+                stream.sendall(b'{"type":"daemon_hello","protocol":{"name":"prime-agent.daemon","version":7}}\n')
+                for line in reader:
+                    request = json.loads(line)
+                    with self.lock:
+                        self.requests.append(request["command"])
+                        self.events.append(request["command"]["type"])
+                        response = self.response(request["command"], owner)
+                    stream.sendall((json.dumps({"type": "response", "id": request["id"], "command": request["command"]["type"], **response}) + "\n").encode())
+            finally:
+                reader.close()
                 with self.lock:
-                    self.requests.append(request["command"])
-                    response = self.response(request["command"])
-                stream.sendall((json.dumps({"type": "response", "id": request["id"], "command": request["command"]["type"], **response}) + "\n").encode())
-            reader.close()
+                    if owner in self.pauses:
+                        self.pauses.remove(owner)
+                        self.events.append("pause_owner_disconnected")
+                        self.release_runnable_inputs()
 
-    def response(self, command):
+    def release_runnable_inputs(self):
+        if not self.pauses:
+            self.runnable_inputs.extend(self.queue["steering"] + self.queue["followUp"])
+            self.queue = {"steering": [], "followUp": []}
+
+    def response(self, command, owner):
         kind = command["type"]
         if "activeSessionId" in command and command["activeSessionId"] != "owned-active":
             return {"success": False, "error": "Wrong session"}
         if kind == self.fail_command:
             return {"success": False, "error": "Explicit owned fixture refusal"}
+        if kind == "get_queue" and self.fail_after_admission and self.admitted_inputs and not self.admission_failure_sent:
+            self.admission_failure_sent = True
+            return {"success": False, "error": "Injected post-admission failure"}
         row = {"id": "owned-active", "activeSessionId": "owned-active", "sessionId": "owned-durable",
                "cwd": str(self.root / "work"), "sessionFile": str(self.root / "owned.jsonl"),
                "messageCount": 0, "modified": "2026-10-23", "lifecycle": "archived" if self.archived else "live"}
@@ -100,6 +123,8 @@ class OwnedSupervisor:
         elif kind in ("prompt", "steer", "follow_up"):
             lane = "steering" if kind == "steer" else "followUp"
             self.queue[lane].append(command["message"])
+            self.admitted_inputs.append(command["message"])
+            self.release_runnable_inputs()
             data = {"queued": True}
         elif kind in ("clear_queue", "abort_and_clear_queue"):
             data = self.queue
@@ -111,10 +136,14 @@ class OwnedSupervisor:
         elif kind == "set_model":
             data = model
         elif kind == "acquire_session_input_pause":
+            self.pauses.add(owner)
             data = {"pauseId": "owned-pause"}
+        elif kind == "release_session_input_pause":
+            self.pauses.discard(owner)
+            self.release_runnable_inputs()
         elif kind == "kill":
             self.archived = True
-        elif kind not in ("set_thinking_level", "release_session_input_pause"):
+        elif kind != "set_thinking_level":
             return {"success": False, "error": "Unknown fixture command"}
         return {"success": True, "data": data}
 
@@ -274,6 +303,32 @@ os.execv("/bin/sh", ["sh", "-c", sys.argv[1]])
                 self.assertEqual([command["type"] for command in server.requests].count("create"), 1)
                 self.assertNotIn("shutdown", [command["type"] for command in server.requests])
                 self.assertTrue(all(command["activeSessionId"] == "owned-active" for command in server.requests if "activeSessionId" in command))
+
+    def test_control_only_never_admits_input_on_post_admission_fault(self):
+        prepared = subprocess.run(["python3", str(ROOT / "scripts/check-prime-cli-live.py"), "prepare"], capture_output=True, text=True,
+                                  env={**self.env, "TMPDIR": str(self.root)}, timeout=10)
+        owned = Path(json.loads(prepared.stdout)["root"])
+        with OwnedSupervisor(owned, fail_after_admission=True) as server:
+            proc = subprocess.run(["python3", str(ROOT / "scripts/check-prime-cli-live.py"), "run", "--root", str(owned), "--timeout", "2"],
+                                  capture_output=True, text=True, env=self.env, timeout=20)
+        self.assertEqual(server.admitted_inputs, [], f"default run admitted runnable text: {server.admitted_inputs}")
+        self.assertEqual(server.runnable_inputs, [])
+        self.assertEqual(proc.returncode, 0, proc.stdout)
+        self.assertTrue(server.archived)
+
+    def test_inference_queue_failure_cancels_before_pause_disconnect(self):
+        prepared = subprocess.run(["python3", str(ROOT / "scripts/check-prime-cli-live.py"), "prepare"], capture_output=True, text=True,
+                                  env={**self.env, "TMPDIR": str(self.root)}, timeout=10)
+        owned = Path(json.loads(prepared.stdout)["root"])
+        with OwnedSupervisor(owned, fail_after_admission=True) as server:
+            proc = subprocess.run(["python3", str(ROOT / "scripts/check-prime-cli-live.py"), "run", "--root", str(owned), "--timeout", "2", "--inference"],
+                                  capture_output=True, text=True, env=self.env, timeout=20)
+        self.assertEqual(proc.returncode, 1, proc.stdout)
+        self.assertEqual(len(server.admitted_inputs), 3)
+        self.assertEqual(server.runnable_inputs, [], f"pause disconnect released runnable inputs: {server.events}")
+        self.assertLess(server.events.index("abort_and_clear_queue"), server.events.index("pause_owner_disconnected"))
+        self.assertEqual(json.loads(proc.stdout)["retainedOwnedSessions"], [])
+        self.assertTrue(server.archived)
 
     def test_live_check_refuses_unprepared_root(self):
         proc = subprocess.run(["python3", str(ROOT / "scripts/check-prime-cli-live.py"), "run", "--root", str(self.root)],
