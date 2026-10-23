@@ -175,6 +175,40 @@ class EngineCase(unittest.TestCase):
             check=False,
         )
 
+    def author_coordinator_checkpoint(self, stream: Path, sid: str) -> str:
+        native = self.tmp / f"checkpoint-{sid}.jsonl"
+        native.write_text(json.dumps({"type": "session", "id": sid, "cwd": str(stream)}) + "\n")
+        entry = f"checkpoint-ack-{sid}"
+        self.stub.automatic_admissions.setdefault(sid, {"sessionId": sid, "cwd": str(stream), "generation": f"fixture-{sid}", "allowed": True, "durable": True})
+        self.stub.simulate_session_lifecycle = True
+        routes = list(self.stub.routes)
+        found_archive = False
+        frozen = {"sessionId": sid, "cwd": str(stream), "generation": f"frozen-{sid}", "allowed": False, "durable": True}
+        for method, path, code, value in routes:
+            if method == "GET" and path == "/api/sessions" and code == 200 and isinstance(value, list):
+                for item in value:
+                    if item.get("id") == sid:
+                        item["path"] = str(native)
+            if method == "GET" and path == f"/api/sessions/{sid}/status" and isinstance(value, dict):
+                value["rotationSafety"] = {"entryId": entry, "callbacksKnown": True, "nativeChildCallbacks": []}
+            if method == "POST" and path == f"/api/sessions/{sid}/archive":
+                found_archive = True
+                if code == 200 and isinstance(value, dict):
+                    value.update({"archived": True, "automaticAdmission": frozen})
+        if not found_archive:
+            routes.append(("POST", f"/api/sessions/{sid}/archive", 200, {"archived": True, "automaticAdmission": frozen}))
+        self.stub.set_routes(routes)
+        report = stream / "handover/coordinator" / f"{sid}.md"
+        report.parent.mkdir(parents=True, exist_ok=True)
+        report.write_text(f"session: {sid}\nCurrent fixture checkpoint. Unfinished work stays in its recorded owned worktree.\n")
+        result = self.run_streams("checkpoint", stream.name, "--session", sid)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        identity = json.loads(result.stdout)["checkpoint"]
+        with native.open("a") as handle:
+            handle.write(json.dumps({"type": "message", "id": entry, "message": {"role": "assistant", "content": [{"type": "text", "text": f"Rotation checkpoint ready: {identity}"}], "stopReason": "stop"}}) + "\n")
+        self.stub.requests.clear()
+        return identity
+
     def delivery_prompt(self, sid: str, text: str, behavior: str | None = None) -> tuple:
         from tick_support import got_prompt
 

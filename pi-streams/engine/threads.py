@@ -83,6 +83,7 @@ class SessionStart:
     role: str
     intent: str
     phase: str = "created"
+    operation: str = "new"
 
 
 def utc_now() -> str:
@@ -133,7 +134,7 @@ def load_threads(path: Path) -> list[Thread]:
     return rows
 
 
-def save_threads(path: Path, rows: list[Thread]) -> None:
+def dump_threads(rows: list[Thread]) -> str:
     lines = ["\t".join(THREAD_COLUMNS)]
     for row in rows:
         fields = (
@@ -152,7 +153,11 @@ def save_threads(path: Path, rows: list[Thread]) -> None:
             if "\t" in field or "\n" in field or "\r" in field:
                 raise StreamsError("a thread field contains a tab or newline")
         lines.append("\t".join(fields))
-    _write(path, "\n".join(lines) + "\n")
+    return "\n".join(lines) + "\n"
+
+
+def save_threads(path: Path, rows: list[Thread]) -> None:
+    _write(path, dump_threads(rows))
 
 
 def is_ratified(text: str) -> bool:
@@ -260,11 +265,11 @@ def _accept_start(stream_dir: Path, session_id: str) -> None:
     _save_start(stream_dir, start)
 
 
-def _resume_or_spawn(cwd: Path, rows: list[Thread], stream_dir: Path, role: str, intent: list[str]) -> tuple[str, bool]:
+def _resume_or_spawn(cwd: Path, rows: list[Thread], stream_dir: Path, role: str, intent: list[str], operation: str = "new") -> tuple[str, bool]:
     digest = hashlib.sha256(json.dumps(intent, ensure_ascii=False).encode()).hexdigest()
     start = _start_record(stream_dir)
     if start is not None:
-        if (start.cwd, start.role, start.intent) != (str(cwd), role, digest):
+        if (start.cwd, start.role, start.intent, start.operation) != (str(cwd), role, digest, operation):
             raise StreamsError("another or changed session start is pending; refusing uncertain adoption")
         if start.phase == "sending":
             raise StreamsError(f"opening acceptance for {start.session} is uncertain; refusing replay")
@@ -280,7 +285,7 @@ def _resume_or_spawn(cwd: Path, rows: list[Thread], stream_dir: Path, role: str,
     if any(item.get("archived") is not True and item.get("id") not in known for item in listing):
         raise StreamsError("unregistered native session; use explicit adoption, not directory-based recovery")
     sid = piweb.spawn(str(cwd))
-    _save_start(stream_dir, SessionStart(sid, str(cwd), role, digest))
+    _save_start(stream_dir, SessionStart(sid, str(cwd), role, digest, operation=operation))
     return sid, True
 
 
@@ -308,7 +313,7 @@ def _adopt_coordinator(project: Project, stream_dir: Path, rows: list[Thread], s
     return session_id
 
 
-def ensure_coordinator(project: Project, stream_dir: Path, *, opening_prompt: str | None = None, coordinator_session: str | None = None) -> str:
+def ensure_coordinator(project: Project, stream_dir: Path, *, opening_prompt: str | None = None, coordinator_session: str | None = None, operation: str = "new") -> str:
     stream_dir = stream_dir.resolve()
     path = stream_dir / "threads.tsv"
     rows = load_threads(path)
@@ -318,18 +323,20 @@ def ensure_coordinator(project: Project, stream_dir: Path, *, opening_prompt: st
         resolved = resolve_coordinator(stream_dir, rows)
         start = _start_record(stream_dir)
         if start is not None:
-            if start.session != resolved.row.session or start.phase != "accepted":
+            if start.session != resolved.row.session or start.phase != "accepted" or start.operation != operation:
                 raise StreamsError("registry and saved session start disagree")
-            _save_start(stream_dir, None)
+            if operation == "new":
+                _save_start(stream_dir, None)
         return resolved.row.session
     prompt = KICKOFF if opening_prompt is None else opening_prompt
-    sid, needs_opening = _resume_or_spawn(stream_dir, rows, stream_dir, "coordinator", [project.coordinator.model, project.coordinator.thinking, prompt])
+    sid, needs_opening = _resume_or_spawn(stream_dir, rows, stream_dir, "coordinator", [project.coordinator.model, project.coordinator.thinking, prompt], operation)
     if needs_opening:
         piweb.configure_session(sid, project.coordinator.model, project.coordinator.thinking)
         _send_start(stream_dir, sid, prompt)
     rows.append(_thread_row(sid, "coordinator", "", stream_dir, "", "", project.coordinator.model, project.coordinator.thinking))
     save_threads(path, rows)
-    _save_start(stream_dir, None)
+    if operation == "new":
+        _save_start(stream_dir, None)
     return sid
 
 
@@ -651,33 +658,9 @@ def spawn_thread(
 
 
 def rotate_coordinator(index: Path, project: Project, stream_id: str) -> str:
-    stream_dir = _require_stream(index, project, stream_id)
-    path = stream_dir / "threads.tsv"
-    rows = load_threads(path)
-    coordinators = [row for row in rows if row.role == "coordinator"]
-    if not coordinators:
-        raise StreamsError(f"stream {stream_id} has no coordinator; run pi-streams new {stream_id}")
-    prompt = (
-        f"You are the new coordinator for stream {stream_id}. "
-        "Your memory is the files in this folder. Read STATE.md, then continue."
-    )
-    if _canonical_stream(stream_dir):
-        state = artifacts._read_stream_state_locked(stream_dir)
-        goal = artifacts.resolve_current_goal(state)
-        prompt = (
-            f"You are the new coordinator for stream {stream_id}. "
-            f"Read {stream_dir}/AGENTS.md and {stream_dir}/STATE.md before acting. "
-            "Use Goals' current objective, falling back to North Star. Current Goals and Rules take precedence. "
-            "Open history/, context/, checks/, and handover/ only on demand. "
-            f"Goal at pickup:\n{goal}"
-        )
-    resolved = resolve_coordinator(stream_dir, rows)
-    active = [resolved.row] if resolved is not None else []
-    for row in active:
-        piweb.archive(row.session)
-        transition(row, Status.archived)
-    save_threads(path, rows)
-    return ensure_coordinator(project, stream_dir, opening_prompt=prompt)
+    from engine.replacement import rotate_locked
+
+    return rotate_locked(index, project, stream_id)
 
 
 def _validated_handover(stream_dir: Path, row: Thread) -> str:

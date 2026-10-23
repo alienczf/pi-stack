@@ -27,6 +27,7 @@ Send coordinator steers with `pi-streams delivery send <stream-id> --delivery-id
 On demand, open history/, context/ and its context/README.md index, checks/, or handover/. They are not per-turn reads.
 Never read engine-only registries, threads.tsv, subscriptions.tsv, stream.toml, events, tick-state, locks, or failures/. Use CLI views instead.
 Only Log is capped at 30 entries. The engine rotates overflow every tick; agents never prune or rotate it. Goals and Rules are rewritten in place, not appended as history.
+Reuse the designated coordinator regardless of context size or age. Only an explicit replacement request permits a boundary checkpoint. At that boundary, synchronize current STATE and write `handover/coordinator/FULL-SID.md` with first line `session: FULL-SID`, current intent/proof, unfinished work and stable owned references. Run `pi-streams checkpoint <stream-id> --session FULL-SID`, then finish the turn with its exact returned acknowledgement. `pi-streams rotate <stream-id>` refuses busy work, queues, unresolved human input or native callback ownership; never abort first to make replacement possible. Generic rotation is not environment-failure recovery.
 No resource cap or spend budget applies unless the incoming task explicitly supplies it.
 For environment/auth/resource failures, stop affected task effects, log, and report. Do not self-remedy the environment or author remedial rules, skills, or memory without explicit human instructions.
 Relay numbers only with their actual check output or source path.

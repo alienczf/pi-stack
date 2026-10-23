@@ -155,10 +155,14 @@ class ScenarioTests(EngineCase):
             ("POST", "/api/sessions", 200, spawned(COORD_2, stream)),
             *configured(COORD_2, session_status(COORD_2, cost=0, tokens=None)),
         ])
+        self.author_coordinator_checkpoint(self.home / "etl", COORD_1)
         rotate = self.run_streams("rotate", "etl")
         self.assertEqual(rotate.returncode, 0, rotate.stderr)
         self.assertEqual(rotate.stdout, f"http://127.0.0.1:8504\n{COORD_2}\n")
         self.assertEqual(self.calls(), [
+            ("GET", "/api/sessions"),
+            ("GET", f"/api/sessions/{COORD_1}/status"),
+            ("GET", "/api/sessions"),
             ("GET", "/api/sessions"),
             ("GET", f"/api/sessions/{COORD_1}/status"),
             ("POST", f"/api/sessions/{COORD_1}/archive"),
@@ -180,6 +184,7 @@ class ScenarioTests(EngineCase):
         repo = self.home / "etl"
         self.assertEqual(git(repo, self.env, "log", "--format=%s").splitlines(), [
             "pi-streams rotate etl",
+            "pi-streams checkpoint etl",
             "pi-streams thread spawn etl datapull",
             "pi-streams new etl",
         ])

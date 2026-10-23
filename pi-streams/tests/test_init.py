@@ -32,8 +32,6 @@ def expected_toml(
         f'thinking = "{thinking}"',
         "",
         "[caps]",
-        "warm_context_tokens = 60000",
-        "warm_idle_hours = 6",
         "thread_handover_tokens = 150000",
         "steer_queue_minutes = 10",
         "",

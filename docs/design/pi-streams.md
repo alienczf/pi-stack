@@ -112,7 +112,7 @@ Required tool outputs stay in the worker's owned worktree, or as explicitly auth
 The artifact contract does not claim the remaining runtime fixes are complete:
 
 - S1's artifact commits still need after-stack disposable verification.
-- S2 owns exact coordinator selection, dispatch/ratification enforcement, receiver stop generations, application receipts, archived evidence, and unsafe-rotation refusal.
+- S2 provides exact coordinator selection, dispatch/ratification enforcement, receiving stop generations, application receipts, archived evidence, and checkpoint-bound explicit replacement. Normal wakes reuse the designated coordinator at every size and age. Old warm size/age settings are accepted but ignored. Explicit replacement requires current coordinator acknowledgement, exact STATE/handover hashes, stable unfinished-worker references, a clean tree, an idle logical native entry and no unresolved input/callback ownership. It never aborts work or migrates native callbacks. Archive/spawn interruption resumes only on an explicit retry with the exact saved attempt, not a background tick. The after-stack private checks remain separate evidence.
 - S2a owns explicit lossless stream-root migration, with preserved original bytes/provenance and no worker-worktree writes.
 - S3 owns same-session tick-observed 150k DCR and the fixed engine resume, including the receiving-side compaction/input boundary.
 - S4 owns cause-independent driven-stall goal reinjection through the actual argument-preserving skill adapter.

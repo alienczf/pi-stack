@@ -21,7 +21,7 @@ from engine.project import (
     stream_locks,
 )
 from engine.subscriptions import SOURCES, Subscription, load_subscriptions
-from engine.threads import Coordinator, Status, Thread, _native_session, load_threads, require_ratified, resolve_coordinator, rotate_coordinator, save_threads, transition
+from engine.threads import Coordinator, Status, Thread, _native_session, load_threads, require_ratified, resolve_coordinator, save_threads, transition
 
 WAKE_KINDS = frozenset({"idle", "ask", "context", "stale-steer", "outage", "recovered", "subscription", "claim"})
 QUEUE_FLAGS = {"steer": "steer", "followUp": "follow-up"}
@@ -258,7 +258,7 @@ class StreamTick:
         self.state.claims = held
 
     def check_subscriptions(self) -> None:
-        if self.coordinator() is None and not self.state.rotating:
+        if self.coordinator() is None:
             return
         try:
             subs = load_subscriptions(self.stream_dir / "subscriptions.tsv")
@@ -459,17 +459,10 @@ class StreamTick:
             _automatic, allowed = piweb.automatic_admission(status, coord.session, coord.worktree, "wake")
             if not allowed:
                 return coord.session, None
-            if status.get("isStreaming") is True:
+            if status.get("isStreaming") is True or status.get("isCompacting") is True:
                 return coord.session, "follow-up"
-            if self.warm(coord, status):
-                return coord.session, None
-        # A rotation that fails after its archive leaves no active coordinator.
-        # The flag lets the next tick finish it instead of waiting for pi-streams rotate.
-        self.state.rotating = True
-        self.flush()
-        sid = rotate_coordinator(self.index, self.project, self.stream)
-        self.rows = load_threads(self.rows_path)
-        return sid, "follow-up"
+            return coord.session, None
+        raise StreamsError("no designated coordinator; explicit new/adoption or rotation recovery is required")
 
     def archive_done(self) -> None:
         for row in self.rows:
@@ -489,14 +482,6 @@ class StreamTick:
             transition(row, Status.archived)
             self.rows_dirty = True
             self.emit("archived", row)
-
-    def warm(self, coord: Thread, status: dict[str, object]) -> bool:
-        tokens = _tokens(status)
-        if tokens is not None and tokens >= self.caps.warm_context_tokens:
-            return False
-        info = self.listing(coord.worktree).get(coord.session)
-        modified = clock.parse(info.get("modified")) if info is not None else None
-        return modified is not None and self.now - modified < timedelta(hours=self.caps.warm_idle_hours)
 
 
 def find_claims(streams: list[tuple[str, Path]]) -> dict[str, list[Claim]] | None:

@@ -136,8 +136,17 @@ def queue_clear(sid: str) -> None:
     call(["queue-clear", sid])
 
 
-def archive(sid: str) -> None:
-    call(["archive", sid])
+def archive(sid: str, *, expected_idle: dict[str, str] | None = None) -> dict[str, object]:
+    flags = [] if expected_idle is None else ["--expected-idle", json.dumps(expected_idle, ensure_ascii=False)]
+    data = call(["archive", sid, *flags])
+    result = data.get("result")
+    if not isinstance(result, dict) or (expected_idle is not None and result.get("archived") is not True):
+        raise StreamsError("archive publication is unconfirmed")
+    if expected_idle is not None:
+        frozen = result.get("automaticAdmission")
+        if not isinstance(frozen, dict) or frozen.get("sessionId") != sid or frozen.get("durable") is not True or frozen.get("allowed") is not False:
+            raise StreamsError("replacement retirement barrier is unconfirmed")
+    return result
 
 
 def prompt_help() -> str:

@@ -117,6 +117,7 @@ class GeneratedStateContractTests(EngineCase):
             ("GET", "/api/sessions/coord-next/status", 200, status_body("coord-next")),
             ("POST", "/api/sessions/coord-next/prompt", 200, {"accepted": True}),
         ])
+        self.author_coordinator_checkpoint(self.stream, "coord-contract")
         result = self.run_streams("rotate", "contract", "--home", str(self.index))
         self.assertEqual(result.returncode, 0, result.stderr)
         prompt = [body["text"] for method, path, query, body in self.stub.requests if path == "/api/sessions/coord-next/prompt"]

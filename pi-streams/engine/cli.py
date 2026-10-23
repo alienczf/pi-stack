@@ -5,7 +5,7 @@ import json
 import sys
 from pathlib import Path
 
-from engine import StreamsError, artifacts, clock, delivery
+from engine import StreamsError, artifacts, clock, delivery, replacement
 from engine.doctor import run_doctor
 from engine.project import (
     STATE_SCHEMA,
@@ -101,6 +101,11 @@ def _parser() -> argparse.ArgumentParser:
     adopt.add_argument("--worktree", required=True)
     adopt.add_argument("--role", required=True)
     adopt.add_argument("--home")
+
+    checkpoint = sub.add_parser("checkpoint")
+    checkpoint.add_argument("stream")
+    checkpoint.add_argument("--home")
+    checkpoint.add_argument("--session", required=True)
 
     rotate = sub.add_parser("rotate")
     rotate.add_argument("stream")
@@ -276,6 +281,17 @@ def cmd_delivery(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_checkpoint(args: argparse.Namespace) -> int:
+    index = resolve_index(args.home)
+    with index_lock(index):
+        project = resolve_project(index)
+        stream_dir = _open_stream(index, project.info.name, args.stream)
+        with stream_lock(stream_dir):
+            result = replacement.prepare_checkpoint_locked(stream_dir, args.session)
+    print(json.dumps(result, sort_keys=True))
+    return 0
+
+
 def cmd_tick(args: argparse.Namespace) -> int:
     indexes = [resolve_index(args.home)] if args.home else read_homes()
     return run_tick(indexes)
@@ -321,6 +337,8 @@ def main(argv: list[str] | None = None) -> int:
             return run_doctor()
         if args.cmd == "upgrade":
             return cmd_upgrade(args)
+        if args.cmd == "checkpoint":
+            return cmd_checkpoint(args)
         if args.cmd == "rotate":
             return cmd_rotate(args)
         if args.cmd == "close":

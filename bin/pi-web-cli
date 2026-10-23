@@ -96,6 +96,18 @@ def _model_body(args: argparse.Namespace) -> dict[str, str]:
     return {"provider": provider, "modelId": model_id}
 
 
+def _archive_body(args: argparse.Namespace) -> dict[str, object]:
+    if args.expected_idle is None:
+        return {}
+    try:
+        expected = json.loads(args.expected_idle)
+    except json.JSONDecodeError as exc:
+        raise UsageError("expected idle checkpoint must be JSON") from exc
+    if not isinstance(expected, dict):
+        raise UsageError("expected idle checkpoint must be an object")
+    return {"expectedIdle": expected}
+
+
 def _answer_body(args: argparse.Namespace) -> dict[str, object]:
     # values holds option ids; free text goes in otherText.
     return {
@@ -109,7 +121,7 @@ VERBS: dict[str, tuple[str, str, tuple[str, ...], VerbBuilder]] = {
     "stop": ("POST", "stop", (), lambda _args: {}),
     "abort": ("POST", "abort", (), lambda _args: {}),
     "queue-clear": ("POST", "queue/clear", (), lambda _args: {}),
-    "archive": ("POST", "archive", (), lambda _args: {}),
+    "archive": ("POST", "archive", (), _archive_body),
     "messages": ("GET", "messages", (), lambda _args: None),
     "model": ("POST", "model", ("model",), _model_body),
     "thinking-level": ("POST", "thinking-level", ("level",), lambda args: {"level": args.level}),
@@ -144,6 +156,8 @@ def main(argv: list[str]) -> int:
         verb.add_argument("sid")
         for positional in positionals:
             verb.add_argument(positional)
+        if name == "archive":
+            verb.add_argument("--expected-idle", help="exact session/cwd/logical entry/generation JSON; refuse stale or busy replacement")
     args = p.parse_args(argv)
     if args.cmd == "list":
         return cmd_list(args.cwd)

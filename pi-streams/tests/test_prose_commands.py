@@ -34,11 +34,13 @@ def command_path(snippet: str) -> list[str]:
 class ProseCommandTests(unittest.TestCase):
     def test_the_prose_names_these_commands(self) -> None:
         self.assertEqual(sorted({" ".join(command_path(item)) for item in named_commands()}), [
+            "pi-streams checkpoint",
             "pi-streams close",
             "pi-streams delivery ack",
             "pi-streams delivery list",
             "pi-streams delivery send",
             "pi-streams new",
+            "pi-streams rotate",
             "pi-streams state append",
             "pi-streams state objective",
             "pi-streams state ruling",

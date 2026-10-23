@@ -1,146 +1,66 @@
-"""rotate archives the coordinator and starts a fresh one."""
+"""Explicit rotation archives one checkpointed coordinator without abort or worker writes."""
 from __future__ import annotations
 
-import urllib.parse
-
-from support import EngineCase, git
-
-HEADER = "session\trole\trepo\tworktree\tbranch\tbase\tmodel\tthinking\tstatus\tstarted\n"
-OLD = "coord-1\tcoordinator\t\t/wt\t\t\topenai-codex/gpt-6-astra\txhigh\tactive\t2026-10-06T00:00:00Z\n"
-ROTATION = (
-    "You are the new coordinator for stream etl. "
-    "Your memory is the files in this folder. Read STATE.md, then continue."
-)
+from support import git
+from tick_support import HEADER, TickCase, info, row, status
 
 
-def status_body(sid: str) -> dict[str, object]:
-    return {
-        "sessionId": sid,
-        "isStreaming": False,
-        "contextUsage": {"tokens": 10},
-        "model": {"provider": "openai-codex", "id": "gpt-6-astra"},
-        "thinkingLevel": "xhigh",
-        "cost": 0,
-    }
-
-
-class RotateTests(EngineCase):
-    def test_rotate_archives_old_and_spawns_new(self) -> None:
-        proc = self.run_streams("init", str(self.root), "-y")
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        stream_dir = (self.home / "etl").resolve()
-        stream_dir.mkdir(parents=True)
-        (stream_dir / "STREAM.md").write_text("ratified: no\n", encoding="utf-8")
-        (stream_dir / "STATE.md").write_text("# STATE\n", encoding="utf-8")
-        (stream_dir / "threads.tsv").write_text(HEADER + OLD.replace("/wt\t", f"{stream_dir}\t"), encoding="utf-8")
-        self.register_stream("etl", stream_dir)
-        self.stub.requests.clear()
+class RotateTests(TickCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.stream = self.make_stream(self.home, "etl", row("coord-1", "coordinator", str(self.home / "etl")))
         self.stub.set_routes([
-            ("GET", "/api/sessions", 200, [{"id": "coord-1", "cwd": str(stream_dir)}]),
-            ("GET", "/api/sessions/coord-1/status", 200, status_body("coord-1")),
-            ("POST", "/api/sessions", 200, {"id": "coord-2", "cwd": str(stream_dir)}),
-            ("GET", "/api/sessions/coord-2/status", 200, status_body("coord-2")),
+            ("GET", "/api/sessions", 200, [info("coord-1", str(self.stream), self.log_path("coord-1"))]),
+            ("GET", "/api/sessions/coord-1/status", 200, status("coord-1")),
+            ("POST", "/api/sessions", 200, {"id": "coord-2", "cwd": str(self.stream)}),
+            ("GET", "/api/sessions/coord-2/status", 200, status("coord-2")),
             ("POST", "/api/sessions/coord-2/prompt", 200, {"accepted": True}),
         ])
+
+    def test_rotate_archives_old_and_spawns_new(self) -> None:
+        self.author_coordinator_checkpoint(self.stream, "coord-1")
         rotated = self.run_streams("rotate", "etl")
         self.assertEqual(rotated.returncode, 0, rotated.stderr)
         self.assertEqual(rotated.stdout, "http://127.0.0.1:8504\ncoord-2\n")
-        self.assertEqual(len(self.stub.requests), 10)
-        self.assertEqual(self.stub.requests[1], ("GET", "/api/sessions/coord-1/status", "", None))
-        self.assertEqual(
-            self.stub.requests[2],
-            ("POST", "/api/sessions/coord-1/archive", "", {}),
-        )
-        method, path, query, body = self.stub.requests[3]
-        self.assertEqual(method, "GET")
-        self.assertEqual(path, "/api/sessions")
-        self.assertEqual(urllib.parse.parse_qs(query), {"cwd": [str(stream_dir)]})
-        self.assertIsNone(body)
-        self.assertEqual(self.stub.requests[4], ("POST", "/api/sessions", "", {"cwd": str(stream_dir)}))
-        self.assertEqual(
-            self.stub.requests[6],
-            (
-                "POST",
-                "/api/sessions/coord-2/model",
-                "",
-                {"provider": "openai-codex", "modelId": "gpt-6-astra"},
-            ),
-        )
-        self.assertEqual(
-            self.stub.requests[7],
-            ("POST", "/api/sessions/coord-2/thinking-level", "", {"level": "xhigh"}),
-        )
-        self.assertEqual(self.stub.requests[5], ("GET", "/api/sessions/coord-2/status", "", None))
-        self.assertEqual(self.stub.requests[8], ("GET", "/api/sessions/coord-2/status", "", None))
-        self.assertEqual(
-            self.stub.requests[9],
-            ("POST", "/api/sessions/coord-2/prompt", "", {"text": ROTATION}),
-        )
-        prompted = [item[1] for item in self.stub.requests if item[1].endswith("/prompt")]
-        self.assertEqual(prompted, ["/api/sessions/coord-2/prompt"])
-        lines = (stream_dir / "threads.tsv").read_text(encoding="utf-8").splitlines()
-        self.assertEqual(lines[1].split("\t")[0], "coord-1")
-        self.assertEqual(lines[1].split("\t")[8], "archived")
-        self.assertEqual(lines[2].split("\t")[0], "coord-2")
-        self.assertEqual(lines[2].split("\t")[1], "coordinator")
-        self.assertEqual(lines[2].split("\t")[8], "active")
-        self.assertEqual(git(stream_dir, self.env, "log", "-1", "--format=%s").strip(), "pi-streams rotate etl")
+        posted = [(path, body) for method, path, _, body in self.stub.requests if method == "POST"]
+        self.assertEqual([path for path, _ in posted], [
+            "/api/sessions/coord-1/archive", "/api/sessions", "/api/sessions/coord-2/model",
+            "/api/sessions/coord-2/thinking-level", "/api/sessions/coord-2/prompt",
+        ])
+        self.assertEqual(posted[0][1], {"expectedIdle": {"sessionId": "coord-1", "cwd": str(self.stream), "entryId": "checkpoint-ack-coord-1", "generation": "fixture-coord-1"}})
+        self.assertEqual(posted[1][1], {"cwd": str(self.stream)})
+        self.assertEqual(posted[2][1], {"provider": "openai-codex", "modelId": "gpt-6-astra"})
+        self.assertEqual(posted[3][1], {"level": "xhigh"})
+        self.assertIn(str(self.stream / "AGENTS.md"), posted[4][1]["text"])
+        self.assertIn(str(self.stream / "STATE.md"), posted[4][1]["text"])
+        self.assertNotIn("Read STREAM.md", posted[4][1]["text"])
+        self.assertEqual([line.split("\t")[0:2] + [line.split("\t")[8]] for line in self.rows(self.stream).splitlines()[1:]], [
+            ["coord-1", "coordinator", "archived"], ["coord-2", "coordinator", "active"],
+        ])
+        self.assertEqual(git(self.stream, self.env, "log", "-1", "--format=%s").strip(), "pi-streams rotate etl")
+        self.assertEqual(git(self.stream, self.env, "status", "--porcelain"), "")
 
     def test_rerun_after_a_failed_spawn_finishes_the_rotation(self) -> None:
-        proc = self.run_streams("init", str(self.root), "-y")
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        stream_dir = (self.home / "etl").resolve()
-        stream_dir.mkdir(parents=True)
-        (stream_dir / "STREAM.md").write_text("ratified: no\n", encoding="utf-8")
-        (stream_dir / "threads.tsv").write_text(HEADER + OLD.replace("/wt\t", f"{stream_dir}\t"), encoding="utf-8")
-        self.register_stream("etl", stream_dir)
-        self.stub.set_routes([
-            ("GET", "/api/sessions", 200, [{"id": "coord-1", "cwd": str(stream_dir), "messageCount": 50}]),
-            ("GET", "/api/sessions/coord-1/status", 200, status_body("coord-1")),
-            ("POST", "/api/sessions", 500, {"error": "spawn failed"}),
-        ])
+        self.author_coordinator_checkpoint(self.stream, "coord-1")
+        self.stub.set_routes([("POST", "/api/sessions", 500, {"error": "spawn failed"}), *self.stub.routes])
         failed = self.run_streams("rotate", "etl")
         self.assertEqual(failed.returncode, 1)
-        self.assertEqual(
-            (stream_dir / "threads.tsv").read_text(encoding="utf-8"),
-            HEADER + OLD.replace("/wt\t", f"{stream_dir}\t").replace("\tactive\t", "\tarchived\t"),
-        )
+        self.assertEqual(self.rows(self.stream), HEADER + row("coord-1", "coordinator", str(self.stream), status="archived"))
         self.stub.requests.clear()
-        self.stub.set_routes([
-            ("GET", "/api/sessions", 200, [
-                {"id": "coord-1", "cwd": str(stream_dir), "messageCount": 50, "archived": True},
-            ]),
-            ("POST", "/api/sessions", 200, {"id": "coord-2", "cwd": str(stream_dir)}),
-            ("GET", "/api/sessions/coord-2/status", 200, status_body("coord-2")),
-            ("POST", "/api/sessions/coord-2/prompt", 200, {"accepted": True}),
-        ])
+        self.stub.set_routes([item for item in self.stub.routes if item[:3] != ("POST", "/api/sessions", 500)])
         again = self.run_streams("rotate", "etl")
         self.assertEqual(again.returncode, 0, again.stderr)
         self.assertEqual(again.stdout, "http://127.0.0.1:8504\ncoord-2\n")
-        posted = [(path, body) for method, path, _query, body in self.stub.requests if method == "POST"]
-        self.assertEqual(posted[0], ("/api/sessions", {"cwd": str(stream_dir)}))
-        self.assertEqual(posted[-1], ("/api/sessions/coord-2/prompt", {"text": ROTATION}))
-        self.assertNotIn("/api/sessions/coord-1/archive", [path for path, _body in posted])
-        lines = (stream_dir / "threads.tsv").read_text(encoding="utf-8").splitlines()
-        self.assertEqual([line.split("\t")[0] + " " + line.split("\t")[8] for line in lines[1:]], [
-            "coord-1 archived",
-            "coord-2 active",
-        ])
+        posted = [path for method, path, _, _ in self.stub.requests if method == "POST"]
+        self.assertEqual(posted.count("/api/sessions"), 1)
+        self.assertEqual(posted.count("/api/sessions/coord-2/prompt"), 1)
+        self.assertNotIn("/api/sessions/coord-1/archive", posted)
+        self.assertEqual([line.split("\t")[0] + " " + line.split("\t")[8] for line in self.rows(self.stream).splitlines()[1:]], ["coord-1 archived", "coord-2 active"])
 
     def test_rotate_without_any_coordinator_points_at_new(self) -> None:
-        proc = self.run_streams("init", str(self.root), "-y")
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        stream_dir = (self.home / "etl").resolve()
-        stream_dir.mkdir(parents=True)
-        (stream_dir / "STREAM.md").write_text("ratified: no\n", encoding="utf-8")
-        (stream_dir / "threads.tsv").write_text(HEADER, encoding="utf-8")
-        self.register_stream("etl", stream_dir)
+        (self.stream / "threads.tsv").write_text(HEADER)
         self.stub.requests.clear()
         refused = self.run_streams("rotate", "etl")
         self.assertEqual(refused.returncode, 1)
         self.assertEqual(refused.stderr, "stream etl has no coordinator; run pi-streams new etl\n")
         self.assertEqual(self.stub.requests, [])
-
-
-if __name__ == "__main__":
-    unittest.main()

@@ -114,69 +114,21 @@ class FailureTests(TickCase):
         self.assertEqual(git(self.etl, self.env, "status", "--porcelain"), "")
         self.assertEqual(git(ops, self.env, "status", "--porcelain"), "")
 
-    def test_a_rotation_that_fails_after_its_archive_is_finished_by_the_next_tick(self) -> None:
+    def test_size_never_enters_an_automatic_archive_or_spawn_failure(self) -> None:
         self.stub.set_routes([
             ("GET", "/api/sessions/t-1/status", 200, status("t-1", streaming=True, ask=ASK)),
-            ("GET", "/api/sessions/coord-1/status", 200, status("coord-1", tokens=60000)),
-            ("POST", "/api/sessions", 500, {"error": "pi exited with code 1"}),
-            self.listed(),
-            PROMPTS,
+            ("GET", "/api/sessions/coord-1/status", 200, status("coord-1", tokens=180000)),
+            ("POST", "/api/sessions", 500, {"error": "must not attempt an automatic spawn"}),
+            self.listed(), PROMPTS,
         ])
-        failed = self.tick("2026-10-06T12:00:00Z")
-        self.assertEqual((failed.returncode, failed.stdout, failed.stderr), (
-            1,
-            f"{self.etl}\task=1\ttick-error=1\n",
-            f"{self.etl}: pi-web-cli spawn {self.etl} failed: {SPAWN_FAILED}\n",
-        ))
-        self.assertEqual(self.stub.requests, [
-            got_list(str(self.etl)),
-            got_status("coord-1"),
-            got_status("t-1"),
-            got_list("/wt/datapull"),
-            got_list(str(self.etl)),
-            got_status("coord-1"),
-            got_list(str(self.etl)),
-            got_status("coord-1"),
-            got_post("coord-1", "archive"),
-            got_list(str(self.etl)),
-            ("POST", "/api/sessions", "", {"cwd": str(self.etl)}),
-        ])
-        archived = HEADER + row("coord-1", "coordinator", str(self.etl), status="archived")
-        archived += row("t-1", "datapull", "/wt/datapull")
-        self.assertEqual(self.rows(self.etl), archived)
-        self.assertEqual((self.state(self.etl)["rotating"], self.state(self.etl)["pending"]), (True, [ASKED]))
-
-        self.stub.set_routes([
-            ("GET", "/api/sessions/t-1/status", 200, status("t-1", streaming=True, ask=ASK)),
-            ("POST", "/api/sessions", 200, info("coord-2", str(self.etl), self.log_path("coord-2"))),
-            ("GET", "/api/sessions/coord-2/status", 200, status("coord-2", tokens=None)),
-            self.listed(),
-            PROMPTS,
-        ])
-        healed = self.tick("2026-10-06T12:05:00Z")
-        self.assertEqual((healed.returncode, healed.stdout, healed.stderr), (0, "", ""))
-        self.assertEqual(self.stub.requests, [
-            got_status("t-1"),
-            got_list("/wt/datapull"),
-            got_list(str(self.etl)),
-            ("POST", "/api/sessions", "", {"cwd": str(self.etl)}),
-            got_status("coord-2"),
-            got_post("coord-2", "model", {"provider": "openai-codex", "modelId": "gpt-6-astra"}),
-            got_post("coord-2", "thinking-level", {"level": "xhigh"}),
-            got_status("coord-2"),
-            got_prompt("coord-2", rotation("etl", self.etl)),
-            got_list(str(self.etl)),
-            got_status("coord-2"),
-            got_list(str(self.etl)),
-            got_status("coord-2"),
-            self.delivery_prompt("coord-2", "pi-streams tick 2026-10-06T12:05:00Z:\nask t-1 datapull Which venue first?", "followUp"),
-        ])
-        self.assertEqual(
-            self.rows(self.etl),
-            archived
-            + f"coord-2\tcoordinator\t\t{self.etl}\t\t\topenai-codex/gpt-6-astra\txhigh\tactive\t2026-10-06T12:05:00Z\n",
-        )
-        self.assertEqual((self.state(self.etl)["rotating"], self.state(self.etl)["pending"]), (False, [ASKED]))
+        before = self.rows(self.etl)
+        result = self.tick("2026-10-06T12:00:00Z")
+        self.assertEqual((result.returncode, result.stdout, result.stderr), (0, f"{self.etl}\task=1\n", ""))
+        posts = [request for request in self.stub.requests if request[0] == "POST"]
+        self.assertEqual(posts, [self.delivery_prompt("coord-1", "pi-streams tick 2026-10-06T12:00:00Z:\nask t-1 datapull Which venue first?")])
+        self.assertEqual(self.rows(self.etl), before)
+        self.assertFalse(self.state(self.etl)["rotating"])
+        self.assertEqual(self.state(self.etl)["pending"], [ASKED])
 
     def test_a_rotation_that_stopped_after_pi_web_archived_the_coordinator_requires_reconciliation(self) -> None:
         state = {"outages": [], "pending": [ASKED], "rotating": True, "sessions": {}}

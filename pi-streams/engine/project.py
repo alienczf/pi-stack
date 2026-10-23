@@ -57,8 +57,6 @@ class ModelSettings:
 
 @dataclass
 class Caps:
-    warm_context_tokens: int = 60000
-    warm_idle_hours: int = 6
     thread_handover_tokens: int = 150000
     steer_queue_minutes: int = 10
 
@@ -112,8 +110,6 @@ def dump_project(project: Project) -> str:
         f"thinking = {_q(project.threads.thinking)}",
         "",
         "[caps]",
-        f"warm_context_tokens = {caps.warm_context_tokens}",
-        f"warm_idle_hours = {caps.warm_idle_hours}",
         f"thread_handover_tokens = {caps.thread_handover_tokens}",
         f"steer_queue_minutes = {caps.steer_queue_minutes}",
         "",
@@ -175,8 +171,6 @@ def load_project(path: Path) -> Project:
             coordinator=ModelSettings(str(coordinator["model"]), str(coordinator["thinking"])),
             threads=ModelSettings(str(threads["model"]), str(threads["thinking"])),
             caps=Caps(
-                warm_context_tokens=int(caps["warm_context_tokens"]),
-                warm_idle_hours=int(caps["warm_idle_hours"]),
                 thread_handover_tokens=int(caps["thread_handover_tokens"]),
                 steer_queue_minutes=int(caps["steer_queue_minutes"]),
             ),

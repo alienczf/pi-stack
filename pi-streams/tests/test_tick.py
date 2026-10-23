@@ -204,100 +204,38 @@ class TickTests(TickCase):
             ),
         ])
 
-    def test_a_coordinator_at_the_context_cap_is_rotated_and_the_new_one_gets_the_events(self) -> None:
+    def test_large_context_reuses_the_coordinator_and_retains_unapplied_events(self) -> None:
         self.stub.set_routes([
             ("GET", "/api/sessions/t-1/status", 200, status("t-1", streaming=True, ask=ASK_2)),
-            ("POST", "/api/sessions", 200, info("coord-2", str(self.etl), self.log_path("coord-2"))),
-            ("GET", "/api/sessions/coord-2/status", 200, status("coord-2", tokens=None)),
-            *self.coordinator(status("coord-1", tokens=60000)),
+            *self.coordinator(status("coord-1", tokens=180000)),
         ])
-        proc = self.tick("2026-10-06T12:00:00Z")
-        self.assertEqual((proc.returncode, proc.stdout, proc.stderr), (0, f"{self.etl}\task=1\n", ""))
-        self.assertEqual(self.stub.requests, [
-            got_list(str(self.etl)),
-            got_status("coord-1"),
-            got_status("t-1"),
-            got_list("/wt/datapull"),
-            got_list(str(self.etl)),
-            got_status("coord-1"),
-            got_list(str(self.etl)),
-            got_status("coord-1"),
-            got_post("coord-1", "archive"),
-            got_list(str(self.etl)),
-            ("POST", "/api/sessions", "", {"cwd": str(self.etl)}),
-            got_status("coord-2"),
-            got_post("coord-2", "model", {"provider": "openai-codex", "modelId": "gpt-6-astra"}),
-            got_post("coord-2", "thinking-level", {"level": "xhigh"}),
-            got_status("coord-2"),
-            got_prompt("coord-2", rotation("etl", self.etl)),
-            got_list(str(self.etl)),
-            got_status("coord-2"),
-            got_list(str(self.etl)),
-            got_status("coord-2"),
-            self.delivery_prompt(
-                "coord-2",
-                "pi-streams tick 2026-10-06T12:00:00Z:\nask t-1 datapull May I write to Test?",
-                "followUp",
-            ),
-        ])
-        self.assertEqual(
-            self.rows(self.etl),
-            HEADER
-            + row("coord-1", "coordinator", str(self.etl), status="archived")
-            + row("t-1", "datapull", "/wt/datapull")
-            + f"coord-2\tcoordinator\t\t{self.etl}\t\t\topenai-codex/gpt-6-astra\txhigh\tactive\t2026-10-06T12:00:00Z\n",
-        )
+        before = self.rows(self.etl)
+        result = self.tick("2026-10-06T12:00:00Z")
+        self.assertEqual((result.returncode, result.stdout, result.stderr), (0, f"{self.etl}\task=1\n", ""))
+        posts = [request for request in self.stub.requests if request[0] == "POST"]
+        self.assertEqual(posts, [self.delivery_prompt("coord-1", "pi-streams tick 2026-10-06T12:00:00Z:\nask t-1 datapull May I write to Test?")])
+        self.assertEqual(self.rows(self.etl), before)
         self.assertEqual(self.state(self.etl)["pending"], [{"at": "2026-10-06T12:00:00Z", "kind": "ask", "session": "t-1", "role": "datapull", "detail": "May I write to Test?"}])
         self.assertEqual(git(self.etl, self.env, "status", "--porcelain"), "")
 
-    def test_a_coordinator_idle_for_six_hours_is_rotated(self) -> None:
+    def test_age_never_replaces_the_designated_coordinator(self) -> None:
         self.stub.set_routes([
             ("GET", "/api/sessions/t-1/status", 200, status("t-1", streaming=True, ask=ASK)),
-            *self.coordinator(status("coord-1", tokens=None), modified="2026-10-06T06:00:00.000Z"),
+            *self.coordinator(status("coord-1", tokens=None), modified="2026-10-01T00:00:00Z"),
         ])
-        warm = self.tick("2026-10-06T11:59:59Z")
-        self.assertEqual((warm.returncode, warm.stdout), (0, f"{self.etl}\task=1\n"))
-        self.assertEqual(self.stub.requests[-1], self.delivery_prompt(
-            "coord-1",
-            "pi-streams tick 2026-10-06T11:59:59Z:\nask t-1 datapull Which venue first? / One day or one week?",
-        ))
-
+        before = self.rows(self.etl)
+        first = self.tick("2026-10-06T11:59:59Z")
+        self.assertEqual((first.returncode, first.stdout), (0, f"{self.etl}\task=1\n"))
+        self.assertEqual([request for request in self.stub.requests if request[0] == "POST"], [self.delivery_prompt("coord-1", "pi-streams tick 2026-10-06T11:59:59Z:\nask t-1 datapull Which venue first? / One day or one week?")])
+        self.apply_tick_delivery(self.etl)
         self.stub.set_routes([
             ("GET", "/api/sessions/t-1/status", 200, status("t-1", streaming=True, ask=ASK_2)),
-            ("POST", "/api/sessions", 200, info("coord-2", str(self.etl), self.log_path("coord-2"))),
-            ("GET", "/api/sessions/coord-2/status", 200, status("coord-2", tokens=None)),
-            *self.coordinator(status("coord-1", tokens=None), modified="2026-10-06T06:00:00.000Z"),
+            *self.coordinator(status("coord-1", tokens=None), modified="2026-09-01T00:00:00Z"),
         ])
-        self.apply_tick_delivery(self.etl)
-        cold = self.tick("2026-10-06T12:00:00Z")
-        self.assertEqual((cold.returncode, cold.stdout, cold.stderr), (0, f"{self.etl}\task=1\n", ""))
-        self.assertEqual(self.stub.requests, [
-            got_list(str(self.etl)),
-            got_status("coord-1"),
-            got_status("t-1"),
-            got_list("/wt/datapull"),
-            got_list(str(self.etl)),
-            got_status("coord-1"),
-            got_list(str(self.etl)),
-            got_status("coord-1"),
-            got_post("coord-1", "archive"),
-            got_list(str(self.etl)),
-            ("POST", "/api/sessions", "", {"cwd": str(self.etl)}),
-            got_status("coord-2"),
-            got_post("coord-2", "model", {"provider": "openai-codex", "modelId": "gpt-6-astra"}),
-            got_post("coord-2", "thinking-level", {"level": "xhigh"}),
-            got_status("coord-2"),
-            got_prompt("coord-2", rotation("etl", self.etl)),
-            got_list(str(self.etl)),
-            got_status("coord-2"),
-            got_list(str(self.etl)),
-            got_status("coord-2"),
-            self.delivery_prompt(
-                "coord-2",
-                "pi-streams tick 2026-10-06T12:00:00Z:\nask t-1 datapull May I write to Test?",
-                "followUp",
-            ),
-        ])
+        second = self.tick("2026-10-06T12:00:00Z")
+        self.assertEqual((second.returncode, second.stdout, second.stderr), (0, f"{self.etl}\task=1\n", ""))
+        self.assertEqual([request for request in self.stub.requests if request[0] == "POST"], [self.delivery_prompt("coord-1", "pi-streams tick 2026-10-06T12:00:00Z:\nask t-1 datapull May I write to Test?")])
+        self.assertEqual(self.rows(self.etl), before)
 
     def test_tick_runs_every_registered_home_unless_one_is_given(self) -> None:
         other_root = self.tmp / "other"
