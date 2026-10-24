@@ -21,6 +21,7 @@ Every turn reads only AGENTS.md and STATE.md. No two stream files share a curren
 | Engine-only | `log/events.jsonl` and `log/tick-state.json` | Engine events and durable delivery/maintenance/recovery progress. This grants no ownership of other `log/` contents. |
 | Engine-only | Index `ALERTS` | Typed off-host notification intake, not stream-local ALERTS.md. |
 | Engine-only | Index and stream locks | Short writer exclusion. No network/Git wait under an all-stream lock. |
+| Engine-only | Index `tick-health.json` and `.pi-streams.tick.lock` | One actual tick pass's per-stream completion/results and a kernel tick-only exclusion lease. No agent-read task ledger, new timer, PID-based adoption or new monitoring service. |
 | Engine-only | `failures/<full-session-id>.lastgood` | Parking marker containing only that session's last completely persisted good-turn entry ID. |
 
 ### STATE shape and authority
