@@ -381,6 +381,21 @@ A separate empty-session smoke check deliberately skipped model selection after 
 
 The final code checks pass **71 Prime fixture tests**, **105 existing stream tests**, installer verification, shell/Python syntax, and whitespace checks. Logs are `/tmp/g20-parent-*.log`. Tests do not prove provider entitlement, inference, compaction, active-turn steering, or off-host connectivity. Those remain unverified. The real check fixes local metadata registration and xhigh retention, not provider-side capability or account access.
 
+## G41 authenticated in-place verification
+
+Steer 2 authorizes real `openai-codex/gpt-6.1-sol` xhigh inference using ZF's completed login in place. The selected HOME is `/home/alphalab/.cache/pi-stack-track6/20261023T172837Z/home`; its native agent directory is `$HOME/pi-stack-merged-poc-test/prime/agent`. No tool opens, copies, moves, prints, links, or edits credentials. Track 6's sessions, streams, and daemon remain outside this verifier's ownership.
+
+The existing verifier overrides the native agent-directory environment with its private root. It also registers metadata and restores settings, which is inappropriate for a shared authenticated directory. The bounded correction is an environment-selected existing-agent mode with explicit ownership. Results and final commands follow after execution.
+
+| Approach | Disposition |
+| --- | --- |
+| Existing authenticated agent directory, separate owned session directory, cwd and socket | Chosen. Native environment selectors support this. Preserve existing model configuration and skip global-persisting setter probes. |
+| Private agent directory with a separate stored-auth path | Rejected. No independent auth-path selector is wired in this native composition. Credential copies or links are not allowed. |
+
+LAYER 1. The selected agent directory carries configuration ownership, distinct from the verification root. This prevents applying private-root registration and rollback to shared settings. LAYER 3. The subprocess environment pins `PRIME_AGENT_SESSION_DIR` and the dedicated socket under the owned root. A rule cannot isolate live session storage. Own-cwd `.prime/agent/settings.json` disables retry, failover and quota waiting without changing shared settings. Native allowedModels is global-only, so exact model creation and readback must fail closed rather than claim a project allowlist override. LAYER 2. Subprocess regressions verify those paths and unchanged shared configuration.
+
+The installed `bin/prime-agent` wrapper uses `env -i` with fixed track 6 paths. Use its unchanged `libexec/prime-agent` directly, with explicit package/kernel environment. Its observed version is `0.10.1` and binary SHA-256 is `489645506b880011cee3408b72ad181c90abb22a388be155303be6c70d445e89`, matching track 6's published provenance. Stock may maintain socket-namespaced descriptors and agent-level caches. This is not a claim of zero shared native housekeeping.
+
 ## Decisions
 
 1. Use the public supervisor JSONL socket and stable v0.10.1 for verification. The wire is explicit and the release is reproducible.
