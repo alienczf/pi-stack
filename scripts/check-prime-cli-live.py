@@ -127,9 +127,8 @@ class AgentDirectory:
         path = Path(os.environ.get("PRIME_AGENT_CODING_AGENT_DIR", str(root / "agent")))
         try:
             info = path.lstat()
-            if (not path.is_absolute() or not stat.S_ISDIR(info.st_mode)
-                    or info.st_uid != os.getuid() or info.st_mode & 0o022):
-                raise ValueError("Expected an owned directory without foreign write access")
+            if not path.is_absolute() or not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
+                raise ValueError("Expected an existing owned directory")
             path = path.resolve()
             owned = path == root / "agent"
             if not owned and (path.is_relative_to(root) or root.is_relative_to(path)):
