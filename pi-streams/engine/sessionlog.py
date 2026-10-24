@@ -207,6 +207,43 @@ def successful_control_completion(path: Path, sid: str, cwd: str, leaf: object, 
     return completed
 
 
+def resume_observation(path: Path, sid: str, cwd: str, leaf: object, identity: str, generation: str, compaction: str, compaction_sha256: str, text: str, goal: str, native: dict) -> dict | None:
+    receipt = native.get("resume")
+    if not isinstance(receipt, dict) or receipt.get("observation") is None:
+        return None
+    observation = receipt["observation"]
+    if not isinstance(observation, dict) or native.get("state") != "resumed" or native.get("inputSequence") != 0 or receipt.get("state") != "admitted" or receipt.get("deliveryId") != identity+":resume" or receipt.get("generation") != generation or receipt.get("inputSequence") != 0 or receipt.get("text") != text or receipt.get("potetoGoal") != goal:
+        raise StreamsError("RESUME observation changed its saved admission/epoch")
+    required = ("entryId", "sha256", "userEntryId", "assistantEntryId", "assistantSha256")
+    if any(not isinstance(observation.get(key), str) or not observation[key] for key in required):
+        raise StreamsError("RESUME observation lacks exact entry/hash identities")
+    entries = branch_records(path, sid, cwd, leaf)
+    positions = {entry["id"]: index for index, (entry, _raw) in enumerate(entries)}
+    keys = (compaction, observation["userEntryId"], observation["assistantEntryId"], observation["entryId"])
+    if any(key not in positions for key in keys) or not all(positions[a] < positions[b] for a, b in zip(keys, keys[1:])):
+        raise StreamsError("RESUME observation is not on its ordered post-compaction branch")
+    entry = json.loads(read_record(path, sid, observation["entryId"], observation["sha256"]).raw)
+    expected = {"kind": "assistant-stop", "operationId": identity, "sessionId": sid, "cwd": cwd, "generation": generation, "deliveryId": identity+":resume", "compactionEntryId": compaction, "userEntryId": observation["userEntryId"], "assistantEntryId": observation["assistantEntryId"], "assistantSha256": observation["assistantSha256"]}
+    if entry.get("type") != "custom" or entry.get("customType") != "pi-web.resume-observed" or entry.get("data") != expected or any(observation.get(key) != expected[key] for key in ("kind", "deliveryId", "compactionEntryId")):
+        raise StreamsError("RESUME observation is not its exact native correlated receipt")
+    compaction_record(read_record(path, sid, compaction, compaction_sha256))
+    assistant = json.loads(read_record(path, sid, observation["assistantEntryId"], observation["assistantSha256"]).raw).get("message", {})
+    if assistant.get("role") != "assistant" or assistant.get("stopReason") != "stop":
+        raise StreamsError("RESUME observation has no actual non-error completed assistant")
+    owned, owned_raw = entries[positions[observation["userEntryId"]]]
+    message = owned.get("message", {})
+    content = message.get("content", [])
+    actual = content if isinstance(content, str) else "\n".join(block.get("text", "") for block in content if isinstance(block, dict) and block.get("type") == "text")
+    invocation = "/poteto-mode " + goal
+    prefix = text[:-len(invocation)] if text.endswith(invocation) else None
+    if message.get("role") != "user" or prefix is None or not actual.startswith(prefix+'<skill name="poteto-mode"') or not actual.endswith("</skill>\n\n"+goal):
+        raise StreamsError("RESUME observation user is not the actual expanded fixed mode/goal input")
+    messages = [value.get("message", {}) for value, _raw in entries[positions[compaction]+1:positions[observation["entryId"]]] if value.get("type") == "message"]
+    if sum(message.get("role") == "user" for message in messages) != 1 or any(message.get("stopReason") in {"error", "aborted"} for message in messages):
+        raise StreamsError("New input or failed inference superseded the owned RESUME")
+    return {**observation, "userSha256": hashlib.sha256(owned_raw).hexdigest()}
+
+
 def last_assistant(path: Path) -> dict[str, object] | None:
     try:
         with regular_reader(path) as handle:

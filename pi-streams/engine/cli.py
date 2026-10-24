@@ -378,7 +378,7 @@ def cmd_failure(args: argparse.Namespace) -> int:
         if args.failure_cmd == "ratify":
             result = failure.ratify_locked(stream_dir, args.session, args.episode, args.notice_id, notice, clock.stamp(clock.now()))
         else:
-            result = failure_recovery.advance_locked(stream_dir, args.session, args.episode, clock.stamp(clock.now()))
+            result = failure_recovery.advance_locked(stream_dir, args.session, args.episode, clock.stamp(clock.now()), index=index, project=project)
     print(json.dumps(result, sort_keys=True))
     return 0
 
@@ -390,15 +390,26 @@ def cmd_dcr(args: argparse.Namespace) -> int:
         stream_dir = require_stream(index, project.info.name, args.stream)
         with stream_lock(stream_dir):
             op = dcr.load(stream_dir, args.session)
-            if op is None or op.id != args.operation or Path(op.cwd).resolve() != stream_dir.resolve():
+            if op is None or op.id != args.operation:
                 raise StreamsError("DCR callback does not match the registered stream/SID/operation")
-            resolved = resolve_coordinator(stream_dir)
-            if resolved is None or resolved.row.session != args.session:
-                raise StreamsError("DCR callback does not own the designated native coordinator")
+            recovery = failure_recovery.load(stream_dir, op.recovery_original) if op.recovery_original else None
+            if recovery is not None:
+                if recovery.id != op.id or recovery.fork != args.session or recovery.cwd != op.cwd or recovery.phase != "dcr":
+                    raise StreamsError("DCR callback does not own this held recovery fork")
+                resolved = failure_recovery.resolve_fork(stream_dir, recovery)
+            else:
+                if op.recovery_original or Path(op.cwd).resolve() != stream_dir.resolve():
+                    raise StreamsError("DCR callback has no exact recovery owner")
+                resolved = resolve_coordinator(stream_dir)
+                if resolved is None or resolved.row.session != args.session:
+                    raise StreamsError("DCR callback does not own the designated native coordinator")
             if args.dcr_cmd == "ready":
                 result = dcr.ready(stream_dir, index, args.stream, resolved, args.operation)
             else:
-                dcr.step(index, project, args.stream, stream_dir, resolved)
+                if recovery is not None:
+                    failure_recovery.advance_locked(stream_dir, recovery.session, recovery.episode, clock.stamp(clock.now()), index=index, project=project)
+                else:
+                    dcr.step(index, project, args.stream, stream_dir, resolved)
                 current = dcr.load(stream_dir, args.session)
                 result = {"id": args.operation, "phase": current.phase, "detail": current.detail}
     print(json.dumps(result, sort_keys=True))

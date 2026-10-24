@@ -13,14 +13,15 @@ class FailureRecoveryTests(TickCase):
     digest = markers.FailureMarkerTests.digest
     body = markers.FailureMarkerTests.body
 
-    def fixture(self, role="coordinator"):
+    def fixture(self, role="coordinator", model="gpt-6-astra"):
         self.cwd = self.home / "etl" if role == "coordinator" else self.tmp / "worker-owned"
         self.cwd.mkdir(exist_ok=True, parents=True)
-        self.stream = self.make_stream(self.home, "etl", row("coi", role, str(self.cwd)))
+        self.stream = self.make_stream(self.home, "etl", row("coi", role, str(self.cwd)).replace("gpt-6-astra", model))
         if role != "coordinator":
             (self.cwd / ".stream").write_text(str(self.stream))
         self.seed("coi", self.cwd)
         self.original = self.body(cwd=self.cwd)
+        self.original["model"]["id"] = model
         self.original.update(failureRatificationConfigured=True, failureForkSupport="ratified-prefix-v1", failureMaintenanceSupport="operation-scoped-v1")
         self.original["rotationSafety"].update(callbackInventory="native-and-extension-v1", callbacksKnown=True, nativeChildCallbacks=[])
         self.listing = [info("coi", str(self.cwd), self.log_path("coi"))]
@@ -40,7 +41,7 @@ class FailureRecoveryTests(TickCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.episode = self.state(self.stream)["failures"]["coi"]
         self.request = {"cwd": str(self.cwd), "id": self.episode["recovery_id"], "episode": self.episode["id"], "expected": {**self.original["failureBoundary"], "generation": "native-parked-coi"}, "ratification": {"entryId": receipt["entryId"], "sha256": receipt["sha256"]}}
-        self.result = {"version": 1, "id": self.request["id"], "episode": self.episode["id"], "originalSessionId": "coi", "cwd": str(self.cwd), "root": str(self.stream), "stream": "etl", "checkpoint": target["checkpoint"], "failure": target["failure"], "intentSha256": hashlib.sha256(json.dumps(self.request, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest(), "noticeId": "offline-notice", "provenance": data["provenance"], "instructions": "", "generation": "frozen-original", "state": "forked", "forkSessionId": "returned-fork", "forkFile": self.log_path("returned-fork")}
+        self.result = {"version": 1, "id": self.request["id"], "episode": self.episode["id"], "originalSessionId": "coi", "cwd": str(self.cwd), "root": str(self.stream), "stream": "etl", "checkpoint": target["checkpoint"], "failure": target["failure"], "intentSha256": hashlib.sha256(json.dumps(self.request, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest(), "noticeId": "offline-notice", "provenance": data["provenance"], "instructions": "", "generation": "frozen-original", "state": "forked", "forkSessionId": "returned-fork", "forkFile": self.log_path("returned-fork"), "forkGeneration": "held-generation"}
         originals = Path(self.log_path("coi")).read_bytes().splitlines(keepends=True)
         header = {"type": "session", "version": 3, "id": "returned-fork", "cwd": str(self.cwd), "parentSession": self.log_path("coi")}
         Path(self.log_path("returned-fork")).write_bytes((json.dumps(header) + "\n").encode() + b"".join(originals[1:5]))
@@ -81,7 +82,9 @@ class FailureRecoveryTests(TickCase):
         self.assertIn("\tparked\t", table)
         self.assertIn("returned-fork\tcoordinator", table)
         self.assertEqual((self.stream / "failures/coi.lastgood").read_bytes(), b"e4\n")
-        self.assertEqual(self.advance().returncode, 0)
+        again = self.advance()
+        self.assertNotEqual(again.returncode, 0, "The fork-only HTTP fixture cannot confirm maintenance preparation")
+        self.assertIn("maintenance owner is unconfirmed", again.stderr)
         self.assertEqual(sum(item[1].endswith("/fork") for item in self.stub.requests), 1)
 
     def test_worker_rebinding_preserves_worktree_files_and_exact_model(self):

@@ -258,23 +258,23 @@ def control_goal_status(sid: str, cwd: str, identity: str) -> dict:
     return _control_goal_result(call(["control-goal", sid, identity, "--cwd", cwd, "--status"]), sid, cwd, identity)
 
 
-def watch_dcr_events(sid: str, cwd: str, identity: str, index: Path, stream: str, generation: str) -> dict:
-    data = call(["maintenance-events", sid, identity, "--cwd", cwd, "--index", str(index), "--stream", stream, "--generation", generation])
+def watch_dcr_events(sid: str, cwd: str, identity: str, index: Path, stream: str, generation: str, *, original: str = "") -> dict:
+    data = {"result": failure_maintenance(original, cwd, {"id": identity, "action": "watch", "index": str(index), "stream": stream, "generation": generation}).get("events")} if original else call(["maintenance-events", sid, identity, "--cwd", cwd, "--index", str(index), "--stream", stream, "--generation", generation])
     result = data.get("result")
     if not isinstance(result, dict) or result.get("id") != identity or not isinstance(result.get("entryId"), str) or not result["entryId"]:
         raise StreamsError("native DCR event registration is unconfirmed")
     return result
 
 
-def close_dcr_events(sid: str, cwd: str, identity: str) -> dict:
-    data = call(["maintenance-events", sid, identity, "--cwd", cwd, "--close"])
+def close_dcr_events(sid: str, cwd: str, identity: str, *, original: str = "") -> dict:
+    data = {"result": failure_maintenance(original, cwd, {"id": identity, "action": "close"}).get("events")} if original else call(["maintenance-events", sid, identity, "--cwd", cwd, "--close"])
     result = data.get("result")
     if not isinstance(result, dict) or result.get("id") != identity or result.get("closed") is not True:
         raise StreamsError("native DCR event close is unconfirmed")
     return result
 
 
-def compact_at_checkpoint(sid: str, identity: str, expected: dict[str, str], instructions: str) -> dict:
+def compact_at_checkpoint(sid: str, identity: str, expected: dict[str, str], instructions: str, *, original: str = "") -> dict:
     if set(expected) != {"sessionId", "cwd", "entryId", "generation"} or expected["sessionId"] != sid or not all(isinstance(value, str) and value for value in expected.values()):
         raise StreamsError("compaction requires the exact saved native checkpoint")
     status = require_maintenance(sid)
@@ -282,15 +282,15 @@ def compact_at_checkpoint(sid: str, identity: str, expected: dict[str, str], ins
     safety = status.get("rotationSafety")
     if not allowed or automatic["generation"] != expected["generation"] or not isinstance(safety, dict) or safety.get("entryId") != expected["entryId"]:
         raise PromptRejected("saved maintenance checkpoint/generation was superseded")
-    data = call(["compact", sid, identity, "--expected-idle", json.dumps(expected)], stdin=instructions)
+    data = {"result": failure_maintenance(original, expected["cwd"], {"id": identity, "action": "compact", "expectedIdle": expected, "instructions": instructions}).get("maintenance")} if original else call(["compact", sid, identity, "--expected-idle", json.dumps(expected)], stdin=instructions)
     result = _maintenance_result(data, sid, identity, expected["cwd"])
     if result.get("entryId") != expected["entryId"] or result.get("generation") != expected["generation"] or result.get("instructions") != instructions:
         raise StreamsError("maintenance receiver changed the saved compaction intent")
     return result
 
 
-def maintenance_status(cwd: str, sid: str, identity: str) -> dict:
-    data = call(["maintenance", sid, identity, "--cwd", cwd])
+def maintenance_status(cwd: str, sid: str, identity: str, *, original: str = "") -> dict:
+    data = {"result": failure_maintenance(original, cwd, {"id": identity, "action": "maintenance-status"}).get("maintenance")} if original else call(["maintenance", sid, identity, "--cwd", cwd])
     return _maintenance_result(data, sid, identity, cwd)
 
 
@@ -299,7 +299,7 @@ def reconcile_maintenance(cwd: str, sid: str, identity: str) -> dict:
     return _maintenance_result(data, sid, identity, cwd)
 
 
-def resume_maintenance(sid: str, identity: str, compaction_entry: str, input_sequence: int, automatic: dict[str, str], delivery_id: str, text: str, *, poteto_goal: str | None = None) -> dict:
+def resume_maintenance(sid: str, identity: str, compaction_entry: str, input_sequence: int, automatic: dict[str, str], delivery_id: str, text: str, *, poteto_goal: str | None = None, original: str = "") -> dict:
     if automatic.get("sessionId") != sid or automatic.get("kind") != "resume" or type(input_sequence) is not int or input_sequence < 0:
         raise StreamsError("RESUME requires its saved exact session/generation/input sequence")
     flags = ["maintenance-resume", sid, identity, "--compaction-entry", compaction_entry, "--input-sequence", str(input_sequence), "--delivery-id", delivery_id, "--automatic-admission", json.dumps(automatic)]
@@ -308,7 +308,7 @@ def resume_maintenance(sid: str, identity: str, compaction_entry: str, input_seq
         require_poteto(sid)
         flags.append("--poteto")
         payload = _poteto_payload(text, poteto_goal)
-    data = call(flags, stdin=payload)
+    data = {"result": failure_maintenance(original, automatic["cwd"], {"id": identity, "action": "resume", "compactionEntryId": compaction_entry, "inputSequence": input_sequence, "deliveryId": delivery_id, "text": text, "potetoGoal": poteto_goal}).get("maintenance")} if original else call(flags, stdin=payload)
     result = _maintenance_result(data, sid, identity, automatic["cwd"])
     receipt = result.get("resume")
     if not isinstance(receipt, dict) or receipt.get("deliveryId") != delivery_id or receipt.get("text") != text or receipt.get("generation") != automatic.get("generation") or receipt.get("inputSequence") != input_sequence or receipt.get("potetoGoal") != poteto_goal:
@@ -316,8 +316,8 @@ def resume_maintenance(sid: str, identity: str, compaction_entry: str, input_seq
     return result
 
 
-def compaction_result(cwd: str, sid: str, identity: str) -> dict | None:
-    operation = maintenance_status(cwd, sid, identity)
+def compaction_result(cwd: str, sid: str, identity: str, *, original: str = "") -> dict | None:
+    operation = maintenance_status(cwd, sid, identity, original=original)
     if operation["state"] in ("prepared", "compacting") or operation["state"] == "superseded" and operation.get("compactionEntryId") is None:
         return None
     if operation["state"] in ("failed", "uncertain"):

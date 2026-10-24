@@ -5,7 +5,7 @@ import json
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
-from engine import StreamsError, artifacts, drive, failure, piweb, sessionlog
+from engine import StreamsError, artifacts, dcr, drive, failure, piweb, sessionlog
 from engine.project import _write
 from engine.threads import Coordinator, Status, _native_session, dump_threads, load_threads, require_ratified
 
@@ -25,6 +25,8 @@ class Recovery:
     registry_before: str = ""
     registry_after: str = ""
     detail: str = ""
+    generation: str = ""
+    observation: dict | None = None
 
 
 def load(stream: Path, sid: str) -> Recovery | None:
@@ -36,7 +38,7 @@ def load(stream: Path, sid: str) -> Recovery | None:
         return None
     try:
         op = Recovery(**value)
-        if op.session != sid or not op.id or not Path(op.cwd).is_absolute() or op.phase not in {"fork-sending", "forked", "binding", "bound", "cancelled", "uncertain"} or not isinstance(op.request, dict):
+        if op.session != sid or not op.id or not Path(op.cwd).is_absolute() or op.phase not in {"fork-sending", "forked", "binding", "bound", "preparing", "dcr", "observed", "cancelled", "uncertain"} or not isinstance(op.request, dict):
             raise ValueError("Recovery identity/phase changed")
         return op
     except (TypeError, ValueError) as exc:
@@ -110,7 +112,7 @@ def _verify_fork(op: Recovery, original):
     return native
 
 
-def advance_locked(stream: Path, sid: str, episode_id: str, at: str) -> dict:
+def advance_locked(stream: Path, sid: str, episode_id: str, at: str, *, index: Path | None = None, project=None) -> dict:
     require_ratified(stream)
     if drive.is_paused(stream):
         raise StreamsError("Local off preserves recovery parking")
@@ -140,6 +142,7 @@ def advance_locked(stream: Path, sid: str, episode_id: str, at: str) -> dict:
     if record.get("customType") != "pi-web.failure-ratification" or any(record.get("data", {}).get(key) != proof[key] for key in ("version", "id", "noticeId", "provenance", "instructions", "generation", "target")) or not any(entry["id"] == proof["entryId"] for entry, _ in entries):
         raise StreamsError("Ratification receipt is not on the current original branch")
     op = load(stream, sid)
+    starting_phase = None if op is None else op.phase
     token, allowed = piweb.automatic_admission(native.status, sid, episode.cwd, "recovery")
     expected_generation = proof["generation"] if op is None or op.result is None else op.result["generation"]
     if op is not None and op.result is None:
@@ -202,4 +205,62 @@ def advance_locked(stream: Path, sid: str, episode_id: str, at: str) -> dict:
             _write(stream / "threads.tsv", op.registry_after)
         op.phase = "bound"
         save(stream, op)
+    if op.phase in {"preparing", "dcr", "observed"} or op.phase == "bound" and starting_phase == "bound":
+        if index is None or project is None:
+            raise StreamsError("Recovery DCR requires its exact registered project/index")
+        _advance_dcr(stream, op, episode, row, native, index, project)
     return asdict(op)
+
+
+def resolve_fork(stream: Path, op: Recovery) -> Coordinator:
+    rows = [row for row in load_threads(stream / "threads.tsv") if row.session == op.fork]
+    original = [row for row in load_threads(stream / "threads.tsv") if row.session == op.session]
+    if len(rows) != 1 or len(original) != 1 or rows[0] != replace(original[0], session=op.fork, status=Status.active):
+        raise StreamsError("Recovery fork registry identity changed")
+    native = _native_session(op.fork, Path(op.cwd))
+    if native.info.get("path") != op.fork_file:
+        raise StreamsError("Recovery fork native file changed")
+    boundary = native.status.get("failureBoundary")
+    if not isinstance(boundary, dict) or boundary.get("state") != "recovering" or boundary.get("recovery") != {"id": op.id, "originalSessionId": op.session}:
+        raise StreamsError("Recovery fork runtime is no longer held by this operation")
+    return Coordinator(rows[0], native)
+
+
+def _advance_dcr(stream: Path, op: Recovery, episode: failure.Episode, row, original, index, project) -> None:
+    from engine.replacement import _idle
+    _idle(Coordinator(row, original))
+    fork = resolve_fork(stream, op)
+    piweb.require_settings(fork.native.status, episode.authorized_model, episode.authorized_thinking)
+    if original.status.get("failureMaintenanceSupport") != "operation-scoped-v1":
+        raise StreamsError("Operation-scoped recovery maintenance capability is unavailable")
+    if op.phase == "bound":
+        if not isinstance(op.result.get("forkGeneration"), str):
+            raise StreamsError("Historical fork has no receiving-owned held generation; preserve parking")
+        token, allowed = piweb.automatic_admission(fork.native.status, op.fork, op.cwd, "wake")
+        if allowed or token["generation"] != op.result["forkGeneration"]:
+            raise StreamsError("Newer fork stop/input superseded initial preparation")
+        op.phase = "preparing"
+        save(stream, op)
+        piweb.failure_maintenance(op.session, op.cwd, {"id": op.id, "action": "prepare", "expectedForkGeneration": op.result["forkGeneration"]})
+    latest = _result(stream, op, episode, _native_session(op.session, Path(op.cwd)))
+    if latest is None or {key: value for key, value in latest.items() if key != "maintenance"} != op.result:
+        raise StreamsError("Native maintenance changed its frozen exact fork result")
+    maintenance = latest.get("maintenance")
+    if not isinstance(maintenance, dict) or maintenance.get("id") != op.id or maintenance.get("phase") != "ready" or maintenance.get("expectedGeneration") != op.result["forkGeneration"] or not isinstance(maintenance.get("generation"), str):
+        raise StreamsError("Held-fork preparation remains uncertain; do not rearm or resend")
+    fork = resolve_fork(stream, op)
+    token, allowed = piweb.automatic_admission(fork.native.status, op.fork, op.cwd, "wake")
+    if not allowed or token["generation"] != maintenance["generation"]:
+        raise StreamsError("Newer fork stop/input superseded DCR")
+    if op.phase == "preparing":
+        op.generation, op.phase = token["generation"], "dcr"
+        save(stream, op)
+    if op.generation != token["generation"]:
+        raise StreamsError("Saved recovery DCR generation changed")
+    current = dcr.prepare(index, stream.name, stream, fork, op.id, token, original=op.session, instructions=op.result["instructions"])
+    if op.phase == "dcr":
+        dcr.step(index, project, stream.name, stream, fork)
+        current = dcr.load(stream, op.fork)
+        if current.phase == "complete" and current.observation is not None:
+            op.observation, op.phase = current.observation, "observed"
+            save(stream, op)

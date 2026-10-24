@@ -42,6 +42,9 @@ class Operation:
     resume_goal: str = ""
     completed_leaf: str = ""
     detail: str = ""
+    recovery_original: str = ""
+    recovery_instructions: str = ""
+    observation: dict | None = None
 
 
 def load(stream_dir: Path, sid: str) -> Operation | None:
@@ -112,7 +115,7 @@ def ready(stream_dir: Path, index: Path, stream: str, resolved: Coordinator, ide
     book = artifacts._read_tick_data(stream_dir).get("state_log")
     op.ready_entries = [] if book is None else [asdict(entry) for entry in artifacts._book(book).entries]
     save(stream_dir, op)
-    piweb.watch_dcr_events(op.session, op.cwd, op.id, index, stream, token["generation"])
+    piweb.watch_dcr_events(op.session, op.cwd, op.id, index, stream, token["generation"], original=op.recovery_original)
     return {"id": op.id, "sessionId": op.session, "stateRevision": revision, "acknowledgement": f"DCR SYNC ready: {op.id} {revision}"}
 
 
@@ -195,9 +198,28 @@ def completion_after(resolved: Coordinator, compaction: str) -> str | None:
 
 
 def close_events(stream_dir: Path, op: Operation) -> None:
-    receipt = piweb.close_dcr_events(op.session, op.cwd, op.id)
+    receipt = piweb.close_dcr_events(op.session, op.cwd, op.id, original=op.recovery_original)
     op.completed_leaf = receipt.get("entryId") or op.completed_leaf
     save(stream_dir, op)
+
+
+def prepare(index: Path, stream: str, stream_dir: Path, resolved: Coordinator, identity: str, token: dict, *, original: str = "", instructions: str = "") -> Operation:
+    previous = load(stream_dir, resolved.row.session)
+    if previous is not None and (original or previous.phase not in {"complete", "superseded"}):
+        if previous.id != identity or previous.recovery_original != original or previous.automatic != token or previous.recovery_instructions != instructions:
+            raise StreamsError("Another DCR operation owns the returned fork")
+        return previous
+    command = shlex.join([str(Path(__file__).resolve().parents[2] / "bin/pi-streams"), "dcr", "ready", stream, "--home", str(index), "--session", resolved.row.session, "--operation", identity])
+    text = (
+        f"SYNC/DUMP for same-session DCR {identity}. At the next safe boundary, finish or record ongoing work. "
+        f"Read {stream_dir}/AGENTS.md and {stream_dir}/STATE.md before syncing any inherited context. Synchronize Current Objective, active Rules, "
+        "completed work, failures and exact artifact references through the canonical artifact commands. "
+        "Do not prune or rotate Log, abort active tools, author RESUME, or retry uncertain external jobs. "
+        f"Then run {command}. Make no artifact writes afterward. Finish the turn with the exact acknowledgement returned by that command."
+    )
+    op = Operation(identity, resolved.row.session, resolved.row.worktree, token, text, recovery_original=original, recovery_instructions=instructions)
+    save(stream_dir, op)
+    return op
 
 
 def step(index: Path, project: Project, stream: str, stream_dir: Path, resolved: Coordinator | None) -> bool:
@@ -214,7 +236,7 @@ def step(index: Path, project: Project, stream: str, stream_dir: Path, resolved:
         return True
     if op is not None and op.phase not in TERMINAL and (not allowed or token != op.automatic):
         if op.phase in {"compact-sending", "compacting", "resume-sending", "resuming"}:
-            native = piweb.maintenance_status(op.cwd, sid, op.id)
+            native = piweb.maintenance_status(op.cwd, sid, op.id, original=op.recovery_original)
             if native.get("generation") != op.automatic["generation"] or native.get("entryId") != op.checkpoint_entry:
                 raise StreamsError("Changed-control DCR disposition has no matching saved checkpoint/generation")
             if native["state"] in {"failed", "uncertain"} and native.get("cancelledByStop") is not True:
@@ -239,18 +261,9 @@ def step(index: Path, project: Project, stream: str, stream_dir: Path, resolved:
             return False
         require_ratified(stream_dir)
         identity = uuid.uuid4().hex
-        command = shlex.join([str(Path(__file__).resolve().parents[2] / "bin/pi-streams"), "dcr", "ready", stream, "--home", str(index), "--session", sid, "--operation", identity])
-        text = (
-            f"SYNC/DUMP for same-session DCR {identity}. At the next safe boundary, finish or record ongoing work. "
-            f"Read {stream_dir}/AGENTS.md and {stream_dir}/STATE.md. Synchronize Current Objective, active Rules, "
-            "completed work, failures and exact artifact references through the canonical artifact commands. "
-            "Do not prune or rotate Log, abort active tools, author RESUME, or retry uncertain external jobs. "
-            f"Then run {command}. Make no artifact writes afterward. Finish the turn with the exact acknowledgement returned by that command."
-        )
-        op = Operation(identity, sid, resolved.row.worktree, token, text)
-        save(stream_dir, op)
+        op = prepare(index, stream, stream_dir, resolved, identity, token)
     try:
-        piweb.require_settings(status, project.coordinator.model, project.coordinator.thinking)
+        piweb.require_settings(status, resolved.row.model if op.recovery_original else project.coordinator.model, resolved.row.thinking if op.recovery_original else project.coordinator.thinking)
         if status.get("maintenanceSupport") != "checkpoint-input-v1" or status.get("potetoInvocationSupport") != "exact-goal-v1" or status.get("dcrEventSupport") != "phase-v1":
             op.phase, op.detail = "blocked", "Native checkpoint, exact mode and idle-event capabilities are required."
             save(stream_dir, op)
@@ -260,7 +273,13 @@ def step(index: Path, project: Project, stream: str, stream_dir: Path, resolved:
                 return True
             op.phase = "sync-sending"
             save(stream_dir, op)
-            piweb.prompt(sid, op.sync_text, "steer" if status.get("isStreaming") is True else None, delivery_id=f"{op.id}:sync", automatic=op.automatic)
+            if op.recovery_original:
+                receipt = piweb.failure_maintenance(op.recovery_original, op.cwd, {"id": op.id, "action": "sync", "deliveryId": f"{op.id}:sync", "text": op.sync_text})
+                sync = receipt["operation"].get("maintenance", {}).get("sync")
+                if not isinstance(sync, dict) or sync.get("text") != op.sync_text or sync.get("deliveryId") != f"{op.id}:sync" or sync.get("state") not in {"sending", "ended"}:
+                    raise StreamsError("Recovery SYNC admission identity/body is unconfirmed")
+            else:
+                piweb.prompt(sid, op.sync_text, "steer" if status.get("isStreaming") is True else None, delivery_id=f"{op.id}:sync", automatic=op.automatic)
             op.phase = "sync-admitted"
             save(stream_dir, op)
             return True
@@ -278,12 +297,12 @@ def step(index: Path, project: Project, stream: str, stream_dir: Path, resolved:
             op.checkpoint_entry, op.checkpoint_sha256 = checkpoint
             op.phase = "compact-sending"
             save(stream_dir, op)
-            piweb.compact_at_checkpoint(sid, op.id, {"sessionId": sid, "cwd": op.cwd, "entryId": op.checkpoint_entry, "generation": token["generation"]}, op.compact_instructions)
+            piweb.compact_at_checkpoint(sid, op.id, {"sessionId": sid, "cwd": op.cwd, "entryId": op.checkpoint_entry, "generation": token["generation"]}, op.compact_instructions, original=op.recovery_original)
             op.phase = "compacting"
             save(stream_dir, op)
             return True
         if op.phase in {"compact-sending", "compacting", "resume-sending", "resuming"}:
-            native = piweb.maintenance_status(op.cwd, sid, op.id)
+            native = piweb.maintenance_status(op.cwd, sid, op.id, original=op.recovery_original)
             if native.get("generation") != op.automatic["generation"] or native.get("entryId") != op.checkpoint_entry:
                 raise StreamsError("Native DCR receipt changed its saved checkpoint/generation")
             if native["state"] in {"failed", "uncertain"}:
@@ -304,9 +323,15 @@ def step(index: Path, project: Project, stream: str, stream_dir: Path, resolved:
             if op.phase == "resuming":
                 if native["state"] != "resumed":
                     return True
-                completed = completion_after(resolved, op.compaction_entry)
-                if completed is None:
-                    return True
+                if op.recovery_original:
+                    op.observation = sessionlog.resume_observation(Path(resolved.native.info["path"]), sid, op.cwd, status.get("rotationSafety", {}).get("entryId"), op.id, op.automatic["generation"], op.compaction_entry, op.compaction_sha256, op.resume_text, op.resume_goal, native)
+                    if op.observation is None:
+                        return True
+                    completed = op.observation["assistantEntryId"]
+                else:
+                    completed = completion_after(resolved, op.compaction_entry)
+                    if completed is None:
+                        return True
                 op.completed_leaf = completed
                 op.phase = "complete"
                 save(stream_dir, op)
@@ -314,7 +339,7 @@ def step(index: Path, project: Project, stream: str, stream_dir: Path, resolved:
                 return False
             if native.get("resume") is not None:
                 raise StreamsError("Native RESUME exists without this driver's saved admission intent")
-            proof = piweb.compaction_result(op.cwd, sid, op.id)
+            proof = piweb.compaction_result(op.cwd, sid, op.id, original=op.recovery_original)
             if proof is None:
                 return True
             artifacts._rotate_log_locked(stream_dir)
@@ -322,10 +347,10 @@ def step(index: Path, project: Project, stream: str, stream_dir: Path, resolved:
             require_ratified(stream_dir)
             op.compaction_entry, op.compaction_sha256 = proof["entryId"], proof["sha256"]
             op.resume_goal = artifacts.resolve_current_goal(state)
-            op.resume_text = resume_text(stream_dir, op.resume_goal)
+            op.resume_text = ("Explicitly ratified exceptional instructions:\n" + op.recovery_instructions + "\n" if op.recovery_instructions else "") + resume_text(stream_dir, op.resume_goal)
             op.phase = "resume-sending"
             save(stream_dir, op)
-            piweb.resume_maintenance(sid, op.id, op.compaction_entry, 0, {**op.automatic, "kind": "resume"}, f"{op.id}:resume", op.resume_text, poteto_goal=op.resume_goal)
+            piweb.resume_maintenance(sid, op.id, op.compaction_entry, 0, {**op.automatic, "kind": "resume"}, f"{op.id}:resume", op.resume_text, poteto_goal=op.resume_goal, original=op.recovery_original)
             op.phase = "resuming"
             save(stream_dir, op)
     except piweb.PromptRejected as exc:

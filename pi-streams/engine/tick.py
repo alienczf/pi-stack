@@ -7,7 +7,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from engine import StreamsError, artifacts, clock, dcr, delivery, drive, failure, piweb, sessionlog, tickhealth
+from engine import StreamsError, artifacts, clock, dcr, delivery, drive, failure, failure_recovery, piweb, sessionlog, tickhealth
 from engine.project import (
     Project,
     StreamRow,
@@ -225,6 +225,11 @@ class StreamTick:
             self.loaded = True
             self.drive_enabled = drive.load(self.stream_dir).enabled
             self.automatic_paused = drive.is_paused(self.stream_dir)
+            if not self.automatic_paused:
+                for sid in artifacts._read_tick_data(self.stream_dir).get("failures", {}):
+                    episode = failure.load(self.stream_dir, sid)
+                    if episode is not None and episode.state == "parked" and episode.kind != "usage-limit" and episode.ratification is not None:
+                        failure_recovery.advance_locked(self.stream_dir, sid, episode.id, self.at, index=self.index, project=self.project)
             self.rows = load_threads(self.rows_path)
             self.coordinator_resolution = resolve_coordinator(self.stream_dir, self.rows)
             if self.coordinator_resolution is not None:
@@ -329,6 +334,11 @@ class StreamTick:
         return resolved.row if resolved is not None and resolved.row.status is Status.active else None
 
     def observe_failure(self, row: Thread, native: dict, status: dict) -> bool:
+        for sid in artifacts._read_tick_data(self.stream_dir).get("failure_recoveries", {}):
+            operation = failure_recovery.load(self.stream_dir, sid)
+            if operation is not None and operation.fork == row.session:
+                self.typed_failures.add(row.session)
+                return True
         piweb.register_stream_failure(row.session, row.worktree, self.stream_dir, status)
         episode = failure.observe(self.stream_dir, row.session, row.worktree, native, status, self.at, row.model, row.thinking)
         if episode is None:
