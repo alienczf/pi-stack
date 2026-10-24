@@ -9,7 +9,7 @@ tracking_issue: https://github.com/alienczf/pi-stack/issues/38
 box_mirror: /workspace/harness-program
 host_docs_worktree: /home/alphalab/Projects/worktrees/pi-stack-harness-program
 host_input_copy: /home/alphalab/Projects/pi-stack/streams/pi-streams-harness/context/harness-program
-updated: "2026-10-24T08:55+08:00 (T6 e3232f1 pushed; live e2e still running; T1 S3 187a454 at 70.7%; T2 live checks streaming 52%). Prev: 2026-10-24T08:35+08:00 (T6 226e32a pushed; T2 steer-2 G41 live checks on T6 test-home runtime). Prev: 2026-10-24T08:05+08:00 (G40: model defaults Sol 6.1 xhigh streams / Luna 6 xhigh workers (openai-codex/gpt-6-luna); T6 steered with steer-1 (defaults + login done G39), landed 08:03, streaming)"
+updated: "2026-10-24T09:30+08:00 (T6 done e3232f1, audit PASS rerun by driver, draft PR #39 opened, poc_sent; T2 pushed 88d9d67, G41 inference pass, wrapper box check pending; T1 S3 2e227a7 at 72.4%). Prev: 2026-10-24T08:55+08:00 (T6 e3232f1 pushed; live e2e still running; T1 S3 187a454 at 70.7%; T2 live checks streaming 52%). Prev: 2026-10-24T08:35+08:00 (T6 226e32a pushed; T2 steer-2 G41 live checks on T6 test-home runtime). Prev: 2026-10-24T08:05+08:00 (G40: model defaults Sol 6.1 xhigh streams / Luna 6 xhigh workers (openai-codex/gpt-6-luna); T6 steered with steer-1 (defaults + login done G39), landed 08:03, streaming)"
 tracks:
   - id: 1
     name: pi-streams must-fix catalog
@@ -37,7 +37,7 @@ tracks:
     session: 01a16656-ddcb-76c7-a44b-c7298bcb0198
     host: options-01
     model: openai-codex/gpt-6.1-sol@xhigh
-    phase: "live checks - steer-2 (G41, sha 6bb5bed6) accepted 08:35: inference + wrapper against the T6 clean test home's authenticated runtime in place"
+    phase: "09:09 G41 real Sol xhigh inference PASS, local wrapper PASS; reports blocked only on the genuine off-host wrapper check, which the driver runs from the box (documented G41 box command in 20-prime-cli-design.md). Idle 58.5%."
     milestones_sent: [track-2-blocker-prime-login 2026-10-23T11:01+08:00]
     started: 2026-10-23T09:19+08:00
     expected_done: 2026-10-23T13:30+08:00
@@ -50,7 +50,7 @@ tracks:
     brief_sha256_verified: true
     blocked_on: ZF interactive openai-codex login for Prime on options-01 (blocker note sent once, 11:01)
     open_questions: [caladan (pi-bot caladan bb39dc0; no pi-stack branch), non-blocking]
-    pushed: feat/prime-cli 6bc1242 (2026-10-23 11:58, driver)
+    pushed: feat/prime-cli 88d9d67 (2026-10-24 09:29, driver; fast-forward over 6bc1242)
     next_action: When idle, collect, push feat/prime-cli again. After ZF logs Prime in, run the inference verification script from the design doc and the off-host wrapper check from the box, then send the track-2-working milestone. Streams-on-prime port waits for track 1 to merge.
   - id: 3
     name: problem-state research + three designs
@@ -106,8 +106,9 @@ tracks:
     session: 01a169cc-9519-7411-bf2f-51073758fc53
     host: options-01
     model: openai-codex/gpt-6.1-sol@xhigh
-    phase: "steered 08:03 with track-6-steer-1 (G40 model defaults + G39 login done); building defaults commit, then live e2e. Was blocked-on-prime-codex-login at f5beb90 (suite/install pass)."
-    milestones_sent: [track-6-blocker-prime-login 2026-10-24T05:58+08:00]
+    phase: "done 09:01 (TRACK 6 STATUS: done, e3232f1, suite/install/e2e pass); driver reran native audit PASS 09:28; draft PR #39 opened 09:29. Earlier: steered 08:03 with track-6-steer-1; Was blocked-on-prime-codex-login at f5beb90 (suite/install pass)."
+    milestones_sent: [track-6-blocker-prime-login 2026-10-24T05:58+08:00, poc-working 2026-10-24T09:30+08:00]
+    pr: https://github.com/alienczf/pi-stack/pull/39
     login_command: "HOME=/home/alphalab/.cache/pi-stack-track6/20261023T172837Z/home /home/alphalab/.cache/pi-stack-track6/20261023T172837Z/home/pi-stack-merged-poc-test/bin/prime-agent then /login in the TUI"
     started: 2026-10-24T01:26+08:00
     pushed: feat/merged-poc e3232f1 (2026-10-24 08:55, driver; fast-forward over 226e32a)
@@ -135,7 +136,7 @@ merged_done: true (2026-10-23T18:58+08:00, gate passed, G34)
 merged_revision_z25: done (2026-10-24T01:30+08:00, gate passed, G38; T5 reported done 01:15)
 merged_revision_z25_sent: null
 track_6_session: 01a169cc-9519-7411-bf2f-51073758fc53
-poc_sent: false
+poc_sent: 2026-10-24T09:30+08:00 (draft PR https://github.com/alienczf/pi-stack/pull/39, handed to main chat via WakeParent; never resend)
 poc_deadline: 2026-10-26T09:00+08:00
 comparison_v2_sent: 2026-10-23T19:00+08:00 (handed to main chat via WakeParent; never resend)
 reference_only: [docs/harness-program/41-design-b-prime-detailed.md]
