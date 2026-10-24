@@ -78,6 +78,66 @@ Path({str(self.events_log)!r}).write_text(json.dumps({{"requests": server.reques
         return self.run_check("verify", "--root", str(self.owned), "--runtime", str(self.runtime),
                               "--timeout", "2", *args)
 
+    def completed_runtime(self, compact_outcome):
+        extension = f'''
+class CompletedSupervisor(MetadataSupervisor):
+    def response(self, command, owner):
+        kind = command["type"]
+        if kind == "prompt_and_wait":
+            self.marker = command["message"].split()[3].rstrip(".")
+            return {{"success": True}}
+        if kind == "compact":
+            outcome = {compact_outcome!r}
+            if outcome == "compacted":
+                self.compaction_count = getattr(self, "compaction_count", 0) + 1
+                return {{"success": True, "data": {{"summary": "fixture summary"}}}}
+            if outcome.startswith("Session is too short"):
+                return {{"success": False, "error": outcome}}
+            return {{"success": False, "error": outcome, "errorInfo": {{"code": "usage_limit"}}}}
+        result = super().response(command, owner)
+        if result.get("success") and kind == "get_messages" and hasattr(self, "marker"):
+            result["data"]["messages"] = [{{"role": "assistant", "stopReason": "stop",
+                "content": [{{"type": "text", "text": self.marker}}]}}]
+        if result.get("success") and kind == "get_connection_state":
+            result["data"]["compactionCount"] = getattr(self, "compaction_count", 0)
+        return result
+with CompletedSupervisor(root) as server:'''
+        self.runtime.write_text(self.runtime.read_text().replace("with MetadataSupervisor(root) as server:", extension))
+
+    def test_inference_records_short_session_compaction_skip_without_waiting_for_counter(self):
+        message = "Session is too short to compact \u2014 try again once it grows"
+        self.completed_runtime(message)
+        proc = self.verify("--inference")
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        result = json.loads(proc.stdout)
+        self.assertEqual((result["inferenceVerified"], result["compactionVerified"]), (True, False))
+        self.assertIn({"compactionVerified": False, "outcome": "skipped", "message": message}, result["checks"])
+        events = json.loads(self.events_log.read_text())
+        self.assertEqual(events["events"].count("compact"), 1)
+        self.assertEqual(events["events"][-1], "shutdown")
+        self.assertNotIn("/compact Preserve the verification marker.", events["admitted"])
+
+    def test_awaited_compact_success_requires_observed_counter_advance(self):
+        self.completed_runtime("compacted")
+        proc = self.verify("--inference")
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        result = json.loads(proc.stdout)
+        self.assertEqual((result["inferenceVerified"], result["compactionVerified"]), (True, True))
+        self.assertIn({"compactionVerified": True, "compactionCount": 1}, result["checks"])
+
+    def test_compaction_usage_refusal_is_not_a_benign_skip_or_retried(self):
+        self.completed_runtime("Fixture compaction usage refusal")
+        proc = self.verify("--inference")
+        self.assertEqual(proc.returncode, 1, proc.stderr + proc.stdout)
+        result = json.loads(proc.stdout)
+        self.assertEqual(result["error"]["errorInfo"], {"code": "usage_limit"})
+        self.assertEqual(result["inferenceVerified"], True)
+        self.assertEqual(result["compactionVerified"], False)
+        self.assertEqual(result["retainedOwnedSessions"], [])
+        events = json.loads(self.events_log.read_text())["events"]
+        self.assertEqual(events.count("compact"), 1)
+        self.assertEqual(events[-1], "shutdown")
+
     def test_launcher_reuses_root_and_stops_only_its_fake_process(self):
         before = (self.owned / "agent/settings.json").read_bytes()
         proc = self.verify()
