@@ -117,12 +117,35 @@ def prepare() -> dict:
             "note": "Launch separately. No runtime was started and no credentials were accessed."}
 
 
+@dataclass(frozen=True)
+class AgentDirectory:
+    path: Path
+    owned: bool
+
+    @classmethod
+    def select(cls, root: Path) -> AgentDirectory:
+        path = Path(os.environ.get("PRIME_AGENT_CODING_AGENT_DIR", str(root / "agent")))
+        try:
+            info = path.lstat()
+            if (not path.is_absolute() or not stat.S_ISDIR(info.st_mode)
+                    or info.st_uid != os.getuid() or info.st_mode & 0o022):
+                raise ValueError("Expected an owned directory without foreign write access")
+            path = path.resolve()
+            owned = path == root / "agent"
+            if not owned and (path.is_relative_to(root) or root.is_relative_to(path)):
+                raise ValueError("Existing agent directory must be separate from the verification root")
+            return cls(path, owned)
+        except (OSError, ValueError) as exc:
+            raise CliError("unsafe_agent_directory", "Expected an existing owned real agent directory", 400) from exc
+
+
 @dataclass
 class VerificationRuntime:
     root: Path
     executable: Path
     timeout: float
     definition: ModelDefinition
+    agent: AgentDirectory | None = None
     model_identity: tuple[int, int] | None = field(default=None, init=False)
     settings_snapshot: bytes | None = field(default=None, init=False, repr=False)
     settings_mode: int = field(default=0o600, init=False)
@@ -143,21 +166,25 @@ class VerificationRuntime:
         if os.path.lexists(self.socket):
             self.evidence["socketRemoved"] = False
             raise CliError("runtime_collision", "Dedicated daemon socket already exists; no daemon was contacted", 409)
-        try:
-            model_fd = os.open(self.root / "agent/models.json", os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-        except FileExistsError as exc:
-            raise CliError("model_registration_collision", "Native models.json already exists; it was not read or replaced", 409) from exc
-        with os.fdopen(model_fd, "w") as config:
-            info = os.fstat(config.fileno())
-            self.model_identity = (info.st_dev, info.st_ino)
-            json.dump(self.definition.native_config(), config, allow_nan=False)
-            config.write("\n")
-        settings = self.root / "agent/settings.json"
-        self.settings_snapshot = settings.read_bytes()
-        self.settings_mode = stat.S_IMODE(settings.stat().st_mode)
+        self.agent = self.agent or AgentDirectory.select(self.root)
+        if self.agent.owned:
+            try:
+                model_fd = os.open(self.root / "agent/models.json", os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            except FileExistsError as exc:
+                raise CliError("model_registration_collision", "Native models.json already exists; it was not read or replaced", 409) from exc
+            with os.fdopen(model_fd, "w") as config:
+                info = os.fstat(config.fileno())
+                self.model_identity = (info.st_dev, info.st_ino)
+                json.dump(self.definition.native_config(), config, allow_nan=False)
+                config.write("\n")
+            settings = self.root / "agent/settings.json"
+            self.settings_snapshot = settings.read_bytes()
+            self.settings_mode = stat.S_IMODE(settings.stat().st_mode)
+        else:
+            self.prepare_project_settings()
         self.process = subprocess.Popen(
             [str(self.executable), "--mode", "daemon", "--daemon-socket", str(self.socket)],
-            env={**os.environ, "PRIME_AGENT_CODING_AGENT_DIR": str(self.root / "agent"),
+            env={**os.environ, "PRIME_AGENT_CODING_AGENT_DIR": str(self.agent.path),
                  "PRIME_AGENT_SESSION_DIR": str(self.root / "agent/sessions"),
                  "PRIME_AGENT_DAEMON_SOCKET": str(self.socket), "DO_NOT_TRACK": "1", "PI_OFFLINE": "1"},
             cwd=self.root / "work", umask=0o077,
@@ -178,6 +205,27 @@ class VerificationRuntime:
             self.evidence["socketRemoved"] = False
             return
         raise CliError("runtime_start_failed", "Dedicated daemon did not create its socket", 504)
+
+    def prepare_project_settings(self) -> None:
+        directory = self.root / "work/.prime"
+        for path in (directory, directory / "agent"):
+            if not os.path.lexists(path):
+                path.mkdir(mode=0o700)
+            info = path.lstat()
+            if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
+                raise CliError("unsafe_verification_root", "Project configuration directory is not owned", 400)
+        path = directory / "agent/settings.json"
+        retry = json.loads((self.root / "agent/settings.json").read_text())["retry"]
+        expected = {"retry": retry}
+        if os.path.lexists(path):
+            info = path.lstat()
+            if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+                    or json.loads(path.read_text()) != expected):
+                raise CliError("runtime_collision", "Project retry settings already differ", 409)
+        else:
+            with os.fdopen(os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600), "w") as out:
+                json.dump(expected, out, allow_nan=False)
+                out.write("\n")
 
     def close(self) -> None:
         try:
@@ -278,6 +326,7 @@ class Check:
                 raise ValueError("Expected exact model pinning with retry, failover, and quota waiting disabled")
         except (OSError, ValueError, AttributeError, TypeError) as exc:
             raise CliError("unsafe_verification_root", "Expected the existing private isolated root with safe nonsecret settings", 400) from exc
+        self.agent = AgentDirectory.select(self.root)
         self.env = {**os.environ, "PRIME_AGENT_DAEMON_SOCKET": self.socket,
                     "PRIME_CLI_MODEL": MODEL, "PRIME_CLI_THINKING": THINKING,
                     "PRIME_CLI_TIMEOUT": str(timeout), "PYTHONDONTWRITEBYTECODE": "1"}
@@ -348,9 +397,12 @@ class Check:
         answer = self.call("answer", sid, "owned-ask", "owned-question", "not injected", expected=1)
         if answer.get("status") != 501 or answer.get("error") != "unsupported":
             raise CliError("answer_gap_hidden", "Interactive answer must be explicitly unsupported")
-        selection = self.call("model", sid, MODEL)
-        if self.definition:
-            self.definition.expect(selection["result"])
+        if self.agent.owned:
+            selection = self.call("model", sid, MODEL)
+            if self.definition:
+                self.definition.expect(selection["result"])
+        else:
+            self.evidence.append({"command": "model", "skipped": "Existing agent defaults are read-only"})
         if inference:
             with PrimeClient(self.socket, self.timeout) as wire:
                 pause = wire.request("acquire_session_input_pause", activeSessionId=sid, leaseKey=str(uuid.uuid4()))
@@ -378,9 +430,12 @@ class Check:
         stopped = self.call("stop", sid)["result"]
         if stopped.get("runtimeClosed") is not False:
             raise CliError("stop_gap_hidden", "Stop must disclose the resident-retaining shim")
-        self.call("thinking-level", sid, THINKING)
+        if self.agent.owned:
+            self.call("thinking-level", sid, THINKING)
+        else:
+            self.evidence.append({"command": "thinking-level", "skipped": "Existing agent defaults are read-only"})
         effective = self.call("status", sid)["session"]["thinkingLevel"]
-        self.evidence.append({"thinkingSetterAccepted": True, "effectiveThinking": effective})
+        self.evidence.append({"thinkingSetterAccepted": self.agent.owned, "effectiveThinking": effective})
         if self.definition and effective != THINKING:
             raise CliError("model_thinking_mismatch", "Native thinking setter did not retain the requested level", 409)
         if inference:
@@ -448,8 +503,9 @@ def main() -> int:
         definition = ModelDefinition.load(args.model_definition) if args.mode == "verify" else None
         check = Check(args.root, args.timeout, definition)
         if args.mode == "verify":
-            result["modelMetadata"] = {"source": str(args.model_definition), "limitations": METADATA_LIMITATIONS}
-            runtime = VerificationRuntime(check.root, args.runtime.resolve(), args.timeout, definition)
+            result["modelMetadata"] = {"source": str(args.model_definition), "limitations": METADATA_LIMITATIONS,
+                                       "registration": "temporary-owned" if check.agent.owned else "existing-agent"}
+            runtime = VerificationRuntime(check.root, args.runtime.resolve(), args.timeout, definition, agent=check.agent)
             runtime.start()
         if args.mode == "verify":
             check.run(False)
