@@ -77,6 +77,12 @@ The private program evidence root `/home/alphalab/.cache/pi-stack-track1/native-
 
 Real passing SID 01a16b94-ad3c-7430-9251-fcf25ae265bc compacted at native entry 2291d0d9, used the latest changed goal and produced exact owned note bytes. The later receiving restart fixture on that SID intentionally retains two accepted queued inputs under uncertain maintenance ownership. Preserve their IDs/bodies/order and do not replay or clear them. The first noncompactable single-message fixture SID 01a16b7a-4c5a-7d72-a9ec-dcbb94ca0495 remains disabled with its exact native bytes. Its preliminary refusal is not credited as stack acceptance. Retained S2 services and all existing non-fixture sessions remain untouched.
 
+## S4 isolated verification artifacts
+
+The private program evidence root `/home/alphalab/.cache/pi-stack-track1/native-s4` contains exact artifact/config/PID/auth-readonly proofs, raw public SDK wire/result observations, actual question/goal-control and note evidence, `after-S4-native-proof.json`, rerunnable `verify-after-s4.py`, and `after-S4-acceptance.json`. Source is main 08b6598 and native 8ea0e07. Native tar SHA256 is 9d38ece66341d55e56d7001626384f7ca3a4a98ebb3d9ab63dd87d84ec18e0f0. These are program verification artifacts, never new mandatory stream reads.
+
+Exact coordinator SID 01a16c1b-db4e-769e-9f50-0ac95381815d kept its real ask_user question while automatic control queued, then completed two real driven context-note steps without another human prompt and confirmed local/native off. The observation-only worker SID 01a16c20-2c70-756e-b341-96c2f89260e3 is a labelled private status-fault fixture with no task inference or product adoption claim. S2/S3 services and the two accepted uncertain S3 inputs remain unchanged. No installed/global/remote operation or real quota failure occurred.
+
 ## Historical baseline observations
 
 The following is the earlier map, not a new live measurement or the current policy. Grok Bot prepared it on 2026-10-23 at 09:58 SGT and read the 12 registered options-01 streams at 10:05 SGT. This amendment does not reread or change those streams or their registry.
