@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 import stat
 import uuid
@@ -91,6 +92,9 @@ class Episode:
     authorized_model: str = ""
     authorized_thinking: str = ""
     checkpoint: dict[str, str] | None = None
+    ratification: dict | None = None
+    verification: dict | None = None
+    recovery_id: str = ""
     reset_at: str = ""
     reset_source: str = ""
     saved_entry: str = ""
@@ -265,6 +269,64 @@ def observe(stream_dir: Path, sid: str, cwd: str, native: dict, status: dict, at
     _publish_marker(stream_dir, episode, checkpoint)
     artifacts.append_log_locked(stream_dir, at, f"Failure {episode.id}", f"Observed {episode.label} for exact session {sid}. Code: {episode.code}. Native failure entry: {episode.failure_entry} SHA-256 {episode.failure_sha256}. Saved input: {episode.saved_entry or 'unknown'}. Reset: {episode.reset_at or 'unknown'}. Task effects remain parked; no environment, rule, skill, memory or provider remedy is authorized.", request_id=f"failure:{episode.id}:{episode.failure_entry}")
     return episode
+
+
+def ratify_locked(stream_dir: Path, sid: str, episode_id: str, notice_id: str, notice: object, at: str) -> dict:
+    from engine.threads import _native_session, load_threads, require_ratified
+
+    require_ratified(stream_dir)
+    if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]*", sid) is None:
+        raise StreamsError("Ratification requires an exact safe original session ID")
+    episode = load(stream_dir, sid)
+    rows = [row for row in load_threads(stream_dir / "threads.tsv") if row.session == sid]
+    if episode is None or episode.id != episode_id or len(rows) != 1 or episode.state != "parked" or episode.kind == "usage-limit" or episode.checkpoint is None or not notice_id:
+        raise StreamsError("Ratification requires the exact current parked nonusage episode and good checkpoint")
+    with sessionlog.regular_reader(stream_dir / "failures" / (sid + ".lastgood")) as marker:
+        if marker.read() != (episode.checkpoint["entryId"] + "\n").encode():
+            raise StreamsError("Failure marker no longer matches the exact parked checkpoint")
+    native = _native_session(sid, Path(rows[0].worktree))
+    status = native.status
+    piweb.require_settings(status, episode.authorized_model, episode.authorized_thinking)
+    boundary = _native_boundary(stream_dir, sid, episode.cwd, status)
+    if boundary is None or boundary["state"] != "parked" or status.get("failureRatificationConfigured") is not True:
+        raise StreamsError("Existing authenticated ZF intake/verifier is unavailable; original remains parked")
+    token, allowed = piweb.automatic_admission(status, sid, episode.cwd, "recovery")
+    if allowed:
+        raise StreamsError("Native failure parking is unconfirmed; no ratification is admitted")
+    notice_hash = hashlib.sha256(json.dumps(notice, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+    if episode.verification is not None and episode.verification.get("noticeId") == notice_id and episode.verification.get("noticeSha256") != notice_hash:
+        raise StreamsError("Genuine notice identity changed bytes; preserved the prior verification intent")
+    if episode.ratification is not None:
+        if episode.ratification.get("noticeId") != notice_id or episode.ratification.get("generation") != token["generation"]:
+            raise StreamsError("Episode already has a different or superseded ratification; no overwrite")
+        return episode.ratification
+    target = {"sessionId": sid, "cwd": episode.cwd, "root": str(stream_dir.resolve()), "stream": stream_dir.name, "episode": episode.id, "checkpoint": {key: episode.checkpoint[key] for key in ("entryId", "sha256")}, "failure": {"entryId": episode.failure_entry, "sha256": episode.failure_sha256, "kind": episode.kind}}
+    episode.verification = {"noticeId": notice_id, "noticeSha256": notice_hash, "state": "sending"}
+    save(stream_dir, episode)
+    try:
+        receipt = piweb.ratify_failure(sid, episode.cwd, {"id": notice_id, "episode": episode.id, "notice": notice, "expected": {**boundary, "generation": token["generation"]}})
+        if receipt.get("id") != notice_id or receipt["noticeId"] != notice_id or receipt["target"] != target or receipt["generation"] != token["generation"] or not receipt["provenance"]:
+            raise StreamsError("Native ratification changed its exact notice/episode/checkpoint/generation")
+        evidence = sessionlog.read_record(Path(native.info["path"]), sid, receipt["entryId"], receipt["sha256"])
+        record = json.loads(evidence.raw)
+        data = record.get("data")
+        if record.get("type") != "custom" or record.get("customType") != "pi-web.failure-ratification" or not isinstance(data, dict) or any(data.get(key) != receipt[key] for key in ("version", "id", "noticeId", "provenance", "instructions", "generation", "target")):
+            raise StreamsError("Ratification lacks its exact persisted native verifier receipt")
+        fresh = piweb.session_status(sid)
+        current, _allowed = piweb.automatic_admission(fresh, sid, episode.cwd, "recovery")
+        leaf = fresh.get("rotationSafety", {}).get("entryId")
+        if current["generation"] != token["generation"] or _allowed or not any(entry["id"] == receipt["entryId"] for entry, _raw in sessionlog.branch_records(Path(native.info["path"]), sid, episode.cwd, leaf)):
+            raise StreamsError("Newer stop/input or branch superseded ratification before publication")
+        artifacts.append_log_locked(stream_dir, at, "Ratified failure recovery", f"Authenticated notice {notice_id} ratifies only session {sid}, episode {episode.id}. Exceptional instructions remain in the verified native receipt; this acknowledgement admits no task effects by itself.", request_id=f"ratification:{sid}:{notice_id}")
+        episode.ratification = receipt
+        episode.recovery_id = episode.recovery_id or uuid.uuid4().hex
+        episode.verification["state"] = "verified"
+        save(stream_dir, episode)
+        return receipt
+    except StreamsError as exc:
+        episode.verification["state"] = "unconfirmed"
+        save(stream_dir, episode)
+        raise StreamsError(f"Ratification remains unconfirmed and parked: {exc}") from exc
 
 
 def trial_receipt_matches(episode: Episode, native: dict) -> bool:

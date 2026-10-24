@@ -208,6 +208,14 @@ def register_stream_failure(sid: str, cwd: str, stream_dir: Path, status: dict, 
         raise StreamsError("Native failure registration is parked or unconfirmed; no opening task was sent")
 
 
+def ratify_failure(sid: str, cwd: str, request: dict) -> dict:
+    data = call(["failure-ratify", sid, "--cwd", cwd], stdin=json.dumps(request, ensure_ascii=False))
+    result = data.get("result")
+    if not isinstance(result, dict) or type(result.get("version")) is not int or result["version"] != 1 or not isinstance(result.get("target"), dict) or result["target"].get("sessionId") != sid or result["target"].get("cwd") != cwd or not all(isinstance(result.get(key), str) for key in ("noticeId", "provenance", "instructions", "generation", "entryId", "sha256")):
+        raise StreamsError("Native authenticated ratification receipt is unconfirmed")
+    return result
+
+
 def require_control_goal(sid: str) -> dict[str, object]:
     status = require_poteto(sid)
     if status.get("controlGoalSupport") != "preserve-ask-v1":

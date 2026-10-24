@@ -5,7 +5,7 @@ import json
 import sys
 from pathlib import Path
 
-from engine import StreamsError, artifacts, clock, dcr, delivery, drive, migration, replacement
+from engine import StreamsError, artifacts, clock, dcr, delivery, drive, failure, migration, replacement
 from engine.doctor import run_doctor
 from engine.project import (
     STATE_SCHEMA,
@@ -77,6 +77,16 @@ def _parser() -> argparse.ArgumentParser:
             operation.add_argument("--state", required=True, choices=("consumed", "applied", "blocked"))
             operation.add_argument("--detail", required=True)
             operation.add_argument("--evidence")
+
+    failures = sub.add_parser("failure")
+    failure_sub = failures.add_subparsers(dest="failure_cmd", required=True)
+    ratify = failure_sub.add_parser("ratify")
+    ratify.add_argument("stream")
+    ratify.add_argument("--home")
+    ratify.add_argument("--session", required=True)
+    ratify.add_argument("--episode", required=True)
+    ratify.add_argument("--notice-id", required=True)
+    ratify.add_argument("--notice-file", required=True)
 
     maintenance = sub.add_parser("dcr")
     maintenance_sub = maintenance.add_subparsers(dest="dcr_cmd", required=True)
@@ -348,6 +358,21 @@ def cmd_drive(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_failure(args: argparse.Namespace) -> int:
+    try:
+        notice = json.loads(_state_body(args.notice_file))
+    except ValueError as exc:
+        raise StreamsError("Authenticated notice input must be JSON, not a fixed/readiness string") from exc
+    index = resolve_index(args.home)
+    with index_lock(index):
+        project = resolve_project(index)
+        stream_dir = require_stream(index, project.info.name, args.stream)
+    with stream_lock(stream_dir):
+        result = failure.ratify_locked(stream_dir, args.session, args.episode, args.notice_id, notice, clock.stamp(clock.now()))
+    print(json.dumps(result, sort_keys=True))
+    return 0
+
+
 def cmd_dcr(args: argparse.Namespace) -> int:
     index = resolve_index(args.home)
     with index_lock(index):
@@ -438,6 +463,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_tick(args)
         if args.cmd == "state":
             return cmd_state(args)
+        if args.cmd == "failure":
+            return cmd_failure(args)
         if args.cmd == "dcr":
             return cmd_dcr(args)
         if args.cmd == "drive":
