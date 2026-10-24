@@ -83,6 +83,12 @@ The private program evidence root `/home/alphalab/.cache/pi-stack-track1/native-
 
 Exact coordinator SID 01a16c1b-db4e-769e-9f50-0ac95381815d kept its real ask_user question while automatic control queued, then completed two real driven context-note steps without another human prompt and confirmed local/native off. The observation-only worker SID 01a16c20-2c70-756e-b341-96c2f89260e3 is a labelled private status-fault fixture with no task inference or product adoption claim. S2/S3 services and the two accepted uncertain S3 inputs remain unchanged. No installed/global/remote operation or real quota failure occurred.
 
+## S5 failure policy source artifacts
+
+Main 10c882a keeps typed failure episodes inside the existing engine-only tick-state record. Each episode retains exact failure/input native entry hashes, reset provenance, owned pause generation, uncertain-job references and one consumed reset-trial identity. Public status shows bounded policy facts. These are not a task ledger, general permission framework or mandatory agent read. Sanitized blocker/recovery envelopes use existing index ALERTS; only canonical failure/continuation observations enter STATE Log. No account/header/secret-bearing provider payload is copied into the episode.
+
+The pure-source public CLI fixtures under `/home/alphalab/.cache/pi-stack-track1/s5-policy` label injected failures and notification receipts. `candidate-late-job-result-red.log` and `green-recovery-post-late-job.log` prove a submitted job reported after an auth-error result in the same tool batch survives parking with the original error entry/hash and no repeated submission. `full-post-late-job.log` passes 356 tests and `final-hashes-3.json` pins the reviewed source. This is not actual native/provider/Slack activity. Missing live notifier/ZF route proof keeps automatic recovery activation gated.
+
 ## Historical baseline observations
 
 The following is the earlier map, not a new live measurement or the current policy. Grok Bot prepared it on 2026-10-23 at 09:58 SGT and read the 12 registered options-01 streams at 10:05 SGT. This amendment does not reread or change those streams or their registry.
