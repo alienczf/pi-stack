@@ -125,6 +125,16 @@ Path({str(self.events_log)!r}).write_text(json.dumps({{"requests": server.reques
         self.assertEqual(result["runtime"], {"started": True, "stopped": True, "socketRemoved": True})
         self.assertFalse((self.owned / "agent/models.json").exists())
 
+    def test_existing_owned_group_writable_agent_does_not_require_permission_changes(self):
+        shared = self.root / "group-agent"
+        shared.mkdir(mode=0o775)
+        shared.chmod(0o775)
+        self.env["PRIME_AGENT_CODING_AGENT_DIR"] = str(shared)
+        proc = self.verify()
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertEqual(shared.stat().st_mode & 0o777, 0o775)
+        self.assertEqual(json.loads(self.log.read_text())["agentDir"], str(shared))
+
     def test_full_metadata_is_read_from_catalog_not_thin_connection_summary(self):
         proc = self.verify()
         self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
