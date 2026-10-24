@@ -140,6 +140,12 @@ class PocScenario:
             self.paused = False
             result = [stub.response(request, {"released": True})]
             if self.parked is not None and self.mode != "missing_resume_result":
+                self.events.append("self-review")
+                if self.mode not in {"missing_review", "save_review_without_resume_review"}:
+                    self.checked_update("Native stream adversarial review during continuation", review=True)
+                if self.mode == "changed_output_after_check":
+                    path = self.product / "check_fixture.py"
+                    path.write_text(path.read_text() + 'Path("answer.json").write_text(' + repr(json.dumps({"marker": self.marker, "answer": 6}) + "\n") + ')\n')
                 self.events.append("resume-result")
                 result.append(stub.response(self.parked, {"completed": True}))
                 self.parked = None
@@ -187,7 +193,7 @@ class PocScenario:
             return [stub.response(self.pending_first, {"completed": True}), steer]
         if body.startswith("Prepare this stream session for compaction."):
             if self.mode != "save_after_compact":
-                self.checked_update("Native checked save before compact")
+                self.checked_update("Native checked save before compact", review=self.mode == "save_review_without_resume_review")
                 self.events.append("checked-save")
             self.append_node("native-save-input")
             self.persist()
@@ -199,14 +205,4 @@ class PocScenario:
             self.append_node("native-resume-input")
             self.persist(omit_compact=self.mode == "missing_disk")
             return None
-        if body.startswith("Review the returned worker summary adversarially"):
-            self.events.append("self-review")
-            if self.mode != "missing_review":
-                self.checked_update("Native stream adversarial review", review=True)
-            if self.mode == "changed_output_after_check":
-                path = self.product / "check_fixture.py"
-                path.write_text(path.read_text() + 'Path("answer.json").write_text(' + repr(json.dumps({"marker": self.marker, "answer": 6}) + "\n") + ')\n')
-            self.append_node("native-review-input")
-            self.persist()
-            return stub.response(request, {"completed": True})
         raise AssertionError(f"unexpected stream body {body[:100]}")

@@ -105,6 +105,7 @@ class RecordingClient(prime.PrimeClient):
     def __init__(self, path, stream):
         super().__init__(path)
         self.trace, self.snapshots, self.stream_path = [], {}, stream
+        self.context_observations = []
 
     def write(self, kind, *, command_id=None, **fields):
         snapshot = None
@@ -113,12 +114,20 @@ class RecordingClient(prime.PrimeClient):
             agents = (self.stream_path / "AGENTS.md").read_text()
             if state._json(current.text) not in fields["message"] or state._json(agents) not in fields["message"]:
                 raise StreamsError("actual outgoing wrapper is not fresh")
-            snapshot = {"state": current.text, "agents": agents}
+            snapshot = {"state": current.text, "agents": agents, "entry_refs": list(state._entries(self.stream_path, current))}
         command = super().write(kind, command_id=command_id, **fields)
         self.trace.append({"operation": "write", "command_id": command, "command": kind, "fields": fields})
         if snapshot:
             self.snapshots[command] = snapshot
         return command
+
+    def query(self, kind, **fields):
+        result = super().query(kind, **fields)
+        if kind in {"get_connection_state", "get_session_stats"} and isinstance(result, dict):
+            self.context_observations.append({"command_id": self.trace[-1]["command_id"], "command": kind,
+                "session_id": result.get("sessionId"), "active_session_id": result.get("activeSessionId"),
+                "context_usage": result.get("contextUsage")})
+        return result
 
     def wait(self, command_id):
         self.trace.append({"operation": "wait", "command_id": command_id})
@@ -340,6 +349,7 @@ def _run_native(root, stream, installation, report, client, product, marker):
     if not write_at < release_at < await_at:
         raise StreamsError("continuation was awaited before pause release")
     _stage(report, "continuation", resume_id, "write < release < await")
+    before_review = set(client.snapshots[resume_id]["entry_refs"])
     previous = current.goals_rules_sha256
     state.update_state(stream, expect=current.sha256,
         goals=replace(current.goals, objective="Review the handed-over fixture against original intent. Stale probe " + str(uuid4())), rules=None,
@@ -354,10 +364,6 @@ def _run_native(root, stream, installation, report, client, product, marker):
     if sum(e.get("command") == "prompt_and_wait" for e in trace) != sent_before:
         raise StreamsError("stale refusal still wrote a model message")
     _stage(report, "stale", stale_reason)
-    before_review = set(prime.stream_entries(stream)[1])
-    review = prime.send_stream_message(client, stream, identity, mode="automatic", original_entries=refs,
-        body=f"Review the returned worker summary adversarially against the whole original ask {marker}, the actual target {product}, 2 + 3 = 5 and protected.txt. Record findings and unanswered outcomes as one exact text-proof entry through the checked update. Include the marker, target, protected behavior and any uncertainty. Keep the original request open for computed close. Do not spawn another worker or reviewer unless necessary.", sessions_dir=session_dir)
-    _native_failure(review)
     current, entries = prime.stream_entries(stream)
     reviews = [e for ref, e in entries.items() if ref not in before_review and e.file.endswith("-update.md") and e.body.get("media_type") == "text/plain" and set(refs) <= set(e.body.get("original_entries", [])) and all(text in e.body.get("text", "") for text in (marker, str(product), "protected", "5"))]
     if len(reviews) != 1:
@@ -426,6 +432,11 @@ def verify(root, stream_id):
                 _run_native(root, stream, installation, report, client, product, marker)
             finally:
                 report["trace"] = client.trace
+                report["native_context_usage"] = client.context_observations
+                report["observed_percentages"] = [observation["context_usage"]["percent"] for observation in client.context_observations
+                    if observation.get("session_id") == report["session_id"] and isinstance(observation.get("context_usage"), dict)
+                    and isinstance(observation["context_usage"].get("percent"), (int, float))
+                    and not isinstance(observation["context_usage"]["percent"], bool)]
                 report["command_ids"] = [event["command_id"] for event in client.trace if event["operation"] == "write"]
         missing = assess(report, installation)
         if missing:

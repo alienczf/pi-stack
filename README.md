@@ -174,6 +174,8 @@ Computed close targets contain `repo`, `commit`, `diff_sha256` and a nonempty `a
 
 Doctor and verification compare both independent role identities with the installation settings. Native construction must return each requested model and thinking level. The verifier also reads actual native model and thinking entries for both new sessions.
 
+Stream Log captures the latest actual assistant summary and native result, not another copy of every sent wrapper and tool readback. The full native transcript remains in Prime storage. The verifier records actual percentage observations and requires a new source-bound self-review during the post-compaction continuation.
+
 The same driver is `python3 scripts/check-merged-poc.py --root "$POC_ROOT" --stream weekend-poc`. It owns a new daemon on a dedicated socket and never adopts an existing session or socket. Native PASS requires actual steer, clean worker handover/kickoff, stale refusal, stream self-review, percentage crossing, checked save, direct compact, persisted native readback, one continuation and computed close. Offline fixtures cannot establish native PASS. Missing authentication is BLOCKED. An uncrossed percentage is INCONCLUSIVE. Reports and native transcripts remain under the prefix. Do not change the threshold or substitute explicit DCR to pass the percentage test.
 
 ## Verify the repository
