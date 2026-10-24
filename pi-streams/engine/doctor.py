@@ -90,10 +90,10 @@ def check_steer() -> list[Finding]:
 def check_maintenance() -> list[Finding]:
     try:
         if piweb.maintenance_capabilities():
-            return [Finding("PASS", "maintenance", "receiving checkpoint/input-v1, exact mode and idle-event capabilities are present")]
+            return [Finding("PASS", "maintenance", "receiving checkpoint/input-v1, exact mode, idle-event and question-preserving control capabilities are present")]
     except StreamsError:
         pass
-    return [Finding("FAIL", "maintenance", "receiving checkpoint/input-v1, exact mode or idle-event capability is unavailable; automatic DCR is disabled")]
+    return [Finding("FAIL", "maintenance", "receiving checkpoint/input-v1, exact mode, idle-event or question-preserving control capability is unavailable; automatic DCR and drive are disabled")]
 
 
 def _check_stream(row: StreamRow, harness: str) -> list[Finding]:

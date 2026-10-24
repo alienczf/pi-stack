@@ -42,7 +42,7 @@ def call(args: list[str], stdin: str | None = None) -> dict[str, object]:
         raise StreamsError(f"pi-web-cli {' '.join(args)} returned {type(data).__name__}")
     if proc.returncode != 0 or data.get("ok") is False:
         detail = proc.stderr.strip() or proc.stdout.strip()
-        error = PromptRejected if args[0] in ("prompt", "compact", "maintenance-resume") and data.get("status") in (400, 404, 409, 422) else StreamsError
+        error = PromptRejected if args[0] in ("prompt", "compact", "maintenance-resume", "control-goal") and data.get("status") in (400, 404, 409, 422) else StreamsError
         raise error(f"pi-web-cli {' '.join(args)} failed: {detail}")
     return data
 
@@ -118,7 +118,7 @@ def automatic_admission(session: dict[str, object], sid: str, cwd: str, kind: st
 def set_automatic_admission(sid: str, allowed: bool) -> dict[str, object]:
     data = call(["automatic-admission", sid, "on" if allowed else "off"])
     result = data.get("result")
-    if not isinstance(result, dict) or result.get("sessionId") != sid or result.get("durable") is not True or result.get("allowed") is not allowed:
+    if not isinstance(result, dict) or result.get("sessionId") != sid or result.get("durable") is not True or result.get("allowed") is not allowed or not isinstance(result.get("generation"), str) or not result["generation"]:
         raise StreamsError("automatic admission control publication is unconfirmed")
     return result
 
@@ -149,7 +149,7 @@ def command_run(sid: str, text: str) -> dict:
 def maintenance_capabilities() -> bool:
     data = call(["runtime"])
     runtime = data.get("runtime")
-    return isinstance(runtime, dict) and runtime.get("component") == "sessiond" and isinstance(runtime.get("capabilities"), list) and all(capability in runtime["capabilities"] for capability in ("sessions.maintenanceCheckpoint", "prompt.potetoArguments", "sessions.streamsDcrEvents"))
+    return isinstance(runtime, dict) and runtime.get("component") == "sessiond" and isinstance(runtime.get("capabilities"), list) and all(capability in runtime["capabilities"] for capability in ("sessions.maintenanceCheckpoint", "prompt.potetoArguments", "sessions.streamsDcrEvents", "prompt.controlGoal"))
 
 
 def require_maintenance(sid: str) -> dict[str, object]:
@@ -188,6 +188,32 @@ def _maintenance_result(data: dict, sid: str, identity: str, cwd: str) -> dict:
     if result.get("state") not in ("prepared", "compacting", "complete", "failed", "uncertain", "superseded", "resuming", "resumed") or type(result.get("inputSequence")) is not int or result["inputSequence"] < 0 or not isinstance(result.get("inputs"), list) or len(result["inputs"]) != result["inputSequence"]:
         raise StreamsError("maintenance receiver returned malformed phase/input state")
     return result
+
+
+def require_control_goal(sid: str) -> dict[str, object]:
+    status = require_poteto(sid)
+    if status.get("controlGoalSupport") != "preserve-ask-v1":
+        raise StreamsError("receiving question-preserving goal control is unavailable")
+    return status
+
+
+def _control_goal_result(data: dict, sid: str, cwd: str, identity: str) -> dict:
+    result = data.get("result")
+    if not isinstance(result, dict) or type(result.get("version")) is not int or result["version"] != 1 or result.get("id") != identity or result.get("sessionId") != sid or result.get("cwd") != cwd or result.get("state") not in ("queued", "sending", "ended", "uncertain", "superseded"):
+        raise StreamsError("current-goal receiver returned unconfirmed identity/phase")
+    return result
+
+
+def control_goal(sid: str, identity: str, run_id: str, sequence: int, text: str, goal: str, automatic: dict[str, str] | None) -> dict:
+    if automatic is None or automatic.get("kind") != "wake" or automatic.get("sessionId") != sid:
+        raise StreamsError("current-goal control requires its saved receiving generation")
+    require_control_goal(sid)
+    data = call(["control-goal", sid, identity, "--run-id", run_id, "--sequence", str(sequence), "--automatic-admission", json.dumps(automatic)], stdin=_poteto_payload(text, goal))
+    return _control_goal_result(data, sid, automatic["cwd"], identity)
+
+
+def control_goal_status(sid: str, cwd: str, identity: str) -> dict:
+    return _control_goal_result(call(["control-goal", sid, identity, "--cwd", cwd, "--status"]), sid, cwd, identity)
 
 
 def watch_dcr_events(sid: str, cwd: str, identity: str, index: Path, stream: str, generation: str) -> dict:

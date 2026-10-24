@@ -7,7 +7,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from engine import StreamsError, artifacts, clock, dcr, delivery, piweb, sessionlog
+from engine import StreamsError, artifacts, clock, dcr, delivery, drive, piweb, sessionlog
 from engine.project import (
     Project,
     StreamRow,
@@ -211,19 +211,28 @@ class StreamTick:
         self.errors: list[str] = []
         self.coordinator_resolution: Coordinator | None = None
         self.dcr_owned = False
+        self.drive_owned = False
+        self.drive_enabled = False
+        self.automatic_paused = False
+        self.stalled = False
 
     def run(self) -> None:
         try:
             self.state = load_state(self.state_path)
             self.loaded = True
+            self.drive_enabled = drive.load(self.stream_dir).enabled
+            self.automatic_paused = drive.is_paused(self.stream_dir)
             self.rows = load_threads(self.rows_path)
             self.coordinator_resolution = resolve_coordinator(self.stream_dir, self.rows)
             if self.coordinator_resolution is not None:
                 resolved = self.coordinator_resolution
                 self.listings[resolved.row.worktree] = {resolved.row.session: resolved.native.info}
-            self.dcr_owned = dcr.step(self.index, self.project, self.stream, self.stream_dir, self.coordinator_resolution)
+                self.stalled = drive.is_stalled(resolved.native.status)
+            if not self.automatic_paused:
+                self.dcr_owned = dcr.step(self.index, self.project, self.stream, self.stream_dir, self.coordinator_resolution)
             self.check_claims()
             self.observe()
+            self.drive_owned = drive.step(self.stream_dir, self.coordinator_resolution, self.stalled, maintenance=self.dcr_owned)
             self.check_subscriptions()
             self.flush()
             self.wake()
@@ -369,10 +378,12 @@ class StreamTick:
         old = self.state.sessions.get(row.session, Seen(busy=True))
         # The last resend stopped after queue/clear, so what is not queued now was dropped.
         # A replayed prompt starts the thread again, whatever the status said before it.
-        sent = self.replay(row, old, Counter(text for text, _kind in _queued(status)))
+        self.stalled = self.stalled or drive.is_stalled(status)
+        sent = False if self.drive_enabled or self.automatic_paused else self.replay(row, old, Counter(text for text, _kind in _queued(status)))
         new = Seen(
             busy=sent or status.get("isStreaming") is True or _count(status.get("pendingMessageCount")) > 0,
             context=old.context,
+            replay=list(old.replay) if self.drive_enabled or self.automatic_paused else [],
         )
         self.state.sessions[row.session] = new
         if old.busy and not new.busy:
@@ -387,7 +398,8 @@ class StreamTick:
         if not old.context and tokens is not None and tokens >= self.caps.thread_handover_tokens:
             new.context = True
             self.emit("context", row, f"{tokens} tokens")
-        self.resend_stale(row, status, old, new)
+        if not self.drive_enabled and not self.automatic_paused:
+            self.resend_stale(row, status, old, new)
 
     def resend_stale(self, row: Thread, status: dict[str, object], old: Seen, new: Seen) -> None:
         queued = _queued(status)
@@ -430,7 +442,7 @@ class StreamTick:
         return timedelta(0) if seen is None else self.now - seen
 
     def wake(self) -> None:
-        if self.dcr_owned:
+        if self.automatic_paused or self.dcr_owned or self.drive_owned:
             return
         current = delivery.current_tick(self.stream_dir)
         if current is not None:

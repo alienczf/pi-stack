@@ -122,6 +122,25 @@ def _invocation_input(args: argparse.Namespace) -> tuple[str, str | None]:
     return value["text"], value["goal"]
 
 
+def cmd_control_goal(args: argparse.Namespace) -> int:
+    sid, identity = urllib.parse.quote(args.sid, safe=""), urllib.parse.quote(args.delivery_id, safe="")
+    if args.status:
+        if not args.cwd:
+            raise UsageError("control-goal status requires its exact cwd")
+        method, body = "GET", None
+        path = f"/api/sessions/{sid}/control-goal/{identity}?" + urllib.parse.urlencode({"cwd": args.cwd})
+    else:
+        automatic = _json_object(args.automatic_admission, "automatic admission")
+        if automatic.get("sessionId") != args.sid or automatic.get("kind") != "wake" or not isinstance(automatic.get("cwd"), str) or not args.run_id or args.sequence is None or args.sequence < 1:
+            raise UsageError("control goal requires its exact run/transport sequence and saved generation")
+        text, goal = _invocation_input(args)
+        method, path = "POST", f"/api/sessions/{sid}/control-goal"
+        body = {"cwd": automatic["cwd"], "id": args.delivery_id, "runId": args.run_id, "sequence": args.sequence, "text": text, "potetoGoal": goal, "automaticAdmission": automatic}
+    code, data = req(method, path, body)
+    ok = code == 200 and isinstance(data, dict) and not data.get("error")
+    return out({"ok": ok, "status": code, "result": data}, ok)
+
+
 def cmd_maintenance(args: argparse.Namespace) -> int:
     sid = urllib.parse.quote(args.sid, safe="")
     if args.cmd == "command-run":
@@ -226,6 +245,15 @@ def main(argv: list[str]) -> int:
     control = sub.add_parser("automatic-admission")
     control.add_argument("sid")
     control.add_argument("mode", choices=("on", "off"))
+    goal_control = sub.add_parser("control-goal")
+    goal_control.add_argument("sid")
+    goal_control.add_argument("delivery_id")
+    goal_control.add_argument("--run-id")
+    goal_control.add_argument("--sequence", type=int)
+    goal_control.add_argument("--automatic-admission")
+    goal_control.add_argument("--cwd")
+    goal_control.add_argument("--status", action="store_true")
+    goal_control.set_defaults(poteto=True, text=None)
     sub.add_parser("runtime")
     sub.add_parser("capabilities")
     command = sub.add_parser("command-run")
@@ -269,11 +297,16 @@ def main(argv: list[str]) -> int:
     if args.cmd in ("runtime", "capabilities"):
         code, data = req("GET", "/api/sessiond/runtime")
         ok = code == 200 and isinstance(data, dict) and data.get("component") == "sessiond" and isinstance(data.get("capabilities"), list) and all(isinstance(capability, str) for capability in data["capabilities"])
-        missing = [capability for capability in ("sessions.maintenanceCheckpoint", "prompt.potetoArguments", "sessions.streamsDcrEvents") if not ok or capability not in data["capabilities"]]
+        missing = [capability for capability in ("sessions.maintenanceCheckpoint", "prompt.potetoArguments", "sessions.streamsDcrEvents", "prompt.controlGoal") if not ok or capability not in data["capabilities"]]
         if args.cmd == "capabilities":
             ok = ok and not missing
             return out({"ok": ok, "status": code, "runtime": data, "missing": missing}, ok)
         return out({"ok": ok, "status": code, "runtime": data}, ok)
+    if args.cmd == "control-goal":
+        try:
+            return cmd_control_goal(args)
+        except (UsageError, UnicodeError) as exc:
+            return out({"ok": False, "error": str(exc)}, False)
     if args.cmd in ("command-run", "compact", "maintenance", "maintenance-resume", "maintenance-events"):
         try:
             return cmd_maintenance(args)

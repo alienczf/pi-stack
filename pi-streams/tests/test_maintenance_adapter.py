@@ -29,7 +29,7 @@ class MaintenanceAdapterTests(EngineCase):
 
     def routes(self, operation=None, status=None):
         self.stub.set_routes([
-            ("GET", "/api/sessiond/runtime", 200, {"component": "sessiond", "capabilities": ["sessions.maintenanceCheckpoint", "prompt.potetoArguments", "sessions.streamsDcrEvents"]}),
+            ("GET", "/api/sessiond/runtime", 200, {"component": "sessiond", "capabilities": ["sessions.maintenanceCheckpoint", "prompt.potetoArguments", "sessions.streamsDcrEvents", "prompt.controlGoal"]}),
             ("GET", f"/api/sessions/{self.sid}/status", 200, self.status if status is None else status),
             ("GET", "/api/sessions", 200, [{"id": self.sid, "cwd": self.cwd, "path": str(self.file)}]),
             ("POST", f"/api/sessions/{self.sid}/commands/run", 200, {"type": "done", "message": "Compaction started…"}),

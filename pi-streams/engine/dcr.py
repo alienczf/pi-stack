@@ -203,6 +203,10 @@ def close_events(stream_dir: Path, op: Operation) -> None:
 def step(index: Path, project: Project, stream: str, stream_dir: Path, resolved: Coordinator | None) -> bool:
     if resolved is None or load_stream_config(stream_dir / "stream.toml").state_schema != STATE_SCHEMA:
         return False
+    from engine.drive import is_paused
+
+    if is_paused(stream_dir):
+        return True
     sid, status = resolved.row.session, resolved.native.status
     op = load(stream_dir, sid)
     token, allowed = piweb.automatic_admission(status, sid, resolved.row.worktree, "wake")

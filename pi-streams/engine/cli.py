@@ -5,7 +5,7 @@ import json
 import sys
 from pathlib import Path
 
-from engine import StreamsError, artifacts, clock, dcr, delivery, migration, replacement
+from engine import StreamsError, artifacts, clock, dcr, delivery, drive, migration, replacement
 from engine.doctor import run_doctor
 from engine.project import (
     STATE_SCHEMA,
@@ -86,6 +86,11 @@ def _parser() -> argparse.ArgumentParser:
         operation.add_argument("--home")
         operation.add_argument("--session", required=True)
         operation.add_argument("--operation", required=True)
+
+    driving = sub.add_parser("drive")
+    driving.add_argument("stream")
+    driving.add_argument("mode", nargs="?", default="status", choices=("on", "off", "status"))
+    driving.add_argument("--home")
 
     sub.add_parser("doctor")
 
@@ -315,6 +320,34 @@ def cmd_delivery(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_drive(args: argparse.Namespace) -> int:
+    index = resolve_index(args.home)
+    with index_lock(index):
+        project = resolve_project(index)
+        stream_dir = require_stream(index, project.info.name, args.stream)
+        with stream_lock(stream_dir):
+            if args.mode == "status":
+                result = drive.public(stream_dir)
+            elif args.mode == "off":
+                drive.pause_local(stream_dir)
+                try:
+                    resolved = resolve_coordinator(stream_dir)
+                    if resolved is None:
+                        raise StreamsError("no designated exact native coordinator; refusing to guess a stop target")
+                    result = drive.confirm_pause(stream_dir, resolved)
+                except (StreamsError, OSError) as exc:
+                    raise StreamsError(f"Local drive-off intent is saved; native stop/durability confirmation is unconfirmed: {exc}") from exc
+            else:
+                resolved = resolve_coordinator(stream_dir)
+                if resolved is None:
+                    raise StreamsError("drive control requires the designated exact native coordinator")
+                from engine import piweb
+                piweb.require_settings(resolved.native.status, project.coordinator.model, project.coordinator.thinking)
+                result = drive.enable(stream_dir, resolved)
+    print(json.dumps(result, sort_keys=True))
+    return 0
+
+
 def cmd_dcr(args: argparse.Namespace) -> int:
     index = resolve_index(args.home)
     with index_lock(index):
@@ -407,6 +440,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_state(args)
         if args.cmd == "dcr":
             return cmd_dcr(args)
+        if args.cmd == "drive":
+            return cmd_drive(args)
         if args.cmd == "delivery":
             return cmd_delivery(args)
         if args.cmd == "thread" and args.thread_cmd == "spawn":

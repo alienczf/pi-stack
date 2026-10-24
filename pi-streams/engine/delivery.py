@@ -14,6 +14,15 @@ STATES = {"prepared", "sending", "transport_accepted", "consumed", "applied", "b
 
 
 @dataclass
+class GoalControl:
+    run_id: str
+    sequence: int
+    goal: str
+    revision: str
+    state: str = "prepared"
+
+
+@dataclass
 class Delivery:
     id: str
     session: str
@@ -25,6 +34,7 @@ class Delivery:
     detail: str = ""
     events: list[dict] = field(default_factory=list)
     evidence: dict[str, str] | None = None
+    control: GoalControl | None = None
 
     def public(self) -> dict:
         return {key: value for key, value in asdict(self).items() if value is not None}
@@ -37,20 +47,29 @@ def _records(data: dict) -> dict[str, Delivery]:
     records = {}
     try:
         for identity, value in raw.items():
+            value = dict(value)
+            if value.get("control") is not None:
+                value["control"] = GoalControl(**value["control"])
             record = Delivery(**value)
-            if record.id != identity or record.state not in STATES or record.origin not in ("steer", "tick") or record.behavior not in (None, "steer", "follow-up"):
+            if record.id != identity or record.state not in STATES or record.origin not in ("steer", "tick", "drive") or record.behavior not in (None, "steer", "follow-up"):
                 raise ValueError("invalid delivery identity or state")
             if not all(isinstance(item, str) and item.strip() for item in (record.id, record.session, record.body)):
                 raise ValueError("missing delivery intent")
             if not isinstance(record.events, list) or not all(isinstance(item, dict) for item in record.events):
                 raise ValueError("invalid delivery events")
             if record.automatic is not None and (
-                record.origin != "tick" or not isinstance(record.automatic, dict)
+                record.origin not in ("tick", "drive") or not isinstance(record.automatic, dict)
                 or set(record.automatic) != {"sessionId", "cwd", "generation", "kind"}
                 or not all(isinstance(value, str) and value for value in record.automatic.values())
                 or record.automatic["kind"] not in ("wake", "recovery", "resume")
             ):
                 raise ValueError("invalid automatic admission snapshot")
+            if record.origin == "drive":
+                control = record.control
+                if control is None or not all(isinstance(item, str) and item for item in (control.run_id, control.goal, control.revision)) or type(control.sequence) is not int or control.sequence < 1 or control.state not in ("prepared", "queued", "sending", "ended", "uncertain", "superseded") or record.body != "/poteto-mode " + control.goal or record.automatic is None or record.automatic["kind"] != "wake":
+                    raise ValueError("invalid current-goal control intent")
+            elif record.control is not None:
+                raise ValueError("control facts belong only to an automatic drive delivery")
             if not isinstance(record.detail, str) or (record.origin == "tick" and not record.events):
                 raise ValueError("invalid delivery description or empty tick batch")
             if record.state == "applied" and (
@@ -108,6 +127,48 @@ def prepare_locked(stream_dir: Path, identity: str, session: str, body: str, *, 
     return _save(stream_dir, record, tick=events is not None)
 
 
+def prepare_control_locked(stream_dir: Path, identity: str, session: str, goal: str, revision: str, run_id: str, sequence: int, automatic: dict[str, str]) -> dict:
+    record = Delivery(identity, session, "/poteto-mode " + goal, origin="drive", automatic=automatic, control=GoalControl(run_id, sequence, goal, revision))
+    if identity in _records(artifacts._read_tick_data(stream_dir)):
+        raise StreamsError("current-goal delivery identity already exists; reconcile it instead")
+    return _save(stream_dir, record)
+
+
+def observe_control_locked(stream_dir: Path, identity: str, *, state: str | None = None) -> dict:
+    record = _get(stream_dir, identity)
+    if record.control is None or record.automatic is None:
+        raise StreamsError("delivery is not a saved current-goal control intent")
+    if state is None:
+        native = piweb.control_goal_status(record.session, str(stream_dir), identity)
+        _control_receipt(record, native)
+        state = native["state"]
+    record.control.state = state
+    if state == "uncertain":
+        record.state = "uncertain"
+        record.detail = "Native control admission is uncertain; do not replay the saved task."
+    elif state == "superseded":
+        record.detail = "Unadmitted automatic goal was superseded; original delivery intent is retained."
+    elif record.state in ("sending", "uncertain"):
+        record.state = "transport_accepted"
+    return _save(stream_dir, record)
+
+
+def reconcile_queued_control_locked(stream_dir: Path, identity: str) -> dict:
+    record = _get(stream_dir, identity)
+    if record.control is None or record.control.state != "queued" or record.automatic is None:
+        raise StreamsError("only a proven unadmitted queued goal can be explicitly reconciled")
+    response = piweb.control_goal(record.session, identity, record.control.run_id, record.control.sequence, record.body, record.control.goal, record.automatic)
+    _control_receipt(record, response)
+    record.control.state = response["state"]
+    return _save(stream_dir, record)
+
+
+def _control_receipt(record: Delivery, native: dict) -> None:
+    control = record.control
+    if control is None or native.get("id") != record.id or native.get("sessionId") != record.session or native.get("text") != record.body or native.get("potetoGoal") != control.goal or native.get("runId") != control.run_id or native.get("sequence") != control.sequence or native.get("automaticAdmission") != record.automatic:
+        raise StreamsError("current-goal receiver changed the exact saved intent")
+
+
 def _require_destination(stream_dir: Path, record: Delivery, session: str) -> dict[str, object]:
     from engine.threads import designated_coordinator, load_threads, resolve_coordinator
 
@@ -131,7 +192,7 @@ def send_locked(stream_dir: Path, identity: str) -> dict:
     if record.state != "prepared":
         return record.public()
     status = _require_destination(stream_dir, record, record.session)
-    if record.origin == "tick":
+    if record.origin in ("tick", "drive"):
         require_ratified(stream_dir)
         if record.automatic is None:
             record.state = "blocked"
@@ -145,9 +206,18 @@ def send_locked(stream_dir: Path, identity: str) -> dict:
     record.state = "sending"
     _save(stream_dir, record)
     try:
-        response = piweb.prompt(record.session, record.body, record.behavior, delivery_id=identity, automatic=record.automatic)
-        if response.get("transportAccepted") is not True:
-            raise StreamsError("delivery transport acceptance is unconfirmed")
+        if record.control is not None:
+            response = piweb.control_goal(record.session, identity, record.control.run_id, record.control.sequence, record.body, record.control.goal, record.automatic)
+            _control_receipt(record, response)
+            record.control.state = response["state"]
+            if response["state"] == "uncertain":
+                record.state = "uncertain"
+                record.detail = "Receiver retained an uncertain goal admission; no replay is authorized."
+                return _save(stream_dir, record)
+        else:
+            response = piweb.prompt(record.session, record.body, record.behavior, delivery_id=identity, automatic=record.automatic)
+            if response.get("transportAccepted") is not True:
+                raise StreamsError("delivery transport acceptance is unconfirmed")
     except StreamsError as exc:
         record.state = "blocked" if isinstance(exc, piweb.PromptRejected) else "uncertain"
         record.detail = str(exc)

@@ -315,6 +315,20 @@ class DcrTests(TickCase):
                     with self.assertRaisesRegex(StreamsError, "changed"):
                         dcr.native_branch(resolved)
 
+    def test_unconfirmed_local_drive_off_blocks_idle_event_advancement(self) -> None:
+        operation = self.ready(self.start())
+        self.routes(streaming=False, leaf="e2", operation=operation, native=self.backend(operation))
+        self.stub.set_routes([("POST", "/api/sessions/coord/automatic-admission", 503, {"error": "Labelled unavailable stop publication"}), *self.stub.routes])
+        stopped = self.run_streams("drive", "etl", "off")
+        self.assertNotEqual(stopped.returncode, 0)
+        self.assertFalse(self.state(self.stream)["drive"]["enabled"])
+        self.assertTrue(self.stub.automatic_admissions["coord"]["allowed"])
+        self.stub.requests.clear()
+        advanced = self.run_streams("dcr", "advance", "etl", "--session", "coord", "--operation", operation["id"])
+        self.assertEqual(advanced.returncode, 0, advanced.stderr)
+        self.assertFalse(any(item[0] == "POST" and item[1].endswith(("/compact", "/resume", "/prompt")) for item in self.stub.requests))
+        self.assertEqual(self.operation()["phase"], "sync-admitted")
+
     def test_callback_advance_refuses_wrong_root_sid_or_operation_before_effect(self) -> None:
         operation = self.ready(self.start())
         self.routes(streaming=False, leaf="e2", operation=operation)

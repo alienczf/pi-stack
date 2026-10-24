@@ -418,6 +418,9 @@ def _one_stream(stream_id: str, stream_dir: Path) -> dict[str, object]:
     maintenance = dcr_receipts(stream_dir)
     if maintenance:
         result["maintenance"] = maintenance
+    if "drive" in artifacts._read_tick_data(stream_dir):
+        from engine.drive import public as drive_status
+        result["drive"] = drive_status(stream_dir)
     if canonical:
         result["path"] = str(stream_dir)
         result["threadSessions"] = [
@@ -461,6 +464,9 @@ def format_status(report: dict[str, object]) -> str:
             f"tokens={tokens}\tmodel={coord['model']}\tthinking={coord['thinkingLevel']}\t"
             f"cost={coord['cost']}\tthreads={counted}\tshare={share_text}"
         )
+        if isinstance(stream.get("drive"), dict):
+            driving = stream["drive"]
+            lines.append(f"{stream['id']}\tdrive={'on' if driving['enabled'] else 'off'}\tdelivery={driving['current_delivery'] or '-'}")
         for maintenance in stream.get("maintenance", []):
             lines.append(f"{stream['id']}\tdcr={maintenance['phase']}\tsession={maintenance['session']}\toperation={maintenance['id']}\t{maintenance['detail']}")
     return "\n".join(lines) + "\n"

@@ -25,6 +25,8 @@ class StubPiWeb:
         self.requests: list[tuple[str, str, str, object]] = []
         self._lock = threading.Lock()
         self.reflect_delivery_ids = False
+        self.reflect_control_goals = False
+        self.control_goals: dict[str, dict] = {}
         self.simulate_session_lifecycle = False
         self.created_sessions: dict[str, dict] = {}
         self.archived_sessions: set[str] = set()
@@ -152,6 +154,17 @@ class StubPiWeb:
                 payload["automaticAdmission"] = copy.deepcopy(control)
         if self.reflect_delivery_ids and parsed.path.endswith("/prompt") and isinstance(body, dict) and "deliveryId" in body and isinstance(payload, dict) and payload.get("accepted") is True:
             payload["deliveryId"] = body["deliveryId"]
+        if self.reflect_control_goals:
+            goal_post = re.fullmatch(r"/api/sessions/([^/]+)/control-goal", parsed.path)
+            goal_get = re.fullmatch(r"/api/sessions/([^/]+)/control-goal/([^/]+)", parsed.path)
+            if handler.command == "POST" and goal_post and isinstance(body, dict) and isinstance(payload, dict) and status == 200:
+                payload = {**body, "version": 1, "sessionId": goal_post[1], "state": payload.get("state", "queued")}
+                self.control_goals[str(body["id"])] = payload
+            elif handler.command == "GET" and goal_get:
+                if goal_get[2] in self.control_goals:
+                    payload = copy.deepcopy(self.control_goals[goal_get[2]])
+                else:
+                    status, payload = 409, {"error": "Control goal is absent or superseded"}
         cwd = urllib.parse.parse_qs(parsed.query).get("cwd", [None])[0]
         if handler.command == "GET" and parsed.path == "/api/sessions" and isinstance(payload, list) and cwd:
             payload = [item for item in payload if not isinstance(item, dict) or item.get("cwd", cwd) == cwd]
