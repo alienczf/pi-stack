@@ -1,0 +1,13 @@
+{
+  "provider": "openai-codex",
+  "id": "gpt-6-luna",
+  "name": "GPT-6 Luna",
+  "api": "openai-codex-responses",
+  "baseUrl": "https://chatgpt.com/backend-api",
+  "reasoning": true,
+  "thinkingLevelMap": {"minimal": null, "xhigh": "xhigh", "max": "max"},
+  "input": ["text", "image"],
+  "contextWindow": 272000,
+  "maxTokens": 128000,
+  "cost": {"input": 0.1, "output": 0.5, "cacheRead": 0.01, "cacheWrite": 0.125}
+}

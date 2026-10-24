@@ -32,7 +32,11 @@ def check_merged_commands() -> None:
         raise SystemExit("merged PoC must document selection, prerequisites, install/init/doctor and verify")
     required = (
         "git clone --branch feat/merged-poc --single-branch https://github.com/alienczf/pi-stack.git pi-stack-merged-poc",
-        '--coordinator-model "$POC_MODEL" --coordinator-thinking "$POC_THINKING"',
+        '`openai-codex/gpt-6.1-sol` with `xhigh`',
+        '`openai-codex/gpt-6-luna` with `xhigh`',
+        '`--worker-model`',
+        '`--worker-thinking`',
+        '`--update-owned-from <receipt-sha256>`',
         '--compaction-percent "$POC_PERCENT"',
         '"$POC_ROOT/bin/pi-streams" poc init --root "$POC_ROOT" --stream weekend-poc',
         '"$POC_ROOT/bin/pi-streams" poc doctor --root "$POC_ROOT" --stream weekend-poc',

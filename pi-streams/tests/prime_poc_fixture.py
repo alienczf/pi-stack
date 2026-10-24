@@ -35,6 +35,8 @@ class PocScenario:
         self.compacted = False
         self.stream_state = self.connection("offline-stream", "stream-route", self.stream)
         self.worker_state = self.connection("offline-worker", "worker-route", self.product)
+        self.worker_state["model"]["id"] = "gpt-6-luna"
+        self.worker_state["sessionFile"] = str(root / "prime/agent/sessions/offline-worker.jsonl")
         self.process = OwnedFixtureProcess()
         self.stopped = False
 
@@ -52,7 +54,9 @@ class PocScenario:
 
     def persist(self, *, omit_compact=False):
         self.native_path.parent.mkdir(parents=True, exist_ok=True)
-        rows = [{"type": "session", "id": "offline-stream", "cwd": str(self.stream)}]
+        rows = [{"type": "session", "id": "offline-stream", "cwd": str(self.stream)},
+                {"type": "model_change", "provider": "openai-codex", "modelId": "gpt-6.1-sol"},
+                {"type": "thinking_level_change", "thinkingLevel": "xhigh"}]
         rows.extend(e for e in self.nodes if not (omit_compact and e["type"] == "compaction"))
         self.native_path.write_text("\n".join(json.dumps(e) for e in rows) + "\n")
 
@@ -92,6 +96,13 @@ class PocScenario:
         self.events.append(kind)
         if kind == "create":
             native = self.stream_state if command["config"]["cwd"] == str(self.stream) else self.worker_state
+            assert command["config"] == {"cwd": native["cwd"], "provider": "openai-codex", "model": "gpt-6.1-sol" if native is self.stream_state else "gpt-6-luna", "thinking": "xhigh"}
+            if native is self.worker_state:
+                from pathlib import Path
+                path = Path(native["sessionFile"])
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text('\n'.join(json.dumps(e) for e in ({"type": "session", "id": "offline-worker", "cwd": str(self.product)},
+                    {"type": "model_change", "provider": "openai-codex", "modelId": "gpt-6-luna"}, {"type": "thinking_level_change", "thinkingLevel": "xhigh"})) + '\n')
             return stub.response(request, {"sessionId": native["sessionId"], "activeSessionId": native["activeSessionId"], "cwd": native["cwd"]})
         target = command.get("activeSessionId")
         native = self.worker_state if target in {"worker-route", "offline-worker"} else self.stream_state

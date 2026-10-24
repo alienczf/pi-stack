@@ -46,6 +46,8 @@ def _parser() -> argparse.ArgumentParser:
     init.add_argument("--pi-web-url")
     init.add_argument("--coordinator-model")
     init.add_argument("--coordinator-thinking")
+    init.add_argument("--worker-model", help="worker default model (openai-codex/gpt-6-luna)")
+    init.add_argument("--worker-thinking", help="worker default thinking (xhigh)")
 
     new = sub.add_parser("new")
     new.add_argument("stream_id", metavar="id")
@@ -117,6 +119,8 @@ def cmd_init(args: argparse.Namespace) -> int:
         pi_web_url=args.pi_web_url,
         coordinator_model=args.coordinator_model,
         coordinator_thinking=args.coordinator_thinking,
+        worker_model=args.worker_model,
+        worker_thinking=args.worker_thinking,
     )
     print(index)
     return 0

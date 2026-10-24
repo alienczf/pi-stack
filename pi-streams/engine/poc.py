@@ -81,13 +81,17 @@ def doctor(root, stream_id):
                 raise StreamsError(f"doctor failed {label}")
         config = project.load_project(root / "index/projects/project.toml")
         checks["explicit_model_thinking"] = config.coordinator.model == installation["model"] and config.coordinator.thinking == installation["thinking"]
-        definition_path = repo_root() / "scripts/prime-models" / (installation["model"].replace("/", "-") + ".json")
-        if definition_path.is_file():
-            definition = json.loads(definition_path.read_text())
-            expected_model = {key: value for key, value in definition.items() if key != "provider"}
-            models = json.loads(confined(root, root / "prime/agent/models.json").read_text())["providers"][definition["provider"]]["models"]
-            matching = [model for model in models if model.get("id") == definition["id"]]
-            checks["reasoning_metadata"] = matching == [expected_model] and installation["thinking"] in definition["thinkingLevelMap"]
+        checks["worker_model_thinking"] = config.threads.model == installation["worker_model"] and config.threads.thinking == installation["worker_thinking"]
+        settings = json.loads(confined(root, root / "prime/agent/settings.json").read_text())
+        checks["allowed_role_models"] = set((installation["model"], installation["worker_model"])) <= set(settings["allowedModels"])
+        for role, model_key, thinking_key in (("stream", "model", "thinking"), ("worker", "worker_model", "worker_thinking")):
+            definition_path = repo_root() / "scripts/prime-models" / (installation[model_key].replace("/", "-") + ".json")
+            if definition_path.is_file():
+                definition = json.loads(definition_path.read_text())
+                expected_model = {key: value for key, value in definition.items() if key != "provider"}
+                models = json.loads(confined(root, root / "prime/agent/models.json").read_text())["providers"][definition["provider"]]["models"]
+                matching = [model for model in models if model.get("id") == definition["id"]]
+                checks[role + "_reasoning_metadata"] = matching == [expected_model] and installation[thinking_key] in definition["thinkingLevelMap"]
         if not all(checks.values()):
             raise StreamsError("doctor model configuration differs")
         result = {"status": "PASS", "stream": stream_id, "checks": checks, "protocol": 7, "schema": 30}
@@ -139,6 +143,20 @@ def assess(report, expected_identity=None):
           or report.get("model") != expected_identity.get("model")
           or report.get("thinking") != expected_identity.get("thinking")):
         failures.append("stock_model_identity")
+    if (not isinstance(expected_identity, dict) or report.get("worker_model") != expected_identity.get("worker_model")
+            or report.get("worker_thinking") != expected_identity.get("worker_thinking")
+            or not expected_identity.get("worker_model")):
+        failures.append("worker_model_identity")
+    for role, model_key, thinking_key in (("coordinator", "model", "thinking"), ("worker", "worker_model", "worker_thinking")):
+        observed = report.get("native_identities", {}).get(role, {})
+        entries = observed.get("entries", [])
+        models = [e for e in entries if e.get("type") == "model_change"]
+        levels = [e for e in entries if e.get("type") == "thinking_level_change"]
+        if (observed.get("model") != report.get(model_key) or observed.get("thinking") != report.get(thinking_key)
+                or not models or models[-1].get("provider", "") + "/" + models[-1].get("modelId", "") != report.get(model_key)
+                or not levels or levels[-1].get("thinkingLevel") != report.get(thinking_key)
+                or not observed.get("sha256") or not observed.get("session_id")):
+            failures.append(role + "_native_identity")
     if not report.get("session_id") or report.get("protocol") != 7 or report.get("schema") != 30:
         failures.append("native_session_contract")
     trace = report.get("trace", [])
@@ -200,8 +218,22 @@ def _stage(report, name, *evidence):
     report["stages"][name] = {"verified": True, "evidence": list(evidence)}
 
 
+def _record_native_identity(root, client, identity, model, thinking):
+    _, connection = prime.resolve_session(client, identity.session_id, identity.active_session_id)
+    path = confined(root, Path(connection["sessionFile"]))
+    if not path.is_relative_to(root / "prime/agent/sessions"):
+        raise StreamsError("native identity transcript is outside owned session storage")
+    entries = [json.loads(line) for line in path.read_text().splitlines()]
+    models = [e for e in entries if e.get("type") == "model_change"]
+    levels = [e for e in entries if e.get("type") == "thinking_level_change"]
+    if not models or not levels or models[-1].get("provider", "") + "/" + models[-1].get("modelId", "") != model or levels[-1].get("thinkingLevel") != thinking:
+        raise StreamsError("native transcript does not preserve requested role model/thinking")
+    return {"session_id": identity.session_id, "active_session_id": identity.active_session_id, "model": model,
+            "thinking": thinking, "entries": [models[-1], levels[-1]], "path": str(path), "sha256": digest(path)}
+
+
 def _run_native(root, stream, installation, report, client, product, marker):
-    identity = prime.create_stream_session(client, stream, installation["model"], installation["thinking"])
+    identity = prime.create_stream_session(client, stream)
     report["session_id"], report["active_session_id"] = identity.session_id, identity.active_session_id
     _, initial_connection = prime.resolve_session(client, identity.session_id, identity.active_session_id)
     native_path = confined(root, Path(initial_connection["sessionFile"]))
@@ -249,6 +281,7 @@ def _run_native(root, stream, installation, report, client, product, marker):
     _stage(report, "steer", steer.command_id, "busy native observation")
     first = prime.finish_message(client, stream, pending, sessions_dir=session_dir)
     _native_failure(first)
+    report.setdefault("native_identities", {})["coordinator"] = _record_native_identity(root, client, identity, installation["model"], installation["thinking"])
     while True:
         if steer.command_id in client.replies and client.replies[steer.command_id]["success"] is False:
             _native_failure(prime.finish_message(client, stream, steer, sessions_dir=session_dir))
@@ -262,8 +295,9 @@ def _run_native(root, stream, installation, report, client, product, marker):
     refs = [w.original_entry for w in state.check_state(stream).goals.work]
     worker, worker_result = spawn_prime_worker(client, stream, worktree=product,
         work=f"Write answer.json with exactly marker={marker!r}, answer=5. Preserve protected.txt. Run python3 check_fixture.py, report actual target/invocation/result and uncertainty. Do not commit or create state files.",
-        original_entries=refs, poteto_path=installation["paths"]["poteto"], model=installation["model"], thinking=installation["thinking"])
+        original_entries=refs, poteto_path=installation["paths"]["poteto"])
     _native_failure(worker_result)
+    report["native_identities"]["worker"] = _record_native_identity(root, client, worker, installation["worker_model"], installation["worker_thinking"])
     if (product / "STATE.md").exists() or (product / "stream.toml").exists() or (product / "AGENTS.md").exists():
         raise StreamsError("clean worker created stream state or role files")
     _stage(report, "worker", worker.session_id, worker_result["entry"])
@@ -360,8 +394,8 @@ def verify(root, stream_id):
     report_path = root / "reports" / f"{stream_id}-poc.json"
     if report_path.exists():
         return {"status": "BLOCKED", "stream": stream_id, "reason": "retained verification already exists; inspect it and initialize a new stream instead of adopting or replaying", "report": str(report_path)}
-    report = {**{key: installation[key] for key in ("pi_stack_revision", "prime_source_revision", "prime_version", "prime_binary_sha256", "prime_runtime_sha256", "pstack_revision", "model", "thinking", "threshold_percent")},
-              "expected_identity": {key: installation[key] for key in ("model", "thinking")},
+    report = {**{key: installation[key] for key in ("pi_stack_revision", "prime_source_revision", "prime_version", "prime_binary_sha256", "prime_runtime_sha256", "pstack_revision", "model", "thinking", "worker_model", "worker_thinking", "threshold_percent")},
+              "expected_identity": {key: installation[key] for key in ("model", "thinking", "worker_model", "worker_thinking")},
               "status": "FAIL", "root": str(root), "stream": stream_id, "session_id": None, "protocol": 7, "schema": 30, "stages": {}, "observed_percentages": []}
     owned = None
     try:
@@ -404,6 +438,10 @@ def verify(root, stream_id):
                 report["owned_daemon_stopped"] = owned.process.poll() is not None
             except (StreamsError, OSError) as exc:
                 report.update(status="FAIL", owned_daemon_stopped=False, shutdown_error=str(exc))
+        for observed in report.get("native_identities", {}).values():
+            path = confined(root, Path(observed["path"]))
+            observed["sha256"] = digest(path)
+            report.setdefault("artifact_hashes", {})[str(path)] = observed["sha256"]
         _report(root, report_path, report)
     return report
 

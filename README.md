@@ -109,10 +109,10 @@ From a checkout, `./install.sh -y --project ~/Projects/alphalab` does the same t
 | Question | Default |
 | --- | --- |
 | Which URL do you open pi-web at? | `host` and `port` from `~/.config/pi-web/config.json`, or `http://127.0.0.1:8504` |
-| Which model should coordinators use? | `openai-codex/gpt-6-astra` |
+| Which model should coordinators use? | `openai-codex/gpt-6.1-sol` |
 | Which thinking level should coordinators use? | `xhigh` |
 
-Pass `--pi-web-url`, `--coordinator-model`, or `--coordinator-thinking` to set an answer without the question.
+Pass `--pi-web-url`, `--coordinator-model`, or `--coordinator-thinking` to set an answer without the question. Workers independently default to `openai-codex/gpt-6-luna` with `xhigh`. Use `--worker-model` and `--worker-thinking` to override their settings. Existing project role settings remain unchanged on rerun.
 
 The pi-web URL in `projects/<name>.toml` is the address you open in a browser, which may be a tunnel. `pi-streams` runs on the pi-web host and calls pi-web at `PI_WEB_URL` when it is set, otherwise at the `host` and `port` in `~/.config/pi-web/config.json`, otherwise at `http://127.0.0.1:8504`.
 
@@ -126,9 +126,9 @@ The timer runs without a login session only when systemd lingering is on for you
 
 ## Isolated stock Prime merged PoC
 
-Use the `feat/merged-poc` branch on Linux with Python 3.11 or newer, Git, a C build toolchain, Cargo/Rust and uv. This mode does not install the Pi overlay, change global links, register a timer, read credentials or start a session. It installs unchanged Prime v0.10.1 at `8aac8692456c00c01d4e53e60e6d3347a3506559`, including its matching runtime sidecar. It requires explicit model, thinking and compaction percentage values. The percentage must be finite, greater than zero and at most 100.
+Use the `feat/merged-poc` branch on Linux with Python 3.11 or newer, Git, a C build toolchain, Cargo/Rust and uv. This mode does not install the Pi overlay, change global links, register a timer, read credentials or start a session. It installs unchanged Prime v0.10.1 at `8aac8692456c00c01d4e53e60e6d3347a3506559`, including its matching runtime sidecar. Streams default to `openai-codex/gpt-6.1-sol` with `xhigh`. Clean workers and optional reviewers independently default to `openai-codex/gpt-6-luna` with `xhigh`. Only the compaction percentage is required. It must be finite, greater than zero and at most 100.
 
-Set `POC_MODEL`, `POC_THINKING` and `POC_PERCENT` yourself. Use a fresh user-owned HOME for an isolated test. Then select the branch and prefix.
+Choose `POC_PERCENT` before creating a test session. Use a fresh user-owned HOME for a new isolated installation. Preserve an already authenticated prefix in place, including onboarding settings and all prior sessions. Then select the branch and prefix.
 
 <!-- merged-poc:start -->
 ```bash
@@ -136,8 +136,6 @@ set -eu
 git clone --branch feat/merged-poc --single-branch https://github.com/alienczf/pi-stack.git pi-stack-merged-poc
 cd pi-stack-merged-poc
 export POC_ROOT="$HOME/pi-stack-merged-poc-test"
-test -n "${POC_MODEL-}"
-test -n "${POC_THINKING-}"
 test -n "${POC_PERCENT-}"
 ```
 <!-- merged-poc:end -->
@@ -157,13 +155,16 @@ Run the install and prepare the stream. The prefix owns source clones, binary an
 
 ```bash
 ./install.sh --merged-poc --prefix "$POC_ROOT" --project "$POC_ROOT/project" \
-  --coordinator-model "$POC_MODEL" --coordinator-thinking "$POC_THINKING" \
   --compaction-percent "$POC_PERCENT"
 "$POC_ROOT/bin/pi-streams" poc init --root "$POC_ROOT" --stream weekend-poc
 "$POC_ROOT/bin/pi-streams" poc doctor --root "$POC_ROOT" --stream weekend-poc
 ```
 
-Only the operator performs login. Start the bare TUI with `"$POC_ROOT/bin/prime-agent"`, then enter `/login`. Installation and verification do not copy or automate authentication. After the operator step, run the verifier.
+Model overrides are optional. Pass `--coordinator-model`, `--coordinator-thinking`, `--worker-model`, and `--worker-thinking` to the isolated installer. Explicit spawn arguments override their respective project role settings. No provider or model fallback is configured.
+
+For an explicit owned-configuration update, first commit and select the intended `feat/merged-poc` source in the same recorded checkout. Record the SHA-256 of `reports/install.json`, then rerun the installer with `--update-owned-from <receipt-sha256>` and the chosen percentage. This verifies prior source ancestry, stock artifacts and owned configuration before replacing selected fields. It snapshots only the prior receipt, wrappers and owned configuration under `reports/install-updates/<receipt-sha256>/`. Unknown settings, onboarding fields and unknown files survive. A conflicting owned value fails without publishing configuration changes. It never reads or copies auth or changes a prior stream. Initialize a new stream ID for every native attempt.
+
+Only the operator performs login when needed. Start the bare TUI with `"$POC_ROOT/bin/prime-agent"`, then enter `/login`. Installation and verification do not copy or automate authentication. After the operator step, run the verifier.
 
 ```bash
 "$POC_ROOT/bin/pi-streams" poc verify --root "$POC_ROOT" --stream weekend-poc
@@ -171,7 +172,7 @@ Only the operator performs login. Start the bare TUI with `"$POC_ROOT/bin/prime-
 
 Computed close targets contain `repo`, `commit`, `diff_sha256` and a nonempty `artifacts` map of relative product-output paths to SHA-256 values. The checker binds those exact outputs, including untracked files, before and after the actual check. It does not silently include generated scratch or reports in that map. Reports have their separate exact path/hash binding. Paths containing `..` or symlink escapes are refused.
 
-Model and thinking values are compared with the explicit installation settings. The Track 6 model and `xhigh` are test selections, not installer defaults. Native construction must still return the requested model and thinking level.
+Doctor and verification compare both independent role identities with the installation settings. Native construction must return each requested model and thinking level. The verifier also reads actual native model and thinking entries for both new sessions.
 
 The same driver is `python3 scripts/check-merged-poc.py --root "$POC_ROOT" --stream weekend-poc`. It owns a new daemon on a dedicated socket and never adopts an existing session or socket. Native PASS requires actual steer, clean worker handover/kickoff, stale refusal, stream self-review, percentage crossing, checked save, direct compact, persisted native readback, one continuation and computed close. Offline fixtures cannot establish native PASS. Missing authentication is BLOCKED. An uncrossed percentage is INCONCLUSIVE. Reports and native transcripts remain under the prefix. Do not change the threshold or substitute explicit DCR to pass the percentage test.
 

@@ -1,5 +1,25 @@
 # Track 6 progress
 
+## G39 and G40 follow-up
+
+1. [x] `how` over the affected subsystem. Traced existing coordinator and threads ModelSettings through project config, Prime creation, installer and shared verifier.
+2. [x] `architect` for parallel design exploration. skip: ZF chose the two model defaults, and the existing independent ModelSettings fields already hold the required shape. No architecture change is needed.
+3. [x] Write the throughput checkpoint as four todo items.
+   - [x] Blocking first steps. Read current source/progress and preserve the newly authenticated prefix and all existing session bytes.
+   - [x] Independent workstreams. n/a: One default/config/install/verifier change shares model identity and installation provenance.
+   - [x] Shared mutable state. One fresh implementation owner writes this worktree and the progress document. Parent review remains read-only until that owner returns.
+   - [x] Smallest safe decomposition. Commit tested model defaults and override behavior first. Then verify installation and the full native sequence on a new disposable stream, with tested follow-up fixes if real evidence requires them.
+4. [x] Delegate code-writing to a subagent using the same Sol 6.1 xhigh authoring model. One fresh owner implements inline without nested agents.
+5. [ ] Verify on the matching surface. Both complete suites, install/doc checks, and real Prime inference with Sol 6.1 xhigh stream plus Luna 6 xhigh workers.
+6. [ ] Rebase into small, ordered commits. skip: Grok Bot alone owns rebasing. Stack green local follow-up commits without rebase or push.
+7. [ ] If the design is contested, `interrogate` before shipping. skip: The model choices are explicit user instructions and the merged design remains settled.
+8. [ ] Run Opening a PR. skip: The user forbids pushes, PRs and GitHub comments.
+
+G39 says the operator's Codex login is complete in the retained clean HOME. Do not read, print, copy or relocate auth. G40 supersedes the former explicit-only installer model contract. Streams default to openai-codex/gpt-6.1-sol xhigh. Workers default independently to openai-codex/gpt-6-luna xhigh. Preserve overrides and onboarding settings. Keep the old missing-auth attempts as historical evidence, never replay them.
+
+G40 implementation passes 231 stream and 72 root tests, plus all required final source gates. Literal native-create and clean handover/kickoff regressions cover omitted settings and explicit per-role overrides. The installer has a receipt-bound explicit owned-configuration update that preserves onboarding and unknown content. Evidence is `evidence/g40-*` under the retained run directory. Twelve percent is selected before the next new native session; actual crossing and post-compaction usage remain to be measured. Commit the green defaults before native verification. Prior native-blocked notes below are historical, not the current login state.
+
+
 - [x] Read the Principles section of the poteto-mode skill.
 - [x] Phase A: Frame.
 - [x] Phase B: Design the workflow.
@@ -56,7 +76,7 @@ The verifier refuses an existing session/socket or retained attempt, captures ac
 
 The second native test ran at `491f1633ae1175a8952a5b8861d2c8febd8bfa2a` and reached the real Codex authentication refusal. Final self-review also reproduced two stop-scope failures. A worker stop incorrectly paused unrelated stream work, and a stream with no objective failed to record its pause. The final Unit 8 correction limits worker stops to matching assignments and permits a paused null objective, as the section-5 schema allows. Both regressions and both suites are green. The final SHA and repeated native outcome are recorded in the canonical progress document.
 
-Final native evidence is `evidence/unit-8-clean-{install,init,doctor,verify}.log`, `evidence/unit-8-native-summary.json` and `<prefix>/reports/weekend-poc-poc.json`. The native transcript records the requested model and `xhigh`. Observed usage crossed 0.1 percent to 4.4306 percent, but authentication failed before DCR or inference; no save/compact/resume or checked-close success is claimed. The native session and all fixture bytes remain retained, and the owned daemon was shut down and waited.
+Earlier native evidence is retained in `evidence/unit-8-attempt-2-clean-{install,init,doctor,verify}.log` and `evidence/unit-8-attempt-2-native-summary.json`. Final corrected native evidence is `evidence/unit-9-clean-{install,init,doctor,verify}.log`, `evidence/unit-9-native-summary.json` and `<prefix>/reports/weekend-poc-poc.json`. The native transcript records the requested model and `xhigh`. Observed usage crossed 0.1 percent to 4.4306 percent, but authentication failed before DCR or inference; no save/compact/resume or checked-close success is claimed. The native session and all fixture bytes remain retained, and the owned daemon was shut down and waited.
 
 Clean HOME is `/home/alphalab/.cache/pi-stack-track6/20261023T172837Z/home`. The operator alone may run `HOME=/home/alphalab/.cache/pi-stack-track6/20261023T172837Z/home /home/alphalab/.cache/pi-stack-track6/20261023T172837Z/home/pi-stack-merged-poc-test/bin/prime-agent`, then enter `/login` in the bare TUI. No login was automated. After login, use a newly initialized stream identifier rather than replaying or adopting the retained failed attempt. Native steer, worker kickoff, stale refusal, self-review and the complete percentage/save/compact/readback/resume/close sequence remain unproved. Independent review is still required.
 
@@ -68,6 +88,6 @@ The correction requires explicit target artifact hashes, including untracked out
 
 The full assembled public-socket verifier now executes actual state saves, paused pickup, direct compact, native transcript readback, continuation, stream review and a real subprocess closing check in OFFLINE fixtures. It also exercises actual missing/error/order/artifact cases, including an untracked output changed after a green check. These fixtures are not native inference evidence.
 
-Final correction checks passed 21 verifier tests, 95 focused Prime tests, 221 stream tests and 72 root tests. Exact commands and logs are `evidence/unit-9-{focused,streams,root}.log`. Red regressions are `integration-review-before.log`, `integration-thinking-alias-before.log`, `integration-steer-failure-before.log`, `integration-worker-children-before.log`, `integration-worker-stale-before.log` and `integration-dispatch-before.log`. The final branch clone/install/native preflight will be repeated after this commit; existing attempts will not be adopted or replayed.
+Final correction checks passed 21 verifier tests, 95 focused Prime tests, 221 stream tests and 72 root tests. Exact commands and logs are `evidence/unit-9-{focused,streams,root}.log`. Red regressions are `integration-review-before.log`, `integration-thinking-alias-before.log`, `integration-steer-failure-before.log`, `integration-worker-children-before.log`, `integration-worker-stale-before.log` and `integration-dispatch-before.log`. Correction commit `f5beb90d69fa805aa7c067477275acc9115e0f74` is locally committed. Its final fresh branch clone, actual stock install, init and doctor passed. Its native verifier again returned the real missing-auth reply, preserved the requested model and xhigh in native entries, and shut down/waited only its own daemon. The final native session is `01a16ab0-7c9b-70c4-8cd1-17d57686fc73`, routing ID `545d9ca39bf6`. Observed percentage was 4.4306, but no successful save/compact/resume/inference/close is claimed. Previous owned attempts are preserved without adoption or replay. This final full-SHA/native note is an unstaged post-commit report update.
 
 Existing-path corrections in Unit 8 have before-fix evidence in `unit-8-steer-before.log`, `unit-8-parked-before.log`, `unit-8-state-path-before.log` and `unit-8-worker-path-before.log`. They cover human steering while another prompt is pending, a genuinely parked continuation, and symlink ancestors at writer/worker boundaries. No staged runtime data or credentials are part of these commits.
