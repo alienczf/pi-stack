@@ -9,7 +9,7 @@ tracking_issue: https://github.com/alienczf/pi-stack/issues/38
 box_mirror: /workspace/harness-program
 host_docs_worktree: /home/alphalab/Projects/worktrees/pi-stack-harness-program
 host_input_copy: /home/alphalab/Projects/pi-stack/streams/pi-streams-harness/context/harness-program
-updated: "2026-10-24T11:00+08:00 (T1 S4 receiving companion 8ea0e07 committed, main drive next; streaming at 80.7%, compact at next idle boundary). Prev: 2026-10-24T10:25+08:00 (T1 S3 disposable pass c41a01a, moving to S4, 78.6%). Prev: 2026-10-24T10:05+08:00 (T2 done G42: box wrapper pass, track-2-working sent; T1 S3 c41a01a at 74.2%). Prev: 2026-10-24T09:30+08:00 (T6 done e3232f1, audit PASS rerun by driver, draft PR #39 opened, poc_sent; T2 pushed 88d9d67, G41 inference pass, wrapper box check pending; T1 S3 2e227a7 at 72.4%). Prev: 2026-10-24T08:55+08:00 (T6 e3232f1 pushed; live e2e still running; T1 S3 187a454 at 70.7%; T2 live checks streaming 52%). Prev: 2026-10-24T08:35+08:00 (T6 226e32a pushed; T2 steer-2 G41 live checks on T6 test-home runtime). Prev: 2026-10-24T08:05+08:00 (G40: model defaults Sol 6.1 xhigh streams / Luna 6 xhigh workers (openai-codex/gpt-6-luna); T6 steered with steer-1 (defaults + login done G39), landed 08:03, streaming)"
+updated: "2026-10-24T11:30+08:00 (T1 S4 405b7d9 goal re-injection when driven and stalled; streaming at 81.3%, no pending, below 85% abort line; compact at next idle boundary). Prev: 2026-10-24T11:00+08:00 (T1 S4 receiving companion 8ea0e07 committed, main drive next; streaming at 80.7%, compact at next idle boundary). Prev: 2026-10-24T10:25+08:00 (T1 S3 disposable pass c41a01a, moving to S4, 78.6%). Prev: 2026-10-24T10:05+08:00 (T2 done G42: box wrapper pass, track-2-working sent; T1 S3 c41a01a at 74.2%). Prev: 2026-10-24T09:30+08:00 (T6 done e3232f1, audit PASS rerun by driver, draft PR #39 opened, poc_sent; T2 pushed 88d9d67, G41 inference pass, wrapper box check pending; T1 S3 2e227a7 at 72.4%). Prev: 2026-10-24T08:55+08:00 (T6 e3232f1 pushed; live e2e still running; T1 S3 187a454 at 70.7%; T2 live checks streaming 52%). Prev: 2026-10-24T08:35+08:00 (T6 226e32a pushed; T2 steer-2 G41 live checks on T6 test-home runtime). Prev: 2026-10-24T08:05+08:00 (G40: model defaults Sol 6.1 xhigh streams / Luna 6 xhigh workers (openai-codex/gpt-6-luna); T6 steered with steer-1 (defaults + login done G39), landed 08:03, streaming)"
 tracks:
   - id: 1
     name: pi-streams must-fix catalog
@@ -166,7 +166,7 @@ env_failure:
 
 | Track | Session | Phase | Artifact | Next |
 |---|---|---|---|---|
-| 1 fix catalog | `01a16655` | implementing; S1-S3 done (S3 disposable pass `c41a01a`); S4 receiving companion `8ea0e07` committed, main drive next; 80.7% context, streaming | `10-pi-streams-fix-catalog.md` + `feat/streams-must-fix` | S1-S6 done, then driver merges |
+| 1 fix catalog | `01a16655` | implementing; S1-S3 done (S3 disposable pass `c41a01a`); S4 `405b7d9` (goal re-injection when driven and stalled) committed; 81.3% context, streaming | `10-pi-streams-fix-catalog.md` + `feat/streams-must-fix` | S1-S6 done, then driver merges |
 | 2 prime CLI | `01a16656` | done 10:04; inference and box wrapper pass | `20-prime-cli-design.md` + `feat/prime-cli` (`88d9d67` pushed) | rebase onto main after track 1 merges |
 | 3 research | `01a16658` | done 18:21; 31 (A over Prime) passed gate 18:22 | `31-design-a-detailed.md` | feeds 51 |
 | 4 B over prime | `01a166e0` | done; 42 passed gate 15:55 | `40`, `41` (reference), `42-design-b-prime-unchanged.md` | feeds 51 |
