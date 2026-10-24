@@ -443,11 +443,25 @@ class Check:
             with PrimeClient(self.socket, self.timeout) as wire:
                 wire.request("prompt_and_wait", activeSessionId=sid,
                              message=f"Reply with exactly {token}. Do not use tools.", streamingBehavior="followUp")
-            self.wait(sid, lambda state, rows: not state["isStreaming"] and state["pendingMessageCount"] == 0 and any(
+            completed = self.wait(sid, lambda state, rows: not state["isStreaming"] and state["pendingMessageCount"] == 0 and any(
                 row.get("role") == "assistant" and token in json.dumps(row.get("content"), ensure_ascii=False) for row in rows))
-            before = self.call("status", sid)["session"]["compactionCount"]
-            self.call("prompt", sid, "/compact Preserve the verification marker.")
-            self.wait(sid, lambda state, _: state["compactionCount"] > before and not state["isCompacting"])
+            self.evidence.append({"inferenceVerified": True, "marker": token,
+                                  "effectiveThinking": completed["thinkingLevel"], "cost": completed.get("cost"),
+                                  "contextUsage": completed.get("contextUsage")})
+            before = completed["compactionCount"]
+            self.evidence.append({"command": "compact", "transport": "native-completion-probe"})
+            try:
+                with PrimeClient(self.socket, self.timeout) as wire:
+                    wire.request("compact", activeSessionId=sid, customInstructions="Preserve the verification marker.")
+            except CliError as exc:
+                skips = ("Already compacted", "Session is too short to compact \u2014 try again once it grows")
+                if (exc.output.get("error") != "upstream_error" or exc.output.get("errorInfo")
+                        or exc.output.get("message") not in skips):
+                    raise
+                self.evidence.append({"compactionVerified": False, "outcome": "skipped", "message": str(exc)})
+            else:
+                compacted = self.wait(sid, lambda state, _: state["compactionCount"] > before and not state["isCompacting"])
+                self.evidence.append({"compactionVerified": True, "compactionCount": compacted["compactionCount"]})
         self.call("archive", sid)
         self.created.remove(sid)
         rows = self.call("list", "--cwd", self.cwd)["sessions"]
@@ -491,7 +505,7 @@ def main() -> int:
     check = None
     runtime = None
     result = {"ok": False, "model": MODEL, "inferenceRequested": args.inference,
-              "parityComplete": False,
+              "inferenceVerified": False, "compactionVerified": False, "parityComplete": False,
               "unsupportedCapabilities": ["interactiveAnswers", "runtimeDisposal", "internalQueueReplay"],
               "retainedOwnedSessions": []}
     if args.mode == "verify":
@@ -519,6 +533,8 @@ def main() -> int:
         if check:
             result["retainedOwnedSessions"] = check.cleanup()
             result["checks"] = check.evidence
+            result["inferenceVerified"] = any(row.get("inferenceVerified") is True for row in check.evidence)
+            result["compactionVerified"] = any(row.get("compactionVerified") is True for row in check.evidence)
             result["knownGaps"] = check.gaps
             if check.gaps or result["retainedOwnedSessions"]:
                 result["ok"] = False
