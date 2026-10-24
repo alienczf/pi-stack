@@ -1,5 +1,26 @@
 # Track 2 progress
 
+## G41 authenticated in-place verification
+
+1. [x] Ground. Inspected verifier and native directory ownership without opening credential storage. The installed wrapper hardcodes track 6's session/socket paths; use its unchanged stock binary directly.
+2. [x] Sketch. Selected existing agent metadata/auth through environment with a separately owned socket, cwd, and session directory. No credential copies/links or shared-settings rollback.
+3. [x] Agree. G41 authorizes this runtime and real Sol 6.1 xhigh inference. No further login or provider/model change.
+4. [x] Implement. Red/green pairs cover agent environment selection, unchanged existing directory permissions, and awaited compaction outcomes. Code revision is 4fd0c90.
+5. [x] Scrap. Skip. Native environment selectors isolate the owned sessions and socket; no alternative topology is needed.
+6. [x] Verify. Actual Sol 6.1 xhigh marker completion passed. Native compaction returned an explicit short-history skip, not success. Real helper is unavailable on this host; local-executor wrapper/control check passed. No actual usage error occurred.
+7. [x] Handoff. Artifact 20 records commands, outcomes and the exact genuine box command. Five owned sessions are archived, daemons stopped and socket/lock absent. Design edits stay uncommitted.
+
+Throughput checkpoint:
+
+- Blocking first steps. Verify actual launcher behavior and split authenticated agent storage from this run's owned session/socket root before any native call.
+- Independent workstreams. Bounded read-only source investigation can run beside parent verifier review. Parent remains the sole code writer and owns every native call.
+- Shared mutable state. Track 6 owns its sessions, streams, daemon and configuration. Do not run its installed wrapper blindly because it hardcodes its session directory and socket. Credentials remain in place and are never opened by tools.
+- Smallest safe decomposition. Keep the existing verifier and public protocol. Prefer a small explicit environment-selected shared-agent mode over credential links, copied configuration, or another service.
+
+G41 result. `/tmp/prime-cli-check-7uekbeka/g41-live-corrected.json` exits 0 with inferenceVerified true, effective xhigh, exact marker response, native cost 0.017224 and context usage 8496 of 500000. Native compaction is explicitly skipped because the session is too short; compactionVerified and parityComplete remain false. Model/thinking setter probes are skipped to preserve shared defaults. The two model-backed session transcripts identify the requested provider/model/API and stopReason stop. No tool opened or manipulated credentials.
+
+The genuine wrapper reports remote_unavailable because options-01-ssh is absent here. `g41-local-wrapper-control.json` passes through the actual wrapper and a deliberately local-only executor; it proves no SSH/Twingate/box connectivity. All five sessions in the owned directory end archived. Final verification passes 76 Prime fixtures, 105 stream fixtures, installer, syntax and whitespace checks. Full track status remains BLOCKED on real box-side verification and unsupported/omitted native parity, not on authentication. No push.
+
 ## G20 follow-up
 
 - [x] Phase A: Frame. Continue from pushed bccf159. No Prime login, credential access/import/copy, provider switch, or model inference is authorized in this follow-up.
