@@ -9,7 +9,7 @@ tracking_issue: https://github.com/alienczf/pi-stack/issues/38
 box_mirror: /workspace/harness-program
 host_docs_worktree: /home/alphalab/Projects/worktrees/pi-stack-harness-program
 host_input_copy: /home/alphalab/Projects/pi-stack/streams/pi-streams-harness/context/harness-program
-updated: "2026-10-24T09:30+08:00 (T6 done e3232f1, audit PASS rerun by driver, draft PR #39 opened, poc_sent; T2 pushed 88d9d67, G41 inference pass, wrapper box check pending; T1 S3 2e227a7 at 72.4%). Prev: 2026-10-24T08:55+08:00 (T6 e3232f1 pushed; live e2e still running; T1 S3 187a454 at 70.7%; T2 live checks streaming 52%). Prev: 2026-10-24T08:35+08:00 (T6 226e32a pushed; T2 steer-2 G41 live checks on T6 test-home runtime). Prev: 2026-10-24T08:05+08:00 (G40: model defaults Sol 6.1 xhigh streams / Luna 6 xhigh workers (openai-codex/gpt-6-luna); T6 steered with steer-1 (defaults + login done G39), landed 08:03, streaming)"
+updated: "2026-10-24T10:05+08:00 (T2 done G42: box wrapper pass, track-2-working sent; T1 S3 c41a01a at 74.2%). Prev: 2026-10-24T09:30+08:00 (T6 done e3232f1, audit PASS rerun by driver, draft PR #39 opened, poc_sent; T2 pushed 88d9d67, G41 inference pass, wrapper box check pending; T1 S3 2e227a7 at 72.4%). Prev: 2026-10-24T08:55+08:00 (T6 e3232f1 pushed; live e2e still running; T1 S3 187a454 at 70.7%; T2 live checks streaming 52%). Prev: 2026-10-24T08:35+08:00 (T6 226e32a pushed; T2 steer-2 G41 live checks on T6 test-home runtime). Prev: 2026-10-24T08:05+08:00 (G40: model defaults Sol 6.1 xhigh streams / Luna 6 xhigh workers (openai-codex/gpt-6-luna); T6 steered with steer-1 (defaults + login done G39), landed 08:03, streaming)"
 tracks:
   - id: 1
     name: pi-streams must-fix catalog
@@ -37,8 +37,9 @@ tracks:
     session: 01a16656-ddcb-76c7-a44b-c7298bcb0198
     host: options-01
     model: openai-codex/gpt-6.1-sol@xhigh
-    phase: "09:09 G41 real Sol xhigh inference PASS, local wrapper PASS; reports blocked only on the genuine off-host wrapper check, which the driver runs from the box (documented G41 box command in 20-prime-cli-design.md). Idle 58.5%."
-    milestones_sent: [track-2-blocker-prime-login 2026-10-23T11:01+08:00]
+    phase: "done 10:04 (G42): real Sol xhigh inference PASS (G41) and genuine box-side wrapper over options-01-ssh PASS at 88d9d67. Rebase onto main after track 1 merges."
+    milestones_sent: [track-2-blocker-prime-login 2026-10-23T11:01+08:00, track-2-working 2026-10-24T10:05+08:00]
+    box_wrapper_check: pass 2026-10-24T10:04+08:00 (G42)
     started: 2026-10-23T09:19+08:00
     expected_done: 2026-10-23T13:30+08:00
     artifact: docs/harness-program/20-prime-cli-design.md
