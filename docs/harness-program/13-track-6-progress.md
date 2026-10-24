@@ -18,7 +18,7 @@ G40 sets stream defaults to `openai-codex/gpt-6.1-sol` with `xhigh`, and worker 
 - Preparation commit `198e433b19259eb56eec9b512b36b1247ffd519a` has a green baseline of 105 stream tests and 71 root tests. `baseline-root-standalone.log` supersedes the earlier incomplete combined root log; that partial log is not a code failure.
 - Unit 1 is implemented and locally committed as `ea6ef52187a6b23a6ee68df7ae3b893881ff9f6c`. Its focused tests, 136-test stream suite and 71-test root suite passed. No native session or authentication probe was attempted.
 - Git, Python 3.12.3, a C compiler and uv were available. Cargo and rustc were absent initially. The README's explicit prerequisite commands installed Cargo/rustc 1.99.1 only under the authorized clean prefix's `build/` directory. No global setup was changed.
-- All eight ordered implementation commits and parent corrections remain in history. G40 final source is `e3232f1ef87a5abae3f808fefb03df9e433e68b4`, with 235 stream tests, 72 root tests and all exact final gates passing. Its authenticated in-place install, init, doctor and actual native E2E pass. Both native role identities and all proof stages were checked against retained artifacts. Every owned verifier daemon was shut down and waited. Earlier missing-auth, failed and inconclusive attempts remain retained as historical evidence. Parent independent acceptance of this G40 follow-up remains required.
+- All eight ordered implementation commits and parent corrections remain in history. G40 final source is `e3232f1ef87a5abae3f808fefb03df9e433e68b4`, with 235 stream tests, 72 root tests and all exact final gates passing. Its authenticated in-place install, init, doctor and actual native E2E pass. Both native role identities and all proof stages were checked against retained artifacts. Every owned verifier daemon was shut down and waited. Earlier missing-auth, failed and inconclusive attempts remain retained as historical evidence. Parent independent acceptance of this G40 follow-up passed on 2026-10-24T01:00:33Z, with 235 stream tests, 72 root tests, 11 installer tests, all required source gates, installed doctor and direct native-artifact/order/preservation checks.
 
 ## Evidence paths
 
@@ -235,6 +235,31 @@ Final source gates were green before the last commit. `g40-followup-2-streams.lo
 | 2026-10-24T00:49:03Z | Accept attempt 3 as native PASS after directly auditing persisted artifacts and actual operations. | Every requested stage has actual stock inference evidence and a real computed close. | `g40-attempt-3-summary.json`; `g40-final-audit.py` | PASS; parent review still required. |
 | 2026-10-24T00:49:03Z | Stop native work after the finite checked close and retain all attempts in place. | Acceptance is complete without replay, extra model work, cleanup of prior bytes or another daemon target. | Final report; preservation audit | All owned daemons stopped/waited; no staged files. |
 
+## G40 independent parent acceptance
+
+Parent acceptance completed at 2026-10-24T01:00:33Z on `e3232f1ef87a5abae3f808fefb03df9e433e68b4`. The parent inspected the actual default-resolution and override code, literal native-create tests, explicit owned-update implementation, fixture handback, summary retention and stale-before-maintenance correction. No product source changed after the successful native run.
+
+| Parent check | Actual result | Evidence under the run directory |
+|---|---|---|
+| Full stream suite | 235 tests pass. | `evidence/g40-parent-streams.log` |
+| Full root suite | 72 tests pass. | `evidence/g40-parent-root.log` |
+| Ordinary installer/overlay fixture | `check-overlay ok`. | `evidence/g40-parent-overlay.log` |
+| Isolated Prime installer suite | 11 tests pass. | `evidence/g40-parent-install-check.log` |
+| README command contract | Exit zero. | `evidence/g40-parent-readme.log` |
+| Shell syntax, whitespace, staged paths | All pass. No staged files; only the intended TODO report note remains modified. | Parent transcript and final source status |
+| Reviewed read-only native artifact audit, rerun by parent | PASS against actual native transcripts, current branch, exact summary, outgoing messages, resumed review, actual computed-check output and product files. | `evidence/g40-parent-native-audit.json`; `evidence/g40-parent-native-summary.log` |
+| Installed doctor, rerun in the authenticated HOME without inference or auth access | PASS. Both role configuration and pinned installation checks pass. | `evidence/g40-parent-doctor.log` |
+| Preservation audit | All 55 pre-existing report/stream/session files and unknown/onboarding settings match their earlier hashes; G40 attempts 1 and 2 remain intact. | `evidence/g40-parent-native-audit.json` |
+| Implementation-owner structured write scope | All observed edit/write calls stay in the permitted worktree, named progress file or retained runtime directory; no auth write. | `evidence/g40-parent-scope-audit.log` |
+
+Native acceptance is now PASS. Actual stream `01a16b5c-998f-74f0-9078-9b317491bd9d` uses `openai-codex/gpt-6.1-sol` at xhigh. Actual clean worker `01a16b5d-a25d-7025-bf6e-cda5a9f48901` uses `openai-codex/gpt-6-luna` at xhigh. The parent checked the full native report SHA-256 `3ff2ed4c79a5a077a50b943c6cb18014f304a02957e33bde7d4d9e395febd01a` and all retained artifact hashes.
+
+The direct native compaction entry is `25c4e8f9`. Its dump entry is `7a85505e`, and its resume command is `2a9bec59-8cc4-48e5-a9dc-da0684fdd438`. Actual command indices prove pause 6060, compact 6070, resume write 6082, release 6083, resume await 6085. The stream's actual resumed adversarial review inspected the whole original, exact answer, protected bytes and worker claims. The actual closing check ran `python3 check_fixture.py` in the assigned product worktree and exited zero with `marker, answer and protected behavior verified`. Goals has no remaining request, the North Star remains, the worker directory has no state/planning files, and the owned verifier daemon is stopped.
+
+The passing 8-percent fixture threshold and the later 18.6846-percent usage are retained facts, not a hard ceiling claim. This is a working finite PoC, not evidence for permanently staying below a chosen threshold. No auth was inspected or copied, no prior session was operated, and no provider fallback, push, PR or rebase occurred. The local branch is ready for Grok Bot to collect.
+
+| 2026-10-24T01:00:33Z | Accept the G40 branch after independent full-suite and native-artifact verification. | Actual stock inference proves every requested stage with the required independent Sol/Luna identities, not only fixture claims. | `evidence/g40-parent-*`; native report SHA-256 `3ff2ed4c79a5a077a50b943c6cb18014f304a02957e33bde7d4d9e395febd01a` | Working PoC, suite/install/E2E PASS. |
+
 ## Orchestration correction
 
 The first asynchronous workflow returned the Unit 1 launch receipt instead of awaiting completion. Its later units were not launched. Unit 1 completed successfully, but a queued follow-up was printed after its final result instead of being executed. No duplicate writer was started. The parent resumes that exact implementation owner with the remaining seven-unit scope because its checkout, uncommitted report note and source context are retained. The parent will perform final independent artifact inspection and rerun verification directly. Installed orchestration tooling is outside the permitted write scope and remains unchanged.
@@ -306,4 +331,4 @@ Attention remains on native inference. A percentage observation and a green offl
 
 ## Remaining
 
-G39 supplied the operator-owned login. G40 source, authenticated installation and actual native acceptance now pass at `e3232f1ef87a5abae3f808fefb03df9e433e68b4`. No login was automated and no auth path was read or copied. All historical attempts remain intact. The remaining step is the parent's independent artifact inspection and gate rerun for this follow-up. The final TODO full-SHA/native note and this progress update are intentionally unstaged small reports. No rebase, push, PR or model/provider switch occurred.
+G39 supplied the operator-owned login. G40 source, authenticated installation and actual native acceptance now pass at `e3232f1ef87a5abae3f808fefb03df9e433e68b4`. No login was automated and no auth path was read or copied. All historical attempts remain intact. The parent's independent artifact inspection and gate rerun for this follow-up are complete and pass. There is no remaining implementation or native proof blocker. Grok Bot owns collection and any later push or rebase. The final TODO full-SHA/native note and this progress update are intentionally unstaged small reports. No rebase, push, PR or model/provider switch occurred.
