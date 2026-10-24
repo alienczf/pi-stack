@@ -201,6 +201,38 @@ class DcrTests(TickCase):
         self.assertEqual(self.operation()["phase"], "superseded")
         self.assertFalse(any(item[1].endswith(("/compact", "/resume", "/prompt")) and item[0] == "POST" for item in self.stub.requests))
 
+    def test_native_compaction_failure_is_not_misreported_as_an_explicit_stop(self) -> None:
+        operation = self.ready(self.start())
+        self.routes(streaming=False, leaf="e2", operation=operation, native=self.backend(operation))
+        started = self.tick("2026-10-06T12:05:00Z")
+        self.assertEqual(started.returncode, 0, started.stderr)
+        self.assertEqual(self.operation()["phase"], "compacting")
+        self.stub.automatic_admissions["coord"].update(generation="failure-induced-pause", allowed=False)
+        failed = self.backend(operation, "failed")
+        failed["detail"] = "Nothing to compact (session too small)"
+        self.routes(streaming=False, leaf="e2", operation=operation, native=failed)
+        observed = self.tick("2026-10-06T12:06:00Z")
+        self.assertEqual(observed.returncode, 0, observed.stderr)
+        self.assertEqual(self.operation()["phase"], "blocked")
+        self.assertIn("Nothing to compact", self.operation()["detail"])
+        self.assertFalse(self.stub.automatic_admissions["coord"]["allowed"])
+        self.assertFalse(any(item[0] == "POST" and item[1].endswith(("/compact", "/resume", "/prompt")) for item in self.stub.requests))
+
+    def test_real_stop_during_compaction_keeps_its_superseded_disposition(self) -> None:
+        operation = self.ready(self.start())
+        self.routes(streaming=False, leaf="e2", operation=operation, native=self.backend(operation))
+        started = self.tick("2026-10-06T12:05:00Z")
+        self.assertEqual(started.returncode, 0, started.stderr)
+        self.stub.automatic_admissions["coord"].update(generation="explicit-stop", allowed=False)
+        stopped = self.backend(operation, "superseded")
+        stopped.update(cancelledByStop=True, detail="Explicit stop/cancel superseded maintenance")
+        self.routes(streaming=False, leaf="e2", operation=operation, native=stopped)
+        observed = self.tick("2026-10-06T12:06:00Z")
+        self.assertEqual(observed.returncode, 0, observed.stderr)
+        self.assertEqual(self.operation()["phase"], "superseded")
+        self.assertFalse(self.stub.automatic_admissions["coord"]["allowed"])
+        self.assertFalse(any(item[0] == "POST" and item[1].endswith(("/compact", "/resume", "/prompt")) for item in self.stub.requests))
+
     def test_saved_sending_sync_is_not_replayed_after_uncertain_transport(self) -> None:
         operation = self.start()
         path = self.stream / "log/tick-state.json"

@@ -209,6 +209,15 @@ def step(index: Path, project: Project, stream: str, stream_dir: Path, resolved:
     if op is not None and op.phase == "blocked":
         return True
     if op is not None and op.phase not in TERMINAL and (not allowed or token != op.automatic):
+        if op.phase in {"compact-sending", "compacting", "resume-sending", "resuming"}:
+            native = piweb.maintenance_status(op.cwd, sid, op.id)
+            if native.get("generation") != op.automatic["generation"] or native.get("entryId") != op.checkpoint_entry:
+                raise StreamsError("Changed-control DCR disposition has no matching saved checkpoint/generation")
+            if native["state"] in {"failed", "uncertain"} and native.get("cancelledByStop") is not True:
+                op.phase, op.detail = "blocked", f"Native DCR {native['state']}: {native.get('detail', 'unconfirmed failure')}"
+                save(stream_dir, op)
+                close_events(stream_dir, op)
+                return True
         op.phase, op.detail = "superseded", "Newer native input or stop superseded this maintenance generation."
         save(stream_dir, op)
         close_events(stream_dir, op)
