@@ -298,14 +298,18 @@ def _git_env(index: Path | None = None) -> dict[str, str]:
 
 
 def git(cwd: Path, *args: str, index: Path | None = None) -> str:
-    proc = subprocess.run(
-        ["git", "-C", os.fspath(cwd), *args],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        env=_git_env(index),
-        check=False,
-    )
+    try:
+        proc = subprocess.run(
+            ["git", "-C", os.fspath(cwd), *args],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            env=_git_env(index),
+            check=False,
+            timeout=60,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise StreamsError(f"git {args[0] if args else ''} timed out in {cwd}; reconcile possible effects before retry") from exc
     if proc.returncode != 0:
         detail = proc.stderr.strip() or proc.stdout.strip() or f"git {args[0]} failed"
         raise StreamsError(detail)

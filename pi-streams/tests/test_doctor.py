@@ -6,6 +6,7 @@ import os
 import shutil
 import time
 import urllib.parse
+from datetime import datetime, timedelta, timezone
 
 from support import EngineCase, git, pi_stack_revision
 from test_new import status_body
@@ -80,6 +81,11 @@ class DoctorTests(EngineCase):
         if git(stream, self.env, "status", "--porcelain").strip() != "":
             git(stream, self.env, "commit", "-m", "stream")
         return stream
+
+    def _completed_tick(self, stream: Path, *, minutes_old: int = 0) -> None:
+        at = (datetime.now(timezone.utc) - timedelta(minutes=minutes_old)).isoformat()
+        report = {"version": 1, "id": "private-completed-pass", "started": at, "completed": at, "ok": True, "errors": [], "streams": {str(stream): {"id": "etl", "project": self.root.name, "started": at, "completed": at, "ok": True, "errors": []}}}
+        (self.index / "tick-health.json").write_text(json.dumps(report) + "\n")
 
     def _basic_routes(self) -> list[tuple]:
         return [
@@ -249,7 +255,7 @@ class DoctorTests(EngineCase):
                 "PASS pi-web: list ok",
                 streams=f"PASS revision: etl records {pi_stack_revision()}\n",
             )
-            + "WARN tick: no tick-state.json under any home is newer than 15 minutes\n",
+            + f"WARN tick: {self.index}: no completed per-stream tick pass is recorded\n",
         )
 
     def test_doctor_warns_when_tick_state_is_older_than_15_minutes(self) -> None:
@@ -258,6 +264,7 @@ class DoctorTests(EngineCase):
         state.write_text("{}\n", encoding="utf-8")
         old = time.time() - (16 * 60)
         os.utime(state, (old, old))
+        self._completed_tick(state.parent.parent, minutes_old=16)
         self.stub.set_routes(self._stream_routes())
         proc = self.run_streams("doctor")
         self.assertEqual(proc.returncode, 0, proc.stderr)
@@ -268,13 +275,15 @@ class DoctorTests(EngineCase):
                 "PASS pi-web: list ok",
                 streams=f"PASS revision: etl records {pi_stack_revision()}\n",
             )
-            + "WARN tick: no tick-state.json under any home is newer than 15 minutes\n",
+            + f"WARN tick: {self.index}: latest completed tick pass is not within 15 minutes\n"
+            + "WARN tick: etl: latest stream tick pass is not within 15 minutes\n",
         )
 
-    def test_doctor_accepts_a_fresh_tick_state(self) -> None:
+    def test_doctor_accepts_a_fresh_completed_tick_pass(self) -> None:
         pi = self._pi_on_path()
         state = self._add_stream() / "log" / "tick-state.json"
         state.write_text("{}\n", encoding="utf-8")
+        self._completed_tick(state.parent.parent)
         self.stub.set_routes(self._stream_routes())
         proc = self.run_streams("doctor")
         self.assertEqual(proc.returncode, 0, proc.stderr)

@@ -16,15 +16,19 @@ def _run(args: list[str], stdin: str | None = None) -> subprocess.CompletedProce
     # tunnel. The engine runs beside pi-web, so it follows pi-web's own config.
     env = os.environ.copy()
     env.setdefault("PI_WEB_URL", default_pi_web_url())
-    return subprocess.run(
-        [sys.executable, os.fspath(repo_root() / "bin" / "pi-web-cli"), *args],
-        input=stdin,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        env=env,
-        check=False,
-    )
+    try:
+        return subprocess.run(
+            [sys.executable, os.fspath(repo_root() / "bin" / "pi-web-cli"), *args],
+            input=stdin,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            env=env,
+            check=False,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise StreamsError(f"pi-web receiving boundary timed out for {args[0]}") from exc
 
 
 class PromptRejected(StreamsError):

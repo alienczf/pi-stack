@@ -7,7 +7,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from engine import StreamsError, artifacts, clock, dcr, delivery, drive, piweb, sessionlog
+from engine import StreamsError, artifacts, clock, dcr, delivery, drive, piweb, sessionlog, tickhealth
 from engine.project import (
     Project,
     StreamRow,
@@ -18,7 +18,7 @@ from engine.project import (
     load_stream_config,
     load_stream_rows,
     push_repo,
-    stream_locks,
+    stream_lock,
 )
 from engine.subscriptions import SOURCES, Subscription, load_subscriptions
 from engine.threads import Coordinator, Status, Thread, _native_session, load_threads, require_ratified, resolve_coordinator, save_threads, transition
@@ -215,6 +215,7 @@ class StreamTick:
         self.drive_enabled = False
         self.automatic_paused = False
         self.stalled = False
+        self.observations_failed = False
 
     def run(self) -> None:
         try:
@@ -328,13 +329,21 @@ class StreamTick:
         observed: set[str] = set()
         for row in self.rows:
             if row.role != "coordinator" and row.status in (Status.active, Status.waiting_quota):
-                self.observe_thread(row)
+                try:
+                    self.observe_thread(row)
+                except (StreamsError, OSError) as exc:
+                    self.observations_failed = True
+                    self.fail(f"observation {row.session}: {exc}")
                 observed.add(row.session)
         self.state.sessions = {sid: seen for sid, seen in self.state.sessions.items() if sid in observed}
         coord = self.coordinator()
         self.state.outages = [sid for sid in self.state.outages if coord is not None and sid == coord.session]
         if coord is not None:
-            self.check_outage(coord)
+            try:
+                self.check_outage(coord)
+            except (StreamsError, OSError) as exc:
+                self.observations_failed = True
+                self.fail(f"observation {coord.session}: {exc}")
         for row in self.rows:
             if not self.out(row):
                 self.alerts.clear(self.stream, row.session)
@@ -442,7 +451,7 @@ class StreamTick:
         return timedelta(0) if seen is None else self.now - seen
 
     def wake(self) -> None:
-        if self.automatic_paused or self.dcr_owned or self.drive_owned:
+        if self.automatic_paused or self.dcr_owned or self.drive_owned or self.observations_failed and not self.drive_enabled:
             return
         current = delivery.current_tick(self.stream_dir)
         if current is not None:
@@ -539,59 +548,77 @@ def _claims_for(group: list[StreamRow]) -> dict[str, list[Claim] | None]:
 
 
 def tick_index(index: Path, now: datetime) -> bool:
-    ok = True
-    with index_lock(index):
-        projects = {project.info.name: project for project in load_projects(index)}
-        rows = load_stream_rows(index)
-        ordered = sorted(rows, key=lambda row: str(Path(row.path).resolve()))
-        with stream_locks([Path(row.path) for row in ordered]):
+    with tickhealth.tick_lease(index):
+        with index_lock(index):
+            projects = {project.info.name: project for project in load_projects(index)}
+            ordered = sorted(load_stream_rows(index), key=lambda row: str(Path(row.path).resolve()))
             alerts = Alerts(index / "ALERTS")
             grouped: dict[str, list[StreamRow]] = {}
             for row in ordered:
                 grouped.setdefault(row.project, []).append(row)
             claims = {stream_id: mine for group in grouped.values() for stream_id, mine in _claims_for(group).items()}
-            runs: list[tuple[StreamRow, StreamTick]] = []
-            history_paths: dict[str, list[str]] = {}
-            for row in ordered:
-                try:
-                    history_paths[row.path] = artifacts._rotate_log_locked(Path(row.path))
-                except (StreamsError, OSError) as exc:
-                    ok = False
-                    print(f"{row.path}: {exc}", file=sys.stderr, flush=True)
-                    continue
-                project = projects.get(row.project)
-                if project is None:
-                    ok = False
-                    print(f"{row.path}: stream {row.id} names missing project {row.project}", file=sys.stderr, flush=True)
-                    continue
-                run = StreamTick(index, project, row.id, Path(row.path), now, alerts, claims.get(row.id))
-                run.run()
-                runs.append((row, run))
-                for error in run.errors:
-                    ok = False
-                    print(f"{row.path}: {error}", file=sys.stderr, flush=True)
-                counts = Counter(event.kind for event in run.events)
-                if counts:
-                    counted = "\t".join(f"{kind}={counts[kind]}" for kind in sorted(counts))
-                    print(f"{row.path}\t{counted}", flush=True)
-            for row, _run in runs:
-                repo = Path(row.path)
-                try:
-                    commit_repo(repo, "pi-streams tick", paths=tuple(history_paths[row.path]))
-                    if history_paths[row.path]:
-                        artifacts._acknowledge_history_locked(repo)
-                except (StreamsError, OSError) as exc:
-                    ok = False
-                    print(f"{row.path}: {exc}", file=sys.stderr, flush=True)
-            alerts.save()
-            for row, _run in runs:
-                repo = Path(row.path)
-                try:
-                    push_repo(repo, load_stream_config(repo / "stream.toml").remote)
-                except StreamsError as exc:
-                    ok = False
-                    print(f"{row.path}: {exc}", file=sys.stderr, flush=True)
-    return ok
+        report = tickhealth.TickPass.begin(ordered, clock.stamp(now))
+
+        def publish() -> None:
+            try:
+                report.save(index)
+            except (StreamsError, OSError) as exc:
+                detail = f"tick health publication is unconfirmed: {exc}"
+                if detail not in report.errors:
+                    report.errors.append(detail)
+                report.ok = False
+                print(f"{index}: {detail}", file=sys.stderr, flush=True)
+
+        publish()
+        for row in ordered:
+            repo = Path(row.path)
+            health = report.streams[str(repo.resolve())]
+            health.started = clock.stamp(clock.now())
+            try:
+                with stream_lock(repo):
+                    bindings = [current for current in load_stream_rows(index) if current.id == row.id and current.project == row.project]
+                    if len(bindings) != 1 or Path(bindings[0].path).resolve() != repo.resolve():
+                        raise StreamsError("registered stream binding changed; refusing an unknown writer target")
+                    history = artifacts._rotate_log_locked(repo)
+                    project = projects.get(row.project)
+                    if project is None:
+                        raise StreamsError(f"stream {row.id} names missing project {row.project}")
+                    run = StreamTick(index, project, row.id, repo, now, alerts, claims.get(row.id))
+                    run.run()
+                    health.errors.extend(run.errors)
+                    for error in run.errors:
+                        print(f"{row.path}: {error}", file=sys.stderr, flush=True)
+                    counts = Counter(event.kind for event in run.events)
+                    if counts:
+                        counted = "\t".join(f"{kind}={counts[kind]}" for kind in sorted(counts))
+                        print(f"{row.path}\t{counted}", flush=True)
+                    try:
+                        commit_repo(repo, "pi-streams tick", paths=tuple(history))
+                        if history:
+                            artifacts._acknowledge_history_locked(repo)
+                    except (StreamsError, OSError) as exc:
+                        health.errors.append(str(exc))
+                        print(f"{row.path}: {exc}", file=sys.stderr, flush=True)
+                    try:
+                        push_repo(repo, load_stream_config(repo / "stream.toml").remote)
+                    except (StreamsError, OSError) as exc:
+                        health.errors.append(str(exc))
+                        print(f"{row.path}: {exc}", file=sys.stderr, flush=True)
+            except (StreamsError, OSError) as exc:
+                health.errors.append(str(exc))
+                print(f"{row.path}: {exc}", file=sys.stderr, flush=True)
+            health.completed, health.ok = clock.stamp(clock.now()), not health.errors
+            publish()
+        try:
+            with index_lock(index):
+                alerts.save()
+        except (StreamsError, OSError) as exc:
+            report.errors.append(str(exc))
+            print(f"{index}: {exc}", file=sys.stderr, flush=True)
+        report.completed = clock.stamp(clock.now())
+        report.ok = all(stream.ok for stream in report.streams.values()) and not report.errors
+        publish()
+        return report.ok
 
 
 def run_tick(indexes: list[Path]) -> int:

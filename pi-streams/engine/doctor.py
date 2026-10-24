@@ -3,13 +3,12 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 from engine import StreamsError
-from engine import piweb
+from engine import clock, piweb, tickhealth
 from engine.threads import resolve_coordinator
 from engine.project import (
     StreamRow,
@@ -184,33 +183,41 @@ def check_systemd_units() -> list[Finding]:
     return [Finding("PASS", "systemd", "pi-streams-tick.service and pi-streams-tick.timer are installed")]
 
 
-def _tick_state_fresh(path: Path, now: float) -> bool:
-    if not path.is_file():
-        return False
-    try:
-        mtime = path.stat().st_mtime
-    except OSError:
-        return False
-    return mtime > now - TICK_FRESH_SECONDS
-
-
 def check_tick() -> list[Finding]:
-    now = time.time()
-    considered = False
+    now = clock.now()
+    findings = []
     for index in read_homes():
         try:
             rows = load_stream_rows(index)
-        except StreamsError:
+            if not rows:
+                continue
+            report = tickhealth.read(index)
+        except (StreamsError, OSError, ValueError) as exc:
+            findings.append(Finding("FAIL", "tick", f"{index}: health is unconfirmed: {exc}"))
             continue
-        if not rows:
+        if report is None:
+            findings.append(Finding("WARN", "tick", f"{index}: no completed per-stream tick pass is recorded"))
             continue
-        considered = True
+        completed = clock.parse(report["completed"])
+        if completed is None:
+            findings.append(Finding("WARN", "tick", f"{index}: latest tick pass is incomplete"))
+        elif (now - completed).total_seconds() > TICK_FRESH_SECONDS or completed > now:
+            findings.append(Finding("WARN", "tick", f"{index}: latest completed tick pass is not within 15 minutes"))
+        if completed is not None and not report["ok"]:
+            findings.append(Finding("FAIL", "tick", f"{index}: latest tick pass failed"))
         for row in rows:
-            if _tick_state_fresh(Path(row.path) / "log" / "tick-state.json", now):
-                return []
-    if not considered:
-        return []
-    return [Finding("WARN", "tick", "no tick-state.json under any home is newer than 15 minutes")]
+            health = report["streams"].get(str(Path(row.path).resolve()))
+            if health is None or health["id"] != row.id or health["project"] != row.project:
+                findings.append(Finding("WARN", "tick", f"{row.id}: no matching stream completion in the latest pass"))
+            else:
+                finished = clock.parse(health["completed"])
+                if finished is None:
+                    findings.append(Finding("WARN", "tick", f"{row.id}: latest stream tick pass is incomplete"))
+                elif (now - finished).total_seconds() > TICK_FRESH_SECONDS or finished > now:
+                    findings.append(Finding("WARN", "tick", f"{row.id}: latest stream tick pass is not within 15 minutes"))
+                if finished is not None and not health["ok"]:
+                    findings.append(Finding("FAIL", "tick", f"{row.id}: latest stream tick failed: {'; '.join(health['errors'])}"))
+    return findings
 
 
 def pi_web_project_dirs() -> list[Path]:

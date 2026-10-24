@@ -62,7 +62,7 @@ class FailureTests(TickCase):
         self.assertEqual((proc.returncode, proc.stdout, proc.stderr), (
             1,
             f"{self.etl}\ttick-error=1\n{ops}\task=1\n",
-            f"{self.etl}: pi-web-cli status t-1 failed: {RESTARTING}\n",
+            f"{self.etl}: observation t-1: pi-web-cli status t-1 failed: {RESTARTING}\n",
         ))
         self.assertEqual(self.stub.requests, [
             got_list(str(self.etl)),
@@ -83,7 +83,7 @@ class FailureTests(TickCase):
         self.assertEqual(
             self.events(self.etl),
             '{"at": "2026-10-06T12:00:00Z", "kind": "tick-error", "session": "", "role": "", '
-            '"detail": "pi-web-cli status t-1 failed: {\\n  \\"ok\\": false,\\n  \\"status\\": 500,\\n  '
+            '"detail": "observation t-1: pi-web-cli status t-1 failed: {\\n  \\"ok\\": false,\\n  \\"status\\": 500,\\n  '
             '\\"session\\": {\\n    \\"error\\": \\"pi runtime is restarting\\"\\n  }\\n}"}\n',
         )
         self.assertEqual(
@@ -180,7 +180,7 @@ class FailureTests(TickCase):
         self.assertEqual((proc.returncode, proc.stdout, proc.stderr), (
             1,
             "",
-            f"{gone}: [Errno 2] No such file or directory: '{gone}/.pi-streams.lock'\n",
+            f"{gone}: [Errno 2] No such file or directory: '{gone}'\n",
         ))
         self.assertEqual(self.stub.requests, [
             got_list(str(self.etl)),
