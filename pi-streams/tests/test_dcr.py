@@ -71,12 +71,15 @@ class DcrTests(TickCase):
 
     def resumed_text(self, goal: str) -> str:
         return (
-            "RESUME after DCR.\n"
-            f"Read {self.stream}/AGENTS.md and {self.stream}/STATE.md first.\n"
-            "Use the latest Current Objective, falling back to North Star, under active Rules. "
-            "Read referenced artifacts only as needed; STATE remains authoritative.\n"
-            "Only Log is capped at 30 entries. Do not add continuation budgets or ask/task ledgers. "
-            "Preserve stops, newer ordered input and uncertain external jobs.\n\n"
+            "Read the current stream artifacts before acting:\n"
+            f"- {self.stream}/AGENTS.md\n"
+            f"- {self.stream}/STATE.md\n"
+            "Resolve the current objective in STATE Goals, falling back to its North Star.\n"
+            "Open history/, context/ and its README index, checks/, or handover/ only on demand.\n"
+            "Historical entries do not override current Goals or Rules.\n"
+            "Do not self-remedy environment/auth/resource failures or write new rules, skills,\n"
+            "or memory because of them. Park and append a Log entry via the engine;\n"
+            "the human repairs them.\n"
             f"/poteto-mode {goal}"
         )
 

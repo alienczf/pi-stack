@@ -14,6 +14,8 @@ Run `pi-streams new <id>`. Report the URL and coordinator session ID it prints. 
 
 Run `pi-streams status [<id>]` and report its output unchanged. For canonical streams, `pi-streams status <id> --json` provides the path and threadSessions view. Use that view instead of reading engine registries. Never resume a session merely to inspect it.
 
+Status also reports maintenance phase and refusal details. Routine DCR compacts the designated session in place, not through close or replacement. Follow AGENTS for the engine's supplied SYNC/DUMP command. Do not send `/compact` as prompt text, abort to force idle, or author RESUME. The engine invokes the recipient-loaded poteto-mode skill with the latest exact goal after proved native compaction.
+
 ## Close
 
 Use only the current Goals, Charter, and Rules as authority. Open history/, context/ and its README index, checks/, or handover/ on demand. Never read raw engine registries, configuration, tick logs/state, locks, or failures/.

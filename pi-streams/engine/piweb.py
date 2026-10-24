@@ -149,7 +149,7 @@ def command_run(sid: str, text: str) -> dict:
 def maintenance_capabilities() -> bool:
     data = call(["runtime"])
     runtime = data.get("runtime")
-    return isinstance(runtime, dict) and runtime.get("component") == "sessiond" and isinstance(runtime.get("capabilities"), list) and "sessions.maintenanceCheckpoint" in runtime["capabilities"]
+    return isinstance(runtime, dict) and runtime.get("component") == "sessiond" and isinstance(runtime.get("capabilities"), list) and all(capability in runtime["capabilities"] for capability in ("sessions.maintenanceCheckpoint", "prompt.potetoArguments", "sessions.streamsDcrEvents"))
 
 
 def require_maintenance(sid: str) -> dict[str, object]:

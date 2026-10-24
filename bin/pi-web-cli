@@ -269,7 +269,7 @@ def main(argv: list[str]) -> int:
     if args.cmd in ("runtime", "capabilities"):
         code, data = req("GET", "/api/sessiond/runtime")
         ok = code == 200 and isinstance(data, dict) and data.get("component") == "sessiond" and isinstance(data.get("capabilities"), list) and all(isinstance(capability, str) for capability in data["capabilities"])
-        missing = [capability for capability in ("sessions.maintenanceCheckpoint", "prompt.potetoArguments") if not ok or capability not in data["capabilities"]]
+        missing = [capability for capability in ("sessions.maintenanceCheckpoint", "prompt.potetoArguments", "sessions.streamsDcrEvents") if not ok or capability not in data["capabilities"]]
         if args.cmd == "capabilities":
             ok = ok and not missing
             return out({"ok": ok, "status": code, "runtime": data, "missing": missing}, ok)
