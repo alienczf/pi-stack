@@ -9,7 +9,7 @@ tracking_issue: https://github.com/alienczf/pi-stack/issues/38
 box_mirror: /workspace/harness-program
 host_docs_worktree: /home/alphalab/Projects/worktrees/pi-stack-harness-program
 host_input_copy: /home/alphalab/Projects/pi-stack/streams/pi-streams-harness/context/harness-program
-updated: "2026-10-24T08:05+08:00 (G40: model defaults Sol 6.1 xhigh streams / Luna 6 xhigh workers (openai-codex/gpt-6-luna); T6 steered with steer-1 (defaults + login done G39), landed 08:03, streaming)"
+updated: "2026-10-24T08:35+08:00 (T6 226e32a pushed; T2 steer-2 G41 live checks on T6 test-home runtime). Prev: 2026-10-24T08:05+08:00 (G40: model defaults Sol 6.1 xhigh streams / Luna 6 xhigh workers (openai-codex/gpt-6-luna); T6 steered with steer-1 (defaults + login done G39), landed 08:03, streaming)"
 tracks:
   - id: 1
     name: pi-streams must-fix catalog
@@ -37,7 +37,7 @@ tracks:
     session: 01a16656-ddcb-76c7-a44b-c7298bcb0198
     host: options-01
     model: openai-codex/gpt-6.1-sol@xhigh
-    phase: blocked-on-prime-codex-login (non-inference parity gaps in progress, steer-1 consumed 10:59)
+    phase: "live checks - steer-2 (G41, sha 6bb5bed6) accepted 08:35: inference + wrapper against the T6 clean test home's authenticated runtime in place"
     milestones_sent: [track-2-blocker-prime-login 2026-10-23T11:01+08:00]
     started: 2026-10-23T09:19+08:00
     expected_done: 2026-10-23T13:30+08:00
@@ -45,7 +45,7 @@ tracks:
     code_branch: feat/prime-cli
     code_worktree: /home/alphalab/Projects/worktrees/pi-stack-prime-cli
     brief: docs/harness-program/briefs/track-2.md
-    steers: [docs/harness-program/briefs/track-2-steer-1.md, docs/harness-program/briefs/track-2-reentry-1.md]
+    steers: [docs/harness-program/briefs/track-2-steer-1.md, docs/harness-program/briefs/track-2-reentry-1.md, docs/harness-program/briefs/track-2-steer-2.md]
     steer_note: 11:31 context 84.5% (~422k) -> aborted, /compact via commands/run (G21), now 19.1%; session auto-continued its in-flight verification. reentry-1 consumed (11:52); session idle at ~3% context, 71 offline tests pass, reports TRACK 2 STATUS blocked on ZF Prime login.
     brief_sha256_verified: true
     blocked_on: ZF interactive openai-codex login for Prime on options-01 (blocker note sent once, 11:01)
@@ -110,7 +110,7 @@ tracks:
     milestones_sent: [track-6-blocker-prime-login 2026-10-24T05:58+08:00]
     login_command: "HOME=/home/alphalab/.cache/pi-stack-track6/20261023T172837Z/home /home/alphalab/.cache/pi-stack-track6/20261023T172837Z/home/pi-stack-merged-poc-test/bin/prime-agent then /login in the TUI"
     started: 2026-10-24T01:26+08:00
-    pushed: feat/merged-poc f5beb90 (2026-10-24 05:57, driver; fast-forward over 7503ca4)
+    pushed: feat/merged-poc 226e32a (2026-10-24 08:33, driver; fast-forward over f5beb90)
     code_branch: feat/merged-poc (session creates worktree /home/alphalab/Projects/worktrees/pi-stack-merged-poc off local main + feat/prime-cli)
     deadline: 2026-10-26T09:00+08:00
     steers: [docs/harness-program/briefs/track-6-steer-1.md (sha256 d61f618a; jsonl match 08:03:14, G40)]
@@ -165,11 +165,11 @@ env_failure:
 | Track | Session | Phase | Artifact | Next |
 |---|---|---|---|---|
 | 1 fix catalog | `01a16655` | implementing; S1 done; S2 last unit (rotation) after `d2a378b`/`dfd9ab6`, suites pass; compacted 01:41 | `10-pi-streams-fix-catalog.md` + `feat/streams-must-fix` | S1-S6 done, then driver merges |
-| 2 prime CLI | `01a16656` | blocked on Prime codex login; non-inference gaps in progress | `20-prime-cli-design.md` + `feat/prime-cli` (`6bc1242` pushed) | ZF logs Prime in, then inference verification |
+| 2 prime CLI | `01a16656` | live checks steered 08:35 against the logged-in test-home runtime | `20-prime-cli-design.md` + `feat/prime-cli` (`6bc1242` pushed) | ZF logs Prime in, then inference verification |
 | 3 research | `01a16658` | done 18:21; 31 (A over Prime) passed gate 18:22 | `31-design-a-detailed.md` | feeds 51 |
 | 4 B over prime | `01a166e0` | done; 42 passed gate 15:55 | `40`, `41` (reference), `42-design-b-prime-unchanged.md` | feeds 51 |
 | 5 merged + v2 | `01a1671a` | done; revised 51 and 50 passed the Z25 gate 01:30 | `51-design-merged.md`, `50-a-vs-b.md` v2 | gate merged_revision_z25, then one short note to ZF |
-| 6 merged PoC | `01a169cc` | built and verified offline (f5beb90 pushed); clean-HOME install passes; native end-to-end waits on ZF Codex login (note sent 05:58) | `feat/merged-poc` + install for a fresh external setup | build 51 section 8; tell ZF once when the PoC works (deadline Mon 26 Oct 09:00) |
+| 6 merged PoC | `01a169cc` | login done; Sol/Luna defaults committed (226e32a pushed); live end-to-end check running | `feat/merged-poc` + install for a fresh external setup | build 51 section 8; tell ZF once when the PoC works (deadline Mon 26 Oct 09:00) |
 
 **Usage limit 16:14-18:11 (closed):** ChatGPT usage limit on openai-codex; ZF reset it at 18:06 and work resumed on the same provider.
 
