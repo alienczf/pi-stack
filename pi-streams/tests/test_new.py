@@ -23,7 +23,7 @@ def status_body(sid: str, model_id: str = "gpt-6-astra", thinking: str = "xhigh"
 class NewTests(EngineCase):
     def setUp(self) -> None:
         super().setUp()
-        proc = self.run_streams("init", str(self.root), "-y")
+        proc = self.run_streams("init", str(self.root), "-y", "--coordinator-model", "openai-codex/gpt-6-astra", "--worker-model", "openai-codex/gpt-6-astra")
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.stub.requests.clear()
 

@@ -40,7 +40,7 @@ def expected_brief(stream_dir: str, worktree: str, base: str) -> str:
 class SpawnTests(EngineCase):
     def setUp(self) -> None:
         super().setUp()
-        proc = self.run_streams("init", str(self.root), "-y")
+        proc = self.run_streams("init", str(self.root), "-y", "--coordinator-model", "openai-codex/gpt-6-astra", "--worker-model", "openai-codex/gpt-6-astra")
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.stream_dir = (self.home / "etl").resolve()
         self.stream_dir.mkdir(parents=True)

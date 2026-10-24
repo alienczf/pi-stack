@@ -46,6 +46,8 @@ def _parser() -> argparse.ArgumentParser:
     init.add_argument("--pi-web-url")
     init.add_argument("--coordinator-model")
     init.add_argument("--coordinator-thinking")
+    init.add_argument("--worker-model", help="worker default model (openai-codex/gpt-6-luna)")
+    init.add_argument("--worker-thinking", help="worker default thinking (xhigh)")
 
     new = sub.add_parser("new")
     new.add_argument("stream_id", metavar="id")
@@ -91,6 +93,21 @@ def _parser() -> argparse.ArgumentParser:
 
     tick = sub.add_parser("tick")
     tick.add_argument("--home")
+    state = sub.add_parser("state")
+    commands = state.add_subparsers(dest="state_cmd", required=True)
+    for name in ("check", "read-entry", "update", "close"):
+        command = commands.add_parser(name)
+        command.add_argument("stream")
+        if name == "read-entry":
+            command.add_argument("entry")
+        if name in {"update", "close"}:
+            command.add_argument("--expect", required=True)
+    poc = sub.add_parser("poc")
+    commands = poc.add_subparsers(dest="poc_cmd", required=True)
+    for name in ("init", "doctor", "verify"):
+        command = commands.add_parser(name)
+        command.add_argument("--root", required=True)
+        command.add_argument("--stream", required=True)
     return parser
 
 
@@ -102,6 +119,8 @@ def cmd_init(args: argparse.Namespace) -> int:
         pi_web_url=args.pi_web_url,
         coordinator_model=args.coordinator_model,
         coordinator_thinking=args.coordinator_thinking,
+        worker_model=args.worker_model,
+        worker_thinking=args.worker_thinking,
     )
     print(index)
     return 0
@@ -218,9 +237,48 @@ def cmd_upgrade(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_state(args):
+    from engine import state
+    stream = Path(args.stream).absolute()
+    try:
+        if args.state_cmd == "read-entry":
+            sys.stdout.write(state.read_entry(stream, args.entry))
+            return 0
+        if args.state_cmd == "check":
+            current = state.check_state(stream)
+            result = {"success": True, "reason": "checked", "state_sha256": current.sha256, "history_files": []}
+        else:
+            payload = json.loads(sys.stdin.read())
+            if args.state_cmd == "close":
+                if not hasattr(state, "close_work"):
+                    raise StreamsError("computed close is not wired")
+                result = state.close_work(stream, expect=args.expect, **payload)
+            else:
+                result = state.update_state(stream, expect=args.expect, **payload)
+    except (StreamsError, OSError, ValueError, TypeError, KeyError) as exc:
+        result = {"success": False, "reason": str(exc), "state_sha256": None, "history_files": []}
+    result = {key: result[key] for key in ("success", "reason", "state_sha256", "history_files")}
+    print(json.dumps(result, ensure_ascii=False, sort_keys=True, allow_nan=False))
+    return 0 if result["success"] else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
+        if args.cmd in {"new", "status", "thread", "rotate", "close"}:
+            selected = resolve_index(args.home)
+            if any(project.info.backend != "pi" for project in load_projects(selected)):
+                raise StreamsError("legacy Pi command is not wired for a Prime project; use the explicit poc/state commands")
+        if args.cmd == "state":
+            return cmd_state(args)
+        if args.cmd == "poc":
+            import importlib.util
+            if importlib.util.find_spec("engine.poc") is None:
+                raise StreamsError("merged PoC commands are not wired yet")
+            from engine import poc
+            result = getattr(poc, args.poc_cmd)(Path(args.root), args.stream)
+            print(json.dumps(result, sort_keys=True, ensure_ascii=False, allow_nan=False))
+            return 0 if result.get("status") == "PASS" else 1
         if args.cmd == "init":
             return cmd_init(args)
         if args.cmd == "new":

@@ -522,7 +522,8 @@ def tick_index(index: Path, now: datetime) -> bool:
     with index_lock(index):
         projects = {project.info.name: project for project in load_projects(index)}
         rows = load_stream_rows(index)
-        ordered = sorted(rows, key=lambda row: str(Path(row.path).resolve()))
+        prime_rows = [row for row in rows if row.project in projects and projects[row.project].info.backend == "prime"]
+        ordered = sorted([row for row in rows if row not in prime_rows], key=lambda row: str(Path(row.path).resolve()))
         with stream_locks([Path(row.path) for row in ordered]):
             alerts = Alerts(index / "ALERTS")
             grouped: dict[str, list[StreamRow]] = {}
@@ -561,7 +562,48 @@ def tick_index(index: Path, now: datetime) -> bool:
                 except StreamsError as exc:
                     ok = False
                     print(f"{row.path}: {exc}", file=sys.stderr, flush=True)
+    for row in prime_rows:
+        from engine.prime import PrimeClient, resolve_session, coordinator_id
+        try:
+            stream = Path(row.path)
+            project = projects[row.project]
+            with PrimeClient(project.info.prime_socket) as client:
+                identity, _ = resolve_session(client, coordinator_id(stream))
+                wake_prime_if_needed(client, stream, identity, sessions_dir=project.info.prime_sessions_dir)
+        except (StreamsError, OSError) as exc:
+            ok = False
+            print(f"{row.path}: {exc}", file=sys.stderr, flush=True)
     return ok
+
+
+def wake_prime_if_needed(client, stream, identity, *, sessions_dir=None):
+    from engine import state
+    from engine.prime import stream_entries, eligible, resolve_session, send_stream_message, check_compaction, observe_workers
+    from engine.prompts import render
+    maintenance = check_compaction(client, stream, identity, sessions_dir=sessions_dir)
+    if maintenance["status"] in {"verified", "held", "deferred", "unknown"} and maintenance.get("reason") != "native percentage is unknown":
+        return None
+    current, entries = stream_entries(stream)
+    worker_activity = observe_workers(client, current, entries)
+    if not eligible(current, entries, worker_activity):
+        return None
+    _, connection = resolve_session(client, identity.session_id, identity.active_session_id)
+    summary = client.query("get_state", activeSessionId=identity.active_session_id)
+    queue = client.query("get_queue", activeSessionId=identity.active_session_id)
+    if any(connection.get(flag) is not False for flag in ("isStreaming", "isCompacting", "isBashRunning")):
+        return None
+    if summary.get("hasRunningSubagents") is not False or queue.get("steering") != [] or queue.get("followUp") != []:
+        return None
+    leaf = connection.get("leafId")
+    if not isinstance(leaf, str):
+        return None
+    key = [identity.session_id, state.sha256(current.goals.objective), leaf]
+    if any(entry.body.get("wake_key") == key for entry in entries.values()):
+        return None
+    return send_stream_message(client, stream, identity, body=render("wake"), mode="automatic",
+                               expected=current.goals_rules_sha256,
+                               metadata={"wake_key": key, "worker_activity": {sid: observed.value for sid, observed in worker_activity.items()}},
+                               original_entries=[w.original_entry for w in current.goals.work], sessions_dir=sessions_dir)
 
 
 def run_tick(indexes: list[Path]) -> int:

@@ -26,7 +26,7 @@ def status_body(sid: str) -> dict[str, object]:
 
 class RotateTests(EngineCase):
     def test_rotate_archives_old_and_spawns_new(self) -> None:
-        proc = self.run_streams("init", str(self.root), "-y")
+        proc = self.run_streams("init", str(self.root), "-y", "--coordinator-model", "openai-codex/gpt-6-astra", "--worker-model", "openai-codex/gpt-6-astra")
         self.assertEqual(proc.returncode, 0, proc.stderr)
         stream_dir = (self.home / "etl").resolve()
         stream_dir.mkdir(parents=True)
@@ -84,7 +84,7 @@ class RotateTests(EngineCase):
         self.assertEqual(git(stream_dir, self.env, "log", "-1", "--format=%s").strip(), "pi-streams rotate etl")
 
     def test_rerun_after_a_failed_spawn_finishes_the_rotation(self) -> None:
-        proc = self.run_streams("init", str(self.root), "-y")
+        proc = self.run_streams("init", str(self.root), "-y", "--coordinator-model", "openai-codex/gpt-6-astra", "--worker-model", "openai-codex/gpt-6-astra")
         self.assertEqual(proc.returncode, 0, proc.stderr)
         stream_dir = (self.home / "etl").resolve()
         stream_dir.mkdir(parents=True)
