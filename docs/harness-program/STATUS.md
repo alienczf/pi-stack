@@ -9,7 +9,7 @@ tracking_issue: https://github.com/alienczf/pi-stack/issues/38
 box_mirror: /workspace/harness-program
 host_docs_worktree: /home/alphalab/Projects/worktrees/pi-stack-harness-program
 host_input_copy: /home/alphalab/Projects/pi-stack/streams/pi-streams-harness/context/harness-program
-updated: "2026-10-24T07:25+08:00 (driver run: T1 streaming 60.8% on S3 0587832, compact at next idle; T6 idle 47.0% blocked on operator Codex login, f5beb90; T2 idle, login not recorded)"
+updated: "2026-10-24T08:05+08:00 (G40: model defaults Sol 6.1 xhigh streams / Luna 6 xhigh workers (openai-codex/gpt-6-luna); T6 steered with steer-1 (defaults + login done G39), landed 08:03, streaming)"
 tracks:
   - id: 1
     name: pi-streams must-fix catalog
@@ -106,13 +106,16 @@ tracks:
     session: 01a169cc-9519-7411-bf2f-51073758fc53
     host: options-01
     model: openai-codex/gpt-6.1-sol@xhigh
-    phase: "blocked-on-prime-codex-login - TRACK 6 STATUS blocked | feat/merged-poc@f5beb90 | suite=pass (221 streams + 72 root + 8 installer) | install=pass (clean HOME) | e2e=pending native inference. Idle 47.0% at 05:58."
+    phase: "steered 08:03 with track-6-steer-1 (G40 model defaults + G39 login done); building defaults commit, then live e2e. Was blocked-on-prime-codex-login at f5beb90 (suite/install pass)."
     milestones_sent: [track-6-blocker-prime-login 2026-10-24T05:58+08:00]
     login_command: "HOME=/home/alphalab/.cache/pi-stack-track6/20261023T172837Z/home /home/alphalab/.cache/pi-stack-track6/20261023T172837Z/home/pi-stack-merged-poc-test/bin/prime-agent then /login in the TUI"
     started: 2026-10-24T01:26+08:00
     pushed: feat/merged-poc f5beb90 (2026-10-24 05:57, driver; fast-forward over 7503ca4)
     code_branch: feat/merged-poc (session creates worktree /home/alphalab/Projects/worktrees/pi-stack-merged-poc off local main + feat/prime-cli)
     deadline: 2026-10-26T09:00+08:00
+    steers: [docs/harness-program/briefs/track-6-steer-1.md (sha256 d61f618a; jsonl match 08:03:14, G40)]
+    login_done: 2026-10-24T07:56+08:00 (G39, clean test HOME)
+    model_defaults: "streams openai-codex/gpt-6.1-sol@xhigh; workers openai-codex/gpt-6-luna@xhigh (G40, ZF t239u)"
     brief: docs/harness-program/briefs/track-6.md (final sha256 4ec99908, aligned to revised 51 section 8)
     progress: docs/harness-program/13-track-6-progress.md
     source: "ZF t234u 00:46 SGT (Z26/G37): drive over the weekend; tell ZF when a working PoC is on the branch; update install for a new external setup"
