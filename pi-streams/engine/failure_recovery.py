@@ -377,13 +377,23 @@ def _retire(stream: Path, op: Recovery, episode: failure.Episode) -> None:
     except FileNotFoundError:
         pass
     else:
+        expected_marker = (episode.checkpoint["entryId"] + "\n").encode()
         with sessionlog.regular_reader(marker) as source:
-            if source.read() != (episode.checkpoint["entryId"] + "\n").encode():
+            if source.read() != expected_marker:
                 raise StreamsError("Foreign/changed failure marker was preserved")
+            owned_marker = os.fstat(source.fileno())
+        owned_directory = directory.lstat()
         _unresolved(stream, op, failure.load(stream, op.session))
         token, allowed = piweb.automatic_admission(piweb.session_status(op.fork), op.fork, op.cwd, "wake")
         if not allowed or token["generation"] != op.generation:
             raise StreamsError("Newer fork stop/input superseded marker cleanup")
+        current_directory = directory.lstat()
+        if directory.is_symlink() or not directory.is_dir() or current_directory.st_dev != owned_directory.st_dev or current_directory.st_ino != owned_directory.st_ino:
+            raise StreamsError("Failure marker directory changed during final receiving check")
+        with sessionlog.regular_reader(marker) as source:
+            current_marker = os.fstat(source.fileno())
+            if any(getattr(current_marker, key) != getattr(owned_marker, key) for key in ("st_dev", "st_ino", "st_mode", "st_size", "st_mtime_ns", "st_ctime_ns")) or source.read() != expected_marker:
+                raise StreamsError("Changed marker identity/bytes after final receiving check were preserved")
         marker.unlink()
         fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         try:

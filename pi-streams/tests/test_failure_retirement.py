@@ -4,6 +4,7 @@ import base64
 import copy
 import hashlib
 import json
+import os
 from pathlib import Path
 
 import test_failure_dcr as cases
@@ -163,6 +164,56 @@ class FailureRetirementTests(TickCase):
         self.assertNotEqual(self.advance().returncode, 0)
         self.assertEqual((self.stream / "failures/coi.lastgood").read_bytes(), b"e4\n")
         self.assertEqual(self.state(self.stream)["failure_recoveries"]["coi"]["phase"], "retiring")
+
+    def marker_at_final_status(self, kind):
+        self.ready_to_retire()
+        marker = self.stream / "failures/coi.lastgood"
+        target = self.tmp / "unrelated-marker-target"
+        target.write_bytes(b"unrelated target bytes")
+        changed = False
+        def boundary(_body):
+            nonlocal changed
+            if self.receipt is not None and self.state(self.stream)["failure_recoveries"]["coi"]["phase"] == "clearing" and not changed:
+                changed = True
+                if kind == "bytes":
+                    marker.write_bytes(b"foreign bytes during final status\n")
+                else:
+                    marker.unlink()
+                    if kind == "symlink":
+                        marker.symlink_to(target)
+                    elif kind == "fifo":
+                        os.mkfifo(marker)
+                    else:
+                        marker.write_bytes(b"e4\n")
+            return 200, self.fork_status
+        self.routes = [(method, path, code, boundary if method == "GET" and path == "/api/sessions/returned-fork/status" else body) for method, path, code, body in self.routes]
+        self.stub.set_routes(self.routes)
+        result = self.advance()
+        self.assertTrue(changed, "The replacement must occur while the final status request awaits its response")
+        self.assertNotEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(marker.exists() or marker.is_symlink())
+        self.assertEqual(target.read_bytes(), b"unrelated target bytes")
+        self.assertEqual(self.state(self.stream)["failure_recoveries"]["coi"]["phase"], "clearing")
+        if kind == "bytes":
+            self.assertEqual(marker.read_bytes(), b"foreign bytes during final status\n")
+        elif kind == "symlink":
+            self.assertTrue(marker.is_symlink())
+        elif kind == "fifo":
+            self.assertTrue(marker.is_fifo())
+        else:
+            self.assertEqual(marker.read_bytes(), b"e4\n")
+
+    def test_final_status_changed_marker_bytes_are_preserved(self):
+        self.marker_at_final_status("bytes")
+
+    def test_final_status_symlink_marker_is_preserved(self):
+        self.marker_at_final_status("symlink")
+
+    def test_final_status_fifo_marker_is_preserved_without_blocking(self):
+        self.marker_at_final_status("fifo")
+
+    def test_final_status_same_bytes_replaced_identity_is_preserved(self):
+        self.marker_at_final_status("identity")
 
     def test_foreign_marker_is_preserved_after_a_verified_native_result(self):
         self.ready_to_retire()
