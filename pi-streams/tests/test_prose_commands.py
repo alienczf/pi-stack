@@ -40,6 +40,7 @@ class ProseCommandTests(unittest.TestCase):
             "pi-streams delivery ack",
             "pi-streams delivery list",
             "pi-streams delivery send",
+            "pi-streams drive",
             "pi-streams new",
             "pi-streams rotate",
             "pi-streams state append",

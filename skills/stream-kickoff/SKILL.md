@@ -44,7 +44,7 @@ Record each new human ruling through `pi-streams state ruling <stream> --subject
 
 ## Plan
 
-Set the immediate authorized objective through `pi-streams state objective <stream> --body-file -`. The single resolver uses this objective, falling back to North Star. There is no North Star completion flag.
+Set the immediate authorized objective through `pi-streams state objective <stream> --body-file -`. The single resolver uses this objective, falling back to North Star. There is no North Star completion flag. Only if the confirmed grant authorizes continuous work, enable `pi-streams drive <stream> on`; otherwise leave it off. A verified finite objective may select the next authorized objective or use `pi-streams drive <stream> off`. No disposition record is required for the engine's current-goal re-injection, and injection is never permission to bypass a human question, stop, failure boundary or uncertain external job.
 
 Append interview outcomes, work, failures, and ZF steers through `pi-streams state append <stream> --subject SUBJECT --body-file - --request-id ID`. Keep each request ID stable across retries. Only Log is capped at 30; the engine rotates overflow every tick. Never prune or rotate entries yourself. Open cold history only on demand. The same STATE remains authoritative through routine same-session DCR. Follow AGENTS for engine-requested SYNC/DUMP, then yield with the returned ready acknowledgement. The engine owns compaction and fixed current-goal RESUME; the agent never authors that prompt.
 

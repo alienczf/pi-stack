@@ -1,12 +1,12 @@
 ---
 name: stream
-description: Start, inspect, or close a pi-streams stream through the engine. Use only for /skill:stream or /stream with new, status, or close.
+description: Start, inspect, drive, or close a pi-streams stream through the engine. Use only for /skill:stream or /stream with new, status, drive, or close.
 disable-model-invocation: true
 ---
 
 # Stream
 
-Arguments are `new <id>`, `status [<id>]`, or `close <id>`. Pass any extra flags ZF gives to each pi-streams call. In a stream role, read AGENTS.md and STATE.md each turn. Do not use TODO.md or PLAN.md; STATE Goals plus Log replace them.
+Arguments are `new <id>`, `status [<id>]`, `drive <id> [on|off|status]`, or `close <id>`. Pass any extra flags ZF gives to each pi-streams call. In a stream role, read AGENTS.md and STATE.md each turn. Do not use TODO.md or PLAN.md; STATE Goals plus Log replace them.
 
 ## New and status
 
@@ -15,6 +15,12 @@ Run `pi-streams new <id>`. Report the URL and coordinator session ID it prints. 
 Run `pi-streams status [<id>]` and report its output unchanged. For canonical streams, `pi-streams status <id> --json` provides the path and threadSessions view. Use that view instead of reading engine registries. Never resume a session merely to inspect it.
 
 Status also reports maintenance phase and refusal details. Routine DCR compacts the designated session in place, not through close or replacement. Follow AGENTS for the engine's supplied SYNC/DUMP command. Do not send `/compact` as prompt text, abort to force idle, or author RESUME. The engine invokes the recipient-loaded poteto-mode skill with the latest exact goal after proved native compaction.
+
+## Drive
+
+Drive is explicitly off by default. Use `pi-streams drive <id> on` only when the current grant authorizes continuous work. Use `pi-streams drive <id> status` to inspect it and `pi-streams drive <id> off` to pause. Report an unconfirmed remote stop honestly; local off remains saved and readiness does not re-enable it. Never guess a missing native target.
+
+The tick reasserts the shared current goal when driven and idle or waiting. It does not diagnose the stall or demand a next-action/disposition record. A coalesced control goal is not a human answer or permission to repair the environment, resubmit an uncertain job, or revive stopped work. Follow current AGENTS and STATE. A finished objective may select another authorized objective or end driving, never complete North Star.
 
 ## Close
 
