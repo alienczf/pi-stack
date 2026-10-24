@@ -160,6 +160,51 @@ class UsageRecoveryTests(TickCase):
         self.assertFalse(any(item[0]=="POST" for item in self.stub.requests))
         self.assertEqual(self.episode()["state"],"parked")
 
+    def test_later_observation_keeps_jobs_from_a_batch_that_was_still_running_at_first_error(self):
+        original=user("Only the authorized private batch")
+        error={"role":"toolResult","toolCallId":"auth-call","toolName":"private-auth","isError":True,"content":[{"type":"text","text":"Labelled tool login expired"}]}
+        self.write_log("coi",str(self.stream),original,error)
+        self.routes(leaf="e2")
+        self.assertEqual(self.tick("2026-10-06T12:00:00Z").returncode,0)
+        first=self.episode()
+        self.write_log("coi",str(self.stream),original,error,{"role":"toolResult","toolCallId":"submit-call","toolName":"private-submit","isError":False,"details":{"jobId":"late-batch-job","status":"submitted"},"content":[]},reply("Batch has now settled"))
+        self.routes(leaf="e4")
+        result=self.tick("2026-10-06T12:05:00Z")
+        self.assertEqual(result.returncode,0,result.stderr)
+        current=self.episode()
+        self.assertEqual(current["id"],first["id"])
+        self.assertEqual(current["failure_sha256"],first["failure_sha256"])
+        self.assertEqual(current["uncertain_jobs"],[{"id":"late-batch-job","state":"submitted"}])
+        self.assertFalse(any(item[0]=="POST" for item in self.stub.requests))
+
+    def test_genuine_later_input_epoch_keeps_saved_trial_parked_even_with_notification(self):
+        self.assertEqual(self.tick("2026-10-06T12:00:00Z").returncode,0)
+        first=self.episode()
+        self.synthetic_notification_receipt()
+        self.stub.automatic_admissions["coi"].update(generation="later-human-input",allowed=False)
+        self.write_log("coi",str(self.stream),user("Reconcile the original authorized step without duplicate external submissions."),failure(self.error),user("A genuinely newer authorized instruction, not a retry permission"))
+        self.routes(leaf="e3")
+        result=self.tick("2026-10-06T13:00:00Z")
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertEqual(self.episode()["saved_entry"],first["saved_entry"])
+        self.assertEqual(self.episode()["retry_id"],"")
+        self.assertFalse(any(item[0]=="POST" for item in self.stub.requests))
+
+    def test_failed_trial_and_process_restart_do_not_replenish_the_same_saved_reset(self):
+        self.assertEqual(self.tick("2026-10-06T12:00:00Z").returncode,0)
+        self.synthetic_notification_receipt()
+        self.assertEqual(self.tick("2026-10-06T12:10:00Z").returncode,0)
+        first=self.episode()
+        self.write_log("coi",str(self.stream),user("Reconcile the original authorized step without duplicate external submissions."),failure(self.error),user(first["retry_body"]),failure(self.error))
+        self.routes(leaf="e4")
+        self.assertEqual(self.tick("2026-10-06T12:11:00Z").returncode,0)
+        self.assertEqual(self.episode()["retry_reset"],"2026-10-06T12:10:00Z")
+        result=self.tick("2026-10-07T12:00:00Z")
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertEqual(self.episode()["retry_id"],first["retry_id"])
+        self.assertEqual(self.episode()["retry_state"],"failed")
+        self.assertFalse(any(item[0]=="POST" for item in self.stub.requests))
+
     def test_nonusage_failure_does_not_release_on_later_success_or_fixed_user_text(self):
         self.write_log("coi",str(self.stream),user("Original authorized task"),failure("Labelled expired Codex login: session expired"))
         first=self.tick("2026-10-06T12:00:00Z")

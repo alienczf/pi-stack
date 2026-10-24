@@ -170,7 +170,14 @@ def observe(stream_dir: Path, sid: str, cwd: str, native: dict, status: dict, at
     observation = sessionlog.failure_observation(Path(path), sid, cwd, leaf)
     if observation is None:
         return previous
+    jobs = observation["uncertainJobs"]
+    replay = artifacts._read_tick_data(stream_dir).get("sessions", {}).get(sid, {}).get("replay", [])
+    if replay:
+        jobs.append({"id": "saved-unconfirmed-replay", "state": "unknown"})
     if previous is not None and previous.failure_entry == observation["entryId"] and previous.failure_sha256 == observation["sha256"]:
+        if previous.uncertain_jobs != jobs:
+            previous.uncertain_jobs = jobs
+            save(stream_dir, previous)
         return previous
     policy = classify(observation["provider"], observation["message"], at, tool_error=observation["toolError"])
     prior = previous
@@ -184,10 +191,7 @@ def observe(stream_dir: Path, sid: str, cwd: str, native: dict, status: dict, at
     if previous is None or not previous.reset_at or policy.reset_at and clock.parse(policy.reset_at) > clock.parse(previous.reset_at):
         episode.reset_at, episode.reset_source = policy.reset_at, policy.reset_source
     episode.saved_entry, episode.saved_sha256 = observation["savedEntryId"], observation["savedSha256"]
-    episode.uncertain_jobs = observation["uncertainJobs"]
-    replay = artifacts._read_tick_data(stream_dir).get("sessions", {}).get(sid, {}).get("replay", [])
-    if replay:
-        episode.uncertain_jobs.append({"id": "saved-unconfirmed-replay", "state": "unknown"})
+    episode.uncertain_jobs = jobs
     episode.state = "parked"
     if episode.retry_state:
         episode.retry_state = "failed"
