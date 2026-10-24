@@ -49,7 +49,8 @@ class MetadataSupervisor(OwnedSupervisor):
             self.archived = False
         result = {{"success": True}} if command["type"] == "get_model_catalog" else super().response(command, owner)
         if result.get("success") and command["type"] in ("get_connection_state", "get_model_catalog", "set_model"):
-            definition = json.loads((root / "agent/models.json").read_text())["providers"]["openai-codex"]["models"][0]
+            path = root / "agent/models.json"
+            definition = json.loads(path.read_text())["providers"]["openai-codex"]["models"][0] if path.exists() else {{key: value for key, value in {DEFINITION!r}.items() if key != "provider"}}
             model = {{"provider": "openai-codex", **definition}}
             if command["type"] == "get_model_catalog":
                 result["data"] = {{"models": [model], "configuredProviders": ["openai-codex"]}}
@@ -92,6 +93,37 @@ Path({str(self.events_log)!r}).write_text(json.dumps({{"requests": server.reques
         self.assertEqual((self.owned / "agent/settings.json").read_bytes(), before)
         self.assertFalse((self.owned / "daemon.sock").exists())
         self.assertFalse((self.owned / "verification.lock").exists())
+
+    def test_existing_agent_environment_preserves_shared_config_and_isolates_sessions(self):
+        shared = self.root / "authenticated-agent"
+        shared.mkdir(mode=0o700)
+        settings = shared / "settings.json"
+        models = shared / "models.json"
+        settings.write_text('{"sharedSetting":"unchanged"}\n')
+        models.write_text("Existing model configuration must not be opened or replaced.\n")
+        before = (settings.read_bytes(), models.read_bytes())
+        self.env["PRIME_AGENT_CODING_AGENT_DIR"] = str(shared)
+        self.env["PRIME_AGENT_SESSION_DIR"] = str(self.root / "foreign-sessions")
+        self.env["PRIME_AGENT_DAEMON_SOCKET"] = str(self.root / "foreign.sock")
+        text = self.runtime.read_text().replace('        if command["type"] == "create":', '''        if command["type"] in ("set_model", "set_thinking_level"):
+            (Path(os.environ["PRIME_AGENT_CODING_AGENT_DIR"]) / "settings.json").write_text("setter changed shared settings")
+        if command["type"] == "create":''')
+        self.runtime.write_text(text)
+        proc = self.verify()
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        launched = json.loads(self.log.read_text())
+        self.assertEqual((launched["agentDir"], launched["sessionDir"], launched["socketEnv"]),
+                         (str(shared), str(self.owned / "agent/sessions"), str(self.owned / "daemon.sock")))
+        self.assertEqual((settings.read_bytes(), models.read_bytes()), before)
+        project = json.loads((self.owned / "work/.prime/agent/settings.json").read_text())
+        self.assertEqual(project, {"retry": {"enabled": False, "failover": {"enabled": False},
+                         "provider": {"waitForUsage": {"enabled": False, "pauseUntilReset": False}}}})
+        result = json.loads(proc.stdout)
+        self.assertEqual(result["retainedOwnedSessions"], [])
+        self.assertEqual([row["command"] for row in result["checks"] if row.get("skipped")],
+                         ["model", "thinking-level"])
+        self.assertEqual(result["runtime"], {"started": True, "stopped": True, "socketRemoved": True})
+        self.assertFalse((self.owned / "agent/models.json").exists())
 
     def test_full_metadata_is_read_from_catalog_not_thin_connection_summary(self):
         proc = self.verify()
