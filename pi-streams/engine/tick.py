@@ -229,7 +229,11 @@ class StreamTick:
                 for sid in artifacts._read_tick_data(self.stream_dir).get("failures", {}):
                     episode = failure.load(self.stream_dir, sid)
                     if episode is not None and episode.state == "parked" and episode.kind != "usage-limit" and episode.ratification is not None:
-                        failure_recovery.advance_locked(self.stream_dir, sid, episode.id, self.at, index=self.index, project=self.project)
+                        try:
+                            failure_recovery.advance_locked(self.stream_dir, sid, episode.id, self.at, index=self.index, project=self.project)
+                        except (StreamsError, OSError) as exc:
+                            self.typed_failures.add(sid)
+                            self.fail(f"recovery {sid}: {exc}")
             self.rows = load_threads(self.rows_path)
             self.coordinator_resolution = resolve_coordinator(self.stream_dir, self.rows)
             if self.coordinator_resolution is not None:
