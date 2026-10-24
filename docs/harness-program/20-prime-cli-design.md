@@ -2,7 +2,7 @@
 
 Track 2. Written before implementation on 2026-10-23. This session leaves its design edits uncommitted for Grok Bot to collect. Code belongs only to `feat/prime-cli` in `/home/alphalab/Projects/worktrees/pi-stack-prime-cli`, based on `3acf0f01e6084a317b89cef3a86f4781e60877cf`.
 
-Final result is **BLOCKED**, not full parity. Grok Bot pushed the initial implementation at `bccf159`. G20 code is locally committed through `84e551dfa27b53216d04b5b59319c241f4974831`. Native model metadata now matches the sourced definition and effective xhigh is retained. Model selection still requires Prime-owned authentication. Structured answers, exact resident disposal, and rich cross-session replay remain unavailable. This session made no login, credential import, provider change, existing-stream action, or push.
+Final track result remains **BLOCKED**, not full parity. G41 cleared the inference authentication blocker through ZF's existing login, without copying credentials. Actual `openai-codex/gpt-6.1-sol` xhigh completion passed. G41 code is locally committed through `4fd0c90f730b2c552e79f6e17adcd466cc0d5f62`; Grok Bot owns pushing. Short-history compaction was explicitly skipped, not verified. The host-side wrapper check passed with a local executor, but real box-side SSH remains unverified. Structured answers, exact resident disposal, and rich cross-session replay remain unavailable. No login, credential import, provider switch, or track 6 session/stream/daemon operation was performed.
 
 ## Goal and boundary
 
@@ -76,7 +76,7 @@ Every row is LAYER 3. The CLI executes the translation on every invocation. A re
 | `thinking-level SID LEVEL` | Select reasoning level | `set_thinking_level` with `level` | Prime may clamp unsupported levels | Preserve native behavior. Read status to observe effective level. |
 | `answer SID ASK_ID QUESTION_ID TEXT` | Submit `{askId,answers:[{id,values:[],otherText}]}`, return `{ok,status,result}` | No equivalent found in public daemon command union | Pi Web's ask registry has no native Prime counterpart | Return `{ok:false,status:501,error:unsupported,...}`. Sending arbitrary prompt text is not an answer implementation. |
 
-`prompt SID '/compact ...'` uses Prime's native session slash command. It is not a separate pi-web-cli verb. Future stream integration needs this path and `isCompacting`. Current Z3 and Z8 replace the former 252k policy with same-session dump, compact, and resume at 150k. This CLI does not implement that policy. Track 1 owns it.
+`prompt SID '/compact ...'` uses Prime's native session slash command. It is not a separate pi-web-cli verb. Future stream integration needs this path and `isCompacting`. At G20, Z3 and Z8 had replaced the former 252k policy with same-session dump, compact, and resume at 150k. Stream integration owns that threshold and later policy amendments. This CLI does not impose a compaction threshold.
 
 The installed PI WEB implementation, not just its thin client, supplies the lifecycle oracle. `dist/server/sessions/piSessionService.js:1767` clears queues during abort. Line 1793 closes the active runtime during stop. Line 1519 rejects active work before archive. `closeActive` at line 1992 disposes runtime without adding archive state. Initial assumptions that abort preserves Pi queues and stop retains the Pi runtime were wrong and are superseded below.
 
@@ -290,7 +290,9 @@ The source investigation compared 26 relevant files at upstream `71beca9` with s
 
 These are source-observed adapter capabilities, not a negotiated native capability list. A later stream port must honor them before destructive clearing. No stream or Caladan code was changed.
 
-### Exact operator login command
+### Historical G20 operator login command
+
+Superseded by G41. ZF has now logged in under track 6's clean HOME. Do not run this historical login recipe again; use the G41 commands below.
 
 ZF runs this one shell command in a real terminal on options-01. This session does not execute it. Prime opens its local login selector without sending a model prompt. Select **ChatGPT Plus/Pro (Codex Subscription)**, complete the displayed authentication flow, wait for the saved-login message, then enter `/quit`. Do not paste the authorization URL or redirect response into any artifact.
 
@@ -317,7 +319,9 @@ This is source-backed for the checksum-verified v0.10.1 binary. `crates/pa-cli/s
 
 The `--no-session` flag avoids a saved login-only transcript. Provider-auth storage selection is independent of session persistence. The explicit socket and agent directory scope the shutdown trap through `daemon_discovery/mod.rs:120-150`. Do not run another workflow against this root concurrently. Non-TTY stdin selects print mode, so do not pipe this command through an unallocated SSH session.
 
-### Ready post-login verification
+### Historical G20 post-login verification
+
+The G41 commands below supersede these old temporary-root commands. The original runtime binary and root are no longer the current verification target.
 
 The committed runner reuses the original ZF login root. **Do not rerun prepare after login. Do not register models.json separately.** Verify creates that metadata file exclusively and removes only its own file after shutdown. It refuses any existing model file without reading or replacing it. Existing auth, transcripts, and settings are preserved. Model and thinking setters can change defaults, so the runner restores its saved nonsecret settings after its daemon exits.
 
@@ -339,7 +343,9 @@ python3 /home/alphalab/Projects/worktrees/pi-stack-prime-cli/scripts/check-prime
 
 The explicit inference path runs control checks first, then tests paused prompt admission and same-session queue resumption, native completion, and manual compaction. It does not prove active-turn steering delivery. Full catalog metadata and effective xhigh must match before runnable input. Model-selection and typed usage failures stop without substitutions or retries. Socket, lock, directory, and settings checks prevent adopting another daemon. Cleanup archives only received created IDs, shuts down only the launched daemon, waits for it, and removes only matching owned files. Reports always retain `parityComplete:false` because missing native capabilities are not repaired by authentication.
 
-### Exact off-host wrapper verification
+### Historical G20 off-host wrapper recipe
+
+Use the G41 box command below for the actual authenticated agent directory. This earlier recipe selects the old private root and is retained only as history.
 
 Grok Bot can run this on his box after ZF's login runtime exits and inference is authorized. It needs the existing authenticated `options-01-ssh` and local Python 3. No local checkout or newly installed wrapper is assumed. The first SSH call reads the known wrapper source; Python runs that wrapper locally, and the wrapper invokes the host verifier through the same SSH route. The absolute Python override is deliberate. The helper never adds `--ensure-tg`.
 
@@ -385,7 +391,7 @@ The final code checks pass **71 Prime fixture tests**, **105 existing stream tes
 
 Steer 2 authorizes real `openai-codex/gpt-6.1-sol` xhigh inference using ZF's completed login in place. The selected HOME is `/home/alphalab/.cache/pi-stack-track6/20261023T172837Z/home`; its native agent directory is `$HOME/pi-stack-merged-poc-test/prime/agent`. No tool opens, copies, moves, prints, links, or edits credentials. Track 6's sessions, streams, and daemon remain outside this verifier's ownership.
 
-The existing verifier overrides the native agent-directory environment with its private root. It also registers metadata and restores settings, which is inappropriate for a shared authenticated directory. The bounded correction is an environment-selected existing-agent mode with explicit ownership. Results and final commands follow after execution.
+The old verifier overrode the native agent-directory environment with its private root and applied private-root registration/rollback to every launch. Commits `70fd745` and `8e612bb` reproduce and fix that boundary. Existing-agent mode now preserves shared configuration. The actual operator-selected directory has mode 775; `f9b29a9` and `530332a` reproduce and remove an unnecessary permission restriction without changing that directory's permissions.
 
 | Approach | Disposition |
 | --- | --- |
@@ -395,6 +401,89 @@ The existing verifier overrides the native agent-directory environment with its 
 LAYER 1. The selected agent directory carries configuration ownership, distinct from the verification root. This prevents applying private-root registration and rollback to shared settings. LAYER 3. The subprocess environment pins `PRIME_AGENT_SESSION_DIR` and the dedicated socket under the owned root. A rule cannot isolate live session storage. Own-cwd `.prime/agent/settings.json` disables retry, failover and quota waiting without changing shared settings. Native allowedModels is global-only, so exact model creation and readback must fail closed rather than claim a project allowlist override. LAYER 2. Subprocess regressions verify those paths and unchanged shared configuration.
 
 The installed `bin/prime-agent` wrapper uses `env -i` with fixed track 6 paths. Use its unchanged `libexec/prime-agent` directly, with explicit package/kernel environment. Its observed version is `0.10.1` and binary SHA-256 is `489645506b880011cee3408b72ad181c90abb22a388be155303be6c70d445e89`, matching track 6's published provenance. Stock may maintain socket-namespaced descriptors and agent-level caches. This is not a claim of zero shared native housekeeping.
+
+### G41 exact commands
+
+These commands select credentials only through the native agent-directory environment. They use this track's prepared root, not track 6's sessions or socket. No new prepare or login is needed for this retained verification root.
+
+Executed on options-01, with stdout saved as `g41-live-corrected.json` under the owned root:
+
+```bash
+(
+  set -eu
+  home=/home/alphalab/.cache/pi-stack-track6/20261023T172837Z/home
+  prefix="$home/pi-stack-merged-poc-test"
+  root=/tmp/prime-cli-check-7uekbeka
+  export HOME="$home" PRIME_AGENT_CODING_AGENT_DIR="$prefix/prime/agent"
+  export PI_PACKAGE_DIR="$prefix/libexec" PRIME_AGENT_KERNEL_VENV="$prefix/prime/kernel-venv"
+  export UV_CACHE_DIR="$root/cache/uv" UV_PYTHON_INSTALL_DIR="$root/cache/python"
+  export XDG_CACHE_HOME="$root/cache/xdg" XDG_CONFIG_HOME="$root/config/xdg"
+  export XDG_DATA_HOME="$root/data/xdg" PYTHONDONTWRITEBYTECODE=1
+  python3 /home/alphalab/Projects/worktrees/pi-stack-prime-cli/scripts/check-prime-cli-live.py verify \
+    --root "$root" --runtime "$prefix/libexec/prime-agent" --timeout 180 --inference
+)
+```
+
+**Exact box command for Grok Bot.** Not executed from this host. It fetches the known wrapper source through the existing authenticated helper, then uses prime-cli-remote with an absolute env executable to pass only public path/configuration assignments to the host verifier. The wrapper still makes the second SSH call. It does not add `--ensure-tg`.
+
+```bash
+(
+  set -euo pipefail
+  repo=/home/alphalab/Projects/worktrees/pi-stack-prime-cli
+  home=/home/alphalab/.cache/pi-stack-track6/20261023T172837Z/home
+  prefix="$home/pi-stack-merged-poc-test"
+  root=/tmp/prime-cli-check-7uekbeka
+  options-01-ssh "cat '$repo/bin/prime-cli-remote'" |
+    PRIME_CLI_REMOTE_BIN=/usr/bin/env python3 - \
+      "HOME=$home" "PRIME_AGENT_CODING_AGENT_DIR=$prefix/prime/agent" \
+      "PI_PACKAGE_DIR=$prefix/libexec" "PRIME_AGENT_KERNEL_VENV=$prefix/prime/kernel-venv" \
+      "UV_CACHE_DIR=$root/cache/uv" "UV_PYTHON_INSTALL_DIR=$root/cache/python" \
+      "XDG_CACHE_HOME=$root/cache/xdg" "XDG_CONFIG_HOME=$root/config/xdg" \
+      "XDG_DATA_HOME=$root/data/xdg" PYTHONDONTWRITEBYTECODE=1 \
+      /usr/bin/python3 "$repo/scripts/check-prime-cli-live.py" verify \
+      --root "$root" --runtime "$prefix/libexec/prime-agent" --timeout 180 --inference
+)
+```
+
+Remove only `--inference` for a control-only run. Both forms refuse an already-running verifier at this root. Do not use track 6's installed bin/prime-agent wrapper, daemon.sock, session files, or stream commands. The retained /tmp root must still exist; do not recreate or copy any authenticated directory if it disappears.
+
+### G41 evidence and limitations
+
+The native run used fresh sessions and the stock binary fingerprint above. Source settings evidence is `settings/storage.rs:12,65-70`, `settings/manager.rs:43-49,594-599`, and `agent_engine/turn/run_once.rs:12-24`. Project retry settings override shared defaults, but the model allowlist is global-only. `model_switch.rs:101-113,187-209` explains why setter coverage is skipped instead of modifying shared defaults. The existing metadata file is not opened or merged by the verifier.
+
+The first live run returned the marker but timed out after slash-command compaction. The owned transcript contained the echo, with no compaction entry. Native `session_engine/session_commands.rs:59-61,225-240` explains that skipped compaction records no durable result. `compact_session/prepare.rs:13-25` defines the two exact skip messages. A poll for an increased count cannot observe that settled skip. Commits `f41daae` and `4fd0c90` reproduce the failure and switch the verifier to awaited public `compact`. Only the two untyped native skip messages are treated as benign; quota or other failures remain fatal with no retry. Success still requires a real counter advance. No compaction thresholds were changed to force a test pass.
+
+Corrected native output, exit 0:
+
+```text
+report -> /tmp/prime-cli-check-7uekbeka/g41-live-corrected.json
+ok -> true
+inferenceRequested -> true
+inferenceVerified -> true
+model -> openai-codex/gpt-6.1-sol
+effectiveThinking -> xhigh
+marker -> PRIME_CLI_VERIFIED_af07aa6c36e34b009ca9e30d117e226a
+native cost -> 0.017223999999999996
+contextUsage -> {tokens:8496,contextWindow:500000,percent:1.6992}
+compactionVerified -> false
+compaction outcome -> skipped, Session is too short to compact
+parityComplete -> false
+retainedOwnedSessions -> []
+runtime -> {started:true,stopped:true,socketRemoved:true}
+```
+
+The transcript at `agent/sessions/01a16b66-d09e-7003-b22b-abecffdd5a4d.jsonl` under that root independently records provider `openai-codex`, model `gpt-6.1-sol`, API `openai-codex-responses`, xhigh, stopReason `stop`, and the exact marker. Native cost is the backend's flat-metadata estimate, not a billing claim. Native compaction is **not verified**. An ok verifier report can include a benign skip; use the separate inferenceVerified and compactionVerified fields rather than infer full parity from ok.
+
+Host wrapper evidence:
+
+- `g41-real-ssh-helper-check.json` records the genuine wrapper returning exit 1, status 502, `remote_unavailable`, `No such file or directory`. `options-01-ssh` is absent here. No network success is claimed.
+- `g41-local-wrapper-control.json` records exit 0 through the actual prime-cli-remote executable with an explicitly named **local-only executor** standing in for the SSH helper. It ran the real native control verifier, with inferenceRequested false and complete cleanup. This proves quoting, environment forwarding and host execution, not Twingate, SSH authentication, or Grok's box route.
+
+All G41 reports remain under `/tmp/prime-cli-check-7uekbeka`, outside Git. `g41-own-session-evidence.json` records five sessions, all archived, with zero retained sessions and no compaction entry. The two marker-probe sessions contain actual successful assistant responses. Each owned daemon was shut down and waited. The dedicated socket, lock and temporary private model file are absent. Shared configuration and credentials were not copied, linked, rewritten or rolled back by the verifier. No track 6 session, stream or daemon was contacted.
+
+Final offline checks passed 76 Prime fixture tests, 105 existing stream tests, installer checks, shell/Python syntax and whitespace. Logs are `/tmp/g41-final-*.log`. The source-only investigation made no native calls. There was no actual usage-limit error, login, provider/model substitution, or push.
+
+G41's native inference and host-side checks are complete. The remaining track gates are real box-side verification, acceptance of the native capability gaps, active-turn steering coverage, actual compaction success, and positive post-login model-setter coverage without mutating shared defaults.
 
 ## Decisions
 
@@ -432,6 +521,10 @@ The installed `bin/prime-agent` wrapper uses `env -i` with fixed track 6 paths. 
 32. Preserve the existing login root with an exclusively owned verifier process and temporary metadata registration. Never prepare it again, merge unknown models.json, adopt a colliding daemon, or retain native setter changes to its settings.
 33. Verify full metadata through get_model_catalog, not the thin selected-model summary. The real daemon, failing regression, and corrected fixture establish the boundary.
 34. Test nonempty resume only under explicit inference authorization. G20 itself used no runnable input. All four new sessions were archived and the dedicated runtimes stopped.
+35. Under G41, select ZF's authenticated agent directory in place through environment and retain an independent session directory, cwd and socket. Do not copy or link credentials or run the installed path-overriding wrapper.
+36. Existing-agent mode never registers metadata or snapshots/restores shared settings. Skip globally persistent setter probes; use owned project retry settings and exact create/readback checks instead.
+37. Observe native compaction through its awaited public command. The two source-defined benign skips are explicit non-verification, not timeouts or successful compaction. Typed usage and other failures stop without retry.
+38. Record native inference as passed, local-executor wrapper proof as host-only, and genuine box-side SSH as unverified. All five G41 sessions are archived and owned daemons exited.
 
 ## Gaps
 
@@ -439,10 +532,10 @@ The installed `bin/prime-agent` wrapper uses `env -i` with fixed track 6 paths. 
 - Exact Pi stop-without-archive disposal has no demonstrated public Prime equivalent. Work-stop can retain the resident runtime only as a labeled shim.
 - Exact replay of Prime internal queued inputs is not guaranteed by its preview-based queue API. Ordinary user input and arbitrary internal work must not be conflated.
 - Busy archive guards are covered offline and real idle archival passed. A native pause stops queued delivery, not every producer. `preflightAtomic:false` is not a quiescence guarantee.
-- Real inference is blocked by `No API key found for openai-codex.` Prime-owned Codex authentication is required in the selected agent directory. No authentication flow or credential import was attempted.
-- The requested model remains absent from the stable bundled catalog, but G20's sourced custom definition fixes local metadata and xhigh retention. Native model selection now exposes the typed unauthenticated-provider gate. Provider acceptance and entitlement remain unverified. Flat native pricing cannot represent the observed above-272000-token tier, and unsupported compatibility flags are omitted.
+- G41 cleared the prior authentication blocker through ZF's existing in-place login. Actual Sol 6.1 xhigh completion is verified. Model and thinking setter probes were intentionally skipped in the shared-agent mode because they can persist global defaults.
+- The requested model remains absent from the stable bundled catalog, but the existing custom definition supplies correct metadata and xhigh. G41's actual completion confirms current access for this account and request. Flat native pricing cannot represent the observed above-272000-token tier, and unsupported compatibility flags remain omitted.
 - Native preflight failures can exist only in awaited results or events, with no assistant error row. The diagnostic script now observes the awaited result, but the later stream port still needs an explicit completion or failure-observation contract. Current message-log inspection alone is insufficient.
-- No successful model completion, active-run steering delivery, or compaction was verified after the credential refusal.
+- Successful marker completion is now verified. Active-run steering delivery and actual compaction success remain unverified. The short-history compaction result was a native skip, not a completed summary.
 - Remote wrapper execution from the Grok Bot machine requires that machine and its authenticated `options-01-ssh`. Local wrapper quoting tests are not off-host evidence.
 - Stream ticks, coordinator compaction policy, skill installation into Prime, and Caladan adaptation are outside this implementation under P2.
 - Prime's executable Python skills are not automatically equivalent to Pi's Markdown process skills. Command discovery must report only what the target runtime actually loads.
@@ -455,7 +548,7 @@ Final tested state. Done means the mapped operation worked on the owned real dae
 | --- | --- | --- |
 | list | done | Real cwd list preserved durable IDs, transcript paths, timestamps, message counts, and archived rows. |
 | spawn | done | Real nested-config create retained the requested cwd and exact provider/model ID. Authentication is a separate failed gate. |
-| prompt, argv and stdin | shimmed | Offline argv and stdin byte checks passed. Real stdin admission passed. Model completion was blocked by native credential refusal. |
+| prompt, argv and stdin | shimmed | CLI argv/stdin and real queued-admission checks pass. G41's awaited native completion probe returned the exact marker. Admission itself still does not claim completion. |
 | prompt --steer | shimmed | Real queued admission and clearing passed. Delivery during an actual model run is not verified. |
 | prompt --follow-up | shimmed | Real queued admission passed. Delivery after an actual model run is not verified. |
 | status | shimmed | Real streaming, queue count, context metadata, effective model/thinking, and numeric cost worked. Reads are non-atomic and queue text is marked replay-unsafe. |
@@ -463,9 +556,9 @@ Final tested state. Done means the mapped operation worked on the owned real dae
 | stop | shimmed | Real work-stop retains the resident runtime. `runtimeClosed:false` discloses the difference. `--require-runtime-close` now refuses with 501 before mutation. |
 | abort | shimmed | Real queued inputs were cleared and abort acknowledged. Full runtime quiescence is not promised. |
 | queue-clear | done | Native raw text is preserved, not rewritten from previews. It loses metadata. `--require-replay-safe` now refuses with 501 before mutation. |
-| queue-resume | shimmed | One native same-session request passes fixtures. Real empty queue failure is preserved. Nonempty model-backed execution was not run under G20. |
+| queue-resume | shimmed | G41's nonempty native resume succeeded under a delivery pause, with unchanged previews. This preserves retained same-session objects, not cross-session replay. |
 | archive | shimmed | Real idle archival retained transcript and archived-list metadata. Busy guards pass offline. Native admission races remain disclosed. |
 | messages | done | Real native message payloads and empty lists were preserved. Ephemeral preflight errors are not fabricated as assistant messages. |
-| model | missing | The sourced definition now matches the full native catalog. Native set_model is blocked by typed model_provider_unauthenticated, not unknown metadata. No substitute was selected. |
-| thinking-level | shimmed | G20's real native create and setter retain xhigh with the explicit sourced map. Provider-side reasoning acceptance remains unverified. |
+| model | missing | Native create and actual assistant response identify the requested Sol model. Positive setter coverage is deliberately omitted under G41 because it persists shared defaults. |
+| thinking-level | shimmed | Real G20 setter retained xhigh. G41 native creation and actual completion retain xhigh; the shared-directory setter probe is skipped. |
 | answer | missing | Explicit unsupported 501. No native correlated-question API exists in the inspected protocol. |
