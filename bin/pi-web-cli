@@ -246,6 +246,11 @@ def main(argv: list[str]) -> int:
     control.add_argument("sid")
     control.add_argument("mode", choices=("on", "off"))
     control.add_argument("--expected-generation", help="compare the exact saved receiving epoch atomically; never renew it")
+    boundary = sub.add_parser("failure-boundary")
+    boundary.add_argument("sid")
+    boundary.add_argument("--cwd", required=True)
+    boundary.add_argument("--stream", required=True)
+    boundary.add_argument("--root", required=True)
     goal_control = sub.add_parser("control-goal")
     goal_control.add_argument("sid")
     goal_control.add_argument("delivery_id")
@@ -303,6 +308,11 @@ def main(argv: list[str]) -> int:
             ok = ok and not missing
             return out({"ok": ok, "status": code, "runtime": data, "missing": missing}, ok)
         return out({"ok": ok, "status": code, "runtime": data}, ok)
+    if args.cmd == "failure-boundary":
+        sid = urllib.parse.quote(args.sid, safe="")
+        code, data = req("POST", f"/api/sessions/{sid}/failure-boundary", {"cwd": args.cwd, "stream": args.stream, "root": args.root})
+        ok = code == 200 and isinstance(data, dict) and not data.get("error")
+        return out({"ok": ok, "status": code, "result": data}, ok)
     if args.cmd == "control-goal":
         try:
             return cmd_control_goal(args)

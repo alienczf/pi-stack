@@ -329,6 +329,7 @@ class StreamTick:
         return resolved.row if resolved is not None and resolved.row.status is Status.active else None
 
     def observe_failure(self, row: Thread, native: dict, status: dict) -> bool:
+        piweb.register_stream_failure(row.session, row.worktree, self.stream_dir, status)
         episode = failure.observe(self.stream_dir, row.session, row.worktree, native, status, self.at, row.model, row.thinking)
         if episode is None:
             return False

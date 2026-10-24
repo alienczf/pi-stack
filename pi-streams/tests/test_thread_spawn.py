@@ -132,6 +132,18 @@ class SpawnTests(EngineCase):
         self.assertEqual(self.stub.requests[before:], [])
         self.assertEqual(git(self.stream_dir, self.env, "rev-parse", "HEAD"), head)
 
+    def test_supported_runtime_registers_failure_boundary_before_its_first_task(self):
+        worktree=(self.root/".worktrees/alpha/etl-datapull").resolve()
+        body={**status_body("thread-1"),"failureBoundarySupport":"persisted-turn-v1"}
+        native={"version":1,"sessionId":"thread-1","cwd":str(worktree),"root":str(self.stream_dir),"stream":"etl","state":"watching"}
+        self.stub.set_routes([("GET","/api/sessions",200,[]),("POST","/api/sessions",200,{"id":"thread-1","cwd":str(worktree)}),("GET","/api/sessions/thread-1/status",200,body),("POST","/api/sessions/thread-1/failure-boundary",200,native),("POST","/api/sessions/thread-1/prompt",200,{"accepted":True})])
+        proc=self.spawn_datapull()
+        self.assertEqual(proc.returncode,0,proc.stderr)
+        actions=[(method,path,payload) for method,path,_query,payload in self.stub.requests if method=="POST"]
+        watch=next((item for item in actions if item[1].endswith("/failure-boundary")),None)
+        self.assertEqual(watch,("POST","/api/sessions/thread-1/failure-boundary",{"cwd":str(worktree),"stream":"etl","root":str(self.stream_dir)}))
+        self.assertLess(actions.index(watch),next(i for i,item in enumerate(actions) if item[1].endswith("/prompt")))
+
     def spawn_datapull(self):
         return self.run_streams(
             "thread",

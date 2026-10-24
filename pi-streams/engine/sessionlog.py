@@ -118,7 +118,42 @@ def branch_records(path: Path, sid: str, cwd: str, leaf: object) -> list[tuple[d
     return branch
 
 
-def failure_observation(path: Path, sid: str, cwd: str, leaf: object) -> dict | None:
+def verify_good_checkpoint(path: Path, sid: str, cwd: str, leaf: object, checkpoint: dict, failure_entry: str) -> dict:
+    if not isinstance(checkpoint.get("entryId"), str) or not isinstance(checkpoint.get("sha256"), str) or re.fullmatch(r"[a-f0-9]{64}", checkpoint["sha256"]) is None:
+        raise StreamsError("native good-turn checkpoint identity/hash is invalid")
+    pending: set[str] = set()
+    healthy = True
+    for entry, raw in branch_records(path, sid, cwd, leaf):
+        if entry["id"] == failure_entry:
+            break
+        message = entry.get("message", {})
+        if message.get("role") == "assistant":
+            healthy = not pending
+            calls = message.get("content", [])
+            if isinstance(calls, list):
+                for call in calls:
+                    if isinstance(call, dict) and call.get("type") == "toolCall":
+                        identity = call.get("id")
+                        if not isinstance(identity, str) or not identity or identity in pending:
+                            raise StreamsError("ambiguous tool-call identity in good-turn checkpoint")
+                        pending.add(identity)
+            if message.get("stopReason") in ("error", "aborted", "length"):
+                healthy = False
+        elif message.get("role") == "toolResult":
+            identity = message.get("toolCallId")
+            if not isinstance(identity, str) or identity not in pending:
+                raise StreamsError("good-turn checkpoint has an unmatched tool result")
+            pending.remove(identity)
+            healthy = healthy and message.get("isError") is not True
+        if entry["id"] == checkpoint["entryId"]:
+            terminal = message.get("role") == "toolResult" or message.get("role") == "assistant" and message.get("stopReason") == "stop"
+            if not terminal or pending or not healthy or hashlib.sha256(raw).hexdigest() != checkpoint["sha256"]:
+                raise StreamsError("checkpoint is not the exact complete successful persisted turn")
+            return {"entryId": checkpoint["entryId"], "sha256": checkpoint["sha256"], "nativeFile": str(path), "branchLeaf": leaf}
+    raise StreamsError("good-turn checkpoint is absent or is not before the native failure")
+
+
+def failure_observation(path: Path, sid: str, cwd: str, leaf: object, failure_entry: str | None = None) -> dict | None:
     branch = branch_records(path, sid, cwd, leaf)
     failed = None
     saved = ("", "")
@@ -141,13 +176,13 @@ def failure_observation(path: Path, sid: str, cwd: str, leaf: object) -> dict | 
                         uncertain[job] = {"id": job, "state": status}
         is_tool = message.get("role") == "toolResult" and message.get("isError") is True
         is_model = message.get("role") == "assistant" and message.get("stopReason") == "error"
-        if not is_tool and not is_model:
+        if not is_tool and not is_model or failure_entry is not None and entry["id"] != failure_entry:
             continue
         body = message.get("errorMessage", "")
         if is_tool:
             content = message.get("content", [])
             body = content if isinstance(content, str) else "\n".join(block.get("text", "") for block in content if isinstance(block, dict) and block.get("type") == "text")
-            if not re.search(r"ENOSPC|no space left|resource exhausted|out of memory|login expired|unauthorized|token expired|authentication expired", body, re.I):
+            if failure_entry is None and not re.search(r"ENOSPC|no space left|resource exhausted|out of memory|login expired|unauthorized|token expired|authentication expired", body, re.I):
                 continue
         failed = {"entryId": entry["id"], "sha256": hashlib.sha256(raw).hexdigest(), "provider": "tool" if is_tool else str(message.get("provider", "unknown")), "message": body if isinstance(body, str) else "", "toolError": is_tool, "savedEntryId": saved[0], "savedSha256": saved[1], "uncertainJobs": []}
     if failed is not None:

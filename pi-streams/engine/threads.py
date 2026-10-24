@@ -332,7 +332,8 @@ def ensure_coordinator(project: Project, stream_dir: Path, *, opening_prompt: st
     prompt = KICKOFF if opening_prompt is None else opening_prompt
     sid, needs_opening = _resume_or_spawn(stream_dir, rows, stream_dir, "coordinator", [project.coordinator.model, project.coordinator.thinking, prompt], operation)
     if needs_opening:
-        piweb.configure_session(sid, project.coordinator.model, project.coordinator.thinking)
+        configured = piweb.configure_session(sid, project.coordinator.model, project.coordinator.thinking)
+        piweb.register_stream_failure(sid, str(stream_dir), stream_dir, configured, starting=True)
         _send_start(stream_dir, sid, prompt)
     rows.append(_thread_row(sid, "coordinator", "", stream_dir, "", "", project.coordinator.model, project.coordinator.thinking))
     save_threads(path, rows)
@@ -651,7 +652,8 @@ def spawn_thread(
         ensure_stream_exclude(worktree)
     sid, needs_brief = _resume_or_spawn(worktree, rows, stream_dir, role, [repo.name, branch_name, sha, model_name, thinking_level, note])
     if needs_brief:
-        piweb.configure_session(sid, model_name, thinking_level)
+        configured = piweb.configure_session(sid, model_name, thinking_level)
+        piweb.register_stream_failure(sid, str(worktree), stream_dir, configured, starting=True)
         _send_start(
             stream_dir,
             sid,

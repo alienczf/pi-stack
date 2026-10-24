@@ -195,6 +195,19 @@ def _maintenance_result(data: dict, sid: str, identity: str, cwd: str) -> dict:
     return result
 
 
+def register_stream_failure(sid: str, cwd: str, stream_dir: Path, status: dict, *, starting: bool = False) -> None:
+    if status.get("failureBoundarySupport") != "persisted-turn-v1":
+        return
+    result = status.get("failureBoundary")
+    if result is None:
+        result = call(["failure-boundary", sid, "--cwd", cwd, "--stream", stream_dir.name, "--root", str(stream_dir.resolve())]).get("result")
+    if not isinstance(result, dict) or type(result.get("version")) is not int or result["version"] != 1 or result.get("sessionId") != sid or result.get("cwd") != cwd or result.get("root") != str(stream_dir.resolve()) or result.get("stream") != stream_dir.name or result.get("state") not in ("watching", "parked", "uncertain"):
+        raise StreamsError("native failure registration identity/state is unconfirmed")
+    status["failureBoundary"] = result
+    if starting and result["state"] != "watching":
+        raise StreamsError("Native failure registration is parked or unconfirmed; no opening task was sent")
+
+
 def require_control_goal(sid: str) -> dict[str, object]:
     status = require_poteto(sid)
     if status.get("controlGoalSupport") != "preserve-ask-v1":

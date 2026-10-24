@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import stat
 import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -89,6 +90,7 @@ class Episode:
     provider: str = "unknown"
     authorized_model: str = ""
     authorized_thinking: str = ""
+    checkpoint: dict[str, str] | None = None
     reset_at: str = ""
     reset_source: str = ""
     saved_entry: str = ""
@@ -154,8 +156,46 @@ def receipts(stream_dir: Path) -> list[dict]:
     for sid in records:
         episode = load(stream_dir, sid)
         if episode is not None:
-            result.append({"id": episode.id, "session": episode.session, "kind": episode.kind, "label": episode.label, "state": episode.state, "resetAt": episode.reset_at, "resetSource": episode.reset_source, "retryState": episode.retry_state, "detail": episode.detail, "notificationState": (episode.notification or {}).get("state", "pending"), "uncertainJobs": episode.uncertain_jobs})
+            result.append({"id": episode.id, "session": episode.session, "kind": episode.kind, "label": episode.label, "state": episode.state, "resetAt": episode.reset_at, "resetSource": episode.reset_source, "retryState": episode.retry_state, "detail": episode.detail, "notificationState": (episode.notification or {}).get("state", "pending"), "uncertainJobs": episode.uncertain_jobs, "checkpoint": None if episode.checkpoint is None else {key: episode.checkpoint[key] for key in ("entryId", "sha256")}})
     return result
+
+
+def _native_boundary(stream_dir: Path, sid: str, cwd: str, status: dict) -> dict | None:
+    value = status.get("failureBoundary")
+    if value is None:
+        return None
+    if not isinstance(value, dict) or type(value.get("version")) is not int or value["version"] != 1 or value.get("sessionId") != sid or value.get("cwd") != cwd or value.get("root") != str(stream_dir.resolve()) or value.get("stream") != stream_dir.name or value.get("state") not in ("watching", "parked", "uncertain"):
+        raise StreamsError("native failure boundary identity/root is unconfirmed")
+    return value
+
+
+def _publish_marker(stream_dir: Path, episode: Episode, checkpoint: dict | None) -> None:
+    if checkpoint is None:
+        return
+    from engine.project import _write
+
+    if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]*", episode.session) is None:
+        raise StreamsError("failure marker requires an exact safe native session ID")
+    if episode.checkpoint is not None and any(episode.checkpoint[key] != checkpoint[key] for key in ("entryId", "sha256", "nativeFile")):
+        raise StreamsError("parked good-turn checkpoint changed; explicit reconciliation required")
+    episode.checkpoint = checkpoint if episode.checkpoint is None else episode.checkpoint
+    save(stream_dir, episode)
+    directory = stream_dir / "failures"
+    if directory.exists() and (directory.is_symlink() or not directory.is_dir()):
+        raise StreamsError("failure marker directory must be an owned regular directory")
+    directory.mkdir(exist_ok=True)
+    path = directory / (episode.session + ".lastgood")
+    expected = (checkpoint["entryId"] + "\n").encode()
+    try:
+        mode = path.lstat().st_mode
+    except FileNotFoundError:
+        _write(path, expected.decode())
+    else:
+        if not stat.S_ISREG(mode):
+            raise StreamsError("existing failure marker is not a regular owned file; preserved")
+        with sessionlog.regular_reader(path) as source:
+            if source.read() != expected:
+                raise StreamsError("existing failure marker is not this exact owned checkpoint; preserved")
 
 
 def observe(stream_dir: Path, sid: str, cwd: str, native: dict, status: dict, at: str, model: str = "", thinking: str = "") -> Episode | None:
@@ -167,9 +207,23 @@ def observe(stream_dir: Path, sid: str, cwd: str, native: dict, status: dict, at
         return previous
     safety = status.get("rotationSafety")
     leaf = safety.get("entryId") if isinstance(safety, dict) else None
-    observation = sessionlog.failure_observation(Path(path), sid, cwd, leaf)
+    boundary = _native_boundary(stream_dir, sid, cwd, status)
+    failed = boundary.get("failure") if boundary is not None and boundary["state"] == "parked" else None
+    if boundary is not None and boundary["state"] == "parked" and failed is None:
+        raise StreamsError("parked native boundary lacks its exact failure evidence")
+    if failed is not None and (not isinstance(failed, dict) or not isinstance(failed.get("entryId"), str) or not isinstance(failed.get("sha256"), str)):
+        raise StreamsError("native failure identity/hash is unconfirmed")
+    observation = sessionlog.failure_observation(Path(path), sid, cwd, leaf, failed["entryId"] if failed else None)
     if observation is None:
         return previous
+    checkpoint = None
+    if failed is not None:
+        if observation["sha256"] != failed["sha256"]:
+            raise StreamsError("native failure entry hash does not match the persisted branch")
+        if boundary.get("checkpoint") is not None:
+            if not isinstance(boundary["checkpoint"], dict):
+                raise StreamsError("native checkpoint is malformed")
+            checkpoint = sessionlog.verify_good_checkpoint(Path(path), sid, cwd, leaf, boundary["checkpoint"], failed["entryId"])
     jobs = observation["uncertainJobs"]
     replay = artifacts._read_tick_data(stream_dir).get("sessions", {}).get(sid, {}).get("replay", [])
     if replay:
@@ -178,6 +232,7 @@ def observe(stream_dir: Path, sid: str, cwd: str, native: dict, status: dict, at
         if previous.uncertain_jobs != jobs:
             previous.uncertain_jobs = jobs
             save(stream_dir, previous)
+        _publish_marker(stream_dir, previous, checkpoint)
         return previous
     policy = classify(observation["provider"], observation["message"], at, tool_error=observation["toolError"])
     prior = previous
@@ -193,6 +248,8 @@ def observe(stream_dir: Path, sid: str, cwd: str, native: dict, status: dict, at
     episode.saved_entry, episode.saved_sha256 = observation["savedEntryId"], observation["savedSha256"]
     episode.uncertain_jobs = jobs
     episode.state = "parked"
+    if episode.kind != "usage-limit" and checkpoint is None:
+        episode.detail = "No confirmed complete native good-turn checkpoint; F-DCR remains blocked without an invented marker."
     if episode.retry_state:
         episode.retry_state = "failed"
     token, allowed = piweb.automatic_admission(status, sid, cwd, "recovery")
@@ -205,6 +262,7 @@ def observe(stream_dir: Path, sid: str, cwd: str, native: dict, status: dict, at
         episode.pause_owned = False
         episode.detail = "Already disabled or stopped; no automatic reset trial may rearm this epoch."
     save(stream_dir, episode)
+    _publish_marker(stream_dir, episode, checkpoint)
     artifacts.append_log_locked(stream_dir, at, f"Failure {episode.id}", f"Observed {episode.label} for exact session {sid}. Code: {episode.code}. Native failure entry: {episode.failure_entry} SHA-256 {episode.failure_sha256}. Saved input: {episode.saved_entry or 'unknown'}. Reset: {episode.reset_at or 'unknown'}. Task effects remain parked; no environment, rule, skill, memory or provider remedy is authorized.", request_id=f"failure:{episode.id}:{episode.failure_entry}")
     return episode
 
