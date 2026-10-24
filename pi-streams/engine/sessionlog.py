@@ -88,6 +88,90 @@ def compaction_record(evidence: EvidenceRecord) -> dict:
     return {"sessionId": evidence.session_id, "entryId": evidence.entry_id, "sha256": evidence.sha256, "tokensBefore": entry["tokensBefore"], "summary": entry["summary"]}
 
 
+def branch_records(path: Path, sid: str, cwd: str, leaf: object) -> list[tuple[dict, bytes]]:
+    entries: dict[str, tuple[dict, bytes]] = {}
+    with regular_reader(path) as handle:
+        header = json.loads(handle.readline())
+        if not isinstance(header, dict) or header.get("type") != "session" or header.get("id") != sid or not isinstance(header.get("cwd"), str) or Path(header["cwd"]).resolve() != Path(cwd).resolve():
+            raise StreamsError("failure evidence does not match the exact native session/cwd")
+        for raw in handle:
+            try:
+                value = json.loads(raw)
+            except ValueError:
+                continue
+            if isinstance(value, dict) and isinstance(value.get("id"), str):
+                if value["id"] in entries:
+                    raise StreamsError("failure evidence contains ambiguous native entry IDs")
+                entries[value["id"]] = value, raw
+    if not isinstance(leaf, str) or leaf not in entries:
+        raise StreamsError("failure boundary cannot prove the exact current native branch")
+    branch = []
+    seen = set()
+    while leaf is not None:
+        if not isinstance(leaf, str) or leaf in seen or leaf not in entries:
+            raise StreamsError("failure evidence has an incomplete or cyclic branch")
+        seen.add(leaf)
+        value, raw = entries[leaf]
+        branch.append((value, raw))
+        leaf = value.get("parentId")
+    branch.reverse()
+    return branch
+
+
+def failure_observation(path: Path, sid: str, cwd: str, leaf: object) -> dict | None:
+    branch = branch_records(path, sid, cwd, leaf)
+    failed = None
+    saved = ("", "")
+    uncertain: dict[str, dict[str, str]] = {}
+    for entry, raw in branch:
+        message = entry.get("message")
+        if not isinstance(message, dict):
+            continue
+        if message.get("role") == "user":
+            saved = entry["id"], hashlib.sha256(raw).hexdigest()
+        if message.get("role") == "toolResult":
+            details = message.get("details")
+            if isinstance(details, dict):
+                job = details.get("jobId", details.get("job_id", details.get("externalJobId")))
+                if isinstance(job, str) and job:
+                    status = str(details.get("status", "unknown"))
+                    if status in ("completed", "succeeded", "failed", "cancelled"):
+                        uncertain.pop(job, None)
+                    else:
+                        uncertain[job] = {"id": job, "state": status}
+        is_tool = message.get("role") == "toolResult" and message.get("isError") is True
+        is_model = message.get("role") == "assistant" and message.get("stopReason") == "error"
+        if not is_tool and not is_model:
+            continue
+        body = message.get("errorMessage", "")
+        if is_tool:
+            content = message.get("content", [])
+            body = content if isinstance(content, str) else "\n".join(block.get("text", "") for block in content if isinstance(block, dict) and block.get("type") == "text")
+            if not re.search(r"ENOSPC|no space left|resource exhausted|out of memory|login expired|unauthorized|token expired|authentication expired", body, re.I):
+                continue
+        failed = {"entryId": entry["id"], "sha256": hashlib.sha256(raw).hexdigest(), "provider": "tool" if is_tool else str(message.get("provider", "unknown")), "message": body if isinstance(body, str) else "", "toolError": is_tool, "savedEntryId": saved[0], "savedSha256": saved[1], "uncertainJobs": []}
+    if failed is not None:
+        failed["uncertainJobs"] = list(uncertain.values())
+    return failed
+
+
+def successful_control_completion(path: Path, sid: str, cwd: str, leaf: object, prefix: str, goal: str) -> bool:
+    active = False
+    completed = False
+    for entry, _raw in branch_records(path, sid, cwd, leaf):
+        message = entry.get("message", {})
+        content = message.get("content", [])
+        text = content if isinstance(content, str) else "\n".join(block.get("text", "") for block in content if isinstance(block, dict) and block.get("type") == "text")
+        if message.get("role") == "user" and text.startswith(prefix) and text.endswith(goal) and '<skill name="poteto-mode"' in text:
+            active, completed = True, False
+        elif active and message.get("role") == "assistant":
+            if message.get("stopReason") == "error":
+                return False
+            if message.get("stopReason") == "stop":
+                completed = True
+    return completed
+
+
 def last_assistant(path: Path) -> dict[str, object] | None:
     try:
         with regular_reader(path) as handle:

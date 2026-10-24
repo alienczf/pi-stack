@@ -26,6 +26,7 @@ class StubPiWeb:
         self._lock = threading.Lock()
         self.reflect_delivery_ids = False
         self.reflect_control_goals = False
+        self.simulate_conditional_controls = False
         self.control_goals: dict[str, dict] = {}
         self.simulate_session_lifecycle = False
         self.created_sessions: dict[str, dict] = {}
@@ -154,6 +155,15 @@ class StubPiWeb:
                 payload["automaticAdmission"] = copy.deepcopy(control)
         if self.reflect_delivery_ids and parsed.path.endswith("/prompt") and isinstance(body, dict) and "deliveryId" in body and isinstance(payload, dict) and payload.get("accepted") is True:
             payload["deliveryId"] = body["deliveryId"]
+        if self.simulate_conditional_controls and handler.command == "POST" and isinstance(body, dict):
+            control = re.fullmatch(r"/api/sessions/([^/]+)/automatic-admission", parsed.path)
+            if control is not None:
+                previous = self.automatic_admissions[control[1]]
+                if body.get("expectedGeneration") is not None and body["expectedGeneration"] != previous["generation"]:
+                    status, payload = 409, {"error": "Conditional generation is stale"}
+                else:
+                    payload = {**previous, "allowed": body["allowed"], "generation": previous["generation"] + "-next"}
+                    self.automatic_admissions[control[1]] = payload
         if self.reflect_control_goals:
             goal_post = re.fullmatch(r"/api/sessions/([^/]+)/control-goal", parsed.path)
             goal_get = re.fullmatch(r"/api/sessions/([^/]+)/control-goal/([^/]+)", parsed.path)

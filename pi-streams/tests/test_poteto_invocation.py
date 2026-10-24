@@ -20,7 +20,7 @@ class PotetoInvocationTests(EngineCase):
         self.goal = "  Verify 'apostrophe', \"double\", $HOME and `ticks`, café.\r\nNext line\n/poteto-mode is literal here.  "
         self.text = f"Read current artifacts:\n- {self.cwd}/AGENTS.md\n- {self.cwd}/STATE.md\n/poteto-mode {self.goal}"
         self.token = {"sessionId": self.sid, "cwd": self.cwd, "generation": "saved-generation", "kind": "resume"}
-        self.runtime = {"component": "sessiond", "capabilities": ["sessions.maintenanceCheckpoint", "prompt.potetoArguments", "sessions.streamsDcrEvents", "prompt.controlGoal"]}
+        self.runtime = {"component": "sessiond", "capabilities": ["sessions.maintenanceCheckpoint", "prompt.potetoArguments", "sessions.streamsDcrEvents", "prompt.controlGoal", "sessions.conditionalAdmission", "prompt.recoveryControl"]}
         self.status = {"sessionId": self.sid, "potetoInvocationSupport": "exact-goal-v1", "maintenanceSupport": "checkpoint-input-v1"}
         self.routes()
 
@@ -110,7 +110,7 @@ class PotetoInvocationTests(EngineCase):
         self.assertEqual(snapshot(self.user_home), before_home)
         self.assertEqual(snapshot(self.xdg), before_config)
         self.assertEqual([request[1] for request in self.stub.requests], ["/api/sessiond/runtime"])
-        self.stub.set_routes([("GET", "/api/sessiond/runtime", 200, {"component": "sessiond", "capabilities": ["sessions.maintenanceCheckpoint", "prompt.potetoArguments", "sessions.streamsDcrEvents"]})])
+        self.stub.set_routes([("GET", "/api/sessiond/runtime", 200, {"component": "sessiond", "capabilities": ["sessions.maintenanceCheckpoint", "prompt.potetoArguments", "sessions.streamsDcrEvents", "prompt.controlGoal"]})])
         result = subprocess.run(["bash", str(ROOT / "install.sh"), "--check-streams-capabilities"], env=self.env, capture_output=True, text=True)
         self.assertEqual(result.returncode, 1)
         self.assertFalse(json.loads(result.stdout)["ok"])

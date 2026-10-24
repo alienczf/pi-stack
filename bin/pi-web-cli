@@ -131,7 +131,7 @@ def cmd_control_goal(args: argparse.Namespace) -> int:
         path = f"/api/sessions/{sid}/control-goal/{identity}?" + urllib.parse.urlencode({"cwd": args.cwd})
     else:
         automatic = _json_object(args.automatic_admission, "automatic admission")
-        if automatic.get("sessionId") != args.sid or automatic.get("kind") != "wake" or not isinstance(automatic.get("cwd"), str) or not args.run_id or args.sequence is None or args.sequence < 1:
+        if automatic.get("sessionId") != args.sid or automatic.get("kind") not in ("wake", "recovery") or not isinstance(automatic.get("cwd"), str) or not args.run_id or args.sequence is None or args.sequence < 1:
             raise UsageError("control goal requires its exact run/transport sequence and saved generation")
         text, goal = _invocation_input(args)
         method, path = "POST", f"/api/sessions/{sid}/control-goal"
@@ -245,6 +245,7 @@ def main(argv: list[str]) -> int:
     control = sub.add_parser("automatic-admission")
     control.add_argument("sid")
     control.add_argument("mode", choices=("on", "off"))
+    control.add_argument("--expected-generation", help="compare the exact saved receiving epoch atomically; never renew it")
     goal_control = sub.add_parser("control-goal")
     goal_control.add_argument("sid")
     goal_control.add_argument("delivery_id")
@@ -297,7 +298,7 @@ def main(argv: list[str]) -> int:
     if args.cmd in ("runtime", "capabilities"):
         code, data = req("GET", "/api/sessiond/runtime")
         ok = code == 200 and isinstance(data, dict) and data.get("component") == "sessiond" and isinstance(data.get("capabilities"), list) and all(isinstance(capability, str) for capability in data["capabilities"])
-        missing = [capability for capability in ("sessions.maintenanceCheckpoint", "prompt.potetoArguments", "sessions.streamsDcrEvents", "prompt.controlGoal") if not ok or capability not in data["capabilities"]]
+        missing = [capability for capability in ("sessions.maintenanceCheckpoint", "prompt.potetoArguments", "sessions.streamsDcrEvents", "prompt.controlGoal", "sessions.conditionalAdmission", "prompt.recoveryControl") if not ok or capability not in data["capabilities"]]
         if args.cmd == "capabilities":
             ok = ok and not missing
             return out({"ok": ok, "status": code, "runtime": data, "missing": missing}, ok)
@@ -338,7 +339,10 @@ def main(argv: list[str]) -> int:
     if args.cmd == "commands":
         return cmd_commands(args.sid)
     if args.cmd == "automatic-admission":
-        code, data = req("POST", f"/api/sessions/{args.sid}/automatic-admission", {"allowed": args.mode == "on"})
+        body = {"allowed": args.mode == "on"}
+        if args.expected_generation is not None:
+            body["expectedGeneration"] = args.expected_generation
+        code, data = req("POST", f"/api/sessions/{args.sid}/automatic-admission", body)
         ok = code == 200 and isinstance(data, dict) and not data.get("error")
         return out({"ok": ok, "status": code, "result": data}, ok)
     method, suffix, _positionals, build = VERBS[args.cmd]

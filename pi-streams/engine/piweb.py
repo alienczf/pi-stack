@@ -119,8 +119,9 @@ def automatic_admission(session: dict[str, object], sid: str, cwd: str, kind: st
     return {"sessionId": sid, "cwd": native_cwd, "generation": generation, "kind": kind}, raw["allowed"]
 
 
-def set_automatic_admission(sid: str, allowed: bool) -> dict[str, object]:
-    data = call(["automatic-admission", sid, "on" if allowed else "off"])
+def set_automatic_admission(sid: str, allowed: bool, *, expected_generation: str | None = None) -> dict[str, object]:
+    flags = [] if expected_generation is None else ["--expected-generation", expected_generation]
+    data = call(["automatic-admission", sid, "on" if allowed else "off", *flags])
     result = data.get("result")
     if not isinstance(result, dict) or result.get("sessionId") != sid or result.get("durable") is not True or result.get("allowed") is not allowed or not isinstance(result.get("generation"), str) or not result["generation"]:
         raise StreamsError("automatic admission control publication is unconfirmed")
@@ -153,7 +154,7 @@ def command_run(sid: str, text: str) -> dict:
 def maintenance_capabilities() -> bool:
     data = call(["runtime"])
     runtime = data.get("runtime")
-    return isinstance(runtime, dict) and runtime.get("component") == "sessiond" and isinstance(runtime.get("capabilities"), list) and all(capability in runtime["capabilities"] for capability in ("sessions.maintenanceCheckpoint", "prompt.potetoArguments", "sessions.streamsDcrEvents", "prompt.controlGoal"))
+    return isinstance(runtime, dict) and runtime.get("component") == "sessiond" and isinstance(runtime.get("capabilities"), list) and all(capability in runtime["capabilities"] for capability in ("sessions.maintenanceCheckpoint", "prompt.potetoArguments", "sessions.streamsDcrEvents", "prompt.controlGoal", "sessions.conditionalAdmission", "prompt.recoveryControl"))
 
 
 def require_maintenance(sid: str) -> dict[str, object]:
@@ -209,9 +210,11 @@ def _control_goal_result(data: dict, sid: str, cwd: str, identity: str) -> dict:
 
 
 def control_goal(sid: str, identity: str, run_id: str, sequence: int, text: str, goal: str, automatic: dict[str, str] | None) -> dict:
-    if automatic is None or automatic.get("kind") != "wake" or automatic.get("sessionId") != sid:
+    if automatic is None or automatic.get("kind") not in ("wake", "recovery") or automatic.get("sessionId") != sid:
         raise StreamsError("current-goal control requires its saved receiving generation")
-    require_control_goal(sid)
+    status = require_control_goal(sid)
+    if automatic["kind"] == "recovery" and (status.get("recoveryControlSupport") != "question-safe-v1" or status.get("conditionalAdmissionSupport") != "generation-cas-v1"):
+        raise StreamsError("question-safe conditional recovery control is unavailable")
     data = call(["control-goal", sid, identity, "--run-id", run_id, "--sequence", str(sequence), "--automatic-admission", json.dumps(automatic)], stdin=_poteto_payload(text, goal))
     return _control_goal_result(data, sid, automatic["cwd"], identity)
 

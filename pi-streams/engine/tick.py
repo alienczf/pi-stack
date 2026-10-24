@@ -7,7 +7,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from engine import StreamsError, artifacts, clock, dcr, delivery, drive, piweb, sessionlog, tickhealth
+from engine import StreamsError, artifacts, clock, dcr, delivery, drive, failure, piweb, sessionlog, tickhealth
 from engine.project import (
     Project,
     StreamRow,
@@ -216,6 +216,8 @@ class StreamTick:
         self.automatic_paused = False
         self.stalled = False
         self.observations_failed = False
+        self.failure_owned = False
+        self.typed_failures: set[str] = set()
 
     def run(self) -> None:
         try:
@@ -229,11 +231,12 @@ class StreamTick:
                 resolved = self.coordinator_resolution
                 self.listings[resolved.row.worktree] = {resolved.row.session: resolved.native.info}
                 self.stalled = drive.is_stalled(resolved.native.status)
-            if not self.automatic_paused:
+                self.failure_owned = self.observe_failure(resolved.row, resolved.native.info, resolved.native.status)
+            if not self.automatic_paused and not self.failure_owned:
                 self.dcr_owned = dcr.step(self.index, self.project, self.stream, self.stream_dir, self.coordinator_resolution)
             self.check_claims()
             self.observe()
-            self.drive_owned = drive.step(self.stream_dir, self.coordinator_resolution, self.stalled, maintenance=self.dcr_owned)
+            self.drive_owned = drive.step(self.stream_dir, self.coordinator_resolution, self.stalled, maintenance=self.dcr_owned or self.failure_owned)
             self.check_subscriptions()
             self.flush()
             self.wake()
@@ -325,6 +328,20 @@ class StreamTick:
         resolved = self.coordinator_resolution
         return resolved.row if resolved is not None and resolved.row.status is Status.active else None
 
+    def observe_failure(self, row: Thread, native: dict, status: dict) -> bool:
+        episode = failure.observe(self.stream_dir, row.session, row.worktree, native, status, self.at, row.model, row.thinking)
+        if episode is None:
+            return False
+        self.typed_failures.add(row.session)
+        held = failure.step(self.stream_dir, episode, status, self.at, native)
+        notification = episode.notification or {}
+        phase = "recovery" if episode.state == "recovered" else "blocker"
+        delivered = notification.get("recoveryState") == "delivered" if phase == "recovery" else notification.get("state") == "delivered"
+        if not delivered:
+            notice = {"version": 1, "episode": episode.id, "stream": self.stream, "session": row.session, "role": row.role, "kind": episode.kind, "provider": episode.provider, "label": episode.label, "resetAt": episode.reset_at, "state": episode.state}
+            self.alerts.add(f"episode {episode.id} {phase} " + json.dumps(notice, separators=(",", ":")))
+        return held
+
     def observe(self) -> None:
         observed: set[str] = set()
         for row in self.rows:
@@ -338,7 +355,7 @@ class StreamTick:
         self.state.sessions = {sid: seen for sid, seen in self.state.sessions.items() if sid in observed}
         coord = self.coordinator()
         self.state.outages = [sid for sid in self.state.outages if coord is not None and sid == coord.session]
-        if coord is not None:
+        if coord is not None and coord.session not in self.typed_failures:
             try:
                 self.check_outage(coord)
             except (StreamsError, OSError) as exc:
@@ -385,19 +402,22 @@ class StreamTick:
         # even when it did so between two ticks. An adopted thread that is already
         # idle reports idle once too, which tells its coordinator that it waits.
         old = self.state.sessions.get(row.session, Seen(busy=True))
+        native = self.listing(row.worktree).get(row.session, {}) if status.get("conditionalAdmissionSupport") == "generation-cas-v1" else {}
+        parked = self.observe_failure(row, native, status) if native else False
         # The last resend stopped after queue/clear, so what is not queued now was dropped.
         # A replayed prompt starts the thread again, whatever the status said before it.
         self.stalled = self.stalled or drive.is_stalled(status)
-        sent = False if self.drive_enabled or self.automatic_paused else self.replay(row, old, Counter(text for text, _kind in _queued(status)))
+        sent = False if self.drive_enabled or self.automatic_paused or parked else self.replay(row, old, Counter(text for text, _kind in _queued(status)))
         new = Seen(
             busy=sent or status.get("isStreaming") is True or _count(status.get("pendingMessageCount")) > 0,
             context=old.context,
-            replay=list(old.replay) if self.drive_enabled or self.automatic_paused else [],
+            replay=list(old.replay) if self.drive_enabled or self.automatic_paused or parked else [],
         )
         self.state.sessions[row.session] = new
         if old.busy and not new.busy:
             self.emit("idle", row)
-        self.check_outage(row)
+        if row.session not in self.typed_failures:
+            self.check_outage(row)
         ask = status.get("pendingAsk")
         if isinstance(ask, dict) and isinstance(ask.get("askId"), str):
             new.asks = [ask["askId"]]
@@ -407,7 +427,7 @@ class StreamTick:
         if not old.context and tokens is not None and tokens >= self.caps.thread_handover_tokens:
             new.context = True
             self.emit("context", row, f"{tokens} tokens")
-        if not self.drive_enabled and not self.automatic_paused:
+        if not self.drive_enabled and not self.automatic_paused and not parked:
             self.resend_stale(row, status, old, new)
 
     def resend_stale(self, row: Thread, status: dict[str, object], old: Seen, new: Seen) -> None:
@@ -451,7 +471,7 @@ class StreamTick:
         return timedelta(0) if seen is None else self.now - seen
 
     def wake(self) -> None:
-        if self.automatic_paused or self.dcr_owned or self.drive_owned or self.observations_failed and not self.drive_enabled:
+        if self.automatic_paused or self.failure_owned or self.dcr_owned or self.drive_owned or self.observations_failed and not self.drive_enabled:
             return
         current = delivery.current_tick(self.stream_dir)
         if current is not None:

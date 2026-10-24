@@ -89,7 +89,7 @@ class DoctorTests(EngineCase):
 
     def _basic_routes(self) -> list[tuple]:
         return [
-            ("GET", "/api/sessiond/runtime", 200, {"component": "sessiond", "capabilities": ["sessions.maintenanceCheckpoint", "prompt.potetoArguments", "sessions.streamsDcrEvents", "prompt.controlGoal"]}),
+            ("GET", "/api/sessiond/runtime", 200, {"component": "sessiond", "capabilities": ["sessions.maintenanceCheckpoint", "prompt.potetoArguments", "sessions.streamsDcrEvents", "prompt.controlGoal", "sessions.conditionalAdmission", "prompt.recoveryControl"]}),
             ("GET", "/api/sessions", 200, []),
         ]
 

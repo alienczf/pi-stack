@@ -418,6 +418,10 @@ def _one_stream(stream_id: str, stream_dir: Path) -> dict[str, object]:
     maintenance = dcr_receipts(stream_dir)
     if maintenance:
         result["maintenance"] = maintenance
+    from engine.failure import receipts as failure_receipts
+    parked = failure_receipts(stream_dir)
+    if parked:
+        result["failures"] = parked
     if "drive" in artifacts._read_tick_data(stream_dir):
         from engine.drive import public as drive_status
         result["drive"] = drive_status(stream_dir)
@@ -464,6 +468,8 @@ def format_status(report: dict[str, object]) -> str:
             f"tokens={tokens}\tmodel={coord['model']}\tthinking={coord['thinkingLevel']}\t"
             f"cost={coord['cost']}\tthreads={counted}\tshare={share_text}"
         )
+        for episode in stream.get("failures", []):
+            lines.append(f"{stream['id']}\tfailure={episode['kind']}\tstate={episode['state']}\tsession={episode['session']}\treset={episode['resetAt'] or 'unknown'}\tretry={episode['retryState'] or '-'}")
         if isinstance(stream.get("drive"), dict):
             driving = stream["drive"]
             lines.append(f"{stream['id']}\tdrive={'on' if driving['enabled'] else 'off'}\tdelivery={driving['current_delivery'] or '-'}")
