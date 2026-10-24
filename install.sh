@@ -64,7 +64,7 @@ Options
                 thinking level coordinators use
   --print-pstack-skills  print the pstack skill roots selected by pi-stack
   --check-streams-capabilities
-                read-only receiving maintenance/mode preflight; no install or timer action
+                read-only integrated receiving safety preflight; no install or timer action
 
 Environment
   HOME          install target (default is your home)
@@ -955,7 +955,7 @@ fi
 if [[ "$streams_in_use" == 1 ]]; then
 	ensure_pi_web
 	if [[ "${PI_STACK_SKIP_SYSTEMD:-}" != 1 ]] && command -v systemctl >/dev/null 2>&1 && ! check_streams_capabilities; then
-		printf 'Receiving maintenance/mode capability is missing. Deploy the tested pi-web artifact and restart its daemon before enabling the tick.\n' >&2
+		printf 'Integrated receiving safety capabilities are missing. Deploy the tested pi-web artifact and restart its daemon before enabling the tick. Capabilities do not authenticate a recovery notice.\n' >&2
 		exit 1
 	fi
 	install_tick_units

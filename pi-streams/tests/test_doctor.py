@@ -89,7 +89,7 @@ class DoctorTests(EngineCase):
 
     def _basic_routes(self) -> list[tuple]:
         return [
-            ("GET", "/api/sessiond/runtime", 200, {"component": "sessiond", "capabilities": ["sessions.maintenanceCheckpoint", "prompt.potetoArguments", "sessions.streamsDcrEvents", "prompt.controlGoal", "sessions.conditionalAdmission", "prompt.recoveryControl"]}),
+            ("GET", "/api/sessiond/runtime", 200, {"component": "sessiond", "capabilities": ["sessions.maintenanceCheckpoint", "prompt.potetoArguments", "sessions.streamsDcrEvents", "prompt.controlGoal", "sessions.conditionalAdmission", "prompt.recoveryControl", "sessions.failureBoundary", "sessions.failureFork", "sessions.failureMaintenance", "sessions.failureRetirement", "sessions.resumeObservation"]}),
             ("GET", "/api/sessions", 200, []),
         ]
 
@@ -110,7 +110,7 @@ class DoctorTests(EngineCase):
         self.env["PATH"] = f"{bindir}{os.pathsep}/usr/bin:/bin"
         return str((bindir / "pi").resolve())
 
-    def _report(self, pi: str, pi_web: str, tail: str, streams: str = "", maintenance: str = "PASS maintenance: receiving checkpoint/input-v1, exact mode, idle-event and question-preserving control capabilities are present") -> str:
+    def _report(self, pi: str, pi_web: str, tail: str, streams: str = "", maintenance: str = "PASS maintenance: receiving maintenance, mode, failure parking, exact fork, completed RESUME and singular retirement capabilities are present; capability presence is not authentication proof") -> str:
         project = str(self.project_file.resolve())
         return (
             f"PASS pi: found at {pi}\n"
@@ -123,7 +123,7 @@ class DoctorTests(EngineCase):
             f"{tail}"
         )
 
-    def _lines(self, pi: str, pi_web: str, extra: str = "", streams: str = "", maintenance: str = "PASS maintenance: receiving checkpoint/input-v1, exact mode, idle-event and question-preserving control capabilities are present") -> str:
+    def _lines(self, pi: str, pi_web: str, extra: str = "", streams: str = "", maintenance: str = "PASS maintenance: receiving maintenance, mode, failure parking, exact fork, completed RESUME and singular retirement capabilities are present; capability presence is not authentication proof") -> str:
         if streams:
             streams = "PASS coordinator: etl exact native identity coord-1\n" + streams
         return self._report(
@@ -153,7 +153,7 @@ class DoctorTests(EngineCase):
         proc = self.run_streams("doctor")
         self.assertEqual(proc.returncode, 1)
         self.assertEqual(proc.stderr, "")
-        self.assertEqual(proc.stdout, self._lines(pi, "FAIL pi-web: list failed", maintenance="FAIL maintenance: receiving checkpoint/input-v1, exact mode, idle-event or question-preserving control capability is unavailable; automatic DCR and drive are disabled"))
+        self.assertEqual(proc.stdout, self._lines(pi, "FAIL pi-web: list failed", maintenance="FAIL maintenance: receiving maintenance/mode or integrated failure-recovery safety capability is unavailable; automatic DCR and drive are disabled"))
 
     def test_doctor_reaches_pi_web_from_its_config_without_pi_web_url(self) -> None:
         pi = self._pi_on_path()

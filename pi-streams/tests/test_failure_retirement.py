@@ -80,6 +80,12 @@ class FailureRetirementTests(TickCase):
         self.assertIn("\tarchived\t", (self.stream / "threads.tsv").read_text())
         self.assertEqual(self.advance().returncode, 0)
         self.assertEqual(self.deletions, 1)
+        report = self.run_streams("status", "etl", "--json")
+        self.assertEqual(report.returncode, 0, report.stderr)
+        public = json.loads(report.stdout)["streams"][0]["failures"][0]["recovery"]
+        self.assertEqual(public["phase"], "complete")
+        self.assertEqual(public["fork"], "returned-fork")
+        self.assertNotIn("sourceBase64", public)
         self.fork_status["controlGoalSupport"] = "preserve-ask-v1"
         self.stub.reflect_control_goals = True
         self.routes += [("POST", "/api/sessions/returned-fork/control-goal", 200, {"state": "queued"}), ("POST", "/api/sessions/returned-fork/automatic-admission", 200, dict(self.stub.automatic_admissions["returned-fork"]))]

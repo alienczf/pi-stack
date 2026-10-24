@@ -27,7 +27,7 @@ def named_commands() -> list[str]:
 
 def command_path(snippet: str) -> list[str]:
     words = snippet.split()
-    depth = 3 if words[:2] in (["pi-streams", "thread"], ["pi-streams", "state"], ["pi-streams", "delivery"], ["pi-streams", "dcr"]) else 2
+    depth = 3 if words[:2] in (["pi-streams", "thread"], ["pi-streams", "state"], ["pi-streams", "delivery"], ["pi-streams", "dcr"], ["pi-streams", "failure"]) else 2
     return words[:depth]
 
 
@@ -41,6 +41,7 @@ class ProseCommandTests(unittest.TestCase):
             "pi-streams delivery list",
             "pi-streams delivery send",
             "pi-streams drive",
+            "pi-streams failure ratify",
             "pi-streams new",
             "pi-streams rotate",
             "pi-streams state append",

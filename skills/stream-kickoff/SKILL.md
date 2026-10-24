@@ -40,7 +40,7 @@ Ask one question at a time with a recommendation grounded in the scout. Never an
 
 Only after ZF's explicit confirmation, rewrite Goals in place and set its first line to `ratified: <UTC date> <ZF's confirming words, verbatim>`. Keep North Star, Current objective, and Charter distinct. Goals and Rules are current text, never an appended history pile.
 
-Record each new human ruling through `pi-streams state ruling <stream> --subject SUBJECT --body-file - --notice-id NOTICE`. Rules contains only rulings still in force. The engine also appends Log. Retire a superseded ruling with its exact old source text; the engine preserves it in history before removal. Notice provenance is not an authentication receipt. Never create rules, skills, or memory to self-remedy a failure.
+Record each new human ruling through `pi-streams state ruling <stream> --subject SUBJECT --body-file - --notice-id NOTICE`. Rules contains only rulings still in force. The engine also appends Log. Retire a superseded ruling with its exact old source text; the engine preserves it in history before removal. Notice provenance is not an authentication receipt. Charter ratification does not authenticate failure recovery. Only the existing trusted ZF intake may ratify an exact parked session/episode for its engine-owned fork, fixed DCR and guarded single-original retirement. Readiness and capability/configuration flags do not release parking. Never create rules, skills, or memory to self-remedy a failure.
 
 ## Plan
 

@@ -20,7 +20,7 @@ class PotetoInvocationTests(EngineCase):
         self.goal = "  Verify 'apostrophe', \"double\", $HOME and `ticks`, café.\r\nNext line\n/poteto-mode is literal here.  "
         self.text = f"Read current artifacts:\n- {self.cwd}/AGENTS.md\n- {self.cwd}/STATE.md\n/poteto-mode {self.goal}"
         self.token = {"sessionId": self.sid, "cwd": self.cwd, "generation": "saved-generation", "kind": "resume"}
-        self.runtime = {"component": "sessiond", "capabilities": ["sessions.maintenanceCheckpoint", "prompt.potetoArguments", "sessions.streamsDcrEvents", "prompt.controlGoal", "sessions.conditionalAdmission", "prompt.recoveryControl"]}
+        self.runtime = {"component": "sessiond", "capabilities": ["sessions.maintenanceCheckpoint", "prompt.potetoArguments", "sessions.streamsDcrEvents", "prompt.controlGoal", "sessions.conditionalAdmission", "prompt.recoveryControl", "sessions.failureBoundary", "sessions.failureFork", "sessions.failureMaintenance", "sessions.failureRetirement", "sessions.resumeObservation"]}
         self.status = {"sessionId": self.sid, "potetoInvocationSupport": "exact-goal-v1", "maintenanceSupport": "checkpoint-input-v1"}
         self.routes()
 

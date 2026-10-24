@@ -22,6 +22,12 @@ Drive is explicitly off by default. Use `pi-streams drive <id> on` only when the
 
 The tick reasserts the shared current goal when driven and idle or waiting. It does not diagnose the stall or demand a next-action/disposition record. A coalesced control goal is not a human answer or permission to repair the environment, resubmit an uncertain job, or revive stopped work. Follow current AGENTS and STATE. A finished objective may select another authorized objective or end driving, never complete North Star.
 
+## Parked failures
+
+Inspect `pi-streams status <id> --json` for the affected full SID, failure episode and recovery phase. Follow current AGENTS. Only usage-limit failures may consume the engine's one conditional reset reconciliation. Do not repeat interrupted shell commands or uncertain jobs. Login expiry, resource exhaustion and model outages stay parked until human repair and an authenticated exact-target notice through the existing intake. Readiness, role=user text and configured/capability flags do not authenticate that notice.
+
+The engine owns the inclusive good-prefix fork and forced same-fork DCR for each affected coordinator or worker. It retains required evidence before singular original archive/delete. Durable deletion and verified fork release precede marker cleanup. Unknown outcomes preserve parking; not-found is not deletion proof. Do not use rotate, close, tree cleanup or marker removal as a recovery shortcut. Independent authorized lanes continue. The off-host bot owns the ZF-only failure notice, not the agent. No new credentials, provider/model switch or remedial rules/skills/memory are authorized by a generic repair notice.
+
 ## Close
 
 Use only the current Goals, Charter, and Rules as authority. Open history/, context/ and its README index, checks/, or handover/ on demand. Never read raw engine registries, configuration, tick logs/state, locks, or failures/.

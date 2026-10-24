@@ -161,6 +161,11 @@ def receipts(stream_dir: Path) -> list[dict]:
         episode = load(stream_dir, sid)
         if episode is not None:
             result.append({"id": episode.id, "session": episode.session, "kind": episode.kind, "label": episode.label, "state": episode.state, "resetAt": episode.reset_at, "resetSource": episode.reset_source, "retryState": episode.retry_state, "detail": episode.detail, "notificationState": (episode.notification or {}).get("state", "pending"), "uncertainJobs": episode.uncertain_jobs, "checkpoint": None if episode.checkpoint is None else {key: episode.checkpoint[key] for key in ("entryId", "sha256")}})
+            from engine.failure_recovery import load as recovery
+            operation = recovery(stream_dir, sid)
+            if operation is not None:
+                pending = {"retiring": "Native retirement is unconfirmed; no deletion claim.", "retired": "Native retirement is verified; host cleanup is pending.", "clearing": "Exact registry/marker cleanup is pending."}
+                result[-1]["recovery"] = {"id": operation.id, "fork": operation.fork, "phase": operation.phase, "detail": operation.detail or pending.get(operation.phase, ""), "retainedSha256": (operation.retirement or {}).get("sourceSha256", "")}
     return result
 
 

@@ -11,5 +11,7 @@ Stay in {worktree}. Outside it, only write the handover below, an explicitly aut
 
 {note}
 
+Environment failures park only the affected lane. Preserve independent authorized work. Do not repair credentials/resources, switch provider/model, resubmit uncertain jobs, or write remedial rules, skills, memory or configuration. Log/report the failure through the engine when possible. Only the engine may consume one saved usage-reset trial after its verified notice/reset/epoch checks. Nonusage recovery needs the existing authenticated ZF intake, not readiness or an ordinary "fixed" message. The engine owns the exact good-prefix fork, forced same-fork DCR and guarded single-original retirement. Never remove markers or use generic close/tree cleanup to bypass parking. Only explicit verified exceptional instructions enter continuation. Inspect failure/recovery state through `pi-streams status {stream} --json`; never read engine metadata.
+
 Before you stop, create the handover's parent directory if needed and write {handover}. Its first line must be exactly `session: {session_id}`. Follow it with intent, what was done with proof, what is left, and what the next agent should know. Never overwrite or relabel another session's handover.
 Keep required tool outputs in your owned worktree, or retain small exact copies at an explicitly authorized owned stream destination. Retain source and session provenance. Never use another tool repository's disposable output as the sole evidence.

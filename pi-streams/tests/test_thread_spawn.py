@@ -35,6 +35,8 @@ def expected_brief(stream_dir: str, worktree: str, base: str, sid: str = "thread
         "\n"
         "ship the slice\n"
         "\n"
+        f"Environment failures park only the affected lane. Preserve independent authorized work. Do not repair credentials/resources, switch provider/model, resubmit uncertain jobs, or write remedial rules, skills, memory or configuration. Log/report the failure through the engine when possible. Only the engine may consume one saved usage-reset trial after its verified notice/reset/epoch checks. Nonusage recovery needs the existing authenticated ZF intake, not readiness or an ordinary \"fixed\" message. The engine owns the exact good-prefix fork, forced same-fork DCR and guarded single-original retirement. Never remove markers or use generic close/tree cleanup to bypass parking. Only explicit verified exceptional instructions enter continuation. Inspect failure/recovery state through `pi-streams status etl --json`; never read engine metadata.\n"
+        "\n"
         f"Before you stop, create the handover's parent directory if needed and write {stream_dir}/handover/datapull/{sid}.md. "
         f"Its first line must be exactly `session: {sid}`. "
         "Follow it with intent, what was done with proof, what is left, and what the next agent should know. "
