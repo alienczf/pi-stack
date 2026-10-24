@@ -15,6 +15,7 @@ ALLOWED = {
     Status.active: {Status.waiting_quota, Status.done, Status.archived},
     Status.waiting_quota: {Status.active, Status.archived},
     Status.done: {Status.archived},
+    Status.parked: {Status.archived},
     Status.archived: set(),
 }
 

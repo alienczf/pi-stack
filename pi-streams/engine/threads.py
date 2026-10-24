@@ -16,6 +16,7 @@ _ROLE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 class Status(enum.Enum):
     active = "active"
+    parked = "parked"
     waiting_quota = "waiting_quota"
     done = "done"
     archived = "archived"
@@ -23,6 +24,7 @@ class Status(enum.Enum):
 
 TRANSITIONS: dict[Status, frozenset[Status]] = {
     Status.active: frozenset({Status.waiting_quota, Status.done, Status.archived}),
+    Status.parked: frozenset({Status.archived}),
     Status.waiting_quota: frozenset({Status.active, Status.archived}),
     Status.done: frozenset({Status.archived}),
     Status.archived: frozenset(),
@@ -388,7 +390,7 @@ def _one_stream(stream_id: str, stream_dir: Path) -> dict[str, object]:
     for row in rows:
         if row.role == "coordinator":
             continue
-        counts[row.status.value] += 1
+        counts[row.status.value] = counts.get(row.status.value, 0) + 1
         threads.append(row)
     session = coordinator.native.status
     coord_state = _coordinator_state(coordinator.row.session, session)

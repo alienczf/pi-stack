@@ -5,7 +5,7 @@ import json
 import sys
 from pathlib import Path
 
-from engine import StreamsError, artifacts, clock, dcr, delivery, drive, failure, migration, replacement
+from engine import StreamsError, artifacts, clock, dcr, delivery, drive, failure, failure_recovery, migration, replacement
 from engine.doctor import run_doctor
 from engine.project import (
     STATE_SCHEMA,
@@ -87,6 +87,11 @@ def _parser() -> argparse.ArgumentParser:
     ratify.add_argument("--episode", required=True)
     ratify.add_argument("--notice-id", required=True)
     ratify.add_argument("--notice-file", required=True)
+    advance = failure_sub.add_parser("advance")
+    advance.add_argument("stream")
+    advance.add_argument("--home")
+    advance.add_argument("--session", required=True)
+    advance.add_argument("--episode", required=True)
 
     maintenance = sub.add_parser("dcr")
     maintenance_sub = maintenance.add_subparsers(dest="dcr_cmd", required=True)
@@ -359,16 +364,21 @@ def cmd_drive(args: argparse.Namespace) -> int:
 
 
 def cmd_failure(args: argparse.Namespace) -> int:
-    try:
-        notice = json.loads(_state_body(args.notice_file))
-    except ValueError as exc:
-        raise StreamsError("Authenticated notice input must be JSON, not a fixed/readiness string") from exc
+    notice = None
+    if args.failure_cmd == "ratify":
+        try:
+            notice = json.loads(_state_body(args.notice_file))
+        except ValueError as exc:
+            raise StreamsError("Authenticated notice input must be JSON, not a fixed/readiness string") from exc
     index = resolve_index(args.home)
     with index_lock(index):
         project = resolve_project(index)
         stream_dir = require_stream(index, project.info.name, args.stream)
     with stream_lock(stream_dir):
-        result = failure.ratify_locked(stream_dir, args.session, args.episode, args.notice_id, notice, clock.stamp(clock.now()))
+        if args.failure_cmd == "ratify":
+            result = failure.ratify_locked(stream_dir, args.session, args.episode, args.notice_id, notice, clock.stamp(clock.now()))
+        else:
+            result = failure_recovery.advance_locked(stream_dir, args.session, args.episode, clock.stamp(clock.now()))
     print(json.dumps(result, sort_keys=True))
     return 0
 

@@ -132,6 +132,8 @@ class StubPiWeb:
             self.requests.append((handler.command, parsed.path, parsed.query, body))
             routes = list(self.routes)
         status, payload = _match(handler.command, parsed.path, routes)
+        if callable(payload):
+            status, payload = payload(body)
         payload = copy.deepcopy(payload)
         with self._lock:
             if self.simulate_session_lifecycle and status in (200, 201):

@@ -216,6 +216,20 @@ def ratify_failure(sid: str, cwd: str, request: dict) -> dict:
     return result
 
 
+def fork_failure(sid: str, cwd: str, request: dict) -> dict:
+    result = call(["failure-fork", sid, "--cwd", cwd], stdin=json.dumps(request, ensure_ascii=False)).get("result")
+    if not isinstance(result, dict) or result.get("version") != 1 or result.get("originalSessionId") != sid or result.get("cwd") != cwd or result.get("id") != request.get("id"):
+        raise StreamsError("Native recovery returned an unconfirmed exact fork identity")
+    return result
+
+
+def failure_maintenance(sid: str, cwd: str, request: dict) -> dict:
+    result = call(["failure-maintenance", sid, "--cwd", cwd], stdin=json.dumps(request, ensure_ascii=False)).get("result")
+    if not isinstance(result, dict) or not isinstance(result.get("operation"), dict) or result["operation"].get("id") != request.get("id") or result["operation"].get("originalSessionId") != sid or result["operation"].get("cwd") != cwd:
+        raise StreamsError("Native recovery maintenance owner is unconfirmed")
+    return result
+
+
 def require_control_goal(sid: str) -> dict[str, object]:
     status = require_poteto(sid)
     if status.get("controlGoalSupport") != "preserve-ask-v1":
