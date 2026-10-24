@@ -187,6 +187,10 @@ class SharedPocTests(unittest.TestCase):
         creates = [r["command"]["config"] for r in requests if r["command"]["type"] == "create"]
         self.assertEqual([(c["provider"], c["model"], c["thinking"]) for c in creates], [("openai-codex", "gpt-6.1-sol", "xhigh"), ("openai-codex", "gpt-6-luna", "xhigh")])
         self.assertEqual(report["native_identities"]["worker"]["model"], "openai-codex/gpt-6-luna")
+        stream_prompts = [r["command"]["message"] for r in requests if r["command"]["type"] == "prompt_and_wait" and r["command"]["activeSessionId"] == "stream-route"]
+        self.assertEqual(len(stream_prompts), 4)
+        self.assertTrue(any(o["context_usage"] is None for o in report["native_context_usage"]))
+        self.assertIn(.2, report["observed_percentages"])
 
     def failed_assembled(self, mode, reason):
         report, scenario, requests = self.assembled(mode)
@@ -249,6 +253,9 @@ class SharedPocTests(unittest.TestCase):
 
     def test_assembled_missing_resume_result_is_unknown_not_success(self):
         self.failed_assembled("missing_resume_result", "timed out")
+
+    def test_precompact_proof_cannot_substitute_for_continuation_self_review(self):
+        self.failed_assembled("save_review_without_resume_review", "adversarial self-review")
 
     def test_assembled_missing_stream_review_cannot_close(self):
         self.failed_assembled("missing_review", "adversarial self-review")

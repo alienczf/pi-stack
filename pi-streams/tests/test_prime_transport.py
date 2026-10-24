@@ -91,6 +91,21 @@ class TransportTests(unittest.TestCase):
                     create_stream_session(client, stream, "openai-codex/gpt-6.1-sol", "xhigh")
             self.assertEqual(len(stub.requests), 2)
 
+    def test_saved_reply_retains_latest_actual_summary_without_reimporting_native_history(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            stream = Path(tmp)
+            project.git(stream, "init")
+            project.copy_missing(project.templates_dir() / "prime", stream)
+            summary = {"role": "assistant", "content": [{"type": "text", "text": "Actual final summary 雪; work remains open."}], "stopReason": "stop"}
+            messages = [{"role": "user", "content": "Current files for stream plus exact STATE and original"},
+                        {"role": "assistant", "content": [{"type": "toolCall", "name": "python", "arguments": {}}]},
+                        {"role": "toolResult", "content": "Full checked STATE readback belongs in native storage"}, summary]
+            saved = save_reply(stream, session_id="durable", command_id=str(uuid4()), sent_text="exact outgoing wrapper", frame={"command": "prompt_and_wait", "success": True, "data": None}, messages=messages)
+            entry = state._parse_entry(state.read_entry(stream, saved["entry"]))
+            self.assertEqual(entry.body["messages"], [summary])
+            self.assertEqual(entry.body["sent_text_sha256"], state.sha256("exact outgoing wrapper"))
+            self.assertEqual(messages[2]["role"], "toolResult")
+
     def test_actual_error_reply_is_saved_without_assistant(self):
         with tempfile.TemporaryDirectory() as tmp:
             stream = Path(tmp)

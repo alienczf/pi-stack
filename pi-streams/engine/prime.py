@@ -267,6 +267,8 @@ def _create_session(client, worktree, model, thinking):
 
 def save_reply(stream, *, session_id, command_id, sent_text, frame, messages):
     from engine.state import append_log, sha256
+    summaries = [message for message in messages if message.get("role") == "assistant"]
+    messages = summaries[-1:]
     return append_log(stream, subject="Prime reply", session_id=session_id, command_id=command_id, purpose="reply",
                       body={"command": frame["command"], "sent_text_sha256": sha256(sent_text), "success": frame["success"],
                             "error": frame.get("error"), "data": frame.get("data"), "messages": messages})
@@ -487,6 +489,8 @@ def send_stream_message(client, stream, identity, *, body, command_id=None, send
         if prior:
             replies = [e for e in entries.values() if e.command == command and "sent_text_sha256" in e.body]
             return {"sending_status": "Prime replied" if replies else "unknown after connection loss", "entry": replies[0].file if replies else prior[0].file}
+        if mode == "automatic":
+            check_current_command(stream, identity, expected or current.goals_rules_sha256, mode=mode, client=client)
     if mode in {"human", "automatic"}:
         maintenance = check_compaction(client, stream, identity, sessions_dir=sessions_dir)
         if maintenance["status"] == "held" and (mode != "human" or maintenance.get("reason") == "pending or unknown DCR"):

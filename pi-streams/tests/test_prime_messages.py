@@ -64,6 +64,18 @@ class MessageTests(PrimeCase):
         self.assertEqual(result["frame"]["success"], True)
         self.assertEqual([r["command"]["type"] for r in stub.requests].count("prompt_and_wait"), 1)
 
+    def test_stale_automatic_message_cannot_start_percentage_maintenance(self):
+        self.active()
+        prepared = state.check_state(self.stream)
+        state.update_state(self.stream, expect=prepared.sha256, goals=replace(prepared.goals, objective="A newer authorized finite objective"), rules=None,
+            entry={"subject": "New objective", "body": {}, "original_entries": []})
+        self.connection["contextUsage"] = {"percent": 51, "tokens": 255000, "contextWindow": 500000}
+        with StubPrime(self.handler) as stub, PrimeClient(stub.path) as client:
+            with self.assertRaises(StreamsError):
+                send_stream_message(client, self.stream, self.identity, body="stale must not cause maintenance", mode="automatic", expected=prepared.goals_rules_sha256, sessions_dir=self.root)
+        self.assertEqual([r["command"]["type"] for r in stub.requests if r["command"]["type"] in {"prompt_and_wait", "compact", "acquire_session_input_pause"}], [])
+        self.assertFalse(any("threshold_percent" in e.body for e in state._entries(self.stream, state.check_state(self.stream)).values()))
+
     def test_human_steer_can_arrive_while_a_known_prompt_is_pending(self):
         with StubPrime(lambda s, r: self.handler(s, r) if r["command"]["type"] != "prompt_and_wait" else None) as stub, PrimeClient(stub.path) as client:
             first = send_stream_message(client, self.stream, self.identity, body="initial finite ask", wait_result=False)
