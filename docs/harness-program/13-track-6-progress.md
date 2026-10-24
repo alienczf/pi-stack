@@ -4,6 +4,12 @@
 
 Build revised 51 section 8 as eight ordered, tested local commits on `feat/merged-poc`. Prove the documented install in a fresh clone and clean HOME. Real inference must demonstrate the requested steer, clean worker handover and kickoff, percentage-triggered save/compact/disk-readback/resume, stale-message rejection, stream adversarial self-review and computed close. Offline fixtures do not prove native inference. Stop at an operator-owned Codex login if that is the only remaining requirement.
 
+## G39 and G40 continuation
+
+Received Track 6 steer 1 at 2026-10-24T00:05:20Z. Grok Bot reports that the operator completed Codex login in the existing clean HOME and set onboarding flags. This report supersedes the prior missing-login blocker, but is not itself native E2E evidence. Do not inspect, copy or relocate auth, replace the authenticated prefix, or operate any prior stream/session.
+
+G40 sets stream defaults to `openai-codex/gpt-6.1-sol` with `xhigh`, and worker defaults independently to `openai-codex/gpt-6-luna` with `xhigh`. Both remain overridable. This supersedes the earlier explicit-only installer model/thinking requirement; compaction percentage remains explicit. Update project/config/installer/spawn paths, docs and literal behavioral default tests, commit locally, then run the complete real native gate on a new disposable stream. The preceding blocked reports and all earlier proof bytes remain retained as historical evidence.
+
 ## Current state
 
 - Worktree created at `/home/alphalab/Projects/worktrees/pi-stack-merged-poc` from local main `3acf0f01e6084a317b89cef3a86f4781e60877cf`.
@@ -135,6 +141,30 @@ Run directory is `/home/alphalab/.cache/pi-stack-track6/20261023T172837Z/`.
 
 | 2026-10-23T21:44:13Z | Accept the final offline build and clean installation, but keep native E2E blocked on the operator's own Codex login. | Parent-rerun suites and actual installed artifact hashes pass, while the retained native response explicitly refuses unauthenticated inference. | `evidence/parent-final-{streams,root,overlay,install-check,readme,artifacts,clean-doctor}.log` | 221 stream tests, 72 root tests and required source/install checks pass; native E2E pending. |
 | 2026-10-23T21:44:13Z | Stop without further native sends and leave the operator login to Grok Bot's ask. | The remaining requirement is authentication, which this task must neither automate nor repair. | Final native session `01a16ab0-7c9b-70c4-8cd1-17d57686fc73`; `evidence/parent-final-artifacts.log` | Owned daemon absent; source and runtime evidence retained. |
+
+| 2026-10-24T00:05:20Z | Apply independent coordinator and worker defaults through the existing ModelSettings fields and preserve explicit overrides. | G40 selects Sol 6.1 xhigh streams and Luna 6 xhigh workers without changing the merged architecture. | Track 6 steer 1; new follow-up in `PLAN.md` and `TODO.md` | Pending implementation and literal spawn regressions. |
+| 2026-10-24T00:05:20Z | Preserve the authenticated prefix in place and use only a new disposable stream for live verification. | G39's login is user-owned and must not be copied or lost during installation updates. | Track 6 steer 1; retained clean HOME | Auth bytes remain uninspected and untouched. |
+| 2026-10-24T00:05:20Z | Assign one fresh same-model implementation owner for the defaults and native follow-up. | The settled source and evidence are durable, so retaining the previous owner's large context is unnecessary. | `PLAN.md`; `TODO.md` | One writer; parent owns independent acceptance. |
+
+## G40 implementation-owner run
+
+Started 2026-10-24T00:05Z on `f5beb90d69fa805aa7c067477275acc9115e0f74`. Authoring identity is `openai-codex/gpt-6.1-sol` with `xhigh`. The parent retains independent review. No nested agent or `pi -p` was launched.
+
+Data remains `Project.coordinator` and `Project.threads`, each an independent `ModelSettings`. New Prime streams record the existing project-config path in `stream.toml`; creation and clean handover resolve the applicable role there before applying explicit per-field arguments. A direct clean-worker constructor uses the worker defaults. No fallback is added. Luna metadata matches the pinned stock catalog, including its unchanged 272000-token context window. Sol retains its unchanged 500000-token window.
+
+The owned update is explicit `--update-owned-from <prior-install-receipt-sha256>`. It requires the same recorded checkout, a clean committed `feat/merged-poc` source descended from the prior revision, unchanged stock binary/runtime and the expected old configuration. It snapshots only the receipt, wrappers and three owned config files. It validates all replacement config before publication, preserves unknown JSON fields and TOML content, and leaves prior streams, sessions and reports untouched. No auth path is read, copied or generated.
+
+Focused results pass 102 Prime tests and 23 verifier tests. `evidence/g40-defaults-before.log` records three failing omitted-settings spawn/config regressions before the fix. Both complete suites pass 231 stream tests and 72 root tests in `evidence/g40-{streams,root}.log`. `evidence/g40-final-gates.log` records overlay, 11 isolated-installer tests, README commands, shell/Python syntax and whitespace checks passing. The first full stream run exposed old fixtures assuming the retired default; `evidence/g40-streams-first-failure.log` is retained. Those legacy behavior fixtures now explicitly select their old model, while new default regressions assert literal Sol/Luna create envelopes.
+
+Principles applied this run. Model the Domain kept the two existing role structures. Laziness Protocol avoided another configuration layer. Test Behavior, Not Implementation placed literal expectations at native create and actual handover/kickoff. Boundary Discipline validates update ownership before publishing. Sequence Work into Verifiable Units puts the green defaults commit before native inference. Prove It Works keeps offline green distinct from native acceptance. Fix Root Causes requires real red/green evidence for any later native correction. The applicable leaf skills were read from the retained pstack source. Missing optional deslop/control-cli skills were not installed or edited; comment/diff review is inline because this owner cannot spawn children.
+
+Native preparation chooses a fixed **12 percent** before any new test-session construction. Historical unauthenticated intake measured 4.4306 percent with this finite 350-repeat fixture. Twelve is above that initial intake and permits growth across the real steer and checked-state exchange. Whether it genuinely crosses and falls below the threshold after compaction is not yet measured. The threshold will not change within an attempt, no context window is altered, and no explicit DCR is substituted. Any inconclusive attempt will be retained under its unique stream ID before choosing a new fixture or threshold.
+
+| UTC time | Decision | One-line reason | Evidence | Result |
+|---|---|---|---|---|
+| 2026-10-24T00:14:26Z | Keep the independent role structures and apply per-field argument overrides after config resolution. | G40 changes role defaults without changing stream or worker ownership. | `test_prime_model_defaults.py`; `g40-defaults-before.log` | Four behavioral role tests pass. |
+| 2026-10-24T00:14:26Z | Add an explicit receipt-bound owned-config update instead of replacing the authenticated prefix. | The login and unknown onboarding fields must remain in place. | `test_prime_install.py`; `g40-focused-install-final.log` | Ownership conflict and unknown-content preservation tests pass. |
+| 2026-10-24T00:14:26Z | Select 12 percent for the next uniquely named disposable native stream. | It exceeds historical 4.4306-percent intake while allowing finite steer/exchange growth. | This pre-creation decision; unchanged finite verifier fixture | Native outcome pending. |
 
 ## Orchestration correction
 
