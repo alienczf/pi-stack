@@ -68,6 +68,14 @@ Migration is a lossless, idempotent, explicit per-stream operation. It uses a pe
 
 Migration does not follow worktree pointers or out-of-root symlinks, write worker worktrees, prompt sessions, or perform any existing-session lifecycle action. TODO/PLAN and invented artifacts are not inputs. Unknown intermediate GOAL/ACTIONS schemas require an explicit source-backed plan or refusal. New templates and ordinary upgrade do not silently migrate or overwrite owned state.
 
+## S3 source and isolated verification artifacts
+
+Main `engine/dcr.py` owns fixed 150k same-SID maintenance facts in the existing engine-only tick-state record. It references the receiving operation, not another input queue. Native `sessionMaintenanceStore` retains exact accepted input identity/body/order/kind and attachment references. Native custom entries retain exact checkpoint/operation/event identity outside model context. These do not become agent-read task ledgers.
+
+The private program evidence root `/home/alphalab/.cache/pi-stack-track1/native-s3` contains `artifact-manifest.json`, `live-isolation-proof.json`, public SDK wire/result observations, `s3-normal-pass-native-proof.json`, `s3-receiving-restart-native-proof.json`, rerunnable `verify-after-s3.py` and `after-S3-acceptance.json`. Source is main c41a01a and native 77c218b. The exact native tar SHA256 is 9b62e1d99cd69c119b96370ab7f7edaa8883c072728e5a54757eb9b037e2923c. This is disposable program evidence, not a new stream artifact or mandatory read.
+
+Real passing SID 01a16b94-ad3c-7430-9251-fcf25ae265bc compacted at native entry 2291d0d9, used the latest changed goal and produced exact owned note bytes. The later receiving restart fixture on that SID intentionally retains two accepted queued inputs under uncertain maintenance ownership. Preserve their IDs/bodies/order and do not replay or clear them. The first noncompactable single-message fixture SID 01a16b7a-4c5a-7d72-a9ec-dcbb94ca0495 remains disabled with its exact native bytes. Its preliminary refusal is not credited as stack acceptance. Retained S2 services and all existing non-fixture sessions remain untouched.
+
 ## Historical baseline observations
 
 The following is the earlier map, not a new live measurement or the current policy. Grok Bot prepared it on 2026-10-23 at 09:58 SGT and read the 12 registered options-01 streams at 10:05 SGT. This amendment does not reread or change those streams or their registry.
