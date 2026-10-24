@@ -246,7 +246,7 @@ def main(argv: list[str]) -> int:
     control.add_argument("sid")
     control.add_argument("mode", choices=("on", "off"))
     control.add_argument("--expected-generation", help="compare the exact saved receiving epoch atomically; never renew it")
-    for name in ("failure-ratify", "failure-fork", "failure-maintenance"):
+    for name in ("failure-ratify", "failure-fork", "failure-maintenance", "failure-retire"):
         recovery = sub.add_parser(name)
         recovery.add_argument("sid")
         recovery.add_argument("--cwd", required=True)
@@ -312,14 +312,14 @@ def main(argv: list[str]) -> int:
             ok = ok and not missing
             return out({"ok": ok, "status": code, "runtime": data, "missing": missing}, ok)
         return out({"ok": ok, "status": code, "runtime": data}, ok)
-    if args.cmd in ("failure-ratify", "failure-fork", "failure-maintenance"):
+    if args.cmd in ("failure-ratify", "failure-fork", "failure-maintenance", "failure-retire"):
         try:
             body = _json_object(_text_input(None), "authenticated ratification envelope")
         except (UsageError, UnicodeError) as exc:
             return out({"ok": False, "error": str(exc)}, False)
         body["cwd"] = args.cwd
         sid = urllib.parse.quote(args.sid, safe="")
-        action = {"failure-ratify": "ratify", "failure-fork": "fork", "failure-maintenance": "maintenance"}[args.cmd]
+        action = {"failure-ratify": "ratify", "failure-fork": "fork", "failure-maintenance": "maintenance", "failure-retire": "retire"}[args.cmd]
         code, data = req("POST", f"/api/sessions/{sid}/failure-recovery/{action}", body)
         ok = code == 200 and isinstance(data, dict) and not data.get("error")
         return out({"ok": ok, "status": code, "result": data}, ok)

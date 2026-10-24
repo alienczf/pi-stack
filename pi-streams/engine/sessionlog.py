@@ -224,6 +224,8 @@ def resume_observation(path: Path, sid: str, cwd: str, leaf: object, identity: s
         raise StreamsError("RESUME observation is not on its ordered post-compaction branch")
     entry = json.loads(read_record(path, sid, observation["entryId"], observation["sha256"]).raw)
     expected = {"kind": "assistant-stop", "operationId": identity, "sessionId": sid, "cwd": cwd, "generation": generation, "deliveryId": identity+":resume", "compactionEntryId": compaction, "userEntryId": observation["userEntryId"], "assistantEntryId": observation["assistantEntryId"], "assistantSha256": observation["assistantSha256"]}
+    if observation.get("userSha256") is not None:
+        expected["userSha256"] = observation["userSha256"]
     if entry.get("type") != "custom" or entry.get("customType") != "pi-web.resume-observed" or entry.get("data") != expected or any(observation.get(key) != expected[key] for key in ("kind", "deliveryId", "compactionEntryId")):
         raise StreamsError("RESUME observation is not its exact native correlated receipt")
     compaction_record(read_record(path, sid, compaction, compaction_sha256))
@@ -231,6 +233,8 @@ def resume_observation(path: Path, sid: str, cwd: str, leaf: object, identity: s
     if assistant.get("role") != "assistant" or assistant.get("stopReason") != "stop":
         raise StreamsError("RESUME observation has no actual non-error completed assistant")
     owned, owned_raw = entries[positions[observation["userEntryId"]]]
+    if observation.get("userSha256") is not None and hashlib.sha256(owned_raw).hexdigest() != observation["userSha256"]:
+        raise StreamsError("RESUME observation user hash changed")
     message = owned.get("message", {})
     content = message.get("content", [])
     actual = content if isinstance(content, str) else "\n".join(block.get("text", "") for block in content if isinstance(block, dict) and block.get("type") == "text")

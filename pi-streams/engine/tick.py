@@ -340,7 +340,7 @@ class StreamTick:
     def observe_failure(self, row: Thread, native: dict, status: dict) -> bool:
         for sid in artifacts._read_tick_data(self.stream_dir).get("failure_recoveries", {}):
             operation = failure_recovery.load(self.stream_dir, sid)
-            if operation is not None and operation.fork == row.session:
+            if operation is not None and operation.phase != "complete" and operation.fork == row.session:
                 self.typed_failures.add(row.session)
                 return True
         piweb.register_stream_failure(row.session, row.worktree, self.stream_dir, status)

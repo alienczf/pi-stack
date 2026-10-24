@@ -230,6 +230,13 @@ def failure_maintenance(sid: str, cwd: str, request: dict) -> dict:
     return result
 
 
+def retire_failure(sid: str, cwd: str, request: dict) -> dict:
+    result = call(["failure-retire", sid, "--cwd", cwd], stdin=json.dumps(request, ensure_ascii=False)).get("result")
+    if not isinstance(result, dict) or result.get("version") != 1 or result.get("id") != request.get("id") or result.get("originalSessionId") != sid or result.get("forkSessionId") != request.get("forkSessionId") or result.get("cwd") != cwd or result.get("state") != "released":
+        raise StreamsError("Scoped retirement has no exact durable released result")
+    return result
+
+
 def require_control_goal(sid: str) -> dict[str, object]:
     status = require_poteto(sid)
     if status.get("controlGoalSupport") != "preserve-ask-v1":

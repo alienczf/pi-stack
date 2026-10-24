@@ -85,9 +85,9 @@ class FailureDcrTests(TickCase):
         receipt = self.native["resume"]
         goal = receipt["potetoGoal"]
         prefix = receipt["text"][:-len("/poteto-mode "+goal)]
-        self.message("resume-user", user(prefix+'<skill name="poteto-mode" location="/offline/skill.md">\nLabelled offline loaded mode, not actual activation proof.\n</skill>\n\n'+goal))
+        user_hash = self.message("resume-user", user(prefix+'<skill name="poteto-mode" location="/offline/skill.md">\nLabelled offline loaded mode, not actual activation proof.\n</skill>\n\n'+goal))
         assistant = self.message("resume-stop", reply("Labelled resumed completed work"))
-        data = {"kind": "assistant-stop", "operationId": self.op["id"], "sessionId": "returned-fork", "cwd": str(self.cwd), "generation": "maintenance-generation", "deliveryId": self.op["id"]+":resume", "compactionEntryId": "native-compaction", "userEntryId": "resume-user", "assistantEntryId": "resume-stop", "assistantSha256": assistant}
+        data = {"kind": "assistant-stop", "operationId": self.op["id"], "sessionId": "returned-fork", "cwd": str(self.cwd), "generation": "maintenance-generation", "deliveryId": self.op["id"]+":resume", "compactionEntryId": "native-compaction", "userEntryId": "resume-user", "userSha256": user_hash, "assistantEntryId": "resume-stop", "assistantSha256": assistant}
         raw = self.append("returned-fork", "resume-observed", "resume-stop", "pi-web.resume-observed", data)
         self.fork_status["rotationSafety"]["entryId"] = "resume-observed"
         self.native["resume"].update(state="admitted", observation={key: value for key, value in data.items() if key not in ("operationId", "sessionId", "cwd", "generation")}|raw)
