@@ -190,6 +190,22 @@ def _maintenance_result(data: dict, sid: str, identity: str, cwd: str) -> dict:
     return result
 
 
+def watch_dcr_events(sid: str, cwd: str, identity: str, index: Path, stream: str, generation: str) -> dict:
+    data = call(["maintenance-events", sid, identity, "--cwd", cwd, "--index", str(index), "--stream", stream, "--generation", generation])
+    result = data.get("result")
+    if not isinstance(result, dict) or result.get("id") != identity or not isinstance(result.get("entryId"), str) or not result["entryId"]:
+        raise StreamsError("native DCR event registration is unconfirmed")
+    return result
+
+
+def close_dcr_events(sid: str, cwd: str, identity: str) -> dict:
+    data = call(["maintenance-events", sid, identity, "--cwd", cwd, "--close"])
+    result = data.get("result")
+    if not isinstance(result, dict) or result.get("id") != identity or result.get("closed") is not True:
+        raise StreamsError("native DCR event close is unconfirmed")
+    return result
+
+
 def compact_at_checkpoint(sid: str, identity: str, expected: dict[str, str], instructions: str) -> dict:
     if set(expected) != {"sessionId", "cwd", "entryId", "generation"} or expected["sessionId"] != sid or not all(isinstance(value, str) and value for value in expected.values()):
         raise StreamsError("compaction requires the exact saved native checkpoint")

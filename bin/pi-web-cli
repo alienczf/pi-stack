@@ -135,6 +135,14 @@ def cmd_maintenance(args: argparse.Namespace) -> int:
         path = f"/api/sessions/{sid}/maintenance/compact"
         body = {"cwd": expected["cwd"], "id": args.operation_id, "expectedIdle": expected, "instructions": _text_input(args.text)}
         method = "POST"
+    elif args.cmd == "maintenance-events":
+        path = f"/api/sessions/{sid}/maintenance/events/" + ("close" if args.close else "watch")
+        body = {"cwd": args.cwd, "id": args.operation_id}
+        if not args.close:
+            if not args.index or not args.stream or not args.generation:
+                raise UsageError("DCR event registration requires its exact index/stream/generation")
+            body.update(index=args.index, stream=args.stream, generation=args.generation)
+        method = "POST"
     elif args.cmd == "maintenance-resume":
         automatic = _json_object(args.automatic_admission, "automatic admission")
         if automatic.get("sessionId") != args.sid or not isinstance(automatic.get("cwd"), str) or automatic.get("kind") != "resume":
@@ -228,6 +236,14 @@ def main(argv: list[str]) -> int:
     compact.add_argument("operation_id")
     compact.add_argument("--expected-idle", required=True)
     compact.add_argument("text", nargs="?")
+    events = sub.add_parser("maintenance-events")
+    events.add_argument("sid")
+    events.add_argument("operation_id")
+    events.add_argument("--cwd", required=True)
+    events.add_argument("--index")
+    events.add_argument("--stream")
+    events.add_argument("--generation")
+    events.add_argument("--close", action="store_true")
     maintenance = sub.add_parser("maintenance")
     maintenance.add_argument("sid")
     maintenance.add_argument("operation_id")
@@ -258,7 +274,7 @@ def main(argv: list[str]) -> int:
             ok = ok and not missing
             return out({"ok": ok, "status": code, "runtime": data, "missing": missing}, ok)
         return out({"ok": ok, "status": code, "runtime": data}, ok)
-    if args.cmd in ("command-run", "compact", "maintenance", "maintenance-resume"):
+    if args.cmd in ("command-run", "compact", "maintenance", "maintenance-resume", "maintenance-events"):
         try:
             return cmd_maintenance(args)
         except (UsageError, UnicodeError) as exc:

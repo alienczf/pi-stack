@@ -7,7 +7,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from engine import StreamsError, artifacts, clock, delivery, piweb, sessionlog
+from engine import StreamsError, artifacts, clock, dcr, delivery, piweb, sessionlog
 from engine.project import (
     Project,
     StreamRow,
@@ -210,6 +210,7 @@ class StreamTick:
         self.loaded = False
         self.errors: list[str] = []
         self.coordinator_resolution: Coordinator | None = None
+        self.dcr_owned = False
 
     def run(self) -> None:
         try:
@@ -220,6 +221,7 @@ class StreamTick:
             if self.coordinator_resolution is not None:
                 resolved = self.coordinator_resolution
                 self.listings[resolved.row.worktree] = {resolved.row.session: resolved.native.info}
+            self.dcr_owned = dcr.step(self.index, self.project, self.stream, self.stream_dir, self.coordinator_resolution)
             self.check_claims()
             self.observe()
             self.check_subscriptions()
@@ -428,6 +430,8 @@ class StreamTick:
         return timedelta(0) if seen is None else self.now - seen
 
     def wake(self) -> None:
+        if self.dcr_owned:
+            return
         current = delivery.current_tick(self.stream_dir)
         if current is not None:
             if current["state"] == "applied":

@@ -5,7 +5,7 @@ import json
 import sys
 from pathlib import Path
 
-from engine import StreamsError, artifacts, clock, delivery, migration, replacement
+from engine import StreamsError, artifacts, clock, dcr, delivery, migration, replacement
 from engine.doctor import run_doctor
 from engine.project import (
     STATE_SCHEMA,
@@ -31,6 +31,7 @@ from engine.threads import (
     ensure_coordinator,
     format_status,
     rotate_coordinator,
+    resolve_coordinator,
     spawn_thread,
     status_report,
 )
@@ -76,6 +77,15 @@ def _parser() -> argparse.ArgumentParser:
             operation.add_argument("--state", required=True, choices=("consumed", "applied", "blocked"))
             operation.add_argument("--detail", required=True)
             operation.add_argument("--evidence")
+
+    maintenance = sub.add_parser("dcr")
+    maintenance_sub = maintenance.add_subparsers(dest="dcr_cmd", required=True)
+    for name in ("ready", "advance"):
+        operation = maintenance_sub.add_parser(name)
+        operation.add_argument("stream")
+        operation.add_argument("--home")
+        operation.add_argument("--session", required=True)
+        operation.add_argument("--operation", required=True)
 
     sub.add_parser("doctor")
 
@@ -305,6 +315,28 @@ def cmd_delivery(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_dcr(args: argparse.Namespace) -> int:
+    index = resolve_index(args.home)
+    with index_lock(index):
+        project = resolve_project(index)
+        stream_dir = require_stream(index, project.info.name, args.stream)
+        with stream_lock(stream_dir):
+            op = dcr.load(stream_dir, args.session)
+            if op is None or op.id != args.operation or Path(op.cwd).resolve() != stream_dir.resolve():
+                raise StreamsError("DCR callback does not match the registered stream/SID/operation")
+            resolved = resolve_coordinator(stream_dir)
+            if resolved is None or resolved.row.session != args.session:
+                raise StreamsError("DCR callback does not own the designated native coordinator")
+            if args.dcr_cmd == "ready":
+                result = dcr.ready(stream_dir, index, args.stream, resolved, args.operation)
+            else:
+                dcr.step(index, project, args.stream, stream_dir, resolved)
+                current = dcr.load(stream_dir, args.session)
+                result = {"id": args.operation, "phase": current.phase, "detail": current.detail}
+    print(json.dumps(result, sort_keys=True))
+    return 0
+
+
 def cmd_checkpoint(args: argparse.Namespace) -> int:
     index = resolve_index(args.home)
     with index_lock(index):
@@ -373,6 +405,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_tick(args)
         if args.cmd == "state":
             return cmd_state(args)
+        if args.cmd == "dcr":
+            return cmd_dcr(args)
         if args.cmd == "delivery":
             return cmd_delivery(args)
         if args.cmd == "thread" and args.thread_cmd == "spawn":

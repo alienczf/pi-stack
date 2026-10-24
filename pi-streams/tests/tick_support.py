@@ -77,6 +77,9 @@ def status(
     body: dict[str, object] = {
         "sessionId": sid,
         "persisted": True,
+        "maintenanceSupport": "checkpoint-input-v1",
+        "potetoInvocationSupport": "exact-goal-v1",
+        "dcrEventSupport": "phase-v1",
         "model": {
             "provider": "openai-codex",
             "id": "gpt-6-astra",

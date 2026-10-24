@@ -27,6 +27,7 @@ class CoordinatorReuseTests(TickCase):
 
     def routes(self, *, tokens=1000, modified="2026-10-06T11:00:00Z", streaming=False, pending=0, callbacks=()):
         body = status("current", tokens=tokens, streaming=streaming)
+        body.update(maintenanceSupport="checkpoint-input-v1", potetoInvocationSupport="exact-goal-v1", dcrEventSupport="phase-v1")
         body["pendingMessageCount"] = pending
         body["rotationSafety"] = {"entryId": "checkpoint-ack", "callbacksKnown": True, "callbackInventory": "native-and-extension-v1", "nativeChildCallbacks": list(callbacks), "unprovenCallbacks": []}
         self.stub.set_routes([
@@ -72,7 +73,11 @@ class CoordinatorReuseTests(TickCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 posts = [(path, body) for method, path, _, body in self.stub.requests if method == "POST"]
                 self.assertEqual([path for path, _ in posts], ["/api/sessions/current/prompt"])
-                self.assertEqual(posts[0][1]["text"], "pi-streams tick 2026-10-06T12:00:00Z:\nidle worker worker")
+                if tokens >= 150000:
+                    self.assertTrue(posts[0][1]["text"].startswith("SYNC/DUMP for same-session DCR "))
+                    self.assertEqual(posts[0][1]["automaticAdmission"]["sessionId"], "current")
+                else:
+                    self.assertEqual(posts[0][1]["text"], "pi-streams tick 2026-10-06T12:00:00Z:\nidle worker worker")
                 self.assertEqual(self.rows(self.stream).splitlines()[1].split("\t")[0], "current")
 
     def test_busy_queue_or_native_callback_ownership_refuses_without_abort_archive_or_spawn(self):

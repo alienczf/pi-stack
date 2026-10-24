@@ -413,6 +413,11 @@ def _one_stream(stream_id: str, stream_dir: Path) -> dict[str, object]:
     deliveries = receipts(stream_dir)
     if deliveries:
         result["deliveries"] = deliveries
+    from engine.dcr import receipts as dcr_receipts
+
+    maintenance = dcr_receipts(stream_dir)
+    if maintenance:
+        result["maintenance"] = maintenance
     if canonical:
         result["path"] = str(stream_dir)
         result["threadSessions"] = [
@@ -456,6 +461,8 @@ def format_status(report: dict[str, object]) -> str:
             f"tokens={tokens}\tmodel={coord['model']}\tthinking={coord['thinkingLevel']}\t"
             f"cost={coord['cost']}\tthreads={counted}\tshare={share_text}"
         )
+        for maintenance in stream.get("maintenance", []):
+            lines.append(f"{stream['id']}\tdcr={maintenance['phase']}\tsession={maintenance['session']}\toperation={maintenance['id']}\t{maintenance['detail']}")
     return "\n".join(lines) + "\n"
 
 

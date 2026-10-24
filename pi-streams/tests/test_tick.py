@@ -213,7 +213,9 @@ class TickTests(TickCase):
         result = self.tick("2026-10-06T12:00:00Z")
         self.assertEqual((result.returncode, result.stdout, result.stderr), (0, f"{self.etl}\task=1\n", ""))
         posts = [request for request in self.stub.requests if request[0] == "POST"]
-        self.assertEqual(posts, [self.delivery_prompt("coord-1", "pi-streams tick 2026-10-06T12:00:00Z:\nask t-1 datapull May I write to Test?")])
+        self.assertEqual([item[1] for item in posts], ["/api/sessions/coord-1/prompt"])
+        self.assertTrue(posts[0][3]["text"].startswith("SYNC/DUMP for same-session DCR "))
+        self.assertEqual(posts[0][3]["automaticAdmission"]["sessionId"], "coord-1")
         self.assertEqual(self.rows(self.etl), before)
         self.assertEqual(self.state(self.etl)["pending"], [{"at": "2026-10-06T12:00:00Z", "kind": "ask", "session": "t-1", "role": "datapull", "detail": "May I write to Test?"}])
         self.assertEqual(git(self.etl, self.env, "status", "--porcelain"), "")

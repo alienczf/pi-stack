@@ -4,13 +4,35 @@ import hashlib
 import json
 import os
 import re
+import stat
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import BinaryIO
+from typing import BinaryIO, Iterator
 
 from engine import StreamsError
 
 CHUNK = 65536
+
+
+@contextmanager
+def regular_reader(path: Path) -> Iterator[BinaryIO]:
+    before = path.lstat()
+    if not stat.S_ISREG(before.st_mode):
+        raise StreamsError(f"native source must be a regular owned file: {path}")
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        opened = os.fstat(descriptor)
+        def identity(value: os.stat_result) -> tuple[int, ...]:
+            return value.st_dev, value.st_ino, value.st_mode, value.st_size, value.st_mtime_ns, value.st_ctime_ns
+        if not stat.S_ISREG(opened.st_mode) or identity(before) != identity(opened):
+            raise StreamsError(f"native source changed before read: {path}")
+        with os.fdopen(descriptor, "rb", closefd=False) as handle:
+            yield handle
+        if identity(os.fstat(descriptor)) != identity(opened) or identity(path.lstat()) != identity(opened):
+            raise StreamsError(f"native source changed during read: {path}")
+    finally:
+        os.close(descriptor)
 
 
 @dataclass(frozen=True)
@@ -29,7 +51,7 @@ def read_record(path: Path, session_id: str, entry_id: str, expected_sha256: str
         raise StreamsError("evidence requires exact session/entry identity and a SHA-256 hash")
     found: tuple[int, bytes] | None = None
     try:
-        with path.open("rb") as handle:
+        with regular_reader(path) as handle:
             try:
                 header = json.loads(handle.readline())
             except ValueError as exc:
@@ -68,7 +90,7 @@ def compaction_record(evidence: EvidenceRecord) -> dict:
 
 def last_assistant(path: Path) -> dict[str, object] | None:
     try:
-        with open(path, "rb") as handle:
+        with regular_reader(path) as handle:
             return _scan_back(handle)
     except FileNotFoundError:
         return None
