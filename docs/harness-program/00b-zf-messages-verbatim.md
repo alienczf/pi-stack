@@ -114,3 +114,7 @@ Going to leave you to drive and make this work over the weekend. Lmk when we hav
 ## t238u (2026-10-24 ~07:56 SGT, laptop, reply after completing the Prime Codex browser sign-in)
 
 http://localhost:1455/auth/callback?code=<redacted>&scope=openid+profile+email+offline_access&state=ccffcd17a0d1e1f9c1919c1fee6b8219
+
+## t239u (2026-10-24 08:01 SGT, laptop)
+
+default to sol xhigh 61 for streams and Luna xhigh 6 for all stream workers.
