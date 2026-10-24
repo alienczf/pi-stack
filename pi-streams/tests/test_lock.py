@@ -12,7 +12,7 @@ from support import CLI, EngineCase, git
 
 class LockTests(EngineCase):
     def test_new_waits_for_the_index_lock(self) -> None:
-        proc = self.run_streams("init", str(self.root), "-y")
+        proc = self.run_streams("init", str(self.root), "-y", "--coordinator-model", "openai-codex/gpt-6-astra", "--worker-model", "openai-codex/gpt-6-astra")
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.stub.set_routes([
             ("GET", "/api/sessions", 200, []),

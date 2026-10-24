@@ -121,6 +121,98 @@ class InstallTests(unittest.TestCase):
             self.assertEqual(config.coordinator.thinking, level)
             self.assertEqual(stored["thinkingLevelMap"][level], api_value)
 
+    def test_omitted_install_role_options_use_literal_independent_defaults(self):
+        original_git = installer.git
+        def selected_checkout(repo, *args):
+            return "feat/merged-poc\n" if args == ("branch", "--show-current") else original_git(repo, *args)
+        args = ["--prefix", str(self.root), "--project", str(self.root / "project"), "--compaction-percent", "12"]
+        build = {"prime_source_revision": installer.PRIME_REVISION, "prime_binary_sha256": "a" * 64, "prime_runtime_sha256": "b" * 64, "prime_version": "0.10.1"}
+        with patch.object(installer, "git", side_effect=selected_checkout), patch.object(installer.shutil, "which", return_value="/fixture/tool"), patch.object(installer, "install_prime", return_value=build), patch.object(installer, "install_poteto", return_value=("c" * 40, self.root / "poteto")), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(installer.main(args), 0)
+        from engine.project import load_project, ModelSettings
+        config = load_project(self.root / "index/projects/project.toml")
+        self.assertEqual(config.coordinator, ModelSettings("openai-codex/gpt-6.1-sol", "xhigh"))
+        self.assertEqual(config.threads, ModelSettings("openai-codex/gpt-6-luna", "xhigh"))
+        receipt = json.loads((self.root / "reports/install.json").read_text())
+        self.assertEqual((receipt["model"], receipt["thinking"], receipt["worker_model"], receipt["worker_thinking"]), ("openai-codex/gpt-6.1-sol", "xhigh", "openai-codex/gpt-6-luna", "xhigh"))
+        self.assertEqual(json.loads((self.root / "prime/agent/settings.json").read_text())["allowedModels"], ["openai-codex/gpt-6.1-sol", "openai-codex/gpt-6-luna"])
+
+    def legacy_installation(self):
+        import types
+        old_revision = installer.git(installer.repo_root(), "log", "-1", "--format=%H", "--grep=^fix: bind merged proof inputs and worker-aware wake$", "HEAD").strip()
+        self.assertRegex(old_revision, r"^[0-9a-f]{40}$")
+        code = installer.git(installer.repo_root(), "show", old_revision + ":pi-streams/engine/install_prime.py")
+        module = types.ModuleType("legacy_installer")
+        module.__file__ = installer.__file__
+        exec(compile(code, installer.__file__, "exec"), module.__dict__)
+        self.root.mkdir()
+        poteto = self.root / "poteto"
+        module.write_wrappers(self.root, installer.repo_root())
+        module.prepare_project(self.root, self.root / "project", "openai-codex/gpt-6.1-sol", "xhigh", .1, poteto)
+        config = self.root / "index/projects/project.toml"
+        config.write_text(config.read_text().replace(installer.git(installer.repo_root(), "rev-parse", "HEAD").strip(), old_revision).replace('[threads]', '[threads] # user heading note').replace('model = "openai-codex/gpt-6.1-sol"', 'model = "openai-codex/gpt-6.1-sol" # user model note') + '\n[user]\nkeep = "untouched"\n')
+        settings = self.root / "prime/agent/settings.json"
+        data = json.loads(settings.read_text())
+        data.update(onboardingComplete=True, onboardingVersion=7, unknownUserContent={"keep": [1, 2]})
+        data["retry"]["unknown"] = "preserve"
+        settings.write_text(json.dumps(data))
+        retained = self.root / "reports/prior-session-evidence.txt"
+        retained.parent.mkdir()
+        retained.write_bytes(b"prior immutable bytes\x00\n")
+        report = {"root": str(self.root), "project": str(self.root / "project"), "model": "openai-codex/gpt-6.1-sol", "thinking": "xhigh", "threshold_percent": .1,
+                  "pi_stack_revision": old_revision, "paths": {"checkout": str(installer.repo_root()), "poteto": str(poteto)}, "unknownReceiptField": "preserve"}
+        receipt = self.root / "reports/install.json"
+        receipt.write_text(json.dumps(report))
+        receipt.chmod(0o644)
+        return receipt, retained, settings, poteto
+
+    def test_explicit_owned_update_verifies_prior_receipt_and_preserves_user_content(self):
+        receipt, retained, settings, poteto = self.legacy_installation()
+        prior_receipt = receipt.read_bytes()
+        prior_settings = settings.read_bytes()
+        expected_hash = installer.digest(receipt)
+        args = ["--prefix", str(self.root), "--project", str(self.root / "project"), "--compaction-percent", "12", "--update-owned-from", expected_hash]
+        real_git = installer.git
+        def git(repo, *args):
+            if args == ("branch", "--show-current"):
+                return "feat/merged-poc\n"
+            return "" if args[:1] == ("status",) else real_git(repo, *args)
+        with patch.object(installer.shutil, "which", return_value="/fixture/tool"), patch.object(installer, "git", side_effect=git), patch.object(installer, "install_prime", return_value={}), patch.object(installer, "install_poteto", return_value=("c" * 40, poteto)), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(installer.main(args), 0)
+        result = json.loads(settings.read_text())
+        self.assertTrue(result["onboardingComplete"])
+        self.assertEqual(result["onboardingVersion"], 7)
+        self.assertEqual(result["unknownUserContent"], {"keep": [1, 2]})
+        self.assertEqual(result["retry"]["unknown"], "preserve")
+        self.assertEqual(result["allowedModels"], ["openai-codex/gpt-6.1-sol", "openai-codex/gpt-6-luna"])
+        self.assertEqual(retained.read_bytes(), b"prior immutable bytes\x00\n")
+        self.assertIn('[user]\nkeep = "untouched"', (self.root / "index/projects/project.toml").read_text())
+        self.assertIn('[threads] # user heading note', (self.root / "index/projects/project.toml").read_text())
+        self.assertIn('model = "openai-codex/gpt-6-luna" # user model note', (self.root / "index/projects/project.toml").read_text())
+        snapshot = self.root / "reports/install-updates" / expected_hash
+        self.assertEqual((snapshot / "reports/install.json").read_bytes(), prior_receipt)
+        self.assertEqual((snapshot / "prime/agent/settings.json").read_bytes(), prior_settings)
+        self.assertEqual(json.loads(receipt.read_text())["unknownReceiptField"], "preserve")
+        self.assertEqual(json.loads(receipt.read_text())["previous_receipt_sha256"], expected_hash)
+
+    def test_owned_update_conflict_has_no_partial_configuration_writes(self):
+        receipt, retained, settings, poteto = self.legacy_installation()
+        data = json.loads(settings.read_text())
+        data["retry"]["enabled"] = True
+        settings.write_text(json.dumps(data))
+        before = (self.root / "index/projects/project.toml").read_bytes()
+        old_receipt = receipt.read_bytes()
+        real_git = installer.git
+        def git(repo, *args):
+            if args == ("branch", "--show-current"):
+                return "feat/merged-poc\n"
+            return "" if args[:1] == ("status",) else real_git(repo, *args)
+        with patch.object(installer.shutil, "which", return_value="/fixture/tool"), patch.object(installer, "git", side_effect=git), patch.object(installer, "install_prime", return_value={}), patch.object(installer, "install_poteto", return_value=("c" * 40, poteto)), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(installer.main(["--prefix", str(self.root), "--project", str(self.root / "project"), "--compaction-percent", "12", "--update-owned-from", installer.digest(receipt)]), 1)
+        self.assertEqual((self.root / "index/projects/project.toml").read_bytes(), before)
+        self.assertEqual(receipt.read_bytes(), old_receipt)
+        self.assertTrue(json.loads(settings.read_text())["retry"]["enabled"])
+
     def test_traversal_cannot_write_outside_the_owned_prefix(self):
         self.root.mkdir()
         outside = self.home / "outside-owned-prefix.txt"

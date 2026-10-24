@@ -6,7 +6,7 @@ Build section 8 of `/home/alphalab/Projects/worktrees/pi-stack-harness-program/d
 
 ## Authority
 
-Write source only in this worktree. The only permitted write in the docs worktree is `docs/harness-program/13-track-6-progress.md`. Runtime evidence belongs under `/home/alphalab/.cache/pi-stack-track6/20261023T172837Z/`. Do not mutate existing sessions, streams, sockets, services, upstream source, credentials, or other worktrees. Do not push, open a PR, merge a PR, or contact GitHub. Grok Bot owns any later track-1 rebase. Stop and report a usage or quota failure. Use only `openai-codex/gpt-6.1-sol` at xhigh for children and the explicitly authorized native test.
+Write source only in this worktree. The only permitted write in the docs worktree is `docs/harness-program/13-track-6-progress.md`. Runtime evidence belongs under `/home/alphalab/.cache/pi-stack-track6/20261023T172837Z/`. Do not mutate existing sessions, streams, sockets, services, upstream source, credentials, or other worktrees. Do not push, open a PR, merge a PR, or contact GitHub. Grok Bot owns any later track-1 rebase. Stop and report a usage or quota failure. Use only `openai-codex/gpt-6.1-sol` at xhigh for authoring subagents and the native coordinator. G40 explicitly authorizes `openai-codex/gpt-6-luna` at xhigh for all native stream workers. Do not substitute a provider or model on failure.
 
 ## Data shape and ownership
 
@@ -39,6 +39,16 @@ Capture failing-before-fix behavior for existing paths. Label genuinely absent A
 ## Test installation
 
 Run directory is `/home/alphalab/.cache/pi-stack-track6/20261023T172837Z`. Set clean HOME to its `home` directory. Clone the local branch into `$HOME/pi-stack-merged-poc` and set `POC_ROOT=$HOME/pi-stack-merged-poc-test`. Use the README commands otherwise unchanged. Set `POC_MODEL=openai-codex/gpt-6.1-sol`, `POC_THINKING=xhigh`, and choose and record an explicit `POC_PERCENT` that the fixture can genuinely cross. Never copy credentials. Report the exact wrapper login command for the operator if native execution stops at authentication.
+
+## G39 and G40 continuation
+
+G39 confirms the operator's Codex login in the retained clean HOME. Preserve its auth file, onboarding settings and all prior streams/sessions. Do not archive or replace the authenticated prefix. A new disposable stream and its own dedicated daemon/socket carry the native test. Existing login sessions and daemons remain untouched.
+
+G40 changes the default data values, not the state or transport architecture. Keep `Project.coordinator` and `Project.threads` as independent `ModelSettings`. Resolve omitted stream settings to `openai-codex/gpt-6.1-sol` plus `xhigh`, and omitted worker settings to `openai-codex/gpt-6-luna` plus `xhigh`. Explicit configuration and spawn arguments still win. Installer defaults, source metadata/config, public creation, clean-worker handover/kickoff, verifier reports and README commands must use the same choices. The percentage remains explicitly selected, with no default.
+
+Add literal behavioral regressions at both actual create envelopes and override tests. Commit the green default change locally before the native gate. Use the completed authentication in place, never copy it to a fresh prefix. If installation ownership metadata needs updating, make that an explicit narrow, tested operation that verifies previous owned content and preserves unknown files and user onboarding fields. Do not bypass doctor or falsify source identity to make a verification pass.
+
+Run the complete native acceptance sequence with the new models. Choose and record the fixture percentage before creating its session. A low threshold can remain exceeded after compaction because the exact original is still in STATE; do not repeatedly compact or mutate the threshold during a proof. Any incomplete or unknown native result remains unproved. Stop immediately on actual quota/usage failure, without retry or provider substitution.
 
 ## Process overrides
 

@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -14,7 +15,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from engine import StreamsError, repo_root
-from engine.project import Project, ProjectSection, ModelSettings, Caps, dump_project, git
+from engine.project import Project, ProjectSection, ModelSettings, Caps, dump_project, git, DEFAULT_MODEL, DEFAULT_WORKER_MODEL, DEFAULT_THINKING
 from engine.prime import LEVELS
 from engine.prime_compat import split_model
 
@@ -51,12 +52,22 @@ def tree_hash(root):
     return hashlib.sha256(json.dumps(files, sort_keys=True).encode()).hexdigest()
 
 
-def install_bytes(root, path, content, mode=0o644):
+def install_bytes(root, path, content, mode=0o644, *, replace_from=None, plan=None):
     path = confined(root, path)
-    if path.exists():
-        if not path.is_file() or path.read_bytes() != content or path.stat().st_mode & 0o777 != mode:
+    if plan is not None:
+        if path.exists() and (not path.is_file() or path.stat().st_mode & 0o777 != mode
+                or path.read_bytes() not in (content, replace_from)):
             raise StreamsError(f"conflicting owned file: {path}")
+        plan[path] = (content, mode, replace_from)
         return
+    if path.exists():
+        if not path.is_file() or path.stat().st_mode & 0o777 != mode:
+            raise StreamsError(f"conflicting owned file: {path}")
+        current = path.read_bytes()
+        if current == content:
+            return
+        if replace_from is None or current != replace_from:
+            raise StreamsError(f"conflicting owned file: {path}")
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary = tempfile.mkstemp(prefix=".install-", dir=path.parent)
     try:
@@ -65,7 +76,12 @@ def install_bytes(root, path, content, mode=0o644):
             handle.flush()
             os.fchmod(handle.fileno(), mode)
             os.fsync(handle.fileno())
-        os.link(temporary, path)
+        if replace_from is None:
+            os.link(temporary, path)
+        else:
+            if path.read_bytes() != replace_from:
+                raise StreamsError(f"owned file changed during update: {path}")
+            os.replace(temporary, path)
         directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
         try:
             os.fsync(directory)
@@ -189,7 +205,73 @@ def write_wrappers(root, checkout):
     return {"prime": str(root / "bin/prime-agent"), "streams": str(root / "bin/pi-streams")}
 
 
-def prepare_project(root, project, model, thinking, percent, poteto):
+def model_metadata(model, thinking, *, revision=None):
+    relative = "scripts/prime-models/" + model.replace("/", "-") + ".json"
+    path = repo_root() / relative
+    if revision is None and not path.is_file():
+        return {}
+    definition = json.loads(git(repo_root(), "show", f"{revision}:{relative}") if revision else path.read_text())
+    levels = definition.get("thinkingLevelMap", {})
+    supported = thinking in levels and (thinking == "off" or definition.get("reasoning") is True and levels[thinking] is not None)
+    if definition.get("provider") + "/" + definition.get("id") != model or not supported:
+        raise StreamsError("model metadata does not support the requested thinking level")
+    return {definition["provider"]: {"models": [{key: value for key, value in definition.items() if key != "provider"}]}}
+
+
+def merge_owned(current, expected, desired):
+    if isinstance(expected, dict) and isinstance(desired, dict):
+        if not isinstance(current, dict):
+            raise StreamsError("conflicting owned configuration")
+        result = dict(current)
+        for key, value in desired.items():
+            if key not in expected:
+                if key in current and current[key] != value:
+                    raise StreamsError("conflicting new owned configuration field: " + key)
+                result[key] = value
+            else:
+                if key not in current:
+                    raise StreamsError("missing prior owned configuration field: " + key)
+                result[key] = merge_owned(current[key], expected[key], value)
+        return result
+    if isinstance(expected, list) and expected and all(isinstance(v, dict) and "id" in v for v in expected):
+        if not isinstance(current, list) or len({v.get("id") for v in current}) != len(current):
+            raise StreamsError("conflicting model definitions")
+        old = {v["id"]: v for v in expected}
+        new = {v["id"]: v for v in desired}
+        result = []
+        for item in current:
+            ident = item.get("id")
+            result.append(merge_owned(item, old[ident], new.get(ident, old[ident])) if ident in old else item)
+        if not set(old) <= {v.get("id") for v in current}:
+            raise StreamsError("missing prior owned model definition")
+        for ident, item in new.items():
+            if ident not in old:
+                existing = [v for v in current if v.get("id") == ident]
+                if existing and existing != [item]:
+                    raise StreamsError("conflicting new model definition")
+                if not existing:
+                    result.append(item)
+        return result
+    if current != expected:
+        raise StreamsError("conflicting prior owned configuration value")
+    return desired
+
+
+def install_json(root, path, desired, *, previous=None, plan=None):
+    confined(root, path)
+    if not path.exists():
+        if previous is not None:
+            raise StreamsError("missing prior owned configuration")
+        install_bytes(root, path, (json.dumps(desired, sort_keys=True) + "\n").encode(), plan=plan)
+        return
+    raw = path.read_bytes()
+    merged = merge_owned(json.loads(raw), desired if previous is None else previous, desired)
+    if json.loads(raw) != merged:
+        install_bytes(root, path, (json.dumps(merged, sort_keys=True) + "\n").encode(), replace_from=raw, plan=plan)
+
+
+def prepare_project(root, project, model, thinking, percent, poteto, *, worker_model=DEFAULT_WORKER_MODEL,
+                    worker_thinking=DEFAULT_THINKING, previous=None, plan=None):
     project.mkdir(parents=True, exist_ok=True)
     index = root / "index"
     index.mkdir(exist_ok=True)
@@ -197,24 +279,65 @@ def prepare_project(root, project, model, thinking, percent, poteto):
     info = ProjectSection(project.name, str(project), "", str(root / "worktrees"), git(repo_root(), "rev-parse", "HEAD").strip(),
                           "prime", str(root / "bin/prime-agent"), str(root / "prime/agent"), str(root / "prime/agent/sessions"),
                           str(root / "prime/daemon.sock"), str(poteto))
-    config = Project(info, models, models, Caps(), [])
-    install_bytes(root, index / "projects" / f"{project.name}.toml", dump_project(config).encode())
+    config = Project(info, models, ModelSettings(worker_model, worker_thinking), Caps(), [])
+    config_path = confined(root, index / "projects" / f"{project.name}.toml")
+    if previous is None:
+        if config_path.exists():
+            import tomllib
+            merge_owned(tomllib.loads(config_path.read_text()), tomllib.loads(dump_project(config)), tomllib.loads(dump_project(config)))
+        else:
+            install_bytes(root, config_path, dump_project(config).encode())
+    else:
+        import tomllib
+        from dataclasses import replace
+        old = replace(config, info=replace(info, pi_stack_revision=previous["pi_stack_revision"]),
+                      coordinator=ModelSettings(previous["model"], previous["thinking"]),
+                      threads=ModelSettings(previous.get("worker_model", previous["model"]), previous.get("worker_thinking", previous["thinking"])))
+        raw = config_path.read_bytes()
+        merge_owned(tomllib.loads(raw.decode()), tomllib.loads(dump_project(old)), tomllib.loads(dump_project(config)))
+        text = raw.decode()
+        section = ""
+        lines = []
+        changes = {"project": {"pi_stack_revision": info.pi_stack_revision}, "coordinator": {"model": model, "thinking": thinking},
+                   "threads": {"model": worker_model, "thinking": worker_thinking}}
+        for line in text.splitlines(keepends=True):
+            if line.strip().startswith("["):
+                heading = re.match(r"\s*\[([A-Za-z_]+)\]\s*(?:#.*)?$", line)
+                section = heading[1] if heading else ""
+            key = line.split("=", 1)[0].strip()
+            if key in changes.get(section, {}):
+                value = re.fullmatch(r"(\s*\w+\s*=\s*)(\"(?:\\.|[^\"\\])*\"|'[^']*')(.*?)(\n?)", line)
+                if not value:
+                    raise StreamsError("unsupported owned TOML value spelling")
+                line = value[1] + json.dumps(changes[section][key]) + value[3] + value[4]
+            lines.append(line)
+        updated = "".join(lines)
+        merge_owned(tomllib.loads(updated), tomllib.loads(dump_project(config)), tomllib.loads(dump_project(config)))
+        install_bytes(root, config_path, updated.encode(), replace_from=raw, plan=plan)
     if not (index / "streams.tsv").exists():
         install_bytes(root, index / "streams.tsv", b"id\tpath\tproject\n")
     if not (index / "ALERTS").exists():
         install_bytes(root, index / "ALERTS", b"")
-    settings = {"allowedModels": [model], "retry": {"enabled": False, "failover": {"enabled": False},
+    settings = {"allowedModels": list(dict.fromkeys((model, worker_model))), "retry": {"enabled": False, "failover": {"enabled": False},
                 "provider": {"waitForUsage": {"enabled": False, "pauseUntilReset": False}}}}
-    install_bytes(root, root / "prime/agent/settings.json", (json.dumps(settings, sort_keys=True) + "\n").encode())
-    metadata_path = repo_root() / "scripts/prime-models" / (model.replace("/", "-") + ".json")
-    if metadata_path.is_file():
-        definition = json.loads(metadata_path.read_text())
-        levels = definition.get("thinkingLevelMap", {})
-        supported = thinking in levels and (thinking == "off" or definition.get("reasoning") is True and levels[thinking] is not None)
-        if definition.get("provider") + "/" + definition.get("id") != model or not supported:
-            raise StreamsError("explicit model metadata does not support the requested thinking level")
-        native = {"providers": {definition["provider"]: {"models": [{key: value for key, value in definition.items() if key != "provider"}]}}}
-        install_bytes(root, root / "prime/agent/models.json", (json.dumps(native, sort_keys=True) + "\n").encode())
+    old_settings = {**settings, "allowedModels": list(dict.fromkeys((previous["model"], previous.get("worker_model", previous["model"]))))} if previous else None
+    install_json(root, root / "prime/agent/settings.json", settings, previous=old_settings, plan=plan)
+    providers = {}
+    for selected_model, selected_thinking in ((model, thinking), (worker_model, worker_thinking)):
+        for provider, metadata in model_metadata(selected_model, selected_thinking).items():
+            rows = providers.setdefault(provider, {"models": []})["models"]
+            for item in metadata["models"]:
+                if item not in rows:
+                    rows.append(item)
+    if providers:
+        old_providers = {}
+        if previous:
+            for selected_model, selected_thinking in ((previous["model"], previous["thinking"]),
+                    (previous.get("worker_model", previous["model"]), previous.get("worker_thinking", previous["thinking"]))):
+                for provider, metadata in model_metadata(selected_model, selected_thinking, revision=previous["pi_stack_revision"]).items():
+                    rows = old_providers.setdefault(provider, {"models": []})["models"]
+                    rows.extend(item for item in metadata["models"] if item not in rows)
+        install_json(root, root / "prime/agent/models.json", {"providers": providers}, previous={"providers": old_providers} if previous else None, plan=plan)
     return config
 
 
@@ -222,26 +345,54 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description="Install the isolated merged PoC; never login or start a session")
     parser.add_argument("--prefix", type=Path, required=True)
     parser.add_argument("--project", type=Path, required=True)
-    parser.add_argument("--coordinator-model", required=True)
-    parser.add_argument("--coordinator-thinking", choices=LEVELS, required=True)
+    parser.add_argument("--coordinator-model", default=DEFAULT_MODEL, help="stream model (default: %(default)s)")
+    parser.add_argument("--coordinator-thinking", choices=LEVELS, default=DEFAULT_THINKING, help="stream thinking (default: %(default)s)")
+    parser.add_argument("--worker-model", default=DEFAULT_WORKER_MODEL, help="worker/reviewer model (default: %(default)s)")
+    parser.add_argument("--worker-thinking", choices=LEVELS, default=DEFAULT_THINKING, help="worker thinking (default: %(default)s)")
+    parser.add_argument("--update-owned-from", metavar="RECEIPT_SHA256", help="explicitly update verified owned config/provenance; preserve user fields and snapshot prior files")
     parser.add_argument("--compaction-percent", type=float, required=True)
     args = parser.parse_args(argv)
     try:
         root = preflight(args.prefix, args.project, args.coordinator_model, args.coordinator_thinking, args.compaction_percent)
+        split_model(args.worker_model)
         root.mkdir(parents=True, exist_ok=True)
+        previous = None
+        receipt = root / "reports/install.json"
+        if args.update_owned_from:
+            if digest(confined(root, receipt)) != args.update_owned_from:
+                raise StreamsError("prior installation receipt hash differs")
+            previous = json.loads(receipt.read_text())
+            if previous["root"] != str(root) or previous["project"] != str(args.project) or previous["paths"]["checkout"] != str(repo_root()):
+                raise StreamsError("prior installation provenance names foreign paths")
+            if git(repo_root(), "status", "--porcelain").strip():
+                raise StreamsError("owned update requires committed clean source")
+            git(repo_root(), "merge-base", "--is-ancestor", previous["pi_stack_revision"], "HEAD")
+            snapshot = root / "reports/install-updates" / args.update_owned_from
+            for relative in ("reports/install.json", "index/projects/project.toml", "prime/agent/settings.json", "prime/agent/models.json", "bin/prime-agent", "bin/pi-streams"):
+                path = confined(root, root / relative)
+                install_bytes(root, snapshot / relative, path.read_bytes(), path.stat().st_mode & 0o777)
         build = install_prime(root)
         pstack_revision, poteto = install_poteto(root)
         wrappers = write_wrappers(root, repo_root())
-        prepare_project(root, args.project, args.coordinator_model, args.coordinator_thinking, args.compaction_percent, poteto)
+        plan = {} if previous else None
+        prepare_project(root, args.project, args.coordinator_model, args.coordinator_thinking, args.compaction_percent, poteto,
+                        worker_model=args.worker_model, worker_thinking=args.worker_thinking, previous=previous, plan=plan)
         report = {"pi_stack_revision": git(repo_root(), "rev-parse", "HEAD").strip(), **build,
                   "pstack_revision": pstack_revision, "root": str(root), "project": str(args.project),
                   "model": args.coordinator_model, "thinking": args.coordinator_thinking,
+                  "worker_model": args.worker_model, "worker_thinking": args.worker_thinking,
                   "threshold_percent": args.compaction_percent, "paths": {**wrappers, "poteto": str(poteto), "checkout": str(repo_root())},
                   "checks": {"pinned_stock": True, "runtime_sidecar": True, "explicit_configuration": True}}
-        install_bytes(root, root / "reports/install.json", (json.dumps(report, sort_keys=True, indent=2) + "\n").encode())
+        if previous:
+            report = {**previous, **report, "previous_receipt_sha256": args.update_owned_from}
+            install_bytes(root, receipt, (json.dumps(report, sort_keys=True, indent=2) + "\n").encode(), replace_from=receipt.read_bytes(), plan=plan)
+            for path, (content, mode, prior) in plan.items():
+                install_bytes(root, path, content, mode, replace_from=prior)
+        else:
+            install_json(root, receipt, report)
         print(json.dumps(report, sort_keys=True))
         return 0
-    except (StreamsError, OSError, ValueError) as exc:
+    except (StreamsError, OSError, ValueError, KeyError, TypeError) as exc:
         print(json.dumps({"status": "BLOCKED", "reason": str(exc)}, sort_keys=True))
         return 1
 

@@ -243,9 +243,11 @@ def validate_stream_settings(stream):
     return data
 
 
-def create_stream_session(client, stream, model, thinking):
+def create_stream_session(client, stream, model=None, thinking=None):
+    from engine.project import role_settings
     validate_stream_settings(stream)
-    return _create_session(client, Path(stream), model, thinking)
+    settings = role_settings(Path(stream), "coordinator", model, thinking)
+    return _create_session(client, Path(stream), settings.model, settings.thinking)
 
 
 def _create_session(client, worktree, model, thinking):
@@ -330,8 +332,10 @@ class PendingMessage:
     mode: str
 
 
-def create_worker_session(client, worktree, model, thinking):
-    return _create_session(client, Path(worktree), model, thinking)
+def create_worker_session(client, worktree, model=None, thinking=None):
+    from engine.project import DEFAULT_WORKER_MODEL, DEFAULT_THINKING
+    return _create_session(client, Path(worktree), DEFAULT_WORKER_MODEL if model is None else model,
+                           DEFAULT_THINKING if thinking is None else thinking)
 
 
 def send_worker(client, stream, identity, text, original_entries, *, expected=None):

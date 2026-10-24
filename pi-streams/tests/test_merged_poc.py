@@ -18,7 +18,10 @@ from prime_poc_fixture import PocScenario
 class EvidenceTests(unittest.TestCase):
     def sample(self):
         return {"prime_source_revision": PRIME_REVISION, "model": "openai-codex/gpt-6.1-sol", "thinking": "xhigh", "threshold_percent": .1, "observed_percentages": [.2],
-                "expected_identity": {"model": "openai-codex/gpt-6.1-sol", "thinking": "xhigh"},
+                "expected_identity": {"model": "openai-codex/gpt-6.1-sol", "thinking": "xhigh", "worker_model": "openai-codex/gpt-6-luna", "worker_thinking": "xhigh"},
+                "worker_model": "openai-codex/gpt-6-luna", "worker_thinking": "xhigh",
+                "native_identities": {"coordinator": {"model": "openai-codex/gpt-6.1-sol", "thinking": "xhigh", "entries": [{"type": "model_change", "provider": "openai-codex", "modelId": "gpt-6.1-sol"}, {"type": "thinking_level_change", "thinkingLevel": "xhigh"}], "sha256": "a" * 64, "session_id": "durable"},
+                                      "worker": {"model": "openai-codex/gpt-6-luna", "thinking": "xhigh", "entries": [{"type": "model_change", "provider": "openai-codex", "modelId": "gpt-6-luna"}, {"type": "thinking_level_change", "thinkingLevel": "xhigh"}], "sha256": "b" * 64, "session_id": "worker"}},
                 "stream": "one", "session_id": "durable", "active_session_id": "routing", "protocol": 7, "schema": 30,
                 "stages": {name: {"verified": True, "evidence": ["offline fixture reference"]} for name in poc.STAGES},
                 "trace": [{"operation": "write", "command": "prompt_and_wait", "command_id": "command", "fields": {"message": 'Current files for stream "one", Prime session "durable", command "command".', "activeSessionId": "routing", "streamingBehavior": "steer"}},
@@ -36,9 +39,24 @@ class EvidenceTests(unittest.TestCase):
 
     def test_explicit_alternative_identity_is_not_a_default_model_violation(self):
         report = self.sample()
-        report.update(model="explicit-provider/explicit-model", thinking="high",
-                      expected_identity={"model": "explicit-provider/explicit-model", "thinking": "high"})
+        report.update(model="explicit-provider/explicit-model", thinking="high", worker_model="explicit-provider/worker", worker_thinking="low",
+                      expected_identity={"model": "explicit-provider/explicit-model", "thinking": "high", "worker_model": "explicit-provider/worker", "worker_thinking": "low"})
+        report["native_identities"]["coordinator"].update(model="explicit-provider/explicit-model", thinking="high")
+        report["native_identities"]["worker"].update(model="explicit-provider/worker", thinking="low")
+        for role, model_id, level in (("coordinator", "explicit-model", "high"), ("worker", "worker", "low")):
+            report["native_identities"][role]["entries"] = [{"type": "model_change", "provider": "explicit-provider", "modelId": model_id}, {"type": "thinking_level_change", "thinkingLevel": level}]
         self.assertEqual(poc.assess(report), [])
+
+    def test_native_worker_coordinator_alias_and_missing_thinking_are_rejected(self):
+        report = self.sample()
+        report["native_identities"]["worker"]["entries"][0]["modelId"] = "gpt-6.1-sol"
+        self.assertIn("worker_native_identity", poc.assess(report))
+        report = self.sample()
+        report["native_identities"]["coordinator"]["entries"].pop()
+        self.assertIn("coordinator_native_identity", poc.assess(report))
+        report = self.sample()
+        report["worker_model"] = report["model"]
+        self.assertIn("worker_model_identity", poc.assess(report))
 
     def test_equal_unknown_percentage_wrong_identity_and_duplicate_compact_cannot_pass(self):
         full = self.sample()
@@ -72,7 +90,7 @@ class SharedPocTests(unittest.TestCase):
         prepare_project(self.root, self.root / "project", "openai-codex/gpt-6.1-sol", "xhigh", .1, self.poteto)
         self.installation = {"root": str(self.root), "project": str(self.root / "project"), "pi_stack_revision": project.git(project.repo_root(), "rev-parse", "HEAD").strip(),
             "prime_source_revision": PRIME_REVISION, "prime_version": "0.10.1", "prime_binary_sha256": digest(binary), "prime_runtime_sha256": tree_hash(runtime), "pstack_revision": "c" * 40,
-            "model": "openai-codex/gpt-6.1-sol", "thinking": "xhigh", "threshold_percent": .1, "paths": {"poteto": str(self.poteto), "checkout": str(project.repo_root())}}
+            "model": "openai-codex/gpt-6.1-sol", "thinking": "xhigh", "worker_model": "openai-codex/gpt-6-luna", "worker_thinking": "xhigh", "threshold_percent": .1, "paths": {"poteto": str(self.poteto), "checkout": str(project.repo_root())}}
         (self.root / "reports").mkdir()
         (self.root / "reports/install.json").write_text(json.dumps(self.installation))
 
@@ -166,6 +184,9 @@ class SharedPocTests(unittest.TestCase):
         self.assertEqual([r["command"]["type"] for r in requests].count("compact"), 1)
         self.assertIn("busy-steer", scenario.events)
         self.assertIn("self-review", scenario.events)
+        creates = [r["command"]["config"] for r in requests if r["command"]["type"] == "create"]
+        self.assertEqual([(c["provider"], c["model"], c["thinking"]) for c in creates], [("openai-codex", "gpt-6.1-sol", "xhigh"), ("openai-codex", "gpt-6-luna", "xhigh")])
+        self.assertEqual(report["native_identities"]["worker"]["model"], "openai-codex/gpt-6-luna")
 
     def failed_assembled(self, mode, reason):
         report, scenario, requests = self.assembled(mode)
@@ -248,6 +269,16 @@ class SharedPocTests(unittest.TestCase):
         self.assertEqual(process.poll(), -15)
         self.assertEqual(path.read_text(), "replacement must not be contacted")
         self.assertEqual(handle.closed, True)
+
+    def test_doctor_refuses_coordinator_identity_in_worker_config(self):
+        poc.init(self.root, "one")
+        path = self.root / "index/projects/project.toml"
+        path.write_text(path.read_text().replace('model = "openai-codex/gpt-6-luna"', 'model = "openai-codex/gpt-6.1-sol"'))
+        self.actual_git = project.git
+        with patch.object(project, "git", side_effect=self.doctor_git):
+            result = poc.doctor(self.root, "one")
+        self.assertEqual(result["status"], "FAIL")
+        self.assertEqual(result["checks"]["worker_model_thinking"], False)
 
     def test_init_refuses_existing_work(self):
         poc.init(self.root, "one")

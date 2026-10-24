@@ -816,10 +816,10 @@ def render_prime_handover(identity, *, worktree, work, sources, findings, poteto
 
 
 def spawn_prime_worker(client, stream, *, worktree, work, original_entries, poteto_path,
-                       model, thinking, findings=(), reviewer=False):
+                       model=None, thinking=None, findings=(), reviewer=False):
     from dataclasses import replace
     from engine import state
-    from engine.project import stream_lock
+    from engine.project import stream_lock, role_settings
     from engine.prime import create_worker_session, send_worker
     stream, worktree = Path(stream), Path(worktree)
     if any(path.is_symlink() for path in (worktree, *worktree.parents)):
@@ -840,6 +840,8 @@ def spawn_prime_worker(client, stream, *, worktree, work, original_entries, pote
         if not original_entries or not set(original_entries) <= open_refs:
             raise StreamsError("worker assignment needs open whole-message sources")
         sources = [state._parse_entry(state.read_entry(stream, ref)).body for ref in original_entries]
+    settings = role_settings(stream, "threads", model, thinking)
+    model, thinking = settings.model, settings.thinking
     identity = create_worker_session(client, worktree, model, thinking)
     handover = render_prime_handover(identity, worktree=worktree, work=work, sources=sources,
                                      findings=list(findings), poteto_path=poteto_path, reviewer=reviewer)

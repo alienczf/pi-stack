@@ -16,7 +16,8 @@ from pathlib import Path
 
 from engine import StreamsError, repo_root
 
-DEFAULT_MODEL = "openai-codex/gpt-6-astra"
+DEFAULT_MODEL = "openai-codex/gpt-6.1-sol"
+DEFAULT_WORKER_MODEL = "openai-codex/gpt-6-luna"
 DEFAULT_THINKING = "xhigh"
 DEFAULT_PI_WEB_URL = "http://127.0.0.1:8504"
 STREAM_ID = re.compile(r"^[a-z0-9][a-z0-9-]*$")
@@ -90,6 +91,7 @@ class StreamConfig:
     remote: str = ""
     state_schema: int = 0
     backend: str = "pi"
+    project_file: str = ""
 
 
 def _q(value: str) -> str:
@@ -147,6 +149,8 @@ def dump_stream_config(config: StreamConfig) -> str:
         lines.append(f"state_schema = {config.state_schema}")
     if config.backend != "pi":
         lines.append(f"backend = {_q(config.backend)}")
+    if config.project_file:
+        lines.append(f"project_file = {_q(config.project_file)}")
     return "\n".join(lines) + "\n"
 
 
@@ -231,6 +235,7 @@ def load_stream_config(path: Path) -> StreamConfig:
             remote=str(remote),
             state_schema=schema,
             backend=str(data.get("backend", "pi")),
+            project_file=str(data.get("project_file", "")),
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise StreamsError(f"{path}: {exc}") from exc
@@ -741,6 +746,8 @@ def init_project(
     pi_web_url: str | None,
     coordinator_model: str | None,
     coordinator_thinking: str | None,
+    worker_model: str | None = None,
+    worker_thinking: str | None = None,
 ) -> Path:
     root = project_root.expanduser().resolve()
     if not root.is_dir():
@@ -772,8 +779,10 @@ def init_project(
                 assume_yes,
             )
             _validate_model(model)
-            if thinking.strip() == "":
+            if thinking.strip() == "" or worker_thinking is not None and worker_thinking.strip() == "":
                 raise StreamsError("thinking level is empty")
+            if worker_model is not None:
+                _validate_model(worker_model)
             project = Project(
                 info=ProjectSection(
                     name=root.name,
@@ -783,7 +792,8 @@ def init_project(
                     pi_stack_revision=pi_stack_revision(),
                 ),
                 coordinator=ModelSettings(model, thinking),
-                threads=ModelSettings(model, thinking),
+                threads=ModelSettings(worker_model if worker_model is not None else DEFAULT_WORKER_MODEL,
+                                      worker_thinking if worker_thinking is not None else DEFAULT_THINKING),
                 caps=Caps(),
                 repos=repos,
             )
@@ -875,6 +885,19 @@ def stream_rows(index: Path, stream_id: str | None = None) -> list[StreamRow]:
     return found
 
 
+def role_settings(stream: Path, role: str, model=None, thinking=None) -> ModelSettings:
+    settings = ModelSettings(DEFAULT_MODEL if role == "coordinator" else DEFAULT_WORKER_MODEL, DEFAULT_THINKING)
+    path = Path(stream) / "stream.toml"
+    if path.is_file():
+        config = load_stream_config(path)
+        if config.project_file:
+            project = load_project(Path(config.project_file))
+            if project.info.name != config.project or Path(project.info.root) / "streams" / Path(stream).name != Path(stream):
+                raise StreamsError("stream project configuration does not match its assigned path")
+            settings = project.coordinator if role == "coordinator" else project.threads
+    return ModelSettings(settings.model if model is None else model, settings.thinking if thinking is None else thinking)
+
+
 def create_stream(index: Path, project: Project, stream_id: str, *, backend: str | None = None) -> Path:
     if STREAM_ID.fullmatch(stream_id) is None:
         raise StreamsError(f"invalid stream id: {stream_id}")
@@ -917,7 +940,8 @@ def create_stream(index: Path, project: Project, stream_id: str, *, backend: str
         save_stream_config(
             dest,
             StreamConfig(project=project.info.name, pi_stack_revision=pi_stack_revision(), backend=backend,
-                         state_schema=TEMPLATE_STATE_SCHEMA if backend == "pi" else 0),
+                         state_schema=TEMPLATE_STATE_SCHEMA if backend == "pi" else 0,
+                         project_file=str(project_file(index, project.info.name).resolve()) if backend == "prime" else ""),
         )
         if backend == "pi":
             seed_context(dest, project.repos)
