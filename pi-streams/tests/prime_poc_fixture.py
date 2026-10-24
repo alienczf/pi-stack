@@ -66,6 +66,11 @@ class PocScenario:
         goals = replace(current.goals, north_star="Preserve the whole finite fixture intent", original_entry=refs[0],
                         objective="Review the finite fixture result", status="active",
                         work=tuple(replace(w, required="Marker, 2 + 3 = 5, answer.json and protected behavior") for w in current.goals.work))
+        if self.mode == "waiting_for_verifier":
+            if "worker" not in self.events:
+                goals = replace(goals, status="waiting", work=tuple(replace(w, next=None, waiting_for="Verifier to dispatch clean worker and return its result; pi-stack compaction; verifier closing check.") for w in goals.work))
+            else:
+                goals = replace(goals, status=current.goals.status)
         body = {"findings": "Whole original intent and unresolved work retained"}
         if review:
             text = f"Adversarial review against {self.marker} at {self.product}. Verified original intent, answer 5 and protected.txt. No unsupported worker-plan claims replace the original. Uncertainty remains until the actual computed check."

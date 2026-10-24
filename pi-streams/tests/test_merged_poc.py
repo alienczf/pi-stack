@@ -196,6 +196,12 @@ class SharedPocTests(unittest.TestCase):
         self.assertNotIn("computed_close", report["stages"])
         return report, scenario, requests
 
+    def test_native_shaped_verifier_wait_is_resolved_only_after_saved_worker_result(self):
+        report, scenario, requests = self.assembled("waiting_for_verifier")
+        self.assertEqual(report["status"], "PASS", report.get("reason"))
+        self.assertIn("resume-result", scenario.events)
+        self.assertEqual(state.check_state(scenario.stream).goals.work, ())
+
     def test_assembled_waits_for_delayed_steer_before_worker_snapshot(self):
         report, scenario, requests = self.assembled("delayed_steer_state")
         self.assertEqual(report["status"], "PASS", report.get("reason"))

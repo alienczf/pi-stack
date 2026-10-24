@@ -301,6 +301,15 @@ def _run_native(root, stream, installation, report, client, product, marker):
     if (product / "STATE.md").exists() or (product / "stream.toml").exists() or (product / "AGENTS.md").exists():
         raise StreamsError("clean worker created stream state or role files")
     _stage(report, "worker", worker.session_id, worker_result["entry"])
+    current = state.check_state(stream)
+    if {w.original_entry for w in current.goals.work} != set(refs) or current.goals.status == "paused":
+        raise StreamsError("fixture instructions changed before worker-result handback")
+    state.update_state(stream, expect=current.sha256,
+        goals=replace(current.goals, objective="Review the returned clean-worker summary against the whole original fixture after compaction.", status="active",
+                      work=tuple(replace(w, next="Review the saved worker result after compaction, then retain work for the verifier's computed check.", waiting_for=None) for w in current.goals.work)),
+        rules=None, entry={"subject": "Verifier returned its fixture worker result", "original_entries": refs,
+            "body": {"worker_session": worker.session_id, "worker_reply_entry": worker_result["entry"],
+                     "findings": "The verifier-dispatched worker has returned a saved successful native result. Review is now eligible. Compaction and the later computed check do not require human permission. The whole original remains requested; this is not completion."}})
     result = prime.finish_message(client, stream, steer, sessions_dir=session_dir)
     _native_failure(result)
     compaction = result.get("compaction")
