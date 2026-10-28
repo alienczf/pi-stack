@@ -862,3 +862,40 @@ Full verify exited 1. Per G45, parent stopped without retry, repair or diagnosti
 Both source indexes are clean. Main has only the existing untracked PLAN/TODO. The rebase conflict is no longer a blocker, but the fresh suite failure prevents the requested done line. Do not install or merge based on an old green result. The operator-only refresh, explicit Z15 migration, `pi-streams upgrade`, `pi-streams doctor` and manual native-daemon restart templates in the previous handoff remain unexecuted. Once a reviewed green result is available, build/deploy the native artifact from exact61c5e26, never upstream main. Grok Bot owns any merge/push/install. All production recovery stays disabled.
 
 TRACK 1 STATUS: blocked | heads=129415e/61c5e26 | main-suite=400 pass | native-suite=2408 pass,1 fail,2 existing skips | failure=piWebStatus.test.ts:163 expected latestVersion 1.202607.1, received undefined | F-DCR=out of scope (G44, Z25)
+
+## G46 settled attribution and final merge handoff
+
+Grok Bot steer 6, 2026-10-28 19:58 SGT, authorizes one ordered base/head comparison and the corresponding bounded follow-up. A failure reproduced on the installed base is pre-existing or private-environment-dependent, not a Track 1 regression. Under that branch, retain all test evidence, run the unchanged head file once with the private environment the test expects, and accept the native suite as green with the limitation documented. No test may be changed to hide the failure.
+
+### Controlled evidence
+
+Only `src/server/piWebStatus.test.ts` was run, in this exact order:
+
+| Revision | Environment | Result | Evidence under `g46-attribution` |
+|---|---|---|---|
+| Base `9b8728a5d626dbc69e321e563b970d44f4000a68`, tag `v1.202607.3` | Exact G45 HOME, all XDG roots, npm configs/cache, TMPDIR, Node/npm and the same physical dependency tree. | 18 pass, 1 fail. Same line163 expected latestVersion `1.202607.1`, received `undefined`. | `base-g45-env.log`, exit1. |
+| Head `61c5e268bd1132e421d8ccaa75f43df0f9783f68` | Identical G45 environment and physical dependency tree. | 18 pass, 1 fail. Identical assertion. | `head-g45-env.log`, exit1. |
+| Same unchanged head `61c5e26` | Same private environment, with only `PI_OFFLINE=1` removed. Private npm configs, proxies and filesystem isolation remain unchanged. | All 19 tests pass, exit0. This is the one authorized corrected-environment file run. | `head-version-check-enabled.log`, exit0. |
+
+The cause is the G45 harness, not Track 1. The unchanged `skipVersionCheck()` at `src/server/piWebStatus.ts:640-645` treats any nonempty `PI_OFFLINE` as a release-check skip. `getLatestReleaseStatus()` at lines388-394 then returns skipped metadata without `latestVersion`. The test at lines141-166 removes `PI_WEB_SKIP_VERSION_CHECK` but not `PI_OFFLINE`, and expects its own two mocked fetch results. G45 added `PI_OFFLINE=1` to the runner, unlike the earlier successful private full-verify wrapper. Removing only that flag restores the test's mocked version-check path. No real registry call, provider inference, login or credential operation is needed for this case.
+
+Base/head test bytes, release-status implementation, release lookup cache and lock bytes match exactly. The Track 1 history has no edits to these release-status files. Both comparison runs used the same resolved `g45-finish/source/node_modules` tree. The G45 full-run and G46 comparison environment command prefixes compare exactly; the corrected run differs only by removing `PI_OFFLINE=1`. Machine evidence with source/log hashes is `g46-attribution/results.json`. The three wrappers/logs and ordered timestamps are retained. No product source or test changed, no commit was added, and neither the full native suite nor main suite was rerun under G46.
+
+### Accepted suite result under G46
+
+Main129415e retains today's fresh 400 pass, zero skips. Native61c5e26 is accepted as **2409 passing tests with two existing skips** under G46 branch2. This combines the G45 full verify's passed typecheck/lint/knip and 2408 passing tests with the demonstrated base/environment attribution and the complete unchanged 19-test file passing once in its expected environment. It is not a claim that the raw G45 full-process run was all green. That failed raw log remains unchanged and linked, and no test was removed or skipped. Unique native test count remains 2409, not an addition of the overlapping file count.
+
+### Final current merge handoff
+
+| Repository | Path and remote URL | Branch and exact head | Accepted base and commit count | Accepted suite |
+|---|---|---|---|---|
+| pi-stack | `/home/alphalab/Projects/worktrees/pi-stack-streams-must-fix`; `https://github.com/alienczf/pi-stack.git` | `feat/streams-must-fix`; `129415e6ffe496181ff21060fd0c19f7924f17a5` | `3acf0f01e6084a317b89cef3a86f4781e60877cf`; 31 commits. Current with fetched origin/main; no rewrite needed. | 400 pass, zero skips. Fresh G44 run retained, not rerun under G45/G46. |
+| pi-web/native | `/home/alphalab/Projects/worktrees/pi-web-streams-must-fix`; `https://github.com/jmfederico/pi-web.git` | `feat/streams-must-fix`; `61c5e268bd1132e421d8ccaa75f43df0f9783f68` | `9b8728a5d626dbc69e321e563b970d44f4000a68` = `v1.202607.3` = G45 operator-confirmed installed version; 21 commits. | 2409 pass with two existing skips, accepted under G46 with the explicit private-environment attribution above. Typecheck/lint/knip pass. |
+
+Both owned branches are restored and tracked/index clean. Only main's existing untracked process PLAN/TODO remain. Native deployment is built from exact61c5e26 on the installed-version base, not upstream main68b1c83. The withdrawn upstream durable-question/generation-invalidation semantic port remains separate later work, with its paused evidence retained under `g44-merge-prep`. No push, merge, stash, reset command, live installation or service/session operation occurred. Grok Bot alone merges and pushes.
+
+The post-merge options-01 templates in the prior handoff remain the source-derived rollout sequence. Refresh clean `~/.pi-stack` with fetch plus fast-forward only, then run `PI_STACK="$HOME/.pi-stack" PI_STACK_SKIP_SYSTEMD=1 bash "$HOME/.pi-stack/install.sh" -y`. For an explicitly selected legacy stream, review `pi-streams migrate "$STREAM" --home "$INDEX" --plan > "$PLAN"`, apply only that exact reviewed plan with `--apply "$PLAN"`, then run `pi-streams upgrade "$STREAM" --home "$INDEX"` and `pi-streams doctor`. Use `--mapping` only with an explicit source-backed plan, or `--resume` only for its existing interrupted journal. Already-canonical streams need only protective upgrade and doctor. Build/deploy the exact reviewed native61c5e26 artifact and manually restart `pi-web-sessiond` at an operator-approved quiescent point outside hosted Pi sessions; a browser/web-only restart does not load daemon code. Reload the web/API for its actual installed mode as needed and run `pi-web doctor`. These remain operator actions, not commands executed here.
+
+G44/Z25 permanently removes genuine authenticated F-DCR and the nonexistent bot notifier/intake/acknowledgement adapters from Track 1. Default trusted intake stays closed, classes 2-5 stay parked for human repair and all production recovery remains disabled. No genuine authenticated F-DCR is claimed. The accepted independent disposable evidence still proves five sessions, 49 real successful sol:xhigh requests, four exact controlled-failure markers, independent healthy work and newer-stop restart durability. Track 1 is complete under the G44/G45/G46 scope and accepted evidence, not under the withdrawn actual-round-trip gate.
+
+TRACK 1 STATUS: done | heads=129415e/61c5e26 | suites=400/2409 pass | disposable=independent checks pass | F-DCR=out of scope (G44, Z25)
