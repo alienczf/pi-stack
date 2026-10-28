@@ -971,3 +971,69 @@ The read-only `rollout/verify-rollout.py` passes at14:15:02Z. It checks actual i
 Part 1 is finished with the named partial outcomes. Grok Bot owns the unverified merged-poc repair and push, seven pending legacy roots and existing identity/health issues. Native application remains unexecuted and belongs to the outside operator after reviewing the staged dependency limitation and approving quiescence. The rebase mission is closed failed because its verification did not pass. No fresh inference quota error occurred. No provider fallback, credential mutation, prompt, stop, adoption or production recovery activation occurred. Shared docs remain uncommitted.
 
 TRACK 1 STATUS: rollout-part-1 done | merged-poc=blocked: suite failures at fa8566c | pi-stack=129415e installed | doctor=fail | migrated=6/13 streams | harness-goal=reset | native=install-native.sh ready be4c5297c08af2b53a241df2e8f809ff3cea817582a346ee6e537cc7729d4f34
+
+## G48 merged-poc base comparison and protected model-fixture conflict
+
+Grok Bot steer8, 2026-10-28 22:35 SGT, authorizes an ordered private base comparison and only actual rebase root-cause source fixes. Tests remain unchanged. No native install, live pi-web service, live pi-stack, existing stream/session, credential, push, integration merge, stash or reset operation is authorized. Evidence is `/home/alphalab/.cache/pi-stack-track1/g48-attribution`.
+
+### Ordered Prime comparison
+
+Ran the exact `python3 -m unittest discover -s tests`, in order, on three fresh private clones. All use the unchanged G47 `test-env.sh` and `private-env.sh`, with identical HOME, all XDG roots, TMPDIR, Python executable/version and system dependencies. Only source cwd changes. No dependency install or credential copy occurred.
+
+| Revision | Tests run | Passing top-level cases | Failure events | Error events | Evidence |
+|---|---|---|---|---|---|
+| Prime base b371748f0b0871d0a53bbf0f8a5f24182191991d | 76 | 55 | 14 | 8 | `base-prime.log` |
+| Old PoC e3232f1ef87a5abae3f808fefb03df9e433e68b4 | 72 | 56 | 10 | 7 | `old-prime.log` |
+| Rebased fa8566c85dbde2ebcf262caeb137a020e9a1c303 | 77 | 56 | 14 | 8 | `head-prime.log` |
+
+The fixed subtest case `test_live_check_complete_control_run_and_failure_cleanup_are_owned` emits two errors for its None/get_commands subtests. Therefore failure/error event totals are not distinct top-level case counts. The passing-case column uses total cases minus distinct failing/error IDs. Head has21 distinct nonpassing IDs and22 events. The machine matrix retains every exact ID, subtest and full traceback in `matrix.json`.
+
+All22 head events have byte-equal complete traces after normalizing only source-root and generated fixture-directory names against base b371748. None is head-only. The verifier test file and launcher source are byte-identical between base/head. The actual unchanged fake executable rendered by `VerificationTests.setUp` exits at `OwnedSupervisor.server.bind` with AF_UNIX path too long. Launcher stderr is suppressed, so14 failures and two errors appear indirectly as runtime_start_failed or absent downstream error/events evidence. Six events expose bind failure directly.
+
+`socket-path-census.py` reproduces the exact nested fixture prefixes. G47 TMPDIR gives123-byte socket paths and fails. The earlier t47 control still gives111 bytes and fails. Using `/home/alphalab/.cache/pi-stack-track1` directly as TMPDIR gives107 bytes and actually binds successfully. Nothing moves into /tmp or a live directory. With **only TMPDIR changed**, base b371748 passes all76 Prime tests. The unchanged rebased head then passes all77 Prime tests in its single corrected-environment final run. HOME/XDG, Python, dependencies, source and tests stay unchanged. These are environment-caused baseline failures, not a rebase code regression. No actual provider quota or model operation is involved.
+
+The21 pre-existing/environment test IDs are listed below. Subtest details remain in the matrix.
+
+- `test_prime_tools.PrimeToolsTests.test_control_only_never_admits_input_on_post_admission_fault`
+- `test_prime_tools.PrimeToolsTests.test_inference_probe_reports_native_failure_without_waiting_for_a_message`
+- `test_prime_tools.PrimeToolsTests.test_inference_queue_failure_cancels_before_pause_disconnect`
+- `test_prime_tools.PrimeToolsTests.test_live_check_complete_control_run_and_failure_cleanup_are_owned`
+- `test_prime_verification.VerificationTests.test_awaited_compact_success_requires_observed_counter_advance`
+- `test_prime_verification.VerificationTests.test_compaction_usage_refusal_is_not_a_benign_skip_or_retried`
+- `test_prime_verification.VerificationTests.test_existing_agent_environment_preserves_shared_config_and_isolates_sessions`
+- `test_prime_verification.VerificationTests.test_existing_owned_group_writable_agent_does_not_require_permission_changes`
+- `test_prime_verification.VerificationTests.test_explicit_inference_runs_control_first_and_never_retries_native_failure`
+- `test_prime_verification.VerificationTests.test_full_metadata_is_read_from_catalog_not_thin_connection_summary`
+- `test_prime_verification.VerificationTests.test_inference_records_short_session_compaction_skip_without_waiting_for_counter`
+- `test_prime_verification.VerificationTests.test_inference_verifier_exercises_same_session_resume_before_clearing`
+- `test_prime_verification.VerificationTests.test_launcher_native_shutdown_targets_only_owned_socket`
+- `test_prime_verification.VerificationTests.test_launcher_refuses_existing_socket_without_contact_or_shutdown`
+- `test_prime_verification.VerificationTests.test_launcher_reuses_root_and_stops_only_its_fake_process`
+- `test_prime_verification.VerificationTests.test_launcher_stops_fake_runtime_after_check_failure`
+- `test_prime_verification.VerificationTests.test_metadata_mismatch_blocks_inference_and_cleans_owned_runtime`
+- `test_prime_verification.VerificationTests.test_native_setter_changes_do_not_replace_existing_settings`
+- `test_prime_verification.VerificationTests.test_native_usage_error_keeps_typed_info_and_never_starts_inference`
+- `test_prime_verification.VerificationTests.test_observed_quota_parking_stops_before_runnable_input`
+- `test_prime_verification.VerificationTests.test_registration_uses_only_whitelisted_metadata_in_isolated_agent_dir`
+
+### Full private integration result and exact blocker
+
+| Final unchanged head fa8566c | Result | Evidence |
+|---|---|---|
+| Full Prime suite | 77 pass,0 fail,0 error. | `final-prime.log` |
+| Full pi-streams suite | 531 run,515 pass,14 fail,2 error. Completed, not interrupted. | `final-streams.log` |
+| Added PoC file | 25 pass,0 fail,0 error. | `final-poc.log` |
+
+All16 remaining stream events are model-contract mismatches. Fifteen return Astra while configured Sol6.1 is required. One worker case returns Astra while Luna is required. Four affected families are coordinator identity4, failure alignment1, generated-state10 and handover identity1. On base b371748, parent reran all four complete files and passed48 tests, comprising23/2/10/13 respectively.
+
+The conflict is concrete. `test_init.py` requires default project TOML with Sol6.1 coordinator and Luna worker, including the Pi backend. Old PoC e3232f1 already has those G40 defaults and head preserves them. The newly integrated T1 fixtures instead use fixed `test_new.status_body` Astra responses, without explicit Astra init flags. Their stub acknowledges model setters but does not change subsequent status. The generated-state fixture therefore both requests Sol6.1 and asserts successful creation while reporting Astra on read-back.
+
+Parent's unchanged-fixture probe captures the actual HTTP model request `{provider: openai-codex, modelId: gpt-6.1-sol}` and its fixed Astra status. Strict `piweb.configure_session` correctly rejects that mismatch before opening or publishing. A read-only independent same-model investigation confirms the contradiction and an offline correct-status control. The actual settings-verification source and affected T1 modules are unchanged from b371748. The default-selection functions preserve old PoC intent. Evidence is `model-fixture-probe.json` and `model-contract-review.md`, with file/line references and positive/negative probes.
+
+No safe production-only fix satisfies these protected inputs. Restoring Astra defaults violates G40 and the exact init tests. Accepting Astra for requested Sol/Luna, trusting setter acknowledgements, rewriting status, or selecting behavior by test/environment would weaken the real model-verification boundary. Repeated setters cannot alter a fixed fixture. Correcting fixture setup could preserve all behavioral assertions, but G48 explicitly forbids changing those tests or helpers. Stop without guessing an exception. No source edit, test edit, new commit or failed code-fix attempt was made. This is a precise incompatible-contract blocker, not an unresolved Prime environment failure. No second failed fix is manufactured to justify stopping.
+
+### Handoff
+
+Private clone `/home/alphalab/.cache/pi-stack-track1/g48-attribution/head` is clean on `feat/merged-poc-rebased` at exact `fa8566c85dbde2ebcf262caeb137a020e9a1c303`. All73 tracked test/support files match their pre-verification hashes, and all tracked source remains unchanged. Original G47 private worktree also remains untouched. Main machine evidence is `results.json`; every final stream failure ID is retained there. `classification.json`, `trace-comparison.json`, `fake-startup-probe.json`, `socket-path-census.json` and complete logs retain the causal chain.
+
+A complete-history source bundle is retained as `merged-poc-rebased-BLOCKED-fa8566c.bundle`, SHA256 `7be293d7c6a560c1fd473b0d7a3968dfc08a7b976d3cb4e4893b92d782a9ba6c`. Bundle verification passes. It is explicitly **not accepted for push or deployment**. The independent read-only review mission is complete, but the rebase remains blocked on permission to align the contradictory fixture inputs, not on code or runtime repair. No native installation/service, live pi-stack, real session, credential or provider was operated in this steer. G44/Z25's closed intake and disabled production recovery are unchanged.

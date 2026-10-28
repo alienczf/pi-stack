@@ -332,3 +332,11 @@ Attention remains on native inference. A percentage observation and a green offl
 ## Remaining
 
 G39 supplied the operator-owned login. G40 source, authenticated installation and actual native acceptance now pass at `e3232f1ef87a5abae3f808fefb03df9e433e68b4`. No login was automated and no auth path was read or copied. All historical attempts remain intact. The parent's independent artifact inspection and gate rerun for this follow-up are complete and pass. There is no remaining implementation or native proof blocker. Grok Bot owns collection and any later push or rebase. The final TODO full-SHA/native note and this progress update are intentionally unstaged small reports. No rebase, push, PR or model/provider switch occurred.
+
+## G48 private rebase verification, Track 1 note
+
+The ordered exact-G47-environment Prime matrix is b37174876 tests with14 failures/8 errors, e3232f172 with10/7, and fa8566c77 with14/8. Every head failure/error event matches the base trace. The cause is nested fixture Unix-socket paths123 bytes long. Changing only private TMPDIR to the cache root gives107-byte paths, then base76 and head77 Prime tests pass. No tests or source changed.
+
+The completed full rebased stream suite remains blocked at531 run,515 pass,14 fail,2 error. Final PoC file passes25. The sixteen stream events combine unchanged G40 Sol6.1/Luna default expectations with fixed-Astra T1 fixtures. Strict settings read-back correctly refuses them. No safe source-only fix can satisfy both protected inputs without changing fixture setup or weakening model verification. Parent and independent read-only same-model review confirm this. No code edit or commit was made under G48.
+
+Final private branch is `feat/merged-poc-rebased`, head `fa8566c85dbde2ebcf262caeb137a020e9a1c303`, under `/home/alphalab/.cache/pi-stack-track1/g48-attribution/head`. The explicitly BLOCKED source bundle, exact failing IDs, matrix and probes are in that parent evidence directory. Full details are the G48 section of progress12 and `g48-attribution/results.json`. The original e3232f1 native acceptance above is not relabelled or replayed. No live native service/install, live pi-stack, auth, real session, provider change or push occurred. Do not push the rebased candidate as green.
