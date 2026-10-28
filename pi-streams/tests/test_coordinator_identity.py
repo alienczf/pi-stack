@@ -12,7 +12,7 @@ from engine.project import StreamRow, load_project
 HEADER = 'session\trole\trepo\tworktree\tbranch\tbase\tmodel\tthinking\tstatus\tstarted\n'
 
 def live(sid: str) -> dict:
-    return {'sessionId': sid, 'isStreaming': False, 'isCompacting': False, 'isBashRunning': False, 'pendingMessageCount': 0, 'contextUsage': {'tokens': 100}, 'model': {'provider': 'openai-codex', 'id': 'gpt-6-astra'}, 'thinkingLevel': 'xhigh', 'cost': 0}
+    return {'sessionId': sid, 'isStreaming': False, 'isCompacting': False, 'isBashRunning': False, 'pendingMessageCount': 0, 'contextUsage': {'tokens': 100}, 'model': {'provider': 'openai-codex', 'id': 'gpt-6.1-sol'}, 'thinkingLevel': 'xhigh', 'cost': 0}
 
 class CoordinatorIdentityTests(EngineCase):
 
@@ -29,7 +29,8 @@ class CoordinatorIdentityTests(EngineCase):
         self.stub.requests.clear()
 
     def row(self, sid, role='coordinator', state='active', cwd=None):
-        return f'{sid}\t{role}\t\t{cwd or self.stream}\t\t\topenai-codex/gpt-6-astra\txhigh\t{state}\t2026-10-23T00:00:00Z\n'
+        model = 'openai-codex/gpt-6.1-sol' if role == 'coordinator' else 'openai-codex/gpt-6-luna'
+        return f'{sid}\t{role}\t\t{cwd or self.stream}\t\t\t{model}\txhigh\t{state}\t2026-10-23T00:00:00Z\n'
 
     def info(self, sid='current', *, archived=False, cwd=None, count=12):
         return {'id': sid, 'cwd': str(cwd or self.stream), 'messageCount': count, 'archived': archived, 'modified': '2026-10-23T00:00:00Z'}

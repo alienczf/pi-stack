@@ -34,7 +34,7 @@ class FailureAlignmentTests(EngineCase):
         initialized = self.run_streams("init", str(self.root), "-y")
         self.assertEqual(initialized.returncode, 0, initialized.stderr)
         stream = self.home / "etl"
-        self.stub.set_routes([("GET", "/api/sessions", 200, []), ("POST", "/api/sessions", 200, {"id": "fixture-coordinator", "cwd": str(stream)}), ("GET", "/api/sessions/fixture-coordinator/status", 200, {"sessionId": "fixture-coordinator", "model": {"provider": "openai-codex", "id": "gpt-6-astra"}, "thinkingLevel": "xhigh"}), ("POST", "/api/sessions/fixture-coordinator/prompt", 200, {"accepted": True})])
+        self.stub.set_routes([("GET", "/api/sessions", 200, []), ("POST", "/api/sessions", 200, {"id": "fixture-coordinator", "cwd": str(stream)}), ("GET", "/api/sessions/fixture-coordinator/status", 200, {"sessionId": "fixture-coordinator", "model": {"provider": "openai-codex", "id": "gpt-6.1-sol"}, "thinkingLevel": "xhigh"}), ("POST", "/api/sessions/fixture-coordinator/prompt", 200, {"accepted": True})])
         generated = self.run_streams("new", "etl")
         self.assertEqual(generated.returncode, 0, generated.stderr)
         instructions = (stream / "AGENTS.md").read_text()

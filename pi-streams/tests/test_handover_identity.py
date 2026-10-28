@@ -23,7 +23,7 @@ def handover(sid: str, body: str = "intent: finish the assigned slice\nproof: pr
 
 def status(sid: str) -> dict[str, object]:
     return {"sessionId": sid, "isStreaming": False, "contextUsage": {"tokens": 10},
-            "model": {"provider": "openai-codex", "id": "gpt-6-astra"},
+            "model": {"provider": "openai-codex", "id": "gpt-6-luna"},
             "thinkingLevel": "xhigh", "cost": 0}
 
 
@@ -44,7 +44,8 @@ class HandoverIdentityTests(EngineCase):
         self.stub.requests.clear()
 
     def row(self, sid: str, role: str, state: str) -> str:
-        return f"{sid}\t{role}\talpha\t{self.fx.alpha_wt}\tfeat-a\tbase\topenai-codex/gpt-6-astra\txhigh\t{state}\t2026-10-23T05:00:00Z\n"
+        model = "openai-codex/gpt-6.1-sol" if role == "coordinator" else "openai-codex/gpt-6-luna"
+        return f"{sid}\t{role}\talpha\t{self.fx.alpha_wt}\tfeat-a\tbase\t{model}\txhigh\t{state}\t2026-10-23T05:00:00Z\n"
 
     def write_handover(self, sid: str, role: str = "worker", *, body: bytes | None = None, legacy: bool = False) -> Path:
         path = self.stream / "handover" / (f"{role}.md" if legacy else f"{role}/{sid}.md")
