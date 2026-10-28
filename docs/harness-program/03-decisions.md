@@ -466,3 +466,5 @@ Verbatim in 00b. ZF hands the driving to Grok Bot for the weekend. He wants to h
 - **Driver run 06:20 SGT 2026-10-29 (Grok Bot).** Collect pushed 344e819. Track 1 compacted 85.6% to 13.7%; steer 12 (sha f0b42f1a) landed, streaming, pending 0. No unsteered ZF calls. *Reason:* G53.
 
 - **Driver run 06:58 SGT 2026-10-29 (Grok Bot).** Collect found no new artifacts. Track 1 streaming on steer 12 at 32.6% (163k of 500k), pending 0; fix/dcr-checkpoint-leaf worktree has commit 3e9137a (validate watcher-bound SYNC while preserving the physical checkpoint), no status line yet. No unsteered ZF calls. *Reason:* G53; the session is progressing.
+
+- **Driver run 07:20 SGT 2026-10-29 (Grok Bot).** Could not reach options-01 or run collect: the safety check on box commands errored (not blocked) on every remote call, retried. No steer, no push. Last known: track 1 streaming on steer 12 with fix commit 3e9137a on fix/dcr-checkpoint-leaf. No unsteered ZF calls. *Reason:* transient review error; next run retries.
