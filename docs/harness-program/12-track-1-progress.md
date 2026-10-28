@@ -837,3 +837,28 @@ pi-streams doctor
 Already-canonical Z15 streams need only protective `pi-streams upgrade` and doctor. Resume an interrupted approved migration with `pi-streams migrate "$STREAM" --home "$INDEX" --resume`. Doctor has no `--home` option. Keep drive off and all production recovery disabled throughout staged rollout. G44 leaves default trusted intake closed and classes 2-5 parked for human repair. The longer source-derived command reference is `g44-merge-prep/operator-handoff.txt`. None of these operator commands ran here.
 
 TRACK 1 STATUS: blocked | main=129415e suite=400 pass | native-rebase=unsafe question-ownership conflict at d2a378b0 pick3/21 | native-final-suite=not run | F-DCR=out of scope (G44, Z25)
+
+## G45 installed-base restoration and one-shot native verification
+
+Grok Bot steer 5, 2026-10-28 19:30 SGT, withdraws the native upstream-rebase requirement. The operator confirms options-01 runs `@jmfederico/pi-web 1.202607.3`. Source verification confirms tag `v1.202607.3` resolves exactly to `9b8728a5d626dbc69e321e563b970d44f4000a68`, and native61c5e26 contains 21 commits on that base. It is the direct tested upgrade of that installed version. No live installation was queried. Native deployment must be built from exact61c5e26, not upstream main68b1c83.
+
+The upstream port is deferred as separate later feature work. Upstream6d68caa5 deleted `pendingAskStore.ts` and made question answers/skips durable and repeatable. Porting stop/cancel/input generation invalidation onto that ownership model needs a semantic port with regression coverage. It is not a Track 1 must-fix or a remaining rebase gate. G44/Z25 still excludes genuine authenticated F-DCR, leaves trusted intake closed and classes 2-5 parked for human repair, and enables no production recovery.
+
+Under G45's explicit authorization, parent ran `git rebase --abort` once. It exited zero at 2026-10-28T11:26:18Z. Native HEAD is restored to `61c5e268bd1132e421d8ccaa75f43df0f9783f68` on `feat/streams-must-fix`, with clean tracked files and index. All paused-rebase evidence remains under `g44-merge-prep`. No stash, reset command, push, merge, live installation or service/session action was performed.
+
+Parent ran the full native `npm run verify` exactly once on a fresh private detached clone of exact61c5e26, from 11:29:29Z to 11:30:40Z. The clone reused an independently copied private dependency tree from the same source/byte-identical lock and existing Node22 PTY build. HOME, XDG roots, npm/config/cache and short TMPDIR were private. The precise runner, dependency setup and environment are retained. Typecheck, lint and knip passed. Vitest reported **2408 passed, 1 failed, 2 existing skipped**, across **275 passing files and 1 failing file**. The sole failure is:
+
+`src/server/piWebStatus.test.ts:163`, `PI WEB status > bypasses cached npm release data for a forced check`: expected `first.release.latestVersion` to equal `1.202607.1`, received `undefined`.
+
+Full verify exited 1. Per G45, parent stopped without retry, repair or diagnostic execution. No product source changed. Pi-stack's fresh G44 400-test result was retained and was not rerun. This is not a done claim or a substitution of earlier native2409 evidence for the new failed run. Evidence is `g45-finish/rebase-abort.log`, `rebase-abort.exit`, `verification-setup.json`, `run-native-full.sh`, `native-full-suite.log`, `native-full-suite.exit` and `results.json` under the private Track 1 cache.
+
+### Current G45 merge handoff
+
+| Repository | Path and remote URL | Branch and exact head | Accepted base and commit count | Latest suite |
+|---|---|---|---|---|
+| pi-stack | `/home/alphalab/Projects/worktrees/pi-stack-streams-must-fix`; `https://github.com/alienczf/pi-stack.git` | `feat/streams-must-fix`; `129415e6ffe496181ff21060fd0c19f7924f17a5` | `3acf0f01e6084a317b89cef3a86f4781e60877cf`; 31 commits. Already current with fetched origin/main. | G44 fresh 400 pass, zero skips. Not rerun under G45. |
+| pi-web/native | `/home/alphalab/Projects/worktrees/pi-web-streams-must-fix`; `https://github.com/jmfederico/pi-web.git` | `feat/streams-must-fix`; `61c5e268bd1132e421d8ccaa75f43df0f9783f68` | `9b8728a5d626dbc69e321e563b970d44f4000a68` = `v1.202607.3` = operator-confirmed installed version; 21 commits. No upstream port/rebase. | G45 fresh full verify failed once. 2408 pass, 1 failure above, 2 existing skips. Typecheck/lint/knip pass. |
+
+Both source indexes are clean. Main has only the existing untracked PLAN/TODO. The rebase conflict is no longer a blocker, but the fresh suite failure prevents the requested done line. Do not install or merge based on an old green result. The operator-only refresh, explicit Z15 migration, `pi-streams upgrade`, `pi-streams doctor` and manual native-daemon restart templates in the previous handoff remain unexecuted. Once a reviewed green result is available, build/deploy the native artifact from exact61c5e26, never upstream main. Grok Bot owns any merge/push/install. All production recovery stays disabled.
+
+TRACK 1 STATUS: blocked | heads=129415e/61c5e26 | main-suite=400 pass | native-suite=2408 pass,1 fail,2 existing skips | failure=piWebStatus.test.ts:163 expected latestVersion 1.202607.1, received undefined | F-DCR=out of scope (G44, Z25)
