@@ -916,15 +916,34 @@ The new worktree/index is clean and no rebase remains active. TODO retains both 
 
 ### Step 2. Live pi-stack refresh
 
-Pending. Initial live checkout is3acf0f0 with only untracked TODO.md. Preserve it and fast-forward only to exact129415e.
+Passed at13:27:19Z. Verified main checkout3acf0f0 with no tracked changes, fetched HTTPS origin/main, required its SHA to equal129415e, then ran `git merge --ff-only 129415e6ffe496181ff21060fd0c19f7924f17a5`. Ran the exact requested installer with `PI_STACK="$HOME/.pi-stack" PI_STACK_SKIP_SYSTEMD=1`. It exited0 and installed18 skills plus the expected overlay/packages. The pre-existing untracked TODO hash is unchanged. Auth was not read/copied; its inode/size/time metadata is unchanged. The existing tick timer was already active/enabled and remains so. No timer or native service command was issued.
+
+Doctor exited1. The complete output is `rollout/doctor-after-install.log`. Failures include missing integrated native capabilities, dirty fill-conditioned-fit and bq-aio roots, strict archived/live coordinator mismatches for fill-conditioned-fit and datapull, an unregistered harness candidate, and failed/incomplete tick health. Old revision and project-list/jig warnings are retained. No identity, existing work or native deployment was repaired to hide these findings. Evidence is `live-install.log`, `live-install.exit`, `live-before.json`, `live-after.json` and the doctor log.
 
 ### Step 3. Registered stream migrations
 
-Pending. Initial registry has13 streams. Review byte-backed plans and coordinator idle state before each application. Unknown authority or source-free mappings stay pending, never inferred.
+Migrated and upgraded6 of13 registered streams. Initial read-only plans were attempted for every entry. The six applied plans were then generated with explicit reviewed source-byte-span maps. Every source byte is reconstructed exactly from retained history before approval. The CLI applied exactly each reviewed plan file, then ran `pi-streams upgrade` for that stream. Parent verified schema1, migration ID, exact proposed STATE bytes, completed journal, every history file against both its source bytes and committed Git blob, unchanged STATE through upgrade, and installed revision129415e. Each new STATE has only Goals/Rules/Log and one seeded Log entry, below the30-entry limit. Nothing ratified an unratified stream.
+
+| Stream | Outcome | Retained history entries | Migration commit |
+|---|---|---|---|
+| cb-tslite-fix-mass-cancel | Migrated and upgraded. Existing completed/consumed publication outcome becomes current objective. | 13 | efcf94cbba65cd60a98375f2e8b80772b8e2d375 |
+| coinbase-l3-qslite | Migrated and upgraded. Exact latest timestamp-matching authority becomes current objective and Rules. Superseded ID-only hold stays history. | 9 | e07e731c4df41de720c2807cb85bb045883afae8 |
+| mm-validations | Migrated and upgraded. Existing pending charter and ratified:no preserved. | 11 | 6a8a24419720cac03ce91274d8d68d2a13dbd446 |
+| pi-streams-harness | Migrated and upgraded. Current D1/D6/D8 source text retained. Old kickoff/withdrawn goal directions are history, not revived. | 9 | c717a683d4cd3728cdfa29bd59a886a709460b4f |
+| prime-stack | Migrated and upgraded. Existing pending charter and ratified:no preserved. No Prime/session adoption. | 9 | 04a338ea0c0f7f8a31db9c6c2d3ad2bc37867121 |
+| vola-rea-extract | Migrated and upgraded. Latest paused disposition becomes current objective; explicit pause and C9/C5 amendment remain active Rules. Existing named limits preserved, none added. | 78 | 29d4bff15498ac65bc7a55a76b60ccee489324ab |
+
+The seven unchanged legacy roots are pending, not migrated. cb-tslite-cancel-routing lacks a first-line ratified marker. cpp-networkstack and fill-conditioned-fit have only bare ratified:yes without required source provenance. mm-algo-dev's first date has a trailing period and does not satisfy the unchanged predicate. No valid authority line was fabricated. Optimus has an archived worker with missing cwd, and its accumulated active/history authority was not safely resolved into a reviewed map. Bq-aio is dirty and contains mixed quoted/current/historical charter authority without a proven reviewed active/history map. Datapull's read-only plan timed out after180 seconds, and strict archived/live coordinator identity is inconsistent. No retry or metadata repair was attempted.
+
+Fresh coordinator status was checked immediately before apply, after apply and after upgrade. Selected coordinators stayed nonstreaming, noncompacting, without active bash or pending input. Harness strict status still reports a second unregistered same-cwd candidate. G47 explicitly names the registered coordinator01a1626a; the exact two candidate IDs were independently listed and both remained idle before/after all artifact actions. No candidate was adopted, stopped or prompted. All other identity failures remained pending. This is observed idle-boundary evidence, not an atomic exclusion of hypothetical external new input.
+
+Post-migration doctor also exits1. Full output is `doctor-after-migrations.log`; missing native safety capability and existing identity/dirty-root/tick-health failures remain. Evidence is `stream-census.json`, `migration-reviews.json`, `migration-results.json`, per-stream exact plan/map/input/status/outcome files, and the retained `plan-streams.py`, `map-streams.py`, `apply-streams.py` levers. Only Markdown source/history and normal stream metadata were committed locally by supported tools. No data, credential, push or session interruption was involved.
 
 ### Step 4. Harness goal reset
 
-Pending. The supported path is `pi-streams state objective`, which updates the Goals current objective under the stream lock without prompting or rearming a coordinator. The target SID is01a1626a-9b8d-7983-96b5-bf27eecfd00f. Source is01-scope.md, not withdrawn deep research.
+Reset at13:44:48Z through `pi-streams state objective pi-streams-harness --home /home/alphalab/.config/pi-streams --body-file <rollout/harness-goal/scope-objective.md>`. The body is the complete authoritative01-scope.md. Only Markdown heading levels1-3 are demoted by three levels so the source fits inside Current objective without changing STATE section boundaries. Source SHA256 is `bfe0d9e086970af96660d5acd768cc6fbf79a98f4dab56d8653669050d24a615`; body SHA256 is `8b74ba8d284ee3f8c30256dbd63168069f7646cfc4363c842608d72d1e7753a5`.
+
+Parent read the resulting STATE, parsed it, and verified resolved current goal equals the exact prepared input. Ratified:no, Rules, Charter and Log remain byte-identical. The stale Resume at GOAL instruction is absent from active STATE and retained verbatim only in migration history. Both same-cwd candidate sessions were idle with empty input queues before and after. No prompt, adoption, stop or rearm occurred. Evidence is `rollout/harness-goal/result.json` and its input, command output and exact status snapshots.
 
 ### Step 5. Native artifact and operator scripts
 
