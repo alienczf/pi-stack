@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 from unittest import mock
 
-from tick_support import TickCase, PROMPTS, info, reply, row, status
+from tick_support import TickCase, PROMPTS, info, reply, row, status, user
 from support import CLI, ROOT
 
 sys.path.insert(0, str(ROOT / "pi-streams"))
@@ -148,6 +148,110 @@ class DcrTests(TickCase):
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertEqual(self.operation()["phase"], "complete")
         self.assertEqual([item[1] for item in self.stub.requests if item[0] == "POST"], ["/api/sessions/coord/maintenance/events/close"])
+
+    def checkpoint_fixture(self, acknowledgement: str, *, descendants: int = 1):
+        assistant = {"type": "message", "id": "32fffa62", "parentId": None, "message": reply(acknowledgement)}
+        raw = (json.dumps(assistant, separators=(",", ":")) + "\n").encode()
+        boundary = {"version": 1, "sessionId": "coord", "cwd": str(self.stream), "root": str(self.stream), "stream": "etl", "state": "watching", "checkpoint": {"entryId": "32fffa62", "sha256": hashlib.sha256(raw).hexdigest()}}
+        records = [(assistant, raw)]
+        for number in range(descendants):
+            entry = {"type": "custom", "customType": "pi-web.stream-failure", "data": json.loads(json.dumps(boundary)), "id": "2bd6aeaa" if number == 0 else f"watch-{number}", "parentId": records[-1][0]["id"]}
+            records.append((entry, (json.dumps(entry) + "\n").encode()))
+        path = Path(self.log_path("coord"))
+        path.write_bytes((json.dumps({"type": "session", "id": "coord", "cwd": str(self.stream)}) + "\n").encode() + b"".join(raw for _, raw in records))
+        native = {"rotationSafety": {"entryId": records[-1][0]["id"]}, "failureBoundary": boundary}
+        resolved = Coordinator(load_threads(self.stream / "threads.tsv")[0], NativeSession(info("coord", str(self.stream), str(path)), native))
+        return resolved, records
+
+    def test_native_watcher_ack_preserves_physical_leaf_cas(self) -> None:
+        operation = self.ready(self.start())
+        ack = f"DCR SYNC ready: {operation['id']} {operation['ready_revision']}"
+        resolved, records = self.checkpoint_fixture(ack)
+        leaf, raw = records[-1]
+        self.assertEqual(dcr.terminal_checkpoint(resolved, ack), ("2bd6aeaa", hashlib.sha256(raw).hexdigest()))
+        native = self.backend(operation)
+        native["entryId"] = leaf["id"]
+        self.routes(streaming=False, leaf=leaf["id"], operation=operation, native=native)
+        for _, path, _, body in self.stub.routes:
+            if path.endswith("/status"):
+                body["failureBoundary"] = resolved.native.status["failureBoundary"]
+        compact = self.tick("2026-10-06T12:05:00Z")
+        self.assertEqual(compact.returncode, 0, compact.stderr)
+        self.assertEqual(self.operation()["phase"], "compacting")
+        self.assertEqual(self.operation()["checkpoint_sha256"], hashlib.sha256(raw).hexdigest())
+        posts = [item for item in self.stub.requests if item[0] == "POST"]
+        self.assertEqual([item[1] for item in posts], ["/api/sessions/coord/maintenance/compact"])
+        self.assertEqual(posts[0][3]["expectedIdle"]["entryId"], "2bd6aeaa")
+
+    def test_multiple_owned_watcher_descendants_bind_the_same_assistant(self) -> None:
+        resolved, records = self.checkpoint_fixture("exact ACK", descendants=2)
+        self.assertEqual(dcr.terminal_checkpoint(resolved, "exact ACK"), ("watch-1", hashlib.sha256(records[-1][1]).hexdigest()))
+
+    def test_watcher_suffix_is_fail_closed(self) -> None:
+        faults = {
+            "other-custom": lambda entry: entry.update(customType="pi-web.streams-dcr"),
+            "not-custom": lambda entry: entry.update(type="unknown"),
+            "missing-checkpoint": lambda entry: entry["data"].pop("checkpoint"),
+            "wrong-entry": lambda entry: entry["data"]["checkpoint"].update(entryId="elsewhere"),
+            "wrong-hash": lambda entry: entry["data"]["checkpoint"].update(sha256="0" * 64),
+            "wrong-session": lambda entry: entry["data"].update(sessionId="other"),
+            "wrong-cwd": lambda entry: entry["data"].update(cwd="/other"),
+            "wrong-root": lambda entry: entry["data"].update(root="/other"),
+            "wrong-stream": lambda entry: entry["data"].update(stream="other"),
+            "wrong-version": lambda entry: entry["data"].update(version=2),
+            "boolean-version": lambda entry: entry["data"].update(version=True),
+            "parked": lambda entry: entry["data"].update(state="parked"),
+            "malformed-data": lambda entry: entry.update(data=[]),
+            "later-user": lambda entry: entry.update(type="message", message=user("new human input")),
+            "later-tool-result": lambda entry: entry.update(type="message", message={"role": "toolResult", "content": []}),
+            "later-tool-call": lambda entry: entry.update(type="message", message={**reply(""), "stopReason": "toolUse", "content": [{"type": "toolCall", "id": "call"}]}),
+            "malformed-message": lambda entry: entry.update(type="message", message=[]),
+        }
+        for label, mutate in faults.items():
+            with self.subTest(fault=label):
+                resolved, records = self.checkpoint_fixture("exact ACK", descendants=2)
+                mutate(records[1][0])
+                records[1] = records[1][0], (json.dumps(records[1][0]) + "\n").encode()
+                with mock.patch("engine.dcr.native_branch", return_value=list(reversed(records))):
+                    with self.assertRaises(StreamsError):
+                        dcr.terminal_checkpoint(resolved, "exact ACK")
+        for message in (None, [], {**reply("exact ACK"), "stopReason": "toolUse"}, reply("not the ACK"), {**reply("exact ACK"), "content": [{"type": "text", "text": 7}]}, {**reply("exact ACK"), "content": "bad"}):
+            with self.subTest(assistant=message):
+                resolved, records = self.checkpoint_fixture("exact ACK")
+                records[0][0]["message"] = message
+                records[0] = records[0][0], (json.dumps(records[0][0]) + "\n").encode()
+                proof = {"entryId": "32fffa62", "sha256": hashlib.sha256(records[0][1]).hexdigest()}
+                records[1][0]["data"]["checkpoint"] = proof
+                resolved.native.status["failureBoundary"]["checkpoint"] = proof
+                with mock.patch("engine.dcr.native_branch", return_value=list(reversed(records))):
+                    with self.assertRaises(StreamsError):
+                        dcr.terminal_checkpoint(resolved, "exact ACK")
+
+    def test_direct_checkpoint_and_status_shapes_are_fail_closed(self) -> None:
+        for message in (None, [], {**reply("exact ACK"), "content": [{"type": "toolCall", "id": "call"}]}, {**reply("exact ACK"), "content": [{"type": "text", "text": 7}]}, {**reply("exact ACK"), "content": [{"type": []}]}):
+            with self.subTest(message=message):
+                resolved, records = self.checkpoint_fixture("exact ACK", descendants=0)
+                records[0][0]["message"] = message
+                with mock.patch("engine.dcr.native_branch", return_value=records):
+                    with self.assertRaises(StreamsError):
+                        dcr.terminal_checkpoint(resolved, "exact ACK")
+        for field, value in (("sessionId", "other"), ("cwd", "/other"), ("version", True), ("root", "relative"), ("stream", "bad/stream"), ("state", "uncertain")):
+            with self.subTest(status_field=field):
+                resolved, records = self.checkpoint_fixture("exact ACK")
+                resolved.native.status["failureBoundary"][field] = value
+                records[1][0]["data"][field] = value
+                with mock.patch("engine.dcr.native_branch", return_value=list(reversed(records))):
+                    with self.assertRaises(StreamsError):
+                        dcr.terminal_checkpoint(resolved, "exact ACK")
+        resolved, _ = self.checkpoint_fixture("exact ACK")
+        resolved.native.status.pop("failureBoundary")
+        with self.assertRaises(StreamsError):
+            dcr.terminal_checkpoint(resolved, "exact ACK")
+        for key, value in (("isStreaming", True), ("isCompacting", True), ("isBashRunning", True), ("pendingMessageCount", 1), ("pendingAsk", {"id": "ask"}), ("pendingExtensionDialogs", [{"id": "dialog"}])):
+            with self.subTest(busy=key):
+                resolved, _ = self.checkpoint_fixture("exact ACK")
+                resolved.native.status[key] = value
+                self.assertIsNone(dcr.terminal_checkpoint(resolved, "exact ACK"))
 
     def test_manual_compaction_is_not_aborted_or_given_an_extra_sync(self) -> None:
         self.routes()

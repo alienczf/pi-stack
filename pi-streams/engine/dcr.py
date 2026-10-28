@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import re
 import shlex
 import uuid
 from dataclasses import asdict, dataclass, field
@@ -175,12 +176,38 @@ def terminal_checkpoint(resolved: Coordinator, acknowledgement: str) -> tuple[st
     status = resolved.native.status
     if any(status.get(key) is True for key in ("isStreaming", "isCompacting", "isBashRunning")) or status.get("pendingMessageCount", 0) or status.get("pendingAsk") or status.get("pendingExtensionDialogs"):
         return None
-    entry, raw = native_branch(resolved)[0]
-    message = entry.get("message", {})
-    text = "\n".join(block.get("text", "") for block in message.get("content", []) if isinstance(block, dict) and block.get("type") == "text")
-    if entry.get("type") != "message" or message.get("role") != "assistant" or message.get("stopReason") != "stop" or acknowledgement not in text.splitlines():
+    branch = native_branch(resolved)
+    suffix = []
+    for entry, raw in branch:
+        if entry.get("type") != "custom" or entry.get("customType") != "pi-web.stream-failure":
+            break
+        suffix.append(entry)
+    else:
+        raise StreamsError("DCR has no native assistant behind its checkpoint metadata")
+    message = entry.get("message")
+    content = message.get("content") if isinstance(message, dict) else None
+    if (entry.get("type") != "message" or not isinstance(content, list)
+        or message.get("role") != "assistant" or message.get("stopReason") != "stop"
+        or any(not isinstance(block, dict) or block.get("type") not in ("text", "thinking")
+               or not isinstance(block.get(block["type"]), str) for block in content)):
         raise StreamsError("DCR has no complete native SYNC acknowledgement at its exact idle leaf")
-    return entry["id"], hashlib.sha256(raw).hexdigest()
+    text = "\n".join(block["text"] for block in content if block.get("type") == "text")
+    if acknowledgement not in text.splitlines():
+        raise StreamsError("DCR has no complete native SYNC acknowledgement at its exact idle leaf")
+    if suffix:
+        boundary = status.get("failureBoundary")
+        proof = {"entryId": entry["id"], "sha256": hashlib.sha256(raw).hexdigest()}
+        if (not isinstance(boundary, dict) or type(boundary.get("version")) is not int or boundary["version"] != 1
+            or boundary.get("sessionId") != resolved.row.session or boundary.get("cwd") != resolved.row.worktree
+            or boundary.get("state") != "watching" or boundary.get("failure") is not None
+            or not isinstance(boundary.get("root"), str) or not Path(boundary["root"]).is_absolute()
+            or not isinstance(boundary.get("stream"), str) or not re.fullmatch(r"[A-Za-z0-9_.-]+", boundary["stream"])
+            or boundary.get("checkpoint") != proof
+            or any(not isinstance(child.get("data"), dict) or type(child["data"].get("version")) is not int
+                   or child["data"] != boundary for child in suffix)):
+            raise StreamsError("DCR checkpoint metadata does not bind its own complete native SYNC acknowledgement")
+    leaf, leaf_raw = branch[0]
+    return leaf["id"], hashlib.sha256(leaf_raw).hexdigest()
 
 
 def completion_after(resolved: Coordinator, compaction: str) -> str | None:
