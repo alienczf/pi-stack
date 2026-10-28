@@ -1037,3 +1037,46 @@ No safe production-only fix satisfies these protected inputs. Restoring Astra de
 Private clone `/home/alphalab/.cache/pi-stack-track1/g48-attribution/head` is clean on `feat/merged-poc-rebased` at exact `fa8566c85dbde2ebcf262caeb137a020e9a1c303`. All73 tracked test/support files match their pre-verification hashes, and all tracked source remains unchanged. Original G47 private worktree also remains untouched. Main machine evidence is `results.json`; every final stream failure ID is retained there. `classification.json`, `trace-comparison.json`, `fake-startup-probe.json`, `socket-path-census.json` and complete logs retain the causal chain.
 
 A complete-history source bundle is retained as `merged-poc-rebased-BLOCKED-fa8566c.bundle`, SHA256 `7be293d7c6a560c1fd473b0d7a3968dfc08a7b976d3cb4e4893b92d782a9ba6c`. Bundle verification passes. It is explicitly **not accepted for push or deployment**. The independent read-only review mission is complete, but the rebase remains blocked on permission to align the contradictory fixture inputs, not on code or runtime repair. No native installation/service, live pi-stack, real session, credential or provider was operated in this steer. G44/Z25's closed intake and disabled production recovery are unchanged.
+
+## G49 stale model fixtures aligned and private rebase green
+
+Grok Bot steer9, 2026-10-28 23:40 SGT, settles G48's permission blocker. Under ZF's delegation, G49 identifies the sixteen remaining failures as stale fixture inputs and permits changes only within coordinator identity, failure alignment, generated state and handover identity. G40 Sol6.1 xhigh stream and Luna6 xhigh worker defaults remain binding. Production settings verification must stay strict. G49 also permits the smaller TMPDIR guard or documentation note. No live install, pi-web service, live pi-stack, stream/session, credential, push or merge action is authorized here.
+
+### Two small local commits
+
+Private branch `feat/merged-poc-rebased` now ends at **`c913ff16f9504d0aa4ce4d37b7514cd1696cf5d3`** in `/home/alphalab/.cache/pi-stack-track1/g48-attribution/head`. Parent fa8566c and all G48 red evidence remain intact. Original G47 worktree remains untouched.
+
+| Commit | Change and one-line reason |
+|---|---|
+| `1238e130492b14cd6ca2c70524241869a01f732b` | Four-family fixture alignment. Report Sol6.1 coordinator and Luna worker statuses so strict settings read-back reaches the behavioral checks. |
+| `c913ff16f9504d0aa4ce4d37b7514cd1696cf5d3` | README verification note. A short user-owned TMPDIR keeps nested socket fixtures below Linux's 107-byte AF_UNIX pathname limit, excluding the terminating NUL. |
+
+The fixture change uses literal G40 model values, role-specific TSV rows and the existing status helper's `model_id` argument. All48 focused tests pass before the fixture commit. All220 behavioral assertion ASTs, the48 test methods and decorators, and all69 outside-family test/support files are unchanged. The complete committed diff is exactly four allowed test files plus README, with13 insertions and9 deletions. No production code changed. The `piweb.py` Git blob is identical to fa8566c. The existing model-mismatch negative test passes unchanged in the full run. No setter acknowledgement is treated as product proof.
+
+The README note is smaller than new setup guard logic. It sits beside the existing repository-check commands, whose bytes remain unchanged. The G48 actual socket probes remain the evidence for the TMPDIR choice. Optional deslop is unavailable; parent manually inspected the small diff before each commit. No comments, suppressions, new fixture engine or abstraction were added.
+
+### Final full verification on the committed head
+
+A fresh read-only poteto-agent on the required Sol6.1/xhigh model independently checks the scoped diff, assertions and file hashes, then runs the prepared `g49-fixtures/run-final.sh` exactly once. Its exclusive start marker prevents accidental replay. Parent independently reads the actual terminal summaries and exit files. No source edits or full-suite retries follow the final commits.
+
+| Order | Command | Terminal result | UTC interval |
+|---|---|---|---|
+| 1 | `python3 -m unittest discover -s pi-streams/tests -v` | **531 pass,0 fail,0 error**, exit0. | 15:59:35Z to16:09:58Z, Oct28 |
+| 2 | `python3 -m unittest discover -s tests` | **77 pass,0 fail,0 error**, exit0. | 16:09:58Z to16:10:46Z, Oct28 |
+| 3 | `python3 -m unittest discover -s pi-streams/tests -p test_merged_poc.py` | **25 pass,0 fail,0 error**, exit0. | 16:10:46Z to16:11:06Z, Oct28 |
+
+The separate25 PoC tests are already included in the531 streams tests and are not added again to a unique-test total. These are complete all-green process results, not composite attribution. The runner retains G47's private HOME/XDG, Python, dependencies and dead external endpoints, with only the proven `TMPDIR=/home/alphalab/.cache/pi-stack-track1` correction. No auth or real model/runtime call is part of these offline fixtures. The first fixture fix passes; failed code-fix attempts are zero. No fresh actual inference quota error or fallback occurred. The five-minute long-tool notification was an observation during the expected full streams run, not a failure or reason to interrupt it.
+
+Evidence root is `/home/alphalab/.cache/pi-stack-track1/g49-fixtures`. It contains `results.json`, `before.json`, `fixture-invariants.json`, `parent-source-review.json`, the patch, commit SHAs/reasons, `fixture-focused.log`, `run-final.sh`, all three `final-*.log` files and corresponding exit/start/end files, `independent-guards.log`, `terminal-verification.log`, and `full-verification.md`. Child `a488b4b6-a71a-499e-a6e1-b300078545cf` is terminal. Parent accepts its verification only after the direct artifact checks.
+
+### Complete-history bundle and operator handoff
+
+Bundle is **`/home/alphalab/.cache/pi-stack-track1/g49-fixtures/merged-poc-rebased-c913ff1.bundle`**.
+
+SHA256 is **`5fbef4f9789337303fb9c8a5a109e0704163ddb6b1ae5ee15852101276d594c0`**.
+
+Parent verifies the bundle in an initially empty bare repository, fetches `refs/heads/feat/merged-poc-rebased`, and passes `git fsck --full --strict`. Fetched head and tree exactly match the tested source. All156 reachable commits are available without prerequisites. Evidence is `bundle.json` and the create, verify, fetch, heads and fsck logs. The source tree/index remain clean, and there are exactly two new commits above fa8566c. No runtime data or private process reports are committed.
+
+G49 supersedes the G48 fixture-permission blocker and accepts this private rebase candidate as green. Grok Bot owns fetching the bundle and force-pushing `feat/merged-poc` with `--force-with-lease`, then native installation outside the hosted session and part2 real-stream verification. None occurred here. G47's other rollout, native dependency-resolution and doctor findings are not cleared by these offline tests. G44/Z25's closed trusted intake and disabled production recovery remain unchanged. Shared progress edits stay uncommitted for collection.
+
+TRACK 1 STATUS: merged-poc-rebase green | head=c913ff16f9504d0aa4ce4d37b7514cd1696cf5d3 | pi-streams=531 pass | prime=77 pass,0 fail,0 error | bundle=/home/alphalab/.cache/pi-stack-track1/g49-fixtures/merged-poc-rebased-c913ff1.bundle 5fbef4f9789337303fb9c8a5a109e0704163ddb6b1ae5ee15852101276d594c0
