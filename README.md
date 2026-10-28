@@ -182,6 +182,8 @@ The same driver is `python3 scripts/check-merged-poc.py --root "$POC_ROOT" --str
 
 Run these commands from the pi-stack Git root. None starts a nested Pi process.
 
+Use a short, user-owned `TMPDIR` for socket fixtures. Linux AF_UNIX socket pathnames allow at most 107 bytes, excluding the terminating NUL. Fixture subdirectories count toward that limit.
+
 <!-- readme-checks:start -->
 ```bash
 bash -n install.sh
