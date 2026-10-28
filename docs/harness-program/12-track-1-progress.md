@@ -908,7 +908,11 @@ Evidence root is `/home/alphalab/.cache/pi-stack-track1/rollout`. One child owns
 
 ### Step 1. Private merged-poc rebase
 
-Pending. Child7efa0796-a25d-411a-ac61-de36750850f2 owns this bounded private rebase and suites. Its enclosing workflow receipt is not proof of terminal child completion.
+Rebase completed on local `feat/merged-poc-rebased` at `fa8566c85dbde2ebcf262caeb137a020e9a1c303`, in `/home/alphalab/.cache/pi-stack-track1/rollout/merged-poc-step1-20261028T1245Z/worktree`. Fetched target is `b371748f0b0871d0a53bbf0f8a5f24182191991d`. All13 non-merge commits map in range-diff. The original14 includes the old Prime foundation merge23640e5, which ordinary rebase omits. No non-merge patch was dropped.
+
+Acceptance is **blocked**, not green. The full pi-streams run was interrupted by the child's30-minute deadline after printing14 failure and2 error markers, with no terminal summary or tracebacks. The child was revived only to reconcile retained state and report, not to modify or retry source. Parent independently ran the root Prime suite and final added PoC file on this unchanged head. Prime ran77 tests and failed with14 failures/8 errors. A single controlled shorter-private-TMPDIR run removed several explicit AF_UNIX path-length errors but still failed77 tests with14 failures/3 errors. It was not retried or repaired. The added `test_merged_poc.py` passes25 tests on the final head. Intermediate focused successes do not substitute for a final full-suite pass.
+
+The new worktree/index is clean and no rebase remains active. TODO retains both histories. Source, range-diff and all conflict-stage/resolution evidence remain in `merged-poc-step1-20261028T1245Z/evidence`. Important semantic resolutions are project schema/publication, backend dispatch and tick integration. The existing Prime installer also still requires the literal `feat/merged-poc` branch name, not the new private branch. Do not push/deploy this unverified candidate as green. Machine child report is `rollout/merged-poc-result.json`; parent logs are `logs/final/parent-prime-tests.log`, `parent-prime-short-tmp.log` and `parent-added-poc-tests.log`. Continue the independent G47 steps without a rebase repair loop.
 
 ### Step 2. Live pi-stack refresh
 
