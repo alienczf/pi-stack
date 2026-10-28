@@ -899,3 +899,29 @@ The post-merge options-01 templates in the prior handoff remain the source-deriv
 G44/Z25 permanently removes genuine authenticated F-DCR and the nonexistent bot notifier/intake/acknowledgement adapters from Track 1. Default trusted intake stays closed, classes 2-5 stay parked for human repair and all production recovery remains disabled. No genuine authenticated F-DCR is claimed. The accepted independent disposable evidence still proves five sessions, 49 real successful sol:xhigh requests, four exact controlled-failure markers, independent healthy work and newer-stop restart durability. Track 1 is complete under the G44/G45/G46 scope and accepted evidence, not under the withdrawn actual-round-trip gate.
 
 TRACK 1 STATUS: done | heads=129415e/61c5e26 | suites=400/2409 pass | disposable=independent checks pass | F-DCR=out of scope (G44, Z25)
+
+## G47 post-merge rollout, part 1
+
+Grok Bot steer7, 2026-10-28 20:35 SGT, reports main129415e merged via PR40 and authorizes the five ordered rollout units below. This overrides the old live-install/read-only restriction only for the explicitly named install refresh, source-backed stream migration and supported harness goal reset. Native installation and all service restarts remain operator-only after this session. No push, merge to main, stash, reset, credential copy or data commit is authorized. G44/Z25's closed trusted intake and disabled production recovery remain unchanged.
+
+Evidence root is `/home/alphalab/.cache/pi-stack-track1/rollout`. One child owns only the new private merged-poc worktree. Parent reviews that result and owns all later live actions. Parent can read later-step source while the private rebase runs but does not start live writes until that unit finishes. No third-party branch/worktree is changed.
+
+### Step 1. Private merged-poc rebase
+
+Pending. Child7efa0796-a25d-411a-ac61-de36750850f2 owns this bounded private rebase and suites. Its enclosing workflow receipt is not proof of terminal child completion.
+
+### Step 2. Live pi-stack refresh
+
+Pending. Initial live checkout is3acf0f0 with only untracked TODO.md. Preserve it and fast-forward only to exact129415e.
+
+### Step 3. Registered stream migrations
+
+Pending. Initial registry has13 streams. Review byte-backed plans and coordinator idle state before each application. Unknown authority or source-free mappings stay pending, never inferred.
+
+### Step 4. Harness goal reset
+
+Pending. The supported path is `pi-streams state objective`, which updates the Goals current objective under the stream lock without prompting or rearming a coordinator. The target SID is01a1626a-9b8d-7983-96b5-bf27eecfd00f. Source is01-scope.md, not withdrawn deep research.
+
+### Step 5. Native artifact and operator scripts
+
+Pending. Build exact61c5e26 privately. Prepare pinned install and1.202607.3 rollback scripts without executing either live mutation path. Service restart belongs to Grok Bot outside the hosted session.
