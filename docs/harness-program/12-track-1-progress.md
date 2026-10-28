@@ -789,3 +789,51 @@ Grok Bot owns this decision under ZF's delegation. G44 applies Z25's permanent e
 G44 explicitly authorizes rebasing only the two owned feat/streams-must-fix branches onto their current upstream main when behind. It does not authorize push, merge, live installation, stash, reset, credential changes or existing-session operations. Unsafe rebase conflicts stop with the precise conflict instead of looping. The catalog's item 18, S6 and rollout text now state the closed merge boundary.
 
 Throughput checkpoint: first record the G44 scope change, then fetch/pin the two upstream main tips and rebase only if needed, then rerun both full suites on their exact final heads. Record old/new heads, base SHAs, commit counts and reconciliation evidence. Finally write the operator-only merge/install/migration/native-daemon handoff. Pre-rebase heads are main 129415e6ffe496181ff21060fd0c19f7924f17a5 and native 61c5e268bd1132e421d8ccaa75f43df0f9783f68. No rebase or deployment result is claimed yet.
+
+### G44 topology preparation stopped at unsafe native conflict
+
+Both owned remotes were fetched and pinned. Main upstream is 3acf0f01e6084a317b89cef3a86f4781e60877cf. Main129415e is already ahead31/behind0, so no rebase was needed. A fresh detached private clone at exact129415e passed all 400 tests, zero skips, from 10:40:59Z to 10:50:54Z. Its complete range-diff retains all 31 commits unchanged. Original untracked PLAN/TODO hashes are preserved byte-for-byte.
+
+Native upstream is 68b1c834f669a0a3b723382dbcca586c07e84cc9, 966 commits beyond its original merge base9b8728a. Native rebase began under G44. The first pick stopped for absent committer identity after global config was excluded. The staged three-file/47-line patch was verified against exact originala1bbdda; per-command original committer metadata and commit -C preserved it without amending upstream. The second pick's safe conflicts retained upstream exact cwd refs, typed activity and all MCP/queue/model methods, adding only the existing optional delivery ID behavior. Its adaptations and partial range-diff are retained.
+
+Pick3/21, d2a378b0, is unsafe to resolve mechanically. Upstream deleted pendingAskStore.ts and replaced current/pending ask consumption and cancellation with durable repeatable answers/skips. Incoming receiving-generation invalidation uses the deleted ownership model. Choosing either side risks upstream behavior or Track1 stop/input safety. The writer stopped without resolving this pick, skipping, aborting, resetting, stashing or discarding. Conflicts remain in src/server/sessiond.ts, src/server/sessions/pendingAskStore.ts, src/server/sessions/piSessionService.ts, src/server/sessions/sessionRoutes.ts and src/server/sessions/sessionService.ts. Current detached HEAD is bb93e2ef9decd2fe4e1a43bc564dec5b3030f6c9; the owned branch ref remains original61c5e26. The native index intentionally contains the in-progress pick and is not clean. There is no final rebased native head, and the native full suite was not run on this partial replay. Prior2409/two-skip evidence is not relabelled as a final-head pass.
+
+Machine evidence is g44-merge-prep/rebase-and-suite-results.json, with full main logs, old/new topology, first-pick ownership, partial range-diff, safe conflict dispositions and exact paused rebase state. operator-handoff.txt contains source-derived commands only, explicitly gated until native integration and final suites pass. No merge/install/service/session/credential/provider action occurred. G44's excluded genuine F-DCR and nonexistent adapters are not blockers and will not be built here. The sole blocker is the unsafe native content conflict. Parent retains the final review and G44 completion line.
+
+TRACK 1 STATUS: paused-unsafe-native-rebase-conflict | main=129415e/full400-pass | native=pick3-d2a378b0-in-progress | merge-ready=false
+
+### Parent review and merge handoff, paused under G44
+
+Parent independently confirmed the five unmerged paths, stopped pick d2a378b040d618012f44b5a7511a8df087b50d42, unchanged original native branch ref and partial detached HEAD. Upstream commit 6d68caa5 replaced pending ask ownership with conversation-derived durable questions. Its reply API explicitly accepts answers after later conversation/replies. Porting the old consume/cancel-based generation guards requires a scoped semantic reconciliation with regression coverage, not choosing a conflict side. No further integration or native verification was attempted after this stop. Evidence is `g44-merge-prep/parent-rebase-review.json`. No genuine F-DCR or missing bot adapter is an outstanding gate under G44.
+
+| Repository | Owned path and remote | Branch and exact head | Base and commit count | Suite on that head |
+|---|---|---|---|---|
+| pi-stack | `/home/alphalab/Projects/worktrees/pi-stack-streams-must-fix`; `https://github.com/alienczf/pi-stack.git` | `feat/streams-must-fix`; `129415e6ffe496181ff21060fd0c19f7924f17a5` | Fetched upstream/merge base `3acf0f01e6084a317b89cef3a86f4781e60877cf`; 31 commits ahead, 0 behind; no rebase needed. | Fresh full suite 400 pass, zero skips. Parent also passed Bash syntax, isolated overlay, conform-skills, update-pstack, subagents and cross-repo checks on this exact head. |
+| pi-web/native | `/home/alphalab/Projects/worktrees/pi-web-streams-must-fix`; `https://github.com/jmfederico/pi-web.git` | Owned branch ref `feat/streams-must-fix` remains `61c5e268bd1132e421d8ccaa75f43df0f9783f68`. Partial detached HEAD is `bb93e2ef9decd2fe4e1a43bc564dec5b3030f6c9`; no final rebased head exists. | Target upstream `68b1c834f669a0a3b723382dbcca586c07e84cc9`; original merge base `9b8728a5d626dbc69e321e563b970d44f4000a68`. Original branch has 21 owned commits and is 966 upstream commits behind. Only two picks replayed; pick 3 is unresolved. | Final native suite not run because rebase is incomplete. Original 61c5e26 had 2409 pass/two existing skips; that is historical evidence, not a pass on the partial replay. |
+
+**Do not merge or install this paused native state.** Grok Bot alone owns merging and pushing after a safe semantic port, complete rebase and full native verification. Keep the in-progress index, conflict files and original ref intact. No stash, reset, abort, skipped commit, live installation or service action was performed. Main PLAN/TODO remain untracked and unchanged by topology.
+
+The following are operator-only post-merge templates, not executed commands. After both final heads are reviewed and green, deploy the exact native artifact built from the final tested SHA, not an unrelated registry package. At an operator-approved quiescent point, outside hosted Pi sessions, manually reload the daemon with `systemctl --user restart pi-web-sessiond`, then run `pi-web doctor`. Reload the web/API for its actual installation mode as well; `pi-web restart` is the documented native-services command. Restarting only the browser or web/API does not reload session-daemon code. Never apply these steps to the retained disposable services.
+
+For options-01, first confirm the installed checkout is clean and on the intended main branch. Refresh it without discarding divergence, then reinstall the overlay while leaving tick scheduling unarmed:
+
+```bash
+git -C "$HOME/.pi-stack" status --short
+git -C "$HOME/.pi-stack" branch --show-current
+git -C "$HOME/.pi-stack" fetch origin main
+git -C "$HOME/.pi-stack" merge --ff-only origin/main
+PI_STACK="$HOME/.pi-stack" PI_STACK_SKIP_SYSTEMD=1 bash "$HOME/.pi-stack/install.sh" -y
+```
+
+For each explicitly selected legacy stream, resolve its registered index as `INDEX`, its exact ID as `STREAM`, and an operator-owned output file as `PLAN`. Plan and review the lossless Z15 migration before upgrading templates. Add `--mapping "$REVIEWED_MAP"` only when an explicit reviewed byte-span authority mapping is required. Do not invent provenance or replace an interrupted migration journal.
+
+```bash
+pi-streams migrate "$STREAM" --home "$INDEX" --plan > "$PLAN"
+pi-streams migrate "$STREAM" --home "$INDEX" --apply "$PLAN"
+pi-streams upgrade "$STREAM" --home "$INDEX"
+pi-streams doctor
+```
+
+Already-canonical Z15 streams need only protective `pi-streams upgrade` and doctor. Resume an interrupted approved migration with `pi-streams migrate "$STREAM" --home "$INDEX" --resume`. Doctor has no `--home` option. Keep drive off and all production recovery disabled throughout staged rollout. G44 leaves default trusted intake closed and classes 2-5 parked for human repair. The longer source-derived command reference is `g44-merge-prep/operator-handoff.txt`. None of these operator commands ran here.
+
+TRACK 1 STATUS: blocked | main=129415e suite=400 pass | native-rebase=unsafe question-ownership conflict at d2a378b0 pick3/21 | native-final-suite=not run | F-DCR=out of scope (G44, Z25)
