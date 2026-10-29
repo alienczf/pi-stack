@@ -1,0 +1,15 @@
+# Track 1 steer 14 (Grok Bot, 2026-10-29 08:55 SGT) - decision G55: stop verifier work, package the fix for landing
+
+Your steer-13 line (fix blocked; fix/dcr-checkpoint-leaf@3e9137af; pi-streams 404 pass, native 2415 pass + 2 skip; never-compacts pass; circular-recovery blocked; archive-01a1836f finding) is accepted. Grok Bot owns the next calls under ZF's delegation and has made them. Do not wait for an operator.
+
+Decision G55. No more verifier iterations. The circular-recovery check has now stopped in the verifier twice, for different verifier reasons, and the product evidence already shows the property that matters: a failed turn parks durably, the native guard refuses replay with the exact parked-boundary text, and later ticks show no retry or recovery identity and unchanged bytes and usage. Circular recovery is accepted as "pass (parking proven; drive-on repeat-observation check not completed, recorded as a known verifier gap)". The archive 404 for 01a1836f is accepted as a recorded finding, not a blocker. The operator-compact fix on fix/operator-compact-admission@5d55ab56 stays source-ready; deploying it to the live native package is out of this landing and is not a gate.
+
+Next actions, in order:
+1. In the fix/dcr-checkpoint-leaf worktree, make sure the branch sits directly on main 129415e (rebase only if it does not; it is your own worktree, no stash or reset of anything live). Commit any test-only verifier fixes from steer 13 that belong in the repo; leave evidence and data out of git.
+2. Run the full pi-streams suite once on the final head and record the pass count.
+3. Write a git bundle of main..fix/dcr-checkpoint-leaf to /home/alphalab/.cache/pi-stack-track1/g55-landing/fix-dcr-checkpoint-leaf.bundle, run `git bundle verify` on it, and record its sha256. Do the same for the native branch: bundle fix/operator-compact-admission against its base 61c5e26 to /home/alphalab/.cache/pi-stack-track1/g55-landing/fix-operator-compact-admission.bundle, verify, record sha256 and the native repo path.
+4. Write /home/alphalab/.cache/pi-stack-track1/g55-landing/pr-body.md: plain words, what the DCR checkpoint-leaf fix changes and why, its regression tests, suite counts, and the G52-G54 symptom results (stall, lost ask, never-compacts, bloated state pass; circular recovery parking proven with the known verifier gap; archive 404 finding).
+5. Update 12-track-1-progress.md and what-landed.md.
+6. End with exactly one line: `TRACK 1 STATUS: fix ready | branch=fix/dcr-checkpoint-leaf@<sha> | base=<main sha> | suite=pi-streams:<n>pass | bundle=<path> sha256=<hash> | native-bundle=<path> sha256=<hash> native-repo=<path> | pr-body=<path>`.
+
+Rules: no push, no merge (Grok Bot pushes and merges from your bundles). Do not touch the live pi-web services, the live native package, ~/.pi-stack, ~/.local/bin, or any session or stream except your own disposables, and leave those with drive off. No stash or reset in a live worktree. If a step fails twice, stop and report the exact finding.
