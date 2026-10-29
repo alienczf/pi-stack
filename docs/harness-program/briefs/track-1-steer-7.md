@@ -1,0 +1,22 @@
+# Track 1 steer 7 (Grok Bot, 2026-10-28 20:35 SGT) - decision G47: post-merge rollout, part 1
+
+You were compacted just before this message. Your brief is docs/harness-program/briefs/track-1.md and your record is docs/harness-program/12-track-1-progress.md; re-read the "Final current merge handoff" section and the operator-only post-merge templates there before acting.
+
+What happened since your last line (`TRACK 1 STATUS: done | heads=129415e/61c5e26 ...`):
+- Grok Bot merged feat/streams-must-fix into alienczf/pi-stack main as a fast-forward. main is now 129415e6ffe496181ff21060fd0c19f7924f17a5. PR: https://github.com/alienczf/pi-stack/pull/40 (merged 2026-10-28 20:27 SGT).
+- Grok Bot rebased and pushed (force-with-lease) docs/harness-program, feat/prime-cli (now b371748, 400 + 76 tests pass on the box) and spike/b-over-prime onto the new main. The host can fetch https://github.com/alienczf/pi-stack.git over HTTPS (read only; do not push).
+- feat/merged-poc did not rebase cleanly. It is the old prime-cli commit 6bc1242 plus 14 commits.
+
+Decision G47. ZF's GO (2026-10-23 11:35 SGT) authorises the post-merge install refresh. You run part 1 of the rollout now. Grok Bot runs the native daemon restart afterwards from outside your session, because restarting pi-web-sessiond from inside a hosted session would cut your own turn.
+
+Do these in order. Record evidence for each step in 12-track-1-progress.md under a new "G47 post-merge rollout, part 1" section. No push, no merge to main, no stash or reset in any live session worktree, never copy credentials, git holds no data.
+
+1. Rebase feat/merged-poc. In a NEW private worktree (not /home/alphalab/Projects/worktrees/pi-stack-merged-poc), fetch origin and run `git rebase --onto origin/feat/prime-cli 6bc1242 origin/feat/merged-poc` on a local branch `feat/merged-poc-rebased`. Resolve conflicts by keeping both sides' intent (TODO.md and pi-streams/engine/project.py conflicted in trial runs). Run the full pi-streams suite (`python3 -m unittest discover -s pi-streams/tests`), the prime tests (`python3 -m unittest discover -s tests`), and any suite the merged-poc branch adds. Report the new head SHA, its worktree path, and the results. Grok Bot pushes it.
+2. Refresh the live install. `~/.pi-stack` is clean at 3acf0f0 apart from an untracked TODO.md. Fetch origin and fast-forward it to 129415e only (`git merge --ff-only`). Then run `PI_STACK="$HOME/.pi-stack" PI_STACK_SKIP_SYSTEMD=1 bash "$HOME/.pi-stack/install.sh" -y`. Then `pi-streams doctor` and record its output.
+3. Migrate existing streams to the STATE.md layout (Goals, Rules, Log capped at 30, plus history/). For each stream in `~/.config/pi-streams/streams.tsv`, run `pi-streams migrate "$STREAM" --home "$INDEX" --plan > "$PLAN"`, review the plan, apply exactly that reviewed plan with `--apply "$PLAN"`, then `pi-streams upgrade "$STREAM" --home "$INDEX"`. Skip and report any stream whose plan would lose content or needs a source-free mapping. Do not interrupt a stream session mid-turn; if a stream's coordinator is streaming, migrate it at its next idle boundary or report it as pending. Run `pi-streams doctor` again at the end.
+4. Reset the pi-streams-harness stream's goal from docs/harness-program/01-scope.md (G14). Its coordinator is 01a1626a-9b8d-7983-96b5-bf27eecfd00f. Put the scope's goal into its STATE.md Goals section through the supported pi-streams path; do not hand-edit around the tool.
+5. Prepare the native pi-web upgrade, but do not install or restart anything yet. Build the deployable artifact from exact 61c5e268bd1132e421d8ccaa75f43df0f9783f68 (feat/streams-must-fix in /home/alphalab/Projects/worktrees/pi-web-streams-must-fix), record its hash, and write one script at `/home/alphalab/.cache/pi-stack-track1/rollout/install-native.sh` that installs that exact artifact over the live @jmfederico/pi-web 1.202607.3, restarts `pi-web-sessiond` and the web/API, waits for 127.0.0.1:8504 to answer, runs `pi-web doctor`, and has a matching `rollback-native.sh` that restores 1.202607.3. Dry-run what you safely can.
+6. End with exactly one line:
+`TRACK 1 STATUS: rollout-part-1 done | merged-poc=<head or blocked: reason> | pi-stack=129415e installed | doctor=<pass/fail> | migrated=<n>/<total> streams | harness-goal=<reset/blocked> | native=install-native.sh ready <artifact hash>`
+
+If a step fails in a way you cannot safely fix, record it, continue with the independent steps, and name the failure in the status line instead of looping.
