@@ -1294,3 +1294,46 @@ Main **fix/dcr-checkpoint-leaf@3e9137af06c09322cf5728ff3259cc9921de959f** and na
 No product/source, live package/service/process environment/profile/local-bin/installed-engine change, credentials operation, fallback, push/merge or genuine quota/auth/provider failure occurs. G44/Z25 trusted recovery stays closed. Shared progress remains uncommitted. No unresolved collector or proof gap is called a clean rollout.
 
 TRACK 1 STATUS: fix blocked | branch=fix/dcr-checkpoint-leaf@3e9137af06c09322cf5728ff3259cc9921de959f | suite=pi-streams:404pass,native:2415pass+2skip | symptoms=stall:pass,lost-ask:pass,circular-recovery:blocked,never-compacts:pass,bloated-state:pass | archive-01a1836f=finding | admin-compact=defect fixed | evidence=/home/alphalab/.cache/pi-stack-track1/g54-verifier/finding-circular-publication-observer-and-archive404.json
+
+## G55 fix ready, final suite green and bundles verified for owner landing
+
+Grok Bot steer14, 2026-10-29 08:55 SGT, ends verifier work and accepts circular recovery as **pass, parking proven, drive-on repeat-observation check not completed and retained as a known verifier gap**. The actual durable parked turn, exact native guard refusal, no later retry/recovery identity and unchanged bytes/usage establish the accepted property. This is the owner's G55 acceptance of existing evidence, not a new runtime check or a claim that the failed collectors passed. The old01a1836f archive404 is accepted as a recorded **nonblocking finding**. Native operator-compact deployment is outside this landing and is not a gate.
+
+Root handoff is **`/home/alphalab/.cache/pi-stack-track1/g55-landing`**. No verifier, model task, session/stream or lifecycle operation is performed. Prior failures and raw evidence remain unchanged. G54's final receipts leave the three recent owned subjects idle/off with no active DCR watcher; G55 does not requery or rearm them. G44/Z25 recovery intake stays closed.
+
+### Exact final heads, no rebase or extra commit
+
+Main **`fix/dcr-checkpoint-leaf@3e9137af06c09322cf5728ff3259cc9921de959f`** has direct parent **`129415e6ffe496181ff21060fd0c19f7924f17a5`**, one commit above the requested base. Its only changed files remain `pi-streams/engine/dcr.py` and `pi-streams/tests/test_dcr.py`. The branch already meets G55's base requirement, so it is not rebased. The local symbolic main ref is still3acf0f0; the bundle therefore explicitly excludes the required129415e SHA rather than that stale local ref. No main ref, live worktree, stash or reset is touched.
+
+There are no uncommitted repo fixes. The G54 marker, observer-directory, first-tick and lock-scope repairs belong to the one-off private runtime harness, not production code or the repository's test harness. They, all evidence and all data stay outside git. No extra commit is manufactured.
+
+Native **`fix/operator-compact-admission@5d55ab56401e941c9c95fa0d303b2b3094697e4d`** remains one commit directly above **`61c5e268bd1132e421d8ccaa75f43df0f9783f68`**, with only the three previously reviewed service/controller/test files changed. Its repo path is **`/home/alphalab/Projects/worktrees/pi-web-operator-compact`**. Both worktrees are clean and unstaged.
+
+### Full pi-streams suite once on the final head
+
+One read-only Sol6.1/xhigh test owner runs exactly **one** foreground `python3 -m unittest discover -s pi-streams/tests` on3e9137af, under private HOME/XDG roots and the proven short TMPDIR. The exclusive start marker records no automatic retry. Source HEAD/tree are identical before and after.
+
+Raw terminal is **`Ran 404 tests in 549.450s`**, then **`OK`**, exit **0**. This is a fresh full-process G55 pass, not a composite or prior result. Log SHA256 is **`a2d3775db368684ff6639ae231ceebd0df99af9c4cd2c55a38a78fbbcfb19faf`**. Evidence is `suite-started.json`, `suite-result.json`, `pi-streams-full.log` and `.exit`. The historical G53 unchanged Git-persistence assertion failure is retained and is not claimed repaired or newly attributed merely because this run passes.
+
+Native's accepted **2415 pass, two existing skips**, typecheck/lint/knip are carried from its exact5d55ab56 source verification. No native suite, package install or deployment is repeated.
+
+### Two verified incremental bundles
+
+Both bundles contain exactly their named branch head and require their exact single base prerequisite to exist in the receiving repository. They do not contain complete base history, runtime evidence or data. `git bundle verify` exits0 for each, `list-heads` matches the expected ref/SHA, and SHA256 is independently rechecked from current artifact bytes. Commands, full verification logs, headers, trees, sizes and prerequisites are retained in `bundles.json` and the per-bundle records.
+
+| Bundle under g55-landing/ | Head | Required base | SHA256 |
+|---|---|---|---|
+| `fix-dcr-checkpoint-leaf.bundle` | 3e9137af | 129415e | **dd57718d4022cbc814973b1836410223d8dccb11df69fb66bce9e876ea1b4c8d** |
+| `fix-operator-compact-admission.bundle` | 5d55ab56 | 61c5e26 | **fd857053385d60cc3c608bee864886ecf5a13cf8054746ab08796a00d073f8bf** |
+
+Main bundle is3523 bytes and advertises `refs/heads/fix/dcr-checkpoint-leaf`; native is2380 bytes and advertises `refs/heads/fix/operator-compact-admission`. Native deployment remains owner work outside this landing. Grok Bot collects, pushes and merges; this assistant performs none of those operations.
+
+### PR body, symptom acceptance and final scope
+
+Ready PR body is **`/home/alphalab/.cache/pi-stack-track1/g55-landing/pr-body.md`**. It explains terminal ACK versus physical checkpoint, strict watcher/hash/owner validation, rejection regressions, final404 pass, inherited native counts and actual G52-G54 results. Stall, lost ask, never-compacts and bloated state pass. Circular recovery passes under the G55 decision with the known drive-on repeat-observation gap explicitly preserved. The archive status/archive404 remains a finding, not deletion or successful archive. Failed collector scripts, STOP records and timings are not rewritten as clean runs.
+
+`what-landed.md`, `acceptance.json` and `results.json` record the same acceptance and source/deployment boundary. Previously landed PR40/main129415e, owner-installed native61c5e26, six of13 migrations, seven pending legacy roots and the supported harness goal reset are unchanged and are not silently cleared by this patch. The fix is ready for owner landing, not claimed already merged or installed.
+
+No source edit/commit, further verifier iteration, credentials operation, fallback, genuine quota/auth/provider failure, push/merge, live service/package/local-bin/installed-engine change or session/stream operation occurs. Shared progress stays uncommitted. No native deployment gate is reopened.
+
+TRACK 1 STATUS: fix ready | branch=fix/dcr-checkpoint-leaf@3e9137af06c09322cf5728ff3259cc9921de959f | base=129415e6ffe496181ff21060fd0c19f7924f17a5 | suite=pi-streams:404pass | bundle=/home/alphalab/.cache/pi-stack-track1/g55-landing/fix-dcr-checkpoint-leaf.bundle sha256=dd57718d4022cbc814973b1836410223d8dccb11df69fb66bce9e876ea1b4c8d | native-bundle=/home/alphalab/.cache/pi-stack-track1/g55-landing/fix-operator-compact-admission.bundle sha256=fd857053385d60cc3c608bee864886ecf5a13cf8054746ab08796a00d073f8bf native-repo=/home/alphalab/Projects/worktrees/pi-web-operator-compact | pr-body=/home/alphalab/.cache/pi-stack-track1/g55-landing/pr-body.md
