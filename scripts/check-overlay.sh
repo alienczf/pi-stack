@@ -615,8 +615,9 @@ git -C "$fake" -c user.email=t@t -c user.name=t commit -qm stub
 initial_pstack_head="$(git -C "$fake" rev-parse HEAD)"
 
 seed="$tmp/seed"
-mkdir -p "$seed"
+mkdir -p "$seed/scripts"
 cp -a "$root/install.sh" "$root/overlay" "$root/prompts" "$root/bin" "$root/skills" "$root/systemd" "$root/.gitignore" "$seed/"
+cp -a "$root/scripts/install-agent-clis.sh" "$seed/scripts/"
 git init -q "$seed"
 git -C "$seed" add .
 git -C "$seed" -c user.email=t@t -c user.name=t commit -qm seed
@@ -956,7 +957,9 @@ test ! -e "$streams_proj/streams/.git" || fail "project streams directory is a g
 test ! -e "$streams_index/.git" || fail "the index is a git repo"
 grep -F -q 'http://127.0.0.1:9' "$streams_toml" || fail "pi-web url was not recorded"
 grep -F -q 'acme/widget' "$streams_toml" || fail "coordinator model was not recorded"
-[[ "$(grep -c 'thinking = "low"' "$streams_toml")" -eq 2 ]] || fail "coordinator thinking was not recorded"
+[[ "$(grep -c 'thinking = "low"' "$streams_toml")" -eq 1 ]] || fail "coordinator thinking was not recorded independently"
+grep -F -q 'model = "openai-codex/gpt-6-luna"' "$streams_toml" || fail "independent worker model default was not recorded"
+grep -F -q 'thinking = "xhigh"' "$streams_toml" || fail "independent worker thinking default was not recorded"
 if grep -F -q 'remote = ' "$streams_toml"; then
 	fail "project file recorded a remote"
 fi
@@ -1331,7 +1334,7 @@ ask_status=$?
 set -e
 [[ "$ask_status" -eq 1 ]] || fail "install --project without -y exited $ask_status, expected 1"
 printf '%s\n' "$ask_out" | grep -F -q 'Which URL do you open pi-web at? [http://127.0.0.1:9]:' || fail "url question did not show its default"
-printf '%s\n' "$ask_out" | grep -F -q 'Which model should coordinators use? [openai-codex/gpt-6-astra]:' || fail "model question did not show its default"
+printf '%s\n' "$ask_out" | grep -F -q 'Which model should coordinators use? [openai-codex/gpt-6.1-sol]:' || fail "model question did not show its default"
 printf '%s\n' "$ask_out" | grep -F -q 'Which thinking level should coordinators use? [xhigh]:' || fail "thinking question did not show its default"
 printf '%s\n' "$ask_out" | grep -F -q 'FAIL pi-web: list failed' || fail "doctor did not fail after the setup questions"
 ask_toml="$ask_home/.config/pi-streams/projects/ask-proj.toml"
@@ -1340,7 +1343,7 @@ grep -F -q 'http://127.0.0.1:9' "$ask_toml" || fail "accepted url default was no
 if grep -F -q 'remote = ' "$ask_toml"; then
 	fail "accepted setup recorded a remote"
 fi
-grep -F -q 'openai-codex/gpt-6-astra' "$ask_toml" || fail "accepted model default was not recorded"
+grep -F -q 'openai-codex/gpt-6.1-sol' "$ask_toml" || fail "accepted model default was not recorded"
 cmp -s "$ask_home/.config/pi-web/config.json" "$tmp/pi-web-config.before" || fail "install changed pi-web config.json"
 test ! -e "$ask_home/.pi/agent/auth.json" || fail "install without -y wrote auth.json"
 

@@ -16,7 +16,8 @@ from pathlib import Path
 
 from engine import StreamsError, repo_root
 
-DEFAULT_MODEL = "openai-codex/gpt-6-astra"
+DEFAULT_MODEL = "openai-codex/gpt-6.1-sol"
+DEFAULT_WORKER_MODEL = "openai-codex/gpt-6-luna"
 DEFAULT_THINKING = "xhigh"
 DEFAULT_PI_WEB_URL = "http://127.0.0.1:8504"
 STREAM_ID = re.compile(r"^[a-z0-9][a-z0-9-]*$")
@@ -47,6 +48,12 @@ class ProjectSection:
     pi_web_url: str
     worktrees_dir: str
     pi_stack_revision: str
+    backend: str = "pi"
+    prime_binary: str = ""
+    prime_agent_dir: str = ""
+    prime_sessions_dir: str = ""
+    prime_socket: str = ""
+    poteto_path: str = ""
 
 
 @dataclass
@@ -83,6 +90,8 @@ class StreamConfig:
     pi_stack_revision: str
     remote: str = ""
     state_schema: int = 0
+    backend: str = "pi"
+    project_file: str = ""
 
 
 def _q(value: str) -> str:
@@ -114,6 +123,9 @@ def dump_project(project: Project) -> str:
         f"steer_queue_minutes = {caps.steer_queue_minutes}",
         "",
     ]
+    if info.backend != "pi":
+        lines[7:7] = [f"{key} = {_q(getattr(info, key))}" for key in (
+            "backend", "prime_binary", "prime_agent_dir", "prime_sessions_dir", "prime_socket", "poteto_path")]
     for repo in project.repos:
         lines.append("[[repos]]")
         lines.append(f"name = {_q(repo.name)}")
@@ -135,6 +147,10 @@ def dump_stream_config(config: StreamConfig) -> str:
         lines.append(f"remote = {_q(config.remote)}")
     if config.state_schema:
         lines.append(f"state_schema = {config.state_schema}")
+    if config.backend != "pi":
+        lines.append(f"backend = {_q(config.backend)}")
+    if config.project_file:
+        lines.append(f"project_file = {_q(config.project_file)}")
     return "\n".join(lines) + "\n"
 
 
@@ -167,6 +183,9 @@ def load_project(path: Path) -> Project:
                 pi_web_url=str(info["pi_web_url"]),
                 worktrees_dir=str(info["worktrees_dir"]),
                 pi_stack_revision=str(info["pi_stack_revision"]),
+                **{key: str(info.get(key, "pi" if key == "backend" else "")) for key in (
+                    "backend", "prime_binary", "prime_agent_dir", "prime_sessions_dir", "prime_socket", "poteto_path")},
+
             ),
             coordinator=ModelSettings(str(coordinator["model"]), str(coordinator["thinking"])),
             threads=ModelSettings(str(threads["model"]), str(threads["thinking"])),
@@ -215,6 +234,8 @@ def load_stream_config(path: Path) -> StreamConfig:
             pi_stack_revision=str(data["pi_stack_revision"]),
             remote=str(remote),
             state_schema=schema,
+            backend=str(data.get("backend", "pi")),
+            project_file=str(data.get("project_file", "")),
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise StreamsError(f"{path}: {exc}") from exc
@@ -533,9 +554,13 @@ def index_lock(index: Path) -> Iterator[None]:
         yield
 
 
+def _stream_lock_path(repo: Path) -> Path:
+    return Path(git(repo, "rev-parse", "--absolute-git-dir").strip()) / "pi-streams.lock"
+
+
 @contextlib.contextmanager
 def stream_lock(repo: Path) -> Iterator[None]:
-    with open(repo / ".git" / "pi-streams.lock", "a", encoding="utf-8") as handle:
+    with open(_stream_lock_path(repo), "a", encoding="utf-8") as handle:
         fcntl.flock(handle, fcntl.LOCK_EX)
         yield
 
@@ -546,7 +571,7 @@ def stream_locks(repos: list[Path]) -> Iterator[None]:
     handles: list[object] = []
     try:
         for repo in ordered:
-            handle = open(repo / ".git" / "pi-streams.lock", "a", encoding="utf-8")
+            handle = open(_stream_lock_path(repo), "a", encoding="utf-8")
             fcntl.flock(handle, fcntl.LOCK_EX)
             handles.append(handle)
         yield
@@ -603,6 +628,32 @@ def _commit_paths(repo: Path, head: str, paths: tuple[str, ...] | None, *, scope
 
 
 def commit_repo(repo: Path, message: str, *, paths: tuple[str, ...] | None = None, scope_only: bool = False) -> bool:
+    config = repo / "stream.toml"
+    if config.is_file() and load_stream_config(config).backend == "prime":
+        if paths is None:
+            owned = {"AGENTS.md", "STATE.md", "STREAM.md", "DECISIONS.md", "threads.tsv",
+                     "subscriptions.tsv", "stream.toml", ".gitignore"}
+            for directory in ("context", "handover", "checks", "history"):
+                root = repo / directory
+                if root.is_symlink():
+                    raise StreamsError("refusing symlink publication directory")
+                if root.is_dir():
+                    owned.update(str(path.relative_to(repo)) for path in root.rglob("*") if path.is_file())
+            paths = sorted(path for path in owned if (repo / path).exists() or git(repo, "ls-files", "--", path).strip())
+        normalized = []
+        for name in paths:
+            path = Path(name)
+            if path.is_absolute() or ".." in path.parts or not path.parts or path.parts[0] in {".git", ".prime", ".pi", "log", "sessions"}:
+                raise StreamsError("unauthorized publication path")
+            target = repo / path
+            if any(item.is_symlink() for item in (target, *target.parents)):
+                raise StreamsError("refusing symlink publication path")
+            normalized.append(path.as_posix())
+        staged = set(git(repo, "diff", "--cached", "--name-only", "-z").split("\0")) - {""}
+        if staged - set(normalized):
+            raise StreamsError("refusing unrelated staged paths: " + ", ".join(sorted(staged - set(normalized))))
+        paths = tuple(normalized)
+        scope_only = True
     index = Path(git(repo, "rev-parse", "--path-format=absolute", "--git-path", "index").strip())
     lock = index.with_name(index.name + ".lock")
     try:
@@ -695,6 +746,8 @@ def init_project(
     pi_web_url: str | None,
     coordinator_model: str | None,
     coordinator_thinking: str | None,
+    worker_model: str | None = None,
+    worker_thinking: str | None = None,
 ) -> Path:
     root = project_root.expanduser().resolve()
     if not root.is_dir():
@@ -726,8 +779,10 @@ def init_project(
                 assume_yes,
             )
             _validate_model(model)
-            if thinking.strip() == "":
+            if thinking.strip() == "" or worker_thinking is not None and worker_thinking.strip() == "":
                 raise StreamsError("thinking level is empty")
+            if worker_model is not None:
+                _validate_model(worker_model)
             project = Project(
                 info=ProjectSection(
                     name=root.name,
@@ -737,7 +792,8 @@ def init_project(
                     pi_stack_revision=pi_stack_revision(),
                 ),
                 coordinator=ModelSettings(model, thinking),
-                threads=ModelSettings(model, thinking),
+                threads=ModelSettings(worker_model if worker_model is not None else DEFAULT_WORKER_MODEL,
+                                      worker_thinking if worker_thinking is not None else DEFAULT_THINKING),
                 caps=Caps(),
                 repos=repos,
             )
@@ -829,26 +885,66 @@ def stream_rows(index: Path, stream_id: str | None = None) -> list[StreamRow]:
     return found
 
 
-def create_stream(index: Path, project: Project, stream_id: str) -> Path:
+def role_settings(stream: Path, role: str, model=None, thinking=None) -> ModelSettings:
+    settings = ModelSettings(DEFAULT_MODEL if role == "coordinator" else DEFAULT_WORKER_MODEL, DEFAULT_THINKING)
+    path = Path(stream) / "stream.toml"
+    if path.is_file():
+        config = load_stream_config(path)
+        if config.project_file:
+            project = load_project(Path(config.project_file))
+            if project.info.name != config.project or Path(project.info.root) / "streams" / Path(stream).name != Path(stream):
+                raise StreamsError("stream project configuration does not match its assigned path")
+            settings = project.coordinator if role == "coordinator" else project.threads
+    return ModelSettings(settings.model if model is None else model, settings.thinking if thinking is None else thinking)
+
+
+def create_stream(index: Path, project: Project, stream_id: str, *, backend: str | None = None) -> Path:
     if STREAM_ID.fullmatch(stream_id) is None:
         raise StreamsError(f"invalid stream id: {stream_id}")
     existing = [
         row for row in load_stream_rows(index) if row.id == stream_id and row.project == project.info.name
     ]
-    dest = Path(existing[0].path) if existing else (Path(project.info.root) / "streams" / stream_id).resolve()
+    dest = Path(existing[0].path) if existing else Path(project.info.root) / "streams" / stream_id
+    expected = Path(os.path.abspath(Path(project.info.root) / "streams" / stream_id))
+    lexical = Path(os.path.abspath(dest))
+    if any(path.is_symlink() for path in (lexical, *lexical.parents)):
+        raise StreamsError("refusing symlink in stream path or ancestors")
+    dest = lexical
     fresh = not (dest / "stream.toml").is_file()
     assert_artifacts_ready(dest)
+    recorded_backend = load_stream_config(dest / "stream.toml").backend if not fresh else None
+    backend = backend or recorded_backend or project.info.backend
+    if backend == "prime" and dest != expected:
+        raise StreamsError("registered Prime stream path escapes its project stream directory")
+    if backend not in {"pi", "prime"} or recorded_backend not in {None, backend}:
+        raise StreamsError("stream backend conflicts with existing stream")
+    if backend == "prime" and (dest.is_symlink() or any((dest / name).is_symlink() for name in ("AGENTS.md", "STATE.md", "threads.tsv", "history"))):
+        raise StreamsError("refusing symlink in Prime stream")
+    if fresh and backend == "prime" and any((dest / name).exists() for name in ("AGENTS.md", "STATE.md")):
+        raise StreamsError("refusing to replace existing stream instructions or current work")
     dest.mkdir(parents=True, exist_ok=True)
     ensure_git(dest)
-    if not fresh and load_stream_config(dest / "stream.toml").state_schema != TEMPLATE_STATE_SCHEMA:
-        raise StreamsError("stream/template STATE schema mismatch; explicit migration is required")
-    copy_missing(templates_dir() / "stream", dest)
+    if backend == "prime":
+        from engine.state import _publish, check_state
+        if fresh:
+            for name in ("AGENTS.md", "STATE.md"):
+                _publish(dest / name, (templates_dir() / "prime" / name).read_text(encoding="utf-8"), immutable=True)
+            _publish(dest / "threads.tsv", (templates_dir() / "stream" / "threads.tsv").read_text(encoding="utf-8"), immutable=True)
+        (dest / "history").mkdir(exist_ok=True)
+        check_state(dest)
+    else:
+        if not fresh and load_stream_config(dest / "stream.toml").state_schema != TEMPLATE_STATE_SCHEMA:
+            raise StreamsError("stream/template STATE schema mismatch; explicit migration is required")
+        copy_missing(templates_dir() / "stream", dest)
     if fresh:
         save_stream_config(
             dest,
-            StreamConfig(project=project.info.name, pi_stack_revision=pi_stack_revision(), state_schema=TEMPLATE_STATE_SCHEMA),
+            StreamConfig(project=project.info.name, pi_stack_revision=pi_stack_revision(), backend=backend,
+                         state_schema=TEMPLATE_STATE_SCHEMA if backend == "pi" else 0,
+                         project_file=str(project_file(index, project.info.name).resolve()) if backend == "prime" else ""),
         )
-        seed_context(dest, project.repos)
+        if backend == "pi":
+            seed_context(dest, project.repos)
     upsert_stream_row(index, StreamRow(id=stream_id, path=str(dest), project=project.info.name))
     return dest
 
@@ -857,11 +953,11 @@ def _protected(relative: Path) -> bool:
     return relative.parts[:1] in {("context",), ("history",), ("failures",)} or relative.as_posix() in PROTECTED_STREAM_FILES
 
 
-def _template_bytes(revision: str, relative: str) -> bytes | None:
+def _template_bytes(revision: str, relative: str, template: str = "stream") -> bytes | None:
     if revision == "":
         return None
     proc = subprocess.run(
-        ["git", "-C", os.fspath(repo_root()), "show", f"{revision}:pi-streams/templates/stream/{relative}"],
+        ["git", "-C", os.fspath(repo_root()), "show", f"{revision}:pi-streams/templates/{template}/{relative}"],
         capture_output=True,
         check=False,
     )
@@ -873,11 +969,14 @@ def _template_bytes(revision: str, relative: str) -> bytes | None:
 def upgrade_stream(repo: Path, stream_id: str) -> bool:
     assert_artifacts_ready(repo)
     config = load_stream_config(repo / "stream.toml")
-    if config.state_schema != TEMPLATE_STATE_SCHEMA:
+    if config.backend == "pi" and config.state_schema != TEMPLATE_STATE_SCHEMA:
         raise StreamsError("stream/template STATE schema mismatch; explicit migration is required")
     recorded = config.pi_stack_revision
     current = pi_stack_revision()
-    source_root = templates_dir() / "stream"
+    source_root = templates_dir() / ("prime" if config.backend == "prime" else "stream")
+    if config.backend == "prime":
+        from engine.state import check_state
+        check_state(repo)
     for dirpath, _dirnames, filenames in os.walk(source_root):
         relative_dir = Path(dirpath).relative_to(source_root)
         if relative_dir.parts[:1] == ("context",):
@@ -893,13 +992,36 @@ def upgrade_stream(repo: Path, stream_id: str) -> bool:
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(new)
                 continue
-            old = _template_bytes(recorded, relative.as_posix())
+            old = _template_bytes(recorded, relative.as_posix(), source_root.name)
             have = target.read_bytes()
             if old is not None and have == old and have != new:
-                target.write_bytes(new)
+                if config.backend == "prime":
+                    from engine.state import _publish
+                    _publish(target, new.decode("utf-8"))
+                else:
+                    target.write_bytes(new)
     config.pi_stack_revision = current
     text = dump_stream_config(config)
     path = repo / "stream.toml"
     if not path.is_file() or path.read_text(encoding="utf-8") != text:
         save_stream_config(repo, config)
     return commit_repo(repo, f"pi-streams upgrade {stream_id}")
+
+
+def write_prime_settings(stream: Path, threshold_percent: float) -> Path:
+    import math
+    from engine.state import _publish
+    if isinstance(threshold_percent, bool) or not isinstance(threshold_percent, (int, float)) or not math.isfinite(threshold_percent) or not 0 < threshold_percent <= 100:
+        raise StreamsError("compaction percentage must be finite, greater than zero and at most 100")
+    path = stream / ".prime" / "agent" / "settings.json"
+    if any(item.is_symlink() for item in (stream, *stream.parents, path.parent, path.parent.parent, path)):
+        raise StreamsError("refusing symlink settings path")
+    data = {"compaction": {"enabled": False, "agentCallable": False, "thresholdPercent": threshold_percent}}
+    text = json.dumps(data, sort_keys=True, allow_nan=False) + "\n"
+    if path.exists():
+        if path.read_text() != text:
+            raise StreamsError("owned Prime settings conflict; never reconfigure a constructed session")
+        return path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _publish(path, text, immutable=True)
+    return path

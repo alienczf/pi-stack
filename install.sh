@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [[ "${1-}" == "--merged-poc" ]]; then
+	shift
+	root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+	exec python3 "$root/pi-streams/engine/install_prime.py" "$@"
+fi
+
 pstack_skill_names=(
 	poteto-mode
 	how
@@ -22,7 +28,9 @@ usage() {
 	cat <<'EOF'
 usage: install.sh [-y] [--project <root>] [--pi-web-url <url>]
                   [--coordinator-model <provider/id>] [--coordinator-thinking <level>]
+                  [--worker-model <provider/id>] [--worker-thinking <level>]
                   [--print-pstack-skills] [--check-streams-capabilities]
+       install.sh --merged-poc --help
 
 Copies the pi-stack overlay into $HOME/.pi/agent.
 Installs poteto-agent and retires the six old role profiles in $HOME/.pi/agent/agents/.
@@ -37,7 +45,9 @@ npm:pi-web-access and npm:pi-subagents.
 Removes retired npm registrations and managed installs; backs up changed settings.
 PI_STACK_SKIP_PACKAGES=1 defers physical package removal until a normal install.
 Rewrites cursor/* subagent models to inherit. Links update-pstack into ~/.local/bin.
-Links pi-streams to this checkout. Installs the stream and stream-kickoff skills
+Links pi-streams, agent-cli, prime-cli, and prime-cli-remote to this checkout.
+The Prime clients do not install or start Prime or change its credentials.
+Installs the stream and stream-kickoff skills
 and the stream prompt. With --project, or once pi-streams has a registered home,
 also installs pi-web-cli into ~/.local/bin, pi-web when it is missing, and the
 tick timer. With --project, runs pi-streams init and then pi-streams doctor.
@@ -61,7 +71,11 @@ Options
   --coordinator-model <provider/id>
                 model coordinators use
   --coordinator-thinking <level>
-                thinking level coordinators use
+                thinking level coordinators use (default xhigh)
+  --worker-model <provider/id>
+                independent worker model (default openai-codex/gpt-6-luna)
+  --worker-thinking <level>
+                independent worker thinking (default xhigh)
   --print-pstack-skills  print the pstack skill roots selected by pi-stack
   --check-streams-capabilities
                 read-only integrated receiving safety preflight; no install or timer action
@@ -135,6 +149,7 @@ have_coordinator_model=0
 coordinator_model=""
 have_coordinator_thinking=0
 coordinator_thinking=""
+worker_args=()
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
 	usage
@@ -187,6 +202,11 @@ while [[ $# -gt 0 ]]; do
 		have_coordinator_thinking=1
 		shift 2
 		;;
+	--worker-model|--worker-thinking)
+		require_value "$@"
+		worker_args+=("$1" "$2")
+		shift 2
+		;;
 	*)
 		usage >&2
 		exit 2
@@ -195,7 +215,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ "$print_skills" == 1 ]]; then
-	if [[ "$assume_yes" == 1 || "$have_project" == 1 || "$have_pi_web_url" == 1 || "$have_coordinator_model" == 1 || "$have_coordinator_thinking" == 1 || "$check_streams" == 1 ]]; then
+	if [[ "$assume_yes" == 1 || "$have_project" == 1 || "$have_pi_web_url" == 1 || "$have_coordinator_model" == 1 || "$have_coordinator_thinking" == 1 || "$check_streams" == 1 || "${#worker_args[@]}" != 0 ]]; then
 		usage >&2
 		exit 2
 	fi
@@ -518,7 +538,7 @@ ensure_pi_web() {
 }
 
 run_project_setup() {
-	local cmd=("${HOME}/.local/bin/pi-streams" init "$project_root")
+	local cmd=("${HOME}/.local/bin/pi-streams" init "$project_root" "${worker_args[@]}")
 	if [[ "$have_pi_web_url" == 1 ]]; then
 		cmd+=(--pi-web-url "$pi_web_url")
 	fi
@@ -564,6 +584,7 @@ if [[ "$have_project" == 1 ]] || { [[ -f "$streams_homes" ]] && grep -q '[^[:spa
 	streams_in_use=1
 fi
 link_pi_streams
+bash "$here/scripts/install-agent-clis.sh"
 if [[ "$streams_in_use" == 1 ]]; then
 	install_pi_web_cli
 fi

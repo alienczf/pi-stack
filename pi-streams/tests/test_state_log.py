@@ -52,7 +52,7 @@ class LogTests(unittest.TestCase):
     def setUp(self) -> None:
         self.stream = Path(tempfile.mkdtemp(prefix="pi-streams-log-"))
         self.addCleanup(lambda: shutil.rmtree(self.stream))
-        (self.stream / ".git").mkdir()
+        project.git(self.stream, "init", "--quiet")
         (self.stream / "stream.toml").write_text('project = "private"\npi_stack_revision = "abc"\nstate_schema = 1\n')
         (self.stream / "STATE.md").write_bytes(PREFIX)
         self.metadata_path = self.stream / "log/tick-state.json"

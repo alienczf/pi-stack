@@ -610,35 +610,44 @@ def tick_index(index: Path, now: datetime) -> bool:
             health = report.streams[str(repo.resolve())]
             health.started = clock.stamp(clock.now())
             try:
-                with stream_lock(repo):
-                    bindings = [current for current in load_stream_rows(index) if current.id == row.id and current.project == row.project]
-                    if len(bindings) != 1 or Path(bindings[0].path).resolve() != repo.resolve():
-                        raise StreamsError("registered stream binding changed; refusing an unknown writer target")
-                    history = artifacts._rotate_log_locked(repo)
-                    project = projects.get(row.project)
-                    if project is None:
-                        raise StreamsError(f"stream {row.id} names missing project {row.project}")
-                    run = StreamTick(index, project, row.id, repo, now, alerts, claims.get(row.id))
-                    run.run()
-                    health.errors.extend(run.errors)
-                    for error in run.errors:
-                        print(f"{row.path}: {error}", file=sys.stderr, flush=True)
-                    counts = Counter(event.kind for event in run.events)
-                    if counts:
-                        counted = "\t".join(f"{kind}={counts[kind]}" for kind in sorted(counts))
-                        print(f"{row.path}\t{counted}", flush=True)
-                    try:
-                        commit_repo(repo, "pi-streams tick", paths=tuple(history))
-                        if history:
-                            artifacts._acknowledge_history_locked(repo)
-                    except (StreamsError, OSError) as exc:
-                        health.errors.append(str(exc))
-                        print(f"{row.path}: {exc}", file=sys.stderr, flush=True)
-                    try:
-                        push_repo(repo, load_stream_config(repo / "stream.toml").remote)
-                    except (StreamsError, OSError) as exc:
-                        health.errors.append(str(exc))
-                        print(f"{row.path}: {exc}", file=sys.stderr, flush=True)
+                bindings = [current for current in load_stream_rows(index) if current.id == row.id and current.project == row.project]
+                if len(bindings) != 1 or Path(bindings[0].path).resolve() != repo.resolve():
+                    raise StreamsError("registered stream binding changed; refusing an unknown writer target")
+                project = projects.get(row.project)
+                if project is not None and project.info.backend == "prime":
+                    from engine.prime import PrimeClient, resolve_session, coordinator_id
+                    with PrimeClient(project.info.prime_socket) as client:
+                        identity, _ = resolve_session(client, coordinator_id(repo))
+                        wake_prime_if_needed(client, repo, identity, sessions_dir=project.info.prime_sessions_dir)
+                else:
+                    with stream_lock(repo):
+                        bindings = [current for current in load_stream_rows(index) if current.id == row.id and current.project == row.project]
+                        if len(bindings) != 1 or Path(bindings[0].path).resolve() != repo.resolve():
+                            raise StreamsError("registered stream binding changed; refusing an unknown writer target")
+                        history = artifacts._rotate_log_locked(repo)
+                        if project is None:
+                            raise StreamsError(f"stream {row.id} names missing project {row.project}")
+                        run = StreamTick(index, project, row.id, repo, now, alerts, claims.get(row.id))
+                        run.run()
+                        health.errors.extend(run.errors)
+                        for error in run.errors:
+                            print(f"{row.path}: {error}", file=sys.stderr, flush=True)
+                        counts = Counter(event.kind for event in run.events)
+                        if counts:
+                            counted = "\t".join(f"{kind}={counts[kind]}" for kind in sorted(counts))
+                            print(f"{row.path}\t{counted}", flush=True)
+                        try:
+                            commit_repo(repo, "pi-streams tick", paths=tuple(history))
+                            if history:
+                                artifacts._acknowledge_history_locked(repo)
+                        except (StreamsError, OSError) as exc:
+                            health.errors.append(str(exc))
+                            print(f"{row.path}: {exc}", file=sys.stderr, flush=True)
+                        try:
+                            push_repo(repo, load_stream_config(repo / "stream.toml").remote)
+                        except (StreamsError, OSError) as exc:
+                            health.errors.append(str(exc))
+                            print(f"{row.path}: {exc}", file=sys.stderr, flush=True)
             except (StreamsError, OSError) as exc:
                 health.errors.append(str(exc))
                 print(f"{row.path}: {exc}", file=sys.stderr, flush=True)
@@ -654,6 +663,36 @@ def tick_index(index: Path, now: datetime) -> bool:
         report.ok = all(stream.ok for stream in report.streams.values()) and not report.errors
         publish()
         return report.ok
+
+
+def wake_prime_if_needed(client, stream, identity, *, sessions_dir=None):
+    from engine import state
+    from engine.prime import stream_entries, eligible, resolve_session, send_stream_message, check_compaction, observe_workers
+    from engine.prompts import render
+    maintenance = check_compaction(client, stream, identity, sessions_dir=sessions_dir)
+    if maintenance["status"] in {"verified", "held", "deferred", "unknown"} and maintenance.get("reason") != "native percentage is unknown":
+        return None
+    current, entries = stream_entries(stream)
+    worker_activity = observe_workers(client, current, entries)
+    if not eligible(current, entries, worker_activity):
+        return None
+    _, connection = resolve_session(client, identity.session_id, identity.active_session_id)
+    summary = client.query("get_state", activeSessionId=identity.active_session_id)
+    queue = client.query("get_queue", activeSessionId=identity.active_session_id)
+    if any(connection.get(flag) is not False for flag in ("isStreaming", "isCompacting", "isBashRunning")):
+        return None
+    if summary.get("hasRunningSubagents") is not False or queue.get("steering") != [] or queue.get("followUp") != []:
+        return None
+    leaf = connection.get("leafId")
+    if not isinstance(leaf, str):
+        return None
+    key = [identity.session_id, state.sha256(current.goals.objective), leaf]
+    if any(entry.body.get("wake_key") == key for entry in entries.values()):
+        return None
+    return send_stream_message(client, stream, identity, body=render("wake"), mode="automatic",
+                               expected=current.goals_rules_sha256,
+                               metadata={"wake_key": key, "worker_activity": {sid: observed.value for sid, observed in worker_activity.items()}},
+                               original_entries=[w.original_entry for w in current.goals.work], sessions_dir=sessions_dir)
 
 
 def run_tick(indexes: list[Path]) -> int:

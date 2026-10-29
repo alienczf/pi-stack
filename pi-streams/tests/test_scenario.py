@@ -83,7 +83,7 @@ class ScenarioTests(EngineCase):
         return [(method, path) for method, path, _query, _body in self.stub.requests]
 
     def test_a_stream_from_init_to_rotation(self) -> None:
-        init = self.run_streams("init", str(self.root), "-y")
+        init = self.run_streams("init", str(self.root), "-y", "--coordinator-model", "openai-codex/gpt-6-astra", "--worker-model", "openai-codex/gpt-6-astra")
         self.assertEqual(init.returncode, 0, init.stderr)
         stream = str((self.home / "etl").resolve())
         worktree = str((self.root / ".worktrees" / "alpha" / "etl-datapull").resolve())

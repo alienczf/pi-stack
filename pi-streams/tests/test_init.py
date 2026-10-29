@@ -12,7 +12,7 @@ def expected_toml(
     worktrees_dir: str,
     repos: list[tuple[str, str, list[tuple[str, str]]]],
     url: str = "http://127.0.0.1:8504",
-    model: str = "openai-codex/gpt-6-astra",
+    model: str = "openai-codex/gpt-6.1-sol",
     thinking: str = "xhigh",
 ) -> str:
     lines = [
@@ -28,8 +28,8 @@ def expected_toml(
         f'thinking = "{thinking}"',
         "",
         "[threads]",
-        f'model = "{model}"',
-        f'thinking = "{thinking}"',
+        'model = "openai-codex/gpt-6-luna"',
+        'thinking = "xhigh"',
         "",
         "[caps]",
         "thread_handover_tokens = 150000",
@@ -121,11 +121,17 @@ class InitTests(EngineCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         text = self.project_file.read_text(encoding="utf-8")
         self.assertIn('pi_web_url = "http://127.0.0.1:9999"', text)
-        self.assertEqual(text.count('model = "acme/widget"'), 2)
-        self.assertEqual(text.count('thinking = "low"'), 2)
-        self.assertNotIn("gpt-6-astra", text)
-        self.assertNotIn("xhigh", text)
+        self.assertEqual(text.count('model = "acme/widget"'), 1)
+        self.assertEqual(text.count('thinking = "low"'), 1)
+        self.assertIn('[threads]\nmodel = "openai-codex/gpt-6-luna"\nthinking = "xhigh"', text)
         self.assertNotIn("remote = ", text)
+
+    def test_worker_flags_do_not_replace_coordinator_defaults(self) -> None:
+        proc = self.run_streams("init", str(self.root), "-y", "--worker-model", "custom/worker", "--worker-thinking", "low")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        text = self.project_file.read_text()
+        self.assertIn('[coordinator]\nmodel = "openai-codex/gpt-6.1-sol"\nthinking = "xhigh"', text)
+        self.assertIn('[threads]\nmodel = "custom/worker"\nthinking = "low"', text)
 
     def test_pi_web_url_comes_from_config(self) -> None:
         config = self.user_home / ".config" / "pi-web"
@@ -160,7 +166,7 @@ class InitTests(EngineCase):
         self.assertNotIn("http://127.0.0.1:8504", text)
         self.assertIn('branch = "feat-b"', text)
         self.assertIn(str(extra.resolve()), text)
-        self.assertIn('model = "openai-codex/gpt-6-astra"', text)
+        self.assertIn('model = "openai-codex/gpt-6.1-sol"', text)
 
 
 if __name__ == "__main__":

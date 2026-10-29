@@ -24,7 +24,7 @@ class GeneratedStateContractTests(EngineCase):
         self.stub.set_routes([
             ("GET", "/api/sessions", 200, []),
             ("POST", "/api/sessions", 200, {"id": "coord-contract", "cwd": str(self.home / "contract")}),
-            ("GET", "/api/sessions/coord-contract/status", 200, status_body("coord-contract")),
+            ("GET", "/api/sessions/coord-contract/status", 200, status_body("coord-contract", model_id="gpt-6.1-sol")),
             ("POST", "/api/sessions/coord-contract/prompt", 200, {"accepted": True}),
         ])
         result = self.run_streams("new", "contract")
@@ -32,7 +32,7 @@ class GeneratedStateContractTests(EngineCase):
         self.stream = self.home / "contract"
         self.stub.set_routes([
             ("GET", "/api/sessions", 200, [{"id": "coord-contract", "cwd": str(self.stream)}]),
-            ("GET", "/api/sessions/coord-contract/status", 200, status_body("coord-contract")),
+            ("GET", "/api/sessions/coord-contract/status", 200, status_body("coord-contract", model_id="gpt-6.1-sol")),
         ])
 
     def test_new_stream_has_only_current_state_seeds_and_is_explicitly_unratified(self) -> None:
@@ -112,9 +112,9 @@ class GeneratedStateContractTests(EngineCase):
         self.stub.requests.clear()
         self.stub.set_routes([
             ("GET", "/api/sessions", 200, [{"id": "coord-contract", "cwd": str(self.stream)}]),
-            ("GET", "/api/sessions/coord-contract/status", 200, status_body("coord-contract")),
+            ("GET", "/api/sessions/coord-contract/status", 200, status_body("coord-contract", model_id="gpt-6.1-sol")),
             ("POST", "/api/sessions", 200, {"id": "coord-next", "cwd": str(self.stream)}),
-            ("GET", "/api/sessions/coord-next/status", 200, status_body("coord-next")),
+            ("GET", "/api/sessions/coord-next/status", 200, status_body("coord-next", model_id="gpt-6.1-sol")),
             ("POST", "/api/sessions/coord-next/prompt", 200, {"accepted": True}),
         ])
         self.author_coordinator_checkpoint(self.stream, "coord-contract")

@@ -152,7 +152,7 @@ def rotation(stream: str, path: Path) -> str:
 class TickCase(EngineCase):
     def setUp(self) -> None:
         super().setUp()
-        proc = self.run_streams("init", str(self.root), "-y")
+        proc = self.run_streams("init", str(self.root), "-y", "--coordinator-model", "openai-codex/gpt-6-astra", "--worker-model", "openai-codex/gpt-6-astra")
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.stub.reflect_delivery_ids = True
         self.stub.simulate_session_lifecycle = True
