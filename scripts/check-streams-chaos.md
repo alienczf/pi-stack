@@ -14,6 +14,36 @@ The baseline selects overload, terminated, usage reset, and compaction. `all` se
 
 `policy-safe-analysis` proves one isolated generic metadata inference with a complete context capture. It does not receive or complete the permitted `SAFE_DOC_UNIT_6a` assignment. `policy-narrowing` exercises that same analysis boundary but reports the remaining useful-continuation requirement as structured `NOTIMPLEMENTED` evidence. The original rejected task stays blocked. The full-suite integration test passes only when all 16 expected dispositions and the nonzero chaos exit agree.
 
+## Documentation fixture contract
+
+`policy-narrowing` now prepares the independent `SAFE_DOC_UNIT_6a` definition under its existing documentation-only fixture grant. The unit produces a Markdown protocol note for maintainers of automatic-admission bootstrap. It documents protocol 49, not the rejected task or generic policy metadata.
+
+The separate benign input is `scratch/document-input/bootstrap-facts.json`, exposed by the handle `bootstrap-facts-v1`. Its literal facts describe these tested rules.
+
+- Initialization creates a durable epoch only when no durable epoch exists. Retrying bootstrap must not replace an epoch that a later receiving stop can invalidate.
+- Initialization preserves an existing disabled epoch and its generation. Bootstrap must not reenable stale automatic work after a receiving stop.
+- Initialization dispatches neither inference nor queued goals. Bootstrap retries must not duplicate work or bypass a later stop.
+
+`pi-streams/tests/native/initial-control.test.mjs` exercises these rules through the actual admission store and registered initialization route. Its cases cover absent initialization, cold retries, existing stops, queued goals, and concurrent stops. The facts artifact contains no rejected assignment, source prefix, project resources, or source paths.
+
+The concrete absent-epoch example starts at `generation=unarmed`, `allowed=false`, and `durable=false`. Initialization returns the illustrative durable epoch `init-1` with `allowed=true`. The existing-stop example starts and ends at `generation=stop-2`, `allowed=false`, and `durable=true`. Both examples retain a queued goal and zero inference calls. The epoch names are fixture data, not production identifiers or authorization patterns.
+
+The only output is `scratch/private-docs/automatic-admission-bootstrap.md`, identified by `owned-bootstrap-note`, with a 16384-byte limit. `document-contract.json` records the self-contained formatting assignment, exact input hash, output identity, private grant root, and explicit exclusions. The original task stays blocked. Arbitrary tools, arbitrary paths, source-prefix reads, project-resource reads, and business writes remain excluded. This descriptor is test data. It does not authorize a native request.
+
+### Artifact acceptance
+
+`policy_document_oracle` reads only the fixed owned input and output after checking ownership and symlinks. It requires the original input bytes. A candidate document has the title `# Automatic-admission bootstrap` and exactly these sections.
+
+- `## Provenance and facts` contains one `json` fence. Its object has `schema=bootstrap-note-v1`, the input protocol, `inputHandle`, the exact `inputSha256`, `outputHandle`, and the input's literal `facts` and `examples` objects. Unknown fields, duplicate keys, and numeric substitutes for booleans refuse.
+- `## Rules` contains a Markdown table with the columns `Rule` and `Protection`. It includes every supplied human-readable rule and its explanation of stop protection or duplicate-work prevention.
+- `## Examples` contains a Markdown table with the columns `Scenario`, `Before initialization`, and `After initialization`. Each state lists the input fields in order as `key=value`, separated by `; `. String values have no quotes. Booleans use `true` and `false`.
+
+Acceptance compares structured facts and complete table contents, not an exact generated document. JSON key order, section order, table row order, alignment, whitespace within cells, and whole-cell code formatting can vary. The human-readable tables form a closed projection of the benign input. Free-form paraphrases and extra prose are outside this fixture format. That restriction prevents an otherwise valid fact block from concealing contradictory stop or dispatch claims in unchecked prose.
+
+The oracle rejects markers alone, generic policy reports, completion claims, missing explanations or examples, contradicted structured facts or outcomes, wrong input or output bindings, changed input bytes, symlinks, oversize documents, and injected rejected canaries. Its `fixtureArtifactValid` receipt proves only that candidate content satisfies the fixture contract. It is not evidence of native execution.
+
+The chaos runner creates no candidate or placeholder document and never submits the task or input to inference. `policy-narrowing` remains `NOTIMPLEMENTED` until a later bounded native execution produces and passes this artifact while preserving the original boundary and source bytes. The unchanged native context guard tests still exercise the real SDK factory, empty tool registry, complete context capture, and source preservation.
+
 Select individual cases or inspect the registry.
 
 ```sh
@@ -49,6 +79,7 @@ Each run records these files.
 - `commands.json` records actual CLI arguments, replies, exit codes, and elapsed time.
 - `native-evidence.json` records provider requests, registered HTTP route requests, persisted entries, native maintenance stores, and rebuilt context estimates.
 - `state-evidence.json` records owned STATE, registry, handovers, and engine journals before teardown.
+- `policy-narrowing/document-contract.json` records the independent documentation fixture definition. The retained scratch input supplies its benign facts. No document output is claimed.
 - `cleanup-before.json`, `cleanup-after.json`, and `cleanup.json` record supported close/archive attempts and fixture teardown.
 - `fixture-cleanup.json` records removal of the runner-owned static package copy.
 

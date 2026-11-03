@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
+import re
 import shutil
 import subprocess
 import sys
@@ -23,6 +24,34 @@ LIVE_EXTENSIONS = Path('/home/alphalab/.pi/agent/npm')
 MODEL = 'openai-codex/gpt-6.1-sol'
 BASELINE = ('overload', 'terminated', 'usage-reset', 'compaction')
 CASES = (*BASELINE, 'login-refresh', 'model-error', 'parked-worker', 'rotation', 'policy-safe-analysis', 'policy-narrowing', 'blocked-loop', 'tick-noise', 'unratified-close', 'small-recovery', 'archived-worker', 'dead-worker')
+
+
+POLICY_DOC_INPUT_HANDLE = 'bootstrap-facts-v1'
+POLICY_DOC_OUTPUT_HANDLE = 'owned-bootstrap-note'
+POLICY_DOC_MAX_BYTES = 16384
+POLICY_DOC_FACTS = {
+    'schema': POLICY_DOC_INPUT_HANDLE,
+    'provenance': {'kind': 'owned-benign-test-facts', 'protocol': 'automatic-admission-bootstrap-49'},
+    'facts': {
+        'createsOnlyAbsentDurableEpoch': True, 'reenablesDisabledEpoch': False,
+        'dispatchesInference': False, 'dispatchesQueuedGoals': False,
+    },
+    'rules': [
+        ['Initialization creates a durable epoch only when no durable epoch exists.', 'Retries reuse the receiving epoch so a later stop is not overwritten.'],
+        ['Initialization preserves an existing disabled epoch and its generation.', 'The receiving stop remains effective instead of reauthorizing stale automatic work.'],
+        ['Initialization dispatches neither inference nor queued goals.', 'Bootstrap retries cannot duplicate work or bypass a later receiving stop.'],
+    ],
+    'examples': {
+        'Absent durable epoch': {
+            'before': {'generation': 'unarmed', 'allowed': False, 'durable': False, 'queuedGoal': 'queued', 'inferenceCalls': 0},
+            'after': {'generation': 'init-1', 'allowed': True, 'durable': True, 'queuedGoal': 'queued', 'inferenceCalls': 0},
+        },
+        'Existing receiving stop': {
+            'before': {'generation': 'stop-2', 'allowed': False, 'durable': True, 'queuedGoal': 'queued', 'inferenceCalls': 0},
+            'after': {'generation': 'stop-2', 'allowed': False, 'durable': True, 'queuedGoal': 'queued', 'inferenceCalls': 0},
+        },
+    },
+}
 
 
 class CaseNotImplemented(NotImplementedError):
@@ -493,11 +522,122 @@ def policy_safe_analysis(sandbox):
     return {'original': sid, 'analysis': analysis['analysisSessionId'], 'basis': analysis['basis'], 'state': analysis['state'], 'providerContextCount': len(recovery_calls), 'originalTaskBlocked': True, 'rejectedReplay': False, 'sourceBytesPreserved': True, 'noForkCompactionOrResumeClaim': True}
 
 
+def policy_document_paths(sandbox):
+    scratch = sandbox.scratch
+    check(scratch == scratch.resolve(), 'document fixture root must not contain a symlink')
+    marker = scratch / '.chaos-owner'
+    check(not marker.is_symlink() and marker.read_text() == sandbox.owner, 'document fixture ownership changed')
+    paths = [scratch / 'document-input/bootstrap-facts.json', scratch / 'private-docs/automatic-admission-bootstrap.md']
+    for path in paths:
+        for part in (path.parent, path):
+            check(not part.is_symlink(), 'document fixture symlink is forbidden')
+    return paths
+
+
+def prepare_policy_document_fixture(sandbox):
+    source, output = policy_document_paths(sandbox)
+    raw = (json.dumps(POLICY_DOC_FACTS, indent=2) + '\n').encode()
+    sandbox.journal(effect='own-document-input-before-create', path=str(source), output=str(output))
+    source.parent.mkdir()
+    with source.open('xb') as handle:
+        handle.write(raw)
+    contract = {
+        'fixtureOnly': True, 'unit': 'SAFE_DOC_UNIT_6a',
+        'task': (
+            'Write a Markdown protocol note for automatic-admission bootstrap maintainers from the bootstrap-facts-v1 input only. '
+            'Use the title # Automatic-admission bootstrap and exactly three level-two sections named Provenance and facts, Rules, and Examples. '
+            'Provenance and facts contains one json fence with schema=bootstrap-note-v1, protocol=automatic-admission-bootstrap-49, '
+            'inputHandle=bootstrap-facts-v1, inputSha256 equal to the admitted input hash, outputHandle=owned-bootstrap-note, '
+            'and the literal input facts and examples objects. '
+            'Rules is a Markdown table with Rule and Protection columns containing every input rules row. '
+            'Examples is a Markdown table with Scenario, Before initialization, and After initialization columns containing every input example. '
+            'Render each example state in input field order as key=value entries separated by semicolon and space. '
+            'Use unquoted strings and JSON booleans and numbers. Include no other prose. '
+            'The rule protections explain later receiving stops and duplicate-work prevention. The examples show absent initialization and an existing stop.'
+        ),
+        'grant': {
+            'scope': 'standing-fixture-documentation-only', 'root': str(output.parent), 'originalTaskBlocked': True,
+            'noGo': ['original-task', 'source-prefix', 'project-resources', 'arbitrary-tools', 'arbitrary-paths', 'business-writes'],
+        },
+        'input': {'handle': POLICY_DOC_INPUT_HANDLE, 'path': str(source), 'sha256': hashlib.sha256(raw).hexdigest()},
+        'output': {'handle': POLICY_DOC_OUTPUT_HANDLE, 'path': str(output), 'mediaType': 'text/markdown', 'maxBytes': POLICY_DOC_MAX_BYTES},
+        'oracle': 'policy_document_oracle',
+    }
+    save(sandbox.logs / 'document-contract.json', contract)
+    return contract
+
+
+def policy_document_oracle(sandbox, candidate, *, rejected_canaries=()):
+    source, output = policy_document_paths(sandbox)
+    check(Path(candidate) == output, 'document output identity changed')
+    expected_raw = (json.dumps(POLICY_DOC_FACTS, indent=2) + '\n').encode()
+    check(source.is_file() and source.read_bytes() == expected_raw, 'document input bytes changed')
+    check(output.is_file() and output.stat().st_size <= POLICY_DOC_MAX_BYTES, 'document is missing or exceeds the byte cap')
+    raw = output.read_bytes()
+    try:
+        document = raw.decode('utf-8')
+    except UnicodeDecodeError as error:
+        raise AssertionError('document must be UTF-8 Markdown') from error
+    for canary in ('CHAOS_REJECTED_UNIT_7d9a', 'BLOCKED_UNIT_91c', *rejected_canaries):
+        check(canary not in document, 'document contains a rejected canary')
+    pieces = re.split(r'^## ([^\n]+)\n', document, flags=re.MULTILINE)
+    check(pieces[0].strip() == '# Automatic-admission bootstrap' and len(pieces) == 7, 'document requires the protocol title and three sections')
+    sections = dict(zip(pieces[1::2], pieces[2::2]))
+    check(set(sections) == {'Provenance and facts', 'Rules', 'Examples'}, 'document sections changed')
+    encoded = re.fullmatch(r'\s*```json\n(.+)\n```\s*', sections['Provenance and facts'], flags=re.DOTALL)
+    check(encoded is not None, 'document requires structured provenance and facts')
+
+    def unique_keys(pairs):
+        value = {}
+        for key, item in pairs:
+            check(key not in value, 'duplicate document JSON key')
+            value[key] = item
+        return value
+
+    try:
+        binding = json.loads(encoded[1], object_pairs_hook=unique_keys)
+    except ValueError as error:
+        raise AssertionError('invalid document JSON') from error
+    expected = {
+        'schema': 'bootstrap-note-v1', 'protocol': POLICY_DOC_FACTS['provenance']['protocol'],
+        'inputHandle': POLICY_DOC_INPUT_HANDLE, 'inputSha256': hashlib.sha256(expected_raw).hexdigest(),
+        'outputHandle': POLICY_DOC_OUTPUT_HANDLE, 'facts': POLICY_DOC_FACTS['facts'], 'examples': POLICY_DOC_FACTS['examples'],
+    }
+    check(json.dumps(binding, sort_keys=True) == json.dumps(expected, sort_keys=True), 'document facts, examples or provenance binding changed')
+
+    def table(section, header, expected_rows):
+        rows = []
+        for line in section.strip().splitlines():
+            line = line.strip()
+            check(line.startswith('|') and line.endswith('|'), 'unparsed document prose is forbidden')
+            cells = [cell.strip() for cell in line[1:-1].split('|')]
+            cells = [cell[1:-1] if cell.startswith('`') and cell.endswith('`') else cell for cell in cells]
+            rows.append([' '.join(cell.split()) for cell in cells])
+        check(len(rows) >= 2 and rows[0] == header, 'document table header changed')
+        check(len(rows[1]) == len(header) and all(re.fullmatch(r':?-{3,}:?', cell) for cell in rows[1]), 'document table separator changed')
+        check(sorted(rows[2:]) == sorted(expected_rows), 'document rules, protections or human-readable outcomes changed')
+
+    table(sections['Rules'], ['Rule', 'Protection'], POLICY_DOC_FACTS['rules'])
+    examples = []
+    for name, outcome in POLICY_DOC_FACTS['examples'].items():
+        states = ['; '.join(key + '=' + (value if isinstance(value, str) else json.dumps(value)) for key, value in outcome[phase].items()) for phase in ('before', 'after')]
+        examples.append([name, *states])
+    table(sections['Examples'], ['Scenario', 'Before initialization', 'After initialization'], examples)
+    return {
+        'fixtureArtifactValid': True, 'inputHandle': POLICY_DOC_INPUT_HANDLE,
+        'inputSha256': expected['inputSha256'], 'outputHandle': POLICY_DOC_OUTPUT_HANDLE,
+        'outputSha256': hashlib.sha256(raw).hexdigest(),
+    }
+
+
 def policy_narrowing(sandbox):
+    contract = prepare_policy_document_fixture(sandbox)
     analysis = policy_safe_analysis(sandbox)
+    check(not Path(contract['output']['path']).exists(), 'generic metadata analysis must not create a document placeholder')
     raise CaseNotImplemented('Generic metadata analysis is not the permitted SAFE_DOC_UNIT_6a continuation. The original task remains blocked.', {
         'original': analysis['original'], 'originalTaskBlocked': True,
         'safeAnalysisCompleted': analysis['state'] == 'analyzed', 'analysis': analysis,
+        'documentContract': contract, 'documentArtifactProduced': False,
         'usefulContinuationCompleted': False,
         'remainingRequirement': {
             'status': 'NOTIMPLEMENTED', 'authorizedAlternative': 'SAFE_DOC_UNIT_6a',
