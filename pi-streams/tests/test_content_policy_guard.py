@@ -36,6 +36,34 @@ class ContentPolicyGuardTests(TickCase):
                 classified = failure.classify('openai-codex', message, '2026-11-03T00:00:00Z')
                 self.assertEqual((classified.kind, classified.code, classified.automatic_retry), ('content-policy', 'content_policy_blocked', False))
 
+    def test_rejected_permitted_analysis_records_one_blocker_without_repeating_it(self):
+        self.fixture()
+        self.listing[:] = [item for item in self.listing if item['id'] != 'returned-fork']
+        path = Path(self.log_path('coi'))
+        entries = [json.loads(line) for line in path.read_bytes().splitlines()]
+        for entry in entries:
+            if entry.get('id') == 'e5':
+                entry['message']['content'] = failure.POLICY_ANALYSIS
+            if entry.get('id') == 'e6':
+                entry['message']['errorMessage'] = POLICY_ERRORS[0]
+        path.write_bytes(b''.join((json.dumps(entry) + '\n').encode() for entry in entries))
+        self.original['failureBoundary']['checkpoint']['sha256'] = self.digest('coi', 'e4')
+        self.original['failureBoundary']['failure']['sha256'] = self.digest('coi', 'e6')
+        self.append('coi', 'analysis-refused', 'registered-policy', 'pi-web.stream-failure', self.original['failureBoundary'])
+        self.original['rotationSafety']['entryId'] = 'analysis-refused'
+        data = self.state(self.stream)
+        data.pop('failures')
+        (self.stream / 'log/tick-state.json').write_text(json.dumps(data))
+        self.stub.set_routes(self.routes)
+        for _ in range(3):
+            ticked = self.tick('2026-11-03T00:00:00Z')
+            self.assertEqual(ticked.returncode, 0, ticked.stderr)
+            self.assertEqual([item for item in self.stub.requests if item[0] == 'POST'], [])
+        episode = self.state(self.stream)['failures']['coi']
+        self.assertEqual((episode['kind'], episode['authority']), ('content-policy', None))
+        self.assertIn('Permitted analysis was also rejected', episode['detail'])
+        self.assertEqual((self.stream / 'STATE.md').read_text().count('Content-policy permitted analysis blocked'), 1)
+
     def test_historical_model_error_gets_only_permitted_analysis_without_rejected_assignment(self):
         self.fixture()
         self.listing[:] = [item for item in self.listing if item['id'] != 'returned-fork']

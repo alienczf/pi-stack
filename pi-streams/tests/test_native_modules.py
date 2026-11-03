@@ -23,7 +23,7 @@ class NativeModuleTests(unittest.TestCase):
         self.run_native("recovery", 10)
 
     def test_actual_policy_nonreplay_guard(self):
-        self.run_native("policy", 3)
+        self.run_native("policy", 4)
 
     def test_actual_blocked_goal_dispatch(self):
         self.run_native("blocked-goals", 2)

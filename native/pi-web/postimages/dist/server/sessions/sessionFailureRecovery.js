@@ -220,6 +220,8 @@ export class SessionFailureRecoveries {
         if (at < 0 || failed <= at || createHash("sha256").update(original[at]?.raw ?? "").digest("hex") !== boundary.checkpoint.sha256 || createHash("sha256").update(original[failed]?.raw ?? "").digest("hex") !== boundary.failure.sha256)
             throw new AutomaticAdmissionRejected("Saved recovery evidence hash/branch is unavailable");
         const policyFailure = isContentPolicyFailure(original[failed].value.message);
+        if (policyFailure && original.slice(at + 1, failed).some(({ value }) => value.message?.role === "user" && JSON.stringify(value.message.content).includes("Explain the content-policy restriction and record a blocker. Do not perform the rejected task or any external effects.")))
+            throw new AutomaticAdmissionRejected("Permitted analysis was also rejected. Preserve a durable content-policy blocker without replay");
         if (original.slice(failed + 1).some(({ value }) => object(value["message"]) && value["message"]["role"] === "user"))
             throw new AutomaticAdmissionRejected("Later accepted human input needs explicit ordered reconciliation before forking");
         const authority = request["authority"];

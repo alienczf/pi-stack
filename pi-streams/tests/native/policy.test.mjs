@@ -9,10 +9,10 @@ const direct = await native('node_modules/@earendil-works/pi-ai/dist/utils/retry
 const nested = await native('node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/utils/retry.js');
 const errors = ['This content was flagged for possible cybersecurity risk', '503 content_policy_violation, please retry your request', '429 usage limit hint with content-policy refusal', 'Request rejected by the content filter', 'Safety policy refusal', 'ResponsibleAIPolicyViolation'];
 
-async function policyPark(message) {
+async function policyPark(message, rejected = 'A bounded continuation') {
     const f = await fixture([response('Verified permitted checkpoint'), errorResponse(message)], {}, { policy: 'enrolled-prefix-v1', enroll: { policyId: 'enrolled-prefix-v1', role: 'coordinator', assignment: 'Verify only permitted offline fixture behavior' } });
     await f.session.prompt('A permitted fixture turn');
-    await f.session.prompt('A bounded continuation');
+    await f.session.prompt(rejected);
     await flush();
     return f;
 }
@@ -52,6 +52,19 @@ test('native resume and fork refuse historical model-error policy failures befor
         assert.deepEqual(f.control.snapshot(ref), before);
         assert.equal(f.calls.length, 2);
         assert.equal(f.boundaries.snapshot(f.session).state, 'parked');
+    } finally { f.session.dispose(); }
+});
+
+test('permitted analysis itself rejected by policy is a durable blocker, not another same-content recovery', async () => {
+    const assignment = 'Explain the content-policy restriction and record a blocker. Do not perform the rejected task or any external effects.';
+    const f = await policyPark(errors[0], assignment);
+    try {
+        const boundary = f.boundaries.snapshot(f.session);
+        const recovery = new SessionFailureRecoveries(f.control, { policy: 'enrolled-prefix-v1', boundary: session => f.boundaries.snapshot(session), quiescent: () => {}, fork: async () => assert.fail('Rejected analysis must not replay') });
+        const continuation = { mode: 'permitted-analysis-v1', role: 'coordinator', assignment, assignmentSha256: createHash('sha256').update(assignment).digest('hex'), blockedGoalSha256: 'b'.repeat(64), policyFailure: { entryId: boundary.failure.entryId, sha256: boundary.failure.sha256 } };
+        await assert.rejects(recovery.fork(f.session, { id: 'policy-repeat', episode: 'repeat', authority: { kind: 'engine-policy', policyId: 'enrolled-prefix-v1', enrollmentId: boundary.enrollment.id }, continuation, expected: { ...boundary, generation: boundary.parking.generation } }), /Permitted analysis was also rejected/);
+        assert.equal(recovery.operations(f.session).size, 0);
+        assert.equal(f.control.snapshot({ id: f.session.sessionId, cwd: f.dir }).allowed, false);
     } finally { f.session.dispose(); }
 });
 

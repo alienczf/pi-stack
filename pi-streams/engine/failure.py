@@ -345,6 +345,13 @@ def _admit_recovery(stream_dir: Path, episode: Episode, path: Path, leaf: object
     enrolled = enrolled_authority(stream_dir, episode.session, episode.cwd, path, leaf, boundary, status, token["generation"])
     if enrolled is None:
         return
+    if episode.kind == "content-policy":
+        rejected = next((entry.get("message", {}) for entry, _ in sessionlog.branch_records(path, episode.session, episode.cwd, leaf) if entry["id"] == episode.saved_entry), {})
+        if POLICY_ANALYSIS in json.dumps(rejected.get("content", ""), ensure_ascii=False):
+            episode.authority, episode.continuation, episode.detail = None, None, "Permitted analysis was also rejected. Preserve a durable content-policy blocker without replay."
+            save(stream_dir, episode)
+            artifacts.append_log_locked(stream_dir, episode.observed_at, "Content-policy permitted analysis blocked", f"{episode.detail} Exact refusal {episode.failure_entry} SHA-256 {episode.failure_sha256}.", request_id=f"policy-analysis-blocked:{episode.id}")
+            return
     episode.authority, episode.continuation = enrolled
     if episode.kind == "content-policy":
         episode.continuation = policy_continuation(stream_dir, episode, episode.continuation["role"])
