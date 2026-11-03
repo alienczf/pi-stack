@@ -156,6 +156,12 @@ def step(stream_dir: Path, resolved: Coordinator | None, stalled: bool, *, maint
             return True
         if not allowed:
             return True
+    from engine import blocked_goals
+    native_file = resolved.native.info.get("path")
+    if isinstance(native_file, str) and previous is not None and previous.control.revision == revision and previous.control.state == "ended":
+        blocked_goals.observe(stream_dir, goal, resolved.row.session, native_file)
+    if not blocked_goals.permit(stream_dir, goal):
+        return True
     record.sequence += 1
     identity = delivery.new_identity()
     delivery.prepare_control_locked(stream_dir, identity, resolved.row.session, goal, revision, record.run_id, record.sequence, token)

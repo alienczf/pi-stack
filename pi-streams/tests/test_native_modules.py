@@ -25,6 +25,9 @@ class NativeModuleTests(unittest.TestCase):
     def test_actual_policy_nonreplay_guard(self):
         self.run_native("policy", 3)
 
+    def test_actual_blocked_goal_dispatch(self):
+        self.run_native("blocked-goals", 2)
+
     def test_actual_callback_ownership_modules(self):
         self.run_native("callbacks", 5)
 

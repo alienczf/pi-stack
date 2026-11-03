@@ -26,6 +26,37 @@ function boundary(value, session) {
         && (value["enrollment"] === undefined || object(value["enrollment"]) && value["enrollment"].policyId === "enrolled-prefix-v1" && ["id", "role", "assignment", "assignmentSha256", "generation"].every(key => typeof value["enrollment"][key] === "string" && value["enrollment"][key] !== "") && createHash("sha256").update(value["enrollment"].assignment).digest("hex") === value["enrollment"].assignmentSha256)
         && (value["parking"] === undefined || object(value["parking"]) && typeof value["parking"].generation === "string" && typeof value["parking"].owned === "boolean");
 }
+export function assertGoalNotBlocked(session, text) {
+    const contentText = content => typeof content === "string" ? content : (Array.isArray(content) ? content : []).filter(part => part?.type === "text").map(part => part.text).join("\n");
+    const fingerprint = value => {
+        const closing = value.lastIndexOf("</skill>\n\n");
+        const goal = closing < 0 ? value.replace(/^\/poteto-mode /, "") : value.slice(closing + "</skill>\n\n".length);
+        return createHash("sha256").update(goal.split(/\s+/).filter(Boolean).join(" ")).digest("hex");
+    };
+    if (!session.sessionManager.getBranch().some(entry => entry.message?.role === "user"))
+        return;
+    const goal = fingerprint(text), sent = [], received = [];
+    let matching = false, saved;
+    for (const { value, raw } of persistedBranch(session)) {
+        const message = value.message;
+        if (message?.role === "user") {
+            matching = fingerprint(contentText(message.content)) === goal;
+            if (matching) sent.push(String(value.id));
+        }
+        if (matching && message?.role === "assistant" && /(?:^|\n)\s*(?:\*\*|#{1,6}\s*)?(?:blocked\b|blocker\b|cannot proceed\b|unable to proceed\b)/i.test(contentText(message.content)))
+            received.push({ entryId: String(value.id), sha256: createHash("sha256").update(raw).digest("hex") });
+        if (value.customType === "pi-web.blocked-goal" && value.data?.fingerprint === goal)
+            saved = value.data;
+    }
+    if (sent.length < 3 || received.length === 0)
+        return;
+    const disposition = { version: 1, sessionId: session.sessionId, cwd: session.sessionManager.getCwd(), fingerprint: goal, sent, received, disposition: "suppressed" };
+    if (!isDeepStrictEqual(saved, disposition)) {
+        session.sessionManager.appendCustomEntry("pi-web.blocked-goal", disposition);
+        persistedBranch(session);
+    }
+    throw new AutomaticAdmissionRejected("Blocked-goal escalation. Identical blocked prompts are suppressed. Select a different authorized strategy or record the blocker; drive intent remains on");
+}
 export function isContentPolicyFailure(message) {
     return /flagged for possible cybersecurity risk|content[ _-]?(?:policy|filter)|safety[ _-]?(?:policy|filter)|responsible[ _-]?ai[ _-]?policy/i.test(message?.errorMessage ?? JSON.stringify(message?.content ?? []));
 }

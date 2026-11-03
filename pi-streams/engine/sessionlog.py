@@ -325,17 +325,17 @@ def resume_observation(path: Path, sid: str, cwd: str, leaf: object, identity: s
     return {**observation, "userSha256": hashlib.sha256(owned_raw).hexdigest()}
 
 
-def last_assistant(path: Path) -> dict[str, object] | None:
+def last_assistant(path: Path, *, evidence: bool = False) -> dict[str, object] | None:
     try:
         with regular_reader(path) as handle:
-            return _scan_back(handle)
+            return _scan_back(handle, evidence=evidence)
     except FileNotFoundError:
         return None
     except OSError as exc:
         raise StreamsError(f"could not read {path}: {exc}") from exc
 
 
-def _scan_back(handle: BinaryIO) -> dict[str, object] | None:
+def _scan_back(handle: BinaryIO, *, evidence: bool = False) -> dict[str, object] | None:
     end = handle.seek(0, os.SEEK_END)
     pieces: list[bytes] = []
     while end > 0:
@@ -347,17 +347,17 @@ def _scan_back(handle: BinaryIO) -> dict[str, object] | None:
         cut = data.rfind(b"\n", 0, stop)
         while cut >= 0:
             pieces.append(data[cut + 1 : stop])
-            message = _assistant(b"".join(reversed(pieces)))
+            message = _assistant(b"".join(reversed(pieces)), evidence=evidence)
             if message is not None:
                 return message
             pieces = []
             stop = cut
             cut = data.rfind(b"\n", 0, stop)
         pieces.append(data[:stop])
-    return _assistant(b"".join(reversed(pieces)))
+    return _assistant(b"".join(reversed(pieces)), evidence=evidence)
 
 
-def _assistant(line: bytes) -> dict[str, object] | None:
+def _assistant(line: bytes, *, evidence: bool = False) -> dict[str, object] | None:
     # A line pi is still appending does not parse yet; the one before it counts.
     try:
         entry = json.loads(line)
@@ -367,5 +367,7 @@ def _assistant(line: bytes) -> dict[str, object] | None:
         return None
     message = entry.get("message")
     if isinstance(message, dict) and message.get("role") == "assistant":
+        if evidence:
+            return {"entryId": entry.get("id", ""), "sha256": hashlib.sha256(line).hexdigest(), "message": message}
         return message
     return None

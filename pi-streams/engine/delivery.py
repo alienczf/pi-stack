@@ -203,6 +203,10 @@ def send_locked(stream_dir: Path, identity: str) -> dict:
             record.state = "blocked"
             record.detail = "Automatic admission was disabled or superseded; the saved generation is not renewed."
             return _save(stream_dir, record)
+    from engine import blocked_goals
+    if not blocked_goals.permit(stream_dir, record.control.goal if record.control else record.body):
+        record.state, record.detail = "blocked", "Blocked-goal escalation suppresses identical prompts. Select a different authorized unit."
+        return _save(stream_dir, record)
     record.state = "sending"
     _save(stream_dir, record)
     try:
@@ -289,6 +293,9 @@ def acknowledge_locked(stream_dir: Path, identity: str, session: str, state: str
         record.evidence = _evidence(stream_dir, evidence)
     elif state == "consumed" and record.state not in ("transport_accepted", "sending", "uncertain", "consumed"):
         raise StreamsError("only an admitted instruction can be consumed")
+    if state == "blocked":
+        from engine import blocked_goals
+        blocked_goals.receive(stream_dir, record.control.goal if record.control else record.body, "delivery:" + identity, sent=identity if record.state in {"transport_accepted", "consumed", "sending", "uncertain"} else "")
     record.state = state
     record.detail = detail
     return _save(stream_dir, record)

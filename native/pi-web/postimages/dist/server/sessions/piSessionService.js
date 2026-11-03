@@ -39,7 +39,7 @@ import { SessionMaintenanceStore } from "./sessionMaintenanceStore.js";
 import { expandPotetoInvocation, supportsPotetoInvocation } from "./potetoInvocation.js";
 import { StreamsDcrEvents } from "./streamsDcrEvents.js";
 import { SessionControlGoalController } from "./sessionControlGoal.js";
-import { assertFailureLifecycleFile, persistedFailureBranch, SessionFailureBoundaries } from "./sessionFailureBoundary.js";
+import { assertFailureLifecycleFile, assertGoalNotBlocked, persistedFailureBranch, SessionFailureBoundaries } from "./sessionFailureBoundary.js";
 import { SessionFailureRecoveries } from "./sessionFailureRecovery.js";
 import { SessionFailureRetirements } from "./sessionFailureRetirement.js";
 const noopLogger = { info() { } };
@@ -1470,6 +1470,7 @@ export class PiSessionService {
             this.automaticAdmissionStore?.assertCurrent({ id: automatic.sessionId, cwd: automatic.cwd }, automatic);
         const session = await this.getOrOpen(lookup);
         const sessionRef = { id: session.sessionId, cwd: canonicalizeStoredCwd(session.sessionManager.getCwd()) };
+        assertGoalNotBlocked(session, potetoGoal ?? promptText);
         if (potetoGoal !== undefined)
             expandPotetoInvocation(session, promptText, potetoGoal);
         this.assertTreeNavigationInactive(session, "send a prompt");
@@ -1711,6 +1712,8 @@ export class PiSessionService {
         if (!isRecord(request) || typeof request["text"] !== "string")
             throw new AutomaticAdmissionRejected("Control goal requires its exact invocation text");
         expandPotetoInvocation(session, request["text"], request["potetoGoal"]);
+        if (this.automaticAdmissionStore?.controlGoal({ id: session.sessionId, cwd: session.sessionManager.getCwd() })?.id !== request["id"])
+            assertGoalNotBlocked(session, request["potetoGoal"] ?? request["text"]);
         return this.controlGoals.submit(session, request);
     }
     async controlGoalStatus(ref, id) {
