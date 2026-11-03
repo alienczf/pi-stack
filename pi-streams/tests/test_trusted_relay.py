@@ -32,6 +32,24 @@ class TrustedRelayTests(TickCase):
         self.assertIn(verified.sha256, state)
         self.assertNotIn('pi-web.failure-ratification', state)
 
+    def test_operational_ruling_records_dated_source_without_duplicate_body_or_authentication_claim(self):
+        raw = self.source()
+        path = self.tmp / 'dated-relay.json'
+        path.write_bytes(raw)
+        command = ('state', 'ruling', 'etl', '--subject', 'Drive policy', '--relay-source', str(path), '--at', '2026-11-03T00:00:00Z')
+        first = self.run_streams(*command)
+        self.assertEqual(first.returncode, 0, first.stderr)
+        second = self.run_streams(*command)
+        self.assertEqual(second.returncode, 0, second.stderr)
+        self.assertEqual(json.loads(first.stdout), json.loads(second.stdout))
+        source = (self.stream / 'STATE.md').read_text()
+        self.assertIn('source provenance, not transport authentication', source)
+        self.assertIn('ZF said "Keep drive on." under the current charter.', source)
+        retained = list((self.stream / 'history').glob('relay-*.json'))
+        self.assertEqual(len(retained), 1)
+        self.assertEqual(retained[0].read_bytes(), raw)
+        self.assertNotIn('Trusted ZF relay principal', source)
+
     def test_body_claims_and_arbitrary_user_role_cannot_authenticate(self):
         before = (self.stream / 'STATE.md').read_bytes()
         for context in (None, {'principal': 'grok-bot-trdboss', 'role': 'user', 'authenticated': True}):

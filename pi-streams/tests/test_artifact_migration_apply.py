@@ -46,6 +46,42 @@ class MigrationApplyTests(EngineCase):
     def count(self, stream=None):
         return int(git(stream or self.stream, self.env, "rev-list", "--count", "HEAD"))
 
+    def test_operational_migration_preserves_nonfirstline_bare_authority_with_exact_dated_relay_provenance(self):
+        legacy = STREAM.replace(b'ratified: 2026-10-20 human notice fixture-1', b'ratified: yes')
+        prefix = b'# Legacy stream\n'
+        raw = prefix + legacy
+        (self.stream / 'STREAM.md').write_bytes(raw)
+        mapping = authority_map(legacy)
+        for item in mapping:
+            if item['source'] == 'STREAM.md':
+                item['start'] += len(prefix)
+                item['end'] += len(prefix)
+        mapping.insert(0, {'source': 'STREAM.md', 'start': 0, 'end': len(prefix), 'target': 'history'})
+        map_file = self.tmp / 'mapping.json'
+        map_file.write_text(json.dumps(mapping))
+        source = {'stream': 'legacy', 'messageId': 'dated-standing-grant', 'onBehalfOf': 'ZF', 'onInstruction': True, 'scope': 'in-scope-reversible', 'instructionDate': '2026-11-03', 'body': 'Retain the genuine standing charter. Migrate the old layout without widening scope.'}
+        relay_raw = (json.dumps(source, indent=2) + '\n').encode()
+        relay_file = self.tmp / 'relay.json'
+        relay_file.write_bytes(relay_raw)
+        planned = self.run_streams('migrate', 'legacy', '--plan', '--mapping', str(map_file), '--relay-source', str(relay_file))
+        self.assertEqual(planned.returncode, 0, planned.stderr)
+        plan = json.loads(planned.stdout)
+        self.assertTrue(plan['ready'], plan['unresolved'])
+        plan_file = self.tmp / 'migration-plan.json'
+        plan_file.write_text(json.dumps(plan))
+        applied = self.run_streams('migrate', 'legacy', '--apply', str(plan_file))
+        self.assertEqual(applied.returncode, 0, applied.stderr)
+        state = (self.stream / 'STATE.md').read_bytes()
+        self.assertIn(b'ratified: 2026-11-03 recorded relay source', state)
+        self.assertIn(b'NO-GO\nNever unfreeze production.', state)
+        self.assertIn(b'not transport authentication', state)
+        retained = self.stream / ('history/relay-' + plan['relay_source']['sha256'] + '.json')
+        self.assertEqual(retained.read_bytes(), relay_raw)
+        original = b''.join((self.stream / p['path']).read_bytes() for p in plan['history'] if p['source'] == 'STREAM.md')
+        self.assertEqual(original, raw)
+        self.assertEqual(self.stub.requests, [])
+        self.assertEqual(self.run_streams('migrate', 'legacy', '--resume').returncode, 0)
+
     def test_scoped_once_commit_preserves_foreign_stage_excluded_and_worker_bytes(self):
         failures = self.stream / "failures"
         failures.mkdir()

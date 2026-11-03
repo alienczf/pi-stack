@@ -5,7 +5,7 @@ import json
 import sys
 from pathlib import Path
 
-from engine import StreamsError, artifacts, clock, dcr, delivery, drive, failure, failure_recovery, migration, replacement
+from engine import StreamsError, artifacts, clock, dcr, delivery, drive, failure, failure_recovery, migration, relay, replacement
 from engine.doctor import run_doctor
 from engine.project import (
     STATE_SCHEMA,
@@ -115,6 +115,7 @@ def _parser() -> argparse.ArgumentParser:
     migration_mode.add_argument("--apply", metavar="PLAN_FILE", help="apply the exact reviewed source-backed plan")
     migration_mode.add_argument("--resume", action="store_true", help="resume only the already recorded migration")
     migrate.add_argument("--mapping", help="explicit JSON byte-span authority/history map")
+    migrate.add_argument("--relay-source", help="exact dated standing-grant source JSON for the migration plan; not transport authentication")
 
     upgrade = sub.add_parser("upgrade")
     upgrade.add_argument("stream_id", metavar="id", nargs="?")
@@ -161,14 +162,16 @@ def _parser() -> argparse.ArgumentParser:
         operation = state_sub.add_parser(name)
         operation.add_argument("stream")
         operation.add_argument("--home")
-        operation.add_argument("--body-file", required=True, help="UTF-8 input file, or - for stdin")
+        operation.add_argument("--body-file", required=name != "ruling", help="UTF-8 input file, or - for stdin")
         if name != "objective":
             operation.add_argument("--subject", required=True)
             operation.add_argument("--at", help="arrival time with ISO timezone; defaults to now")
         if name == "append":
             operation.add_argument("--request-id", required=True)
         if name == "ruling":
-            operation.add_argument("--notice-id", required=True, help="human ruling provenance, not an authentication receipt")
+            provenance = operation.add_mutually_exclusive_group(required=True)
+            provenance.add_argument("--notice-id", help="sourced ruling provenance, not an authentication receipt")
+            provenance.add_argument("--relay-source", help="exact dated relay JSON; records provenance, not transport authentication")
             operation.add_argument("--supersedes-file", help="exact retired Rules text; no automatic classification")
     return parser
 
@@ -193,16 +196,17 @@ def _open_stream(index: Path, project_name: str, stream_id: str) -> Path:
 
 
 def cmd_migrate(args: argparse.Namespace) -> int:
-    if args.mapping and not args.plan:
-        raise StreamsError("--mapping is only for --plan; application requires the exact reviewed plan file")
+    if (args.mapping or args.relay_source) and not args.plan:
+        raise StreamsError("--mapping and --relay-source are only for --plan; application requires the exact reviewed plan file")
     mapping = json.loads(migration.regular_bytes(Path(args.mapping))) if args.mapping else None
     document = json.loads(migration.regular_bytes(Path(args.apply))) if args.apply else None
+    source = relay.source_provenance(migration.regular_bytes(Path(args.relay_source)), args.stream) if args.relay_source else None
     index = resolve_index(args.home)
     with index_lock(index):
         project = resolve_project(index)
         stream = require_stream(index, project.info.name, args.stream, allow_migration=True)
         with stream_lock(stream):
-            result = migration.plan_migration(stream, mapping).public() if args.plan else migration.apply_migration_locked(stream, document)
+            result = migration.plan_migration(stream, mapping, relay_source=source).public() if args.plan else migration.apply_migration_locked(stream, document)
     print(json.dumps(result, sort_keys=True))
     return 0
 
@@ -289,7 +293,12 @@ def _state_body(path: str) -> str:
 
 
 def cmd_state(args: argparse.Namespace) -> int:
-    body = _state_body(args.body_file)
+    relay_raw = migration.regular_bytes(Path(args.relay_source)) if getattr(args, "relay_source", None) else None
+    if relay_raw is not None and args.body_file:
+        raise StreamsError("--relay-source supplies its exact body; do not duplicate it with --body-file")
+    if relay_raw is None and not args.body_file:
+        raise StreamsError("--body-file is required without --relay-source")
+    body = _state_body(args.body_file) if relay_raw is None else ""
     retired = _state_body(args.supersedes_file) if getattr(args, "supersedes_file", None) else None
     index = resolve_index(args.home)
     with index_lock(index):
@@ -305,6 +314,9 @@ def cmd_state(args: argparse.Namespace) -> int:
                 if args.state_cmd == "append":
                     occurrence = artifacts.append_log(stream_dir, at, args.subject, body, request_id=args.request_id)
                     request = args.request_id
+                elif relay_raw is not None:
+                    occurrence = relay.record_sourced_ruling(stream_dir, at, args.subject, relay_raw, supersedes=retired)
+                    request = "ruling:relay-source:" + relay.source_provenance(relay_raw, stream_dir.name)["messageId"]
                 else:
                     occurrence = artifacts.record_ruling(stream_dir, at, args.subject, body,
                                                          notice_id=args.notice_id, supersedes=retired)

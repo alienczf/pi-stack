@@ -10,7 +10,7 @@ import tomllib
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from engine import StreamsError, artifacts, clock
+from engine import StreamsError, artifacts, clock, relay
 from engine.project import _sync_directory, _write, commit_repo, git, git_blob, load_stream_config, templates_dir
 
 SOURCES = ("STREAM.md", "DECISIONS.md", "STATE.md")
@@ -58,13 +58,17 @@ class MigrationPlan:
     history: tuple[dict, ...]
     unresolved: tuple[dict, ...]
     state: str | None
+    relay_source: dict | None = None
 
     @property
     def ready(self) -> bool:
         return not self.unresolved and self.state is not None
 
     def public(self) -> dict:
-        return {"version": 1, **asdict(self), "ready": self.ready}
+        result = {"version": 1, **asdict(self), "ready": self.ready}
+        if self.relay_source is None:
+            result.pop("relay_source")
+        return result
 
 
 def state_parts(data: bytes) -> list[tuple[int, int]]:
@@ -157,15 +161,22 @@ def _mapping(sources: dict[str, dict], mapping: list[dict] | None) -> tuple[tupl
     return tuple(rows), unresolved
 
 
-def _state(sources: dict[str, dict], mapping: tuple[dict, ...], identity: str, at: str, count: int) -> bytes:
+def _state(sources: dict[str, dict], mapping: tuple[dict, ...], identity: str, at: str, count: int, relay_source: dict | None = None) -> bytes:
     def fragments(target: str) -> list[bytes]:
         return [base64.b64decode(sources[row["source"]]["bytes"])[row["start"]:row["end"]] for row in mapping if row["target"] == target]
 
     authority = [row for row in mapping if row["target"] == "ratified"]
     stars, objectives = fragments("north_star"), fragments("current_objective")
-    if len(authority) != 1 or authority[0]["source"] != "STREAM.md" or authority[0]["start"] != 0 or len(stars) != 1 or len(objectives) > 1:
-        raise StreamsError("migration requires one first-line STREAM authority, one North Star and at most one current objective")
+    if len(authority) != 1 or authority[0]["source"] != "STREAM.md" or len(stars) != 1 or len(objectives) > 1:
+        raise StreamsError("migration requires one source-backed STREAM authority, one North Star and at most one current objective")
+    original = base64.b64decode(sources["STREAM.md"]["bytes"])
+    if authority[0]["start"] and original[authority[0]["start"]-1:authority[0]["start"]] != b"\n":
+        raise StreamsError("migration authority must be an exact complete source line")
     marker = fragments("ratified")[0]
+    if relay_source is not None and marker.strip().lower() in {b"ratified: yes", b"ratified: true"}:
+        if not relay_source["instructionDate"]:
+            raise StreamsError("A bare legacy affirmative requires its dated standing-grant source provenance")
+        marker = f"ratified: {relay_source['instructionDate']} recorded relay source {relay_source['messageId']} SHA-256 {relay_source['sha256']}; legacy affirmative retained, not transport authentication\n".encode()
     if marker.rstrip().lower() != b"ratified: no" and not artifacts.has_ratified_authority_line(marker.decode("utf-8")):
         raise StreamsError("migration authority must retain dated source provenance or an explicit ZF notice reference, or remain ratified: no")
     def body(parts: list[bytes]) -> bytes:
@@ -177,7 +188,7 @@ def _state(sources: dict[str, dict], mapping: tuple[dict, ...], identity: str, a
     return state
 
 
-def plan_migration(stream: Path, mapping: list[dict] | None = None, *, started_at: str | None = None) -> MigrationPlan:
+def plan_migration(stream: Path, mapping: list[dict] | None = None, *, started_at: str | None = None, relay_source: dict | None = None) -> MigrationPlan:
     if stream.is_symlink() or not stream.is_dir():
         raise StreamsError("migration requires a real selected stream root, not a symlink")
     root = stream.resolve()
@@ -215,15 +226,18 @@ def plan_migration(stream: Path, mapping: list[dict] | None = None, *, started_a
         sources[name] = {"bytes": encoded(raw), "sha256": digest(raw), "git_head": head}
     rows, unresolved = _mapping(sources, mapping)
     seed = {"root": str(root), "started_at": at, "sources": sources, "config": config, "mapping": rows}
+    if relay_source is not None:
+        relay.validate_provenance(relay_source, root.name)
+        seed["relay_source"] = relay_source
     identity = digest(json.dumps(seed, sort_keys=True, separators=(",", ":")).encode())
     history = _history(root, sources, at)
     state = None
     if not unresolved:
         try:
-            state = encoded(_state(sources, rows, identity, at, sum(part["source"] == "STATE.md" for part in history)))
+            state = encoded(_state(sources, rows, identity, at, sum(part["source"] == "STATE.md" for part in history), relay_source))
         except StreamsError as exc:
             unresolved.append({"source": "STREAM.md", "start": 0, "end": len(base64.b64decode(sources["STREAM.md"]["bytes"])), "target": "unresolved", "reason": str(exc)})
-    return MigrationPlan(identity, str(root), at, sources, config, rows, history, tuple(unresolved), state)
+    return MigrationPlan(identity, str(root), at, sources, config, rows, history, tuple(unresolved), state, relay_source)
 
 
 def _json(value: object) -> str:
@@ -246,6 +260,10 @@ def _restore_plan(root: Path, document: dict) -> MigrationPlan:
             raise ValueError("unresolved mapping")
         at = clock.stamp(clock.parse(document["started_at"]))
         seed = {"root": str(root), "started_at": at, "sources": sources, "config": config, "mapping": rows}
+        relay_source = document.get("relay_source")
+        if relay_source is not None:
+            relay.validate_provenance(relay_source, root.name)
+            seed["relay_source"] = relay_source
         identity = digest(_json(seed).encode())
         history = []
         for name in SOURCES:
@@ -278,8 +296,8 @@ def _restore_plan(root: Path, document: dict) -> MigrationPlan:
                 else:
                     raise ValueError("unknown history time provenance")
                 history.append(part)
-        state = encoded(_state(sources, rows, identity, at, sum(item["source"] == "STATE.md" for item in history)))
-        restored = MigrationPlan(identity, str(root), at, sources, config, rows, tuple(history), (), state)
+        state = encoded(_state(sources, rows, identity, at, sum(item["source"] == "STATE.md" for item in history), relay_source))
+        restored = MigrationPlan(identity, str(root), at, sources, config, rows, tuple(history), (), state, relay_source)
         if _json(restored.public()) != _json(document):
             raise ValueError("plan changed or has unsupported fields")
         return restored
@@ -316,7 +334,7 @@ def _set_phase(root: Path, operation: dict, phase: str) -> None:
 
 
 def _scope(plan: MigrationPlan) -> tuple[str, ...]:
-    return tuple(sorted({*plan.sources, "stream.toml", ".gitignore", "failures/.gitkeep", *(part["path"] for part in plan.history)}))
+    return tuple(sorted({*plan.sources, "stream.toml", ".gitignore", "failures/.gitkeep", *(part["path"] for part in plan.history), *_relay_files(plan)}))
 
 
 def _seed_book(plan: MigrationPlan) -> dict:
@@ -325,6 +343,13 @@ def _seed_book(plan: MigrationPlan) -> dict:
     book = artifacts.LogBook(next_occurrence=2, entries=[artifacts.LogEntry(1, 0, len(raw), digest(raw), artifacts._timestamp(plan.started_at), "Stream artifact migration")], receipts={"migration:" + plan.id: {"intent": digest(raw), "occurrence": 1}})
     artifacts._checked_state(state.source, book)
     return asdict(book)
+
+
+def _relay_files(plan: MigrationPlan) -> dict[str, bytes]:
+    if plan.relay_source is None:
+        return {}
+    raw = relay.validate_provenance(plan.relay_source, Path(plan.root).name)
+    return {f"history/relay-{plan.relay_source['sha256']}.json": raw}
 
 
 def _expected(plan: MigrationPlan, operation: dict) -> dict[str, bytes | None]:
@@ -338,7 +363,7 @@ def _expected(plan: MigrationPlan, operation: dict) -> dict[str, bytes | None]:
     marker_before = artifacts._decode_bytes(marker["before"]) if marker["before"] is not None else None
     if artifacts._decode_bytes(marker["after"]) != (marker_before if marker_before is not None else (templates_dir() / "stream/failures/.gitkeep").read_bytes()):
         raise StreamsError("migration layout marker changed")
-    return {**{name: None for name in plan.sources if name != "STATE.md"}, "STATE.md": artifacts._decode_bytes(plan.state), "stream.toml": _new_config(artifacts._decode_bytes(plan.config["bytes"]), plan.id), **{part["path"]: artifacts._decode_bytes(part["bytes"]) for part in plan.history}, **{name: artifacts._decode_bytes(record["after"]) for name, record in extras.items()}}
+    return {**{name: None for name in plan.sources if name != "STATE.md"}, "STATE.md": artifacts._decode_bytes(plan.state), "stream.toml": _new_config(artifacts._decode_bytes(plan.config["bytes"]), plan.id), **{part["path"]: artifacts._decode_bytes(part["bytes"]) for part in plan.history}, **{name: artifacts._decode_bytes(record["after"]) for name, record in extras.items()}, **_relay_files(plan)}
 
 
 def _actual(path: Path) -> bytes | None:
@@ -376,6 +401,9 @@ def _validate_current(root: Path, plan: MigrationPlan, operation: dict, expected
     allowed_books = (None,) if phase == "history" else (None, seed) if phase == "state" else (seed,)
     if book not in allowed_books or (book == seed and _actual(root / "STATE.md") != expected["STATE.md"]):
         raise StreamsError("migration Log ownership changed unexpectedly")
+    for name, raw in _relay_files(plan).items():
+        if _actual(root / name) not in ((None, raw) if phase == "history" else (raw,)):
+            raise StreamsError("Migration relay source changed")
     for part in plan.history:
         actual = _actual(root / part["path"])
         if actual != expected[part["path"]] and (actual is not None or phase != "history"):
@@ -413,7 +441,7 @@ def apply_migration_locked(stream: Path, document: dict | None = None) -> dict:
         if document is None:
             raise StreamsError("no migration to resume; supply an explicitly reviewed --apply plan")
         plan = _restore_plan(root, document)
-        fresh = plan_migration(root, list(plan.mapping), started_at=plan.started_at)
+        fresh = plan_migration(root, list(plan.mapping), started_at=plan.started_at, relay_source=plan.relay_source)
         if _json(fresh.public()) != _json(plan.public()):
             raise StreamsError("migration sources or plan changed before application")
         if artifacts._read_tick_data(root).get("state_log") is not None:
@@ -464,6 +492,8 @@ def apply_migration_locked(stream: Path, document: dict | None = None) -> dict:
         _set_phase(root, operation, "complete")
         return {"id": plan.id, "commit": head, "changed": False}
     if operation["phase"] == "history":
+        for name, raw in _relay_files(plan).items():
+            _write(root / name, raw.decode('utf-8'))
         for name in (".gitignore", "failures/.gitkeep"):
             _write(root / name, expected[name].decode())
         for part in plan.history:

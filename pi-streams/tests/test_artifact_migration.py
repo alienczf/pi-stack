@@ -10,7 +10,7 @@ from unittest import mock
 from support import EngineCase, ROOT, git, snapshot
 
 sys.path.insert(0, str(ROOT / "pi-streams"))
-from engine import StreamsError, artifacts, migration
+from engine import StreamsError, artifacts, migration, relay
 
 AT = "2026-10-24T01:40:00Z"
 STREAM = b"ratified: 2026-10-20 human notice fixture-1\n\nGOAL\nShip exact evidence.\n\nCURRENT\nVerify the retained artifact.\n\nTARGET\nOnly the private fixture.\nNO-GO\nNever unfreeze production.\n"
@@ -130,6 +130,24 @@ class MigrationPlanningTests(EngineCase):
         part = next(p for p in first["history"] if p["source"] == "STATE.md")
         self.assertEqual(part["at"], AT)
         self.assertEqual(part["time_source"], "migration-start-fallback")
+
+    def test_bare_affirmative_needs_dated_source_and_unratified_no_is_never_elevated(self):
+        raw = STREAM.replace(b'ratified: 2026-10-20 human notice fixture-1', b'ratified: yes')
+        (self.stream / 'STREAM.md').write_bytes(raw)
+        self.assertFalse(self.plan(authority_map(raw)).ready)
+        source = {'stream': 'legacy', 'messageId': 'standing-source', 'onBehalfOf': 'ZF', 'onInstruction': True, 'scope': 'in-scope-reversible', 'instructionDate': '2026-11-03', 'body': 'Retain existing authorized scope.'}
+        provenance = relay.source_provenance(json.dumps(source).encode(), 'legacy')
+        with mock.patch.dict(os.environ, self.env, clear=True):
+            plan = migration.plan_migration(self.stream, authority_map(raw), started_at=AT, relay_source=provenance)
+        self.assertTrue(plan.ready)
+        changed = dict(provenance, sha256='0' * 64)
+        with self.assertRaisesRegex(StreamsError, 'provenance'):
+            migration.plan_migration(self.stream, authority_map(raw), started_at=AT, relay_source=changed)
+        raw = raw.replace(b'ratified: yes', b'ratified: no')
+        (self.stream / 'STREAM.md').write_bytes(raw)
+        with mock.patch.dict(os.environ, self.env, clear=True):
+            plan = migration.plan_migration(self.stream, authority_map(raw), started_at=AT, relay_source=provenance)
+        self.assertTrue(base64.b64decode(plan.public()['state']).startswith(b'## Goals\nratified: no\n'))
 
     def test_unratified_marker_remains_unratified(self):
         raw = STREAM.replace(b"ratified: 2026-10-20 human notice fixture-1", b"ratified: no")
