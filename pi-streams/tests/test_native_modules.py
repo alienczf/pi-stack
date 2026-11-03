@@ -22,6 +22,9 @@ class NativeModuleTests(unittest.TestCase):
     def test_actual_recovery_modules(self):
         self.run_native("recovery", 10)
 
+    def test_actual_policy_nonreplay_guard(self):
+        self.run_native("policy", 2)
+
     def test_actual_callback_ownership_modules(self):
         self.run_native("callbacks", 5)
 

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { AutomaticAdmissionRejected } from "./automaticAdmissionStore.js";
-import { persistedFailureBranch } from "./sessionFailureBoundary.js";
+import { isContentPolicyFailure, persistedFailureBranch } from "./sessionFailureBoundary.js";
 import { unresolvedEffects } from "./streamTransientRetry.js";
 const CUSTOM_TYPE = "pi-web.failure-recovery";
 function object(value) { return typeof value === "object" && value !== null && !Array.isArray(value); }
@@ -219,6 +219,8 @@ export class SessionFailureRecoveries {
         const failed = original.findIndex(({ value }) => value["id"] === boundary.failure?.entryId);
         if (at < 0 || failed <= at || createHash("sha256").update(original[at]?.raw ?? "").digest("hex") !== boundary.checkpoint.sha256 || createHash("sha256").update(original[failed]?.raw ?? "").digest("hex") !== boundary.failure.sha256)
             throw new AutomaticAdmissionRejected("Saved recovery evidence hash/branch is unavailable");
+        if (isContentPolicyFailure(original[failed].value.message))
+            throw new AutomaticAdmissionRejected("Content-policy blocker. Do not recover the same rejected content");
         if (original.slice(failed + 1).some(({ value }) => object(value["message"]) && value["message"]["role"] === "user"))
             throw new AutomaticAdmissionRejected("Later accepted human input needs explicit ordered reconciliation before forking");
         const authority = request["authority"];

@@ -10,7 +10,7 @@ const CUSTOM_TYPE = "pi-web.stream-failure";
 function object(value) { return typeof value === "object" && value !== null && !Array.isArray(value); }
 function evidence(value) { return object(value) && typeof value["entryId"] === "string" && value["entryId"] !== "" && typeof value["sha256"] === "string" && /^[a-f0-9]{64}$/.test(value["sha256"]); }
 function failureEvidence(value) {
-    return object(value) && ["resource", "tool-login", "codex-login", "model-error", "transient"].includes(String(value["kind"])) && evidence(value);
+    return object(value) && ["resource", "tool-login", "codex-login", "model-error", "transient", "content-policy"].includes(String(value["kind"])) && evidence(value);
 }
 function boundary(value, session) {
     return object(value)
@@ -26,11 +26,16 @@ function boundary(value, session) {
         && (value["enrollment"] === undefined || object(value["enrollment"]) && value["enrollment"].policyId === "enrolled-prefix-v1" && ["id", "role", "assignment", "assignmentSha256", "generation"].every(key => typeof value["enrollment"][key] === "string" && value["enrollment"][key] !== "") && createHash("sha256").update(value["enrollment"].assignment).digest("hex") === value["enrollment"].assignmentSha256)
         && (value["parking"] === undefined || object(value["parking"]) && typeof value["parking"].generation === "string" && typeof value["parking"].owned === "boolean");
 }
+export function isContentPolicyFailure(message) {
+    return /flagged for possible cybersecurity risk|content[ _-]?(?:policy|filter)|safety[ _-]?(?:policy|filter)|responsible[ _-]?ai[ _-]?policy/i.test(message?.errorMessage ?? JSON.stringify(message?.content ?? []));
+}
 function failure(message) {
     const text = typeof message["errorMessage"] === "string" ? message["errorMessage"] : JSON.stringify(message["content"] ?? []);
     const tool = message["role"] === "toolResult" && message["isError"] === true;
     if (!tool && !(message["role"] === "assistant" && message["stopReason"] === "error"))
         return undefined;
+    if (isContentPolicyFailure(message))
+        return "content-policy";
     if (!tool && (/insufficient_quota|quota exceeded|usage.?limit/i.test(text) || message["provider"] === "openai-codex" && /usage_not_included|rate_limit_exceeded/i.test(text)))
         return undefined;
     if (/ENOSPC|no space left|resource exhausted|out of memory/i.test(text))
@@ -399,6 +404,8 @@ export class SessionFailureBoundaries {
         const failed = branch.findIndex(item => item.value.id === previous.failure.entryId);
         if (failed < 0 || branch.slice(failed + 1).some(item => item.value.message?.role === "user") || unresolvedEffects(branch))
             throw new AutomaticAdmissionRejected("Newer accepted input or unresolved effects require reconciliation before resume");
+        if (isContentPolicyFailure(branch[failed].value.message))
+            throw new AutomaticAdmissionRejected("Content-policy blocker. Do not recover the same rejected content");
         const parked = await this.control.setAllowedAtGeneration(ref, false, control.generation);
         const next = { ...previous, parking: { generation: parked.generation, owned: true } };
         session.sessionManager.appendCustomEntry(CUSTOM_TYPE, structuredClone(next));

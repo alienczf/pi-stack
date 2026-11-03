@@ -144,6 +144,9 @@ def resume_parked_locked(stream: Path, at: str, *, index: Path, project, operato
                     piweb.require_settings(native.status, row.model, row.thinking)
                     drive.enable(stream, Coordinator(row, native))
                 continue
+            if episode.kind == "content-policy":
+                results.append({"session": row.session, "state": "policy-blocked", "detail": failure.POLICY_BLOCKER})
+                continue
             if explicit:
                 branch = _branch(native, row.session, row.worktree)
                 failed = next((i for i, (entry, _) in enumerate(branch) if entry["id"] == episode.failure_entry), None)
@@ -179,6 +182,9 @@ def resume_parked_locked(stream: Path, at: str, *, index: Path, project, operato
 
 def advance_locked(stream: Path, sid: str, episode_id: str, at: str, *, index: Path | None = None, project=None) -> dict:
     require_ratified(stream)
+    episode = failure.load(stream, sid)
+    if episode is not None and episode.kind == "content-policy":
+        raise StreamsError(failure.POLICY_BLOCKER)
     saved = load(stream, sid)
     if saved is not None and saved.phase in {"retiring", "retired", "clearing", "complete"}:
         episode = failure.load(stream, sid)
@@ -201,6 +207,8 @@ def advance_locked(stream: Path, sid: str, episode_id: str, at: str, *, index: P
     piweb.require_settings(native.status, episode.authorized_model, episode.authorized_thinking)
     failure.observe(stream, sid, episode.cwd, native.info, native.status, at, row.model, row.thinking)
     episode = failure.load(stream, sid)
+    if episode.kind == "content-policy":
+        raise StreamsError(failure.POLICY_BLOCKER)
     if not episode.recovery_id or episode.authority is None or native.status.get("failureForkSupport") != "engine-prefix-v1" or native.status.get("engineFailureRecoverySupport") != "enrolled-prefix-v1":
         raise StreamsError("Exact native recovery ownership is unavailable; original remains parked")
     if not piweb.recovery_readiness(sid, episode.cwd, native.status, episode.kind):
