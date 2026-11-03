@@ -524,8 +524,6 @@ class StreamTick:
         if self.automatic_paused or self.failure_owned or self.dcr_owned or self.drive_owned or self.observations_failed and not self.drive_enabled:
             return
         if self.coordinator() is None:
-            if self.state.pending and not any(row.role == "coordinator" for row in self.rows):
-                raise StreamsError("no designated coordinator; explicit new/adoption or rotation recovery is required")
             return
         current = delivery.current_tick(self.stream_dir)
         if current is not None:
