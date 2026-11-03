@@ -11,8 +11,10 @@ from pathlib import Path
 
 from engine import StreamsError, artifacts, clock, dcr, piweb, sessionlog
 
-KINDS = {"usage-limit", "codex-login", "tool-login", "resource", "model-error"}
-LABELS = {"usage-limit": "Codex usage limit", "codex-login": "Expired Codex login", "tool-login": "Tool login expiry", "resource": "Disk or resource exhaustion", "model-error": "Model error or outage"}
+KINDS = {"usage-limit", "transient", "codex-login", "tool-login", "resource", "model-error"}
+LABELS = {"usage-limit": "Codex usage limit", "transient": "Transient provider or connection failure", "codex-login": "Expired Codex login", "tool-login": "Tool login expiry", "resource": "Disk or resource exhaustion", "model-error": "Model error or outage"}
+TRANSIENT = re.compile(r"overloaded|rate.?limit|too many requests|429|500|502|503|504|524|service.?unavailable|server.?error|internal.?error|provider.?returned.?error|network.?error|connection.?(?:error|refused|lost)|other side closed|fetch failed|getaddrinfo|ENOTFOUND|EAI_AGAIN|upstream.?connect|reset before headers|socket hang up|socket connection was closed|timed? out|timeout|terminated|websocket.?(?:closed|error)|ended without|stream ended before (?:message_stop|a terminal response event)|http2 request did not get a response|retry delay|you can retry your request|try your request again|please retry your request|ResourceExhausted", re.IGNORECASE)
+NON_TRANSIENT = re.compile(r"insufficient_quota|quota exceeded|billing|usage.?limit|out of budget|available balance|GoUsageLimitError|FreeUsageLimitError", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -72,6 +74,8 @@ def classify(provider: str, message: str, observed_at: str, *, tool_error: bool 
         kind, normalized = "tool-login", "tool_auth_expired"
     elif provider == "openai-codex" and any(word in text for word in ("session expired", "login expired", "expired codex login", "token expired", "unauthorized")):
         kind, normalized = "codex-login", "codex_auth_expired"
+    elif not tool_error and not NON_TRANSIENT.search(message) and TRANSIENT.search(message):
+        kind, normalized = "transient", "transient_error"
     else:
         kind, normalized = "model-error", "model_error"
     return Classification(kind, normalized, LABELS[kind], provider if provider in {"openai-codex", "tool", "engine"} else "unknown")

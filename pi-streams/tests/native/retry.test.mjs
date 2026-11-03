@@ -54,7 +54,7 @@ test('all bundled transient classes remain eligible after usage exclusions', asy
 });
 
 test('Codex usage codes and quota/billing never enter watched retry', async () => {
-    for (const text of ['rate_limit_exceeded', 'usage_limit_reached', 'usage_not_included', 'ChatGPT usage limit', 'Codex usage limit', 'insufficient_quota 429', 'quota exceeded 503', 'billing 500']) {
+    for (const text of ['rate_limit_exceeded', 'usage_limit_reached', 'usage_not_included', 'ChatGPT usage limit', 'Codex usage limit', 'insufficient_quota 429', 'quota exceeded 503', 'billing 500', 'usage-limit 429', 'usage limit 503', 'usage_limit 429']) {
         const f = await fixture([errorResponse(text)]);
         await f.session.prompt('task');
         assert.equal(f.calls.length, 1, text);

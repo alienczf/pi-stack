@@ -29,8 +29,17 @@ class FailurePolicyTests(unittest.TestCase):
         unknown = failure.classify("openai-codex", "You have hit your ChatGPT usage limit.", "2026-10-06T12:00:00Z")
         self.assertEqual(unknown.reset_at, "")
 
+    def test_transient_patterns_are_distinct_from_terminal_model_errors(self):
+        for message in ("overloaded", "rate_limit", "too many requests", "429", "500", "502", "503", "504", "524", "service unavailable", "server error", "internal error", "provider returned error", "network error", "connection error", "connection refused", "connection lost", "other side closed", "fetch failed", "getaddrinfo", "ENOTFOUND", "EAI_AGAIN", "upstream connect", "reset before headers", "terminated"):
+            with self.subTest(message=message):
+                result = failure.classify("openai-codex", message, "2026-10-06T12:00:00Z")
+                self.assertEqual(result.kind, "transient")
+                self.assertFalse(result.automatic_retry, "only native AgentSession owns inference retry")
+        for message in ("insufficient_quota 429", "quota exceeded 503", "billing 500", "usage-limit 429", "usage limit 503", "usage_limit 429"):
+            self.assertEqual(failure.classify("openai-codex", message, "2026-10-06T12:00:00Z").kind, "model-error", message)
+
     def test_other_four_failure_classes_never_gain_an_automatic_readiness_retry(self):
-        cases = [("openai-codex", "Expired Codex login: session expired", False, "codex-login"), ("tool", "Tool login expired: unauthorized token", True, "tool-login"), ("engine", "ENOSPC: no space left on device", False, "resource"), ("openai-codex", "Other model 503 unavailable", False, "model-error")]
+        cases = [("openai-codex", "Expired Codex login: session expired", False, "codex-login"), ("tool", "Tool login expired: unauthorized token", True, "tool-login"), ("engine", "ENOSPC: no space left on device", False, "resource"), ("openai-codex", "Unclassified provider rejection", False, "model-error")]
         for provider, message, tool, expected in cases:
             with self.subTest(kind=expected):
                 result = failure.classify(provider, message, "2026-10-06T12:00:00Z", tool_error=tool)
