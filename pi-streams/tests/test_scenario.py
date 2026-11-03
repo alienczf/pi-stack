@@ -137,6 +137,7 @@ class ScenarioTests(EngineCase):
                 "coordinatorCostShare": 0.25,
                 "path": stream,
                 "threadSessions": [{"session": THREAD, "role": "datapull", "worktree": worktree, "status": "active"}],
+                "drive": {"enabled": False, "run_id": "", "sequence": 0, "current_delivery": "", "desired": None, "remote_state": "not-requested", "remote_generation": "", "resume_original": "", "known": True},
             }],
         })
         text = self.run_streams("status")
@@ -144,7 +145,8 @@ class ScenarioTests(EngineCase):
         self.assertEqual(
             text.stdout,
             f"etl\tratified=yes\t{COORD_1}\tstreaming=no\ttokens=-\tmodel=gpt-6-astra\tthinking=xhigh\t"
-            "cost=0.5\tthreads=active=1,waiting_quota=0,done=0,archived=0\tshare=0.25\n",
+            "cost=0.5\tthreads=active=1,waiting_quota=0,done=0,archived=0\tshare=0.25\n"
+            "etl\tdrive=off\tdelivery=-\tremote=not-requested\n",
         )
 
         self.stub.requests.clear()

@@ -25,7 +25,18 @@ STATUS_JSON = """\
         "done": 0,
         "archived": 1
       },
-      "coordinatorCostShare": 0.5
+      "coordinatorCostShare": 0.5,
+      "drive": {
+        "enabled": false,
+        "run_id": "",
+        "sequence": 0,
+        "current_delivery": "",
+        "desired": null,
+        "remote_state": "not-requested",
+        "remote_generation": "",
+        "resume_original": "",
+        "known": true
+      }
     }
   ]
 }

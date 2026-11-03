@@ -26,6 +26,16 @@ Every turn reads only the role's AGENTS.md and stream STATE.md. A worker follows
 
 Agents use CLI views instead of reading raw engine files. Kickoff can open the context README on demand for the seeded repo references. Canonical `pi-streams status <id> --json` adds the stream path and a threadSessions view with full session ID, role, worktree, and lifecycle status. Existing counts and cost observations remain reports, not budgets or task acceptance.
 
+### Status diagnostics
+
+`pi-streams status` lists every registered stream in index order. A malformed STATE, missing artifact, invalid registry, archived coordinator, unregistered native candidate, or native observation failure produces a diagnostic for that stream. Later streams remain visible. `status <id>` uses the same diagnostic format.
+
+JSON keeps the `streams` list and existing successful field values. Each failed entry has `id`, `path`, and an `error` object with `type` and `message`. Its `ratified`, `coordinator`, `threads`, and `coordinatorCostShare` fields are `null`, not negative health or authority findings. Text output prints a separate error line for each failed stream.
+
+Every entry includes an independently read `drive` object. `known: true` means the local drive record was read successfully. Existing drive fields retain their meanings. An absent record uses the existing disabled default with `remote_state: "not-requested"`. This default does not confirm a native stop. An unreadable or invalid drive record has `known: false`, `enabled: null`, `remote_state: "unknown"`, and its own structured `error`. Text output shows `drive=on`, `drive=off`, or `drive=unknown`, plus the recorded remote state. A known local switch does not prove current native confirmation, stream health, ratification, or task acceptance.
+
+Status exits 0 after successful stream enumeration, even if one or all streams have diagnostics. Callers inspect each entry's `error` and `drive.known`, not the command exit code, for stream observations. Index resolution, index parsing, and unknown named-stream errors remain command failures. Status does not repair artifacts, adopt candidates, change drive controls, or mutate stream state.
+
 The names STREAM.md, DECISIONS.md, GOAL.md, and ACTIONS.md are retired from new seeds. There is no separate CURRENT section. Invented alert ledgers, decision tables, and ad-hoc output directories are not imported, inventoried, or assigned ownership by this work.
 
 ## STATE shape
