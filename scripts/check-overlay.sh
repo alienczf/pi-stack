@@ -619,7 +619,7 @@ initial_pstack_head="$(git -C "$fake" rev-parse HEAD)"
 
 seed="$tmp/seed"
 mkdir -p "$seed"
-cp -a "$root/install.sh" "$root/overlay" "$root/prompts" "$root/bin" "$root/skills" "$root/systemd" "$root/.gitignore" "$seed/"
+cp -a "$root/install.sh" "$root/overlay" "$root/prompts" "$root/bin" "$root/skills" "$root/systemd" "$root/native" "$root/scripts" "$root/.gitignore" "$seed/"
 git init -q "$seed"
 git -C "$seed" add .
 git -C "$seed" -c user.email=t@t -c user.name=t commit -qm seed
