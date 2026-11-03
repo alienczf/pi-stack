@@ -112,6 +112,9 @@ def step(stream_dir: Path, resolved: Coordinator | None, stalled: bool, *, maint
     state = artifacts._read_stream_state_locked(stream_dir)
     require_ratified(stream_dir)
     goal = artifacts.resolve_current_goal(state)
+    from engine.failure import policy_blocks_goal
+    if policy_blocks_goal(stream_dir, goal):
+        return True
     revision = hashlib.sha256(goal.encode("utf-8")).hexdigest()
     record.desired = {"goal": goal, "body": "/poteto-mode " + goal, "revision": revision}
     save(stream_dir, record)

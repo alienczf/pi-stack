@@ -234,6 +234,12 @@ def continuation_text(op: Operation, stream_dir: Path) -> str:
     context = op.continuation
     if context is None:
         return ""
+    if context.get("mode") == "permitted-analysis-v1":
+        return ("Content-policy restricted continuation from a previously permitted checkpoint. "
+                "Do not reread or reconstruct rejected input, original assignments, or original handovers. "
+                "Do not carry the rejected goal into SYNC, summary, or RESUME. STATE remains evidence, not permission to repeat blocked work. "
+                "Only explain the restriction and record a blocker through the Log. No task or external effects are authorized. "
+                f"Preserve bounded role {context['role']}. Refusal evidence {json.dumps(context['policyFailure'], sort_keys=True)}.\n")
     role = context.get("role")
     assignment = context.get("assignment")
     if not isinstance(role, str) or re.fullmatch(r"[a-z][a-z0-9_-]*", role) is None or not isinstance(assignment, str) or not assignment:
@@ -260,7 +266,13 @@ def prepare(index: Path, stream: str, stream_dir: Path, resolved: Coordinator, i
         "Do not prune or rotate Log, abort active tools, author RESUME, or retry uncertain external jobs. "
         f"Then run {command}. Make no artifact writes afterward. Finish the turn with the exact acknowledgement returned by that command."
     )
+    if (continuation or {}).get("mode") == "permitted-analysis-v1":
+        text = (f"SYNC/DUMP for restricted policy analysis {identity}. Record the content-policy restriction through the Log without quoting rejected content. "
+                f"Do not copy Current objective or original assignment into this turn. Then run {command}. "
+                "Make no artifact writes afterward. Finish with the exact acknowledgement returned by that command.")
     op = Operation(identity, resolved.row.session, resolved.row.worktree, token, text, recovery_original=original, continuation=continuation)
+    if (continuation or {}).get("mode") == "permitted-analysis-v1":
+        op.compact_instructions = "Retain only permitted checkpoint context, the content-policy restriction, exact refusal hashes and bounded analysis role. Omit rejected input, original assignment and blocked goals. No task effects or policy evasion."
     op.sync_text = continuation_text(op, stream_dir) + op.sync_text
     save(stream_dir, op)
     return op
@@ -393,7 +405,7 @@ def step(index: Path, project: Project, stream: str, stream_dir: Path, resolved:
             state = artifacts._read_stream_state_locked(stream_dir)
             require_ratified(stream_dir)
             op.compaction_entry, op.compaction_sha256 = proof["entryId"], proof["sha256"]
-            op.resume_goal = artifacts.resolve_current_goal(state)
+            op.resume_goal = op.continuation["assignment"] if (op.continuation or {}).get("mode") == "permitted-analysis-v1" else artifacts.resolve_current_goal(state)
             op.resume_text = continuation_text(op, stream_dir) + resume_text(stream_dir, op.resume_goal)
             op.phase = "resume-sending"
             save(stream_dir, op)

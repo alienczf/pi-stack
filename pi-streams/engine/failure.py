@@ -14,7 +14,8 @@ from engine import StreamsError, artifacts, clock, dcr, piweb, sessionlog
 KINDS = {"usage-limit", "transient", "codex-login", "tool-login", "resource", "model-error", "content-policy"}
 LABELS = {"usage-limit": "Codex usage limit", "transient": "Transient provider or connection failure", "codex-login": "Expired Codex login", "tool-login": "Tool login expiry", "resource": "Disk or resource exhaustion", "model-error": "Model error or outage", "content-policy": "Content-policy refusal"}
 CONTENT_POLICY = re.compile(r"flagged for possible cybersecurity risk|content[ _-]?(?:policy|filter)|safety[ _-]?(?:policy|filter)|responsible[ _-]?ai[ _-]?policy", re.IGNORECASE)
-POLICY_BLOCKER = "Content-policy blocker. Do not retry or recover the same rejected content. Safe narrowed continuation is not implemented yet."
+POLICY_ANALYSIS = "Explain the content-policy restriction and record a blocker. Do not perform the rejected task or any external effects."
+POLICY_BLOCKER = "Content-policy restriction. The rejected task remains blocked. Only permitted analysis may continue; never reconstruct, retry or rephrase rejected content."
 TRANSIENT = re.compile(r"overloaded|server.?busy|ECONNRESET|rate.?limit|too many requests|429|500|502|503|504|524|service.?unavailable|server.?error|internal.?error|provider.?returned.?error|network.?error|connection.?(?:error|refused|lost)|other side closed|fetch failed|getaddrinfo|ENOTFOUND|EAI_AGAIN|upstream.?connect|reset before headers|socket hang up|socket connection was closed|timed? out|timeout|terminated|websocket.?(?:closed|error)|ended without|stream ended before (?:message_stop|a terminal response event)|http2 request did not get a response|retry delay|you can retry your request|try your request again|please retry your request|ResourceExhausted", re.IGNORECASE)
 NON_TRANSIENT = re.compile(r"insufficient_quota|quota exceeded|billing|usage.?limit|out of budget|available balance|GoUsageLimitError|FreeUsageLimitError", re.IGNORECASE)
 
@@ -276,7 +277,7 @@ def observe(stream_dir: Path, sid: str, cwd: str, native: dict, status: dict, at
         jobs.append({"id": "saved-unconfirmed-replay", "state": "unknown"})
     policy = classify(observation["provider"], observation["message"], at, tool_error=observation["toolError"])
     if previous is not None and previous.failure_entry == observation["entryId"] and previous.failure_sha256 == observation["sha256"]:
-        if policy.kind == "content-policy":
+        if policy.kind == "content-policy" and previous.kind != "content-policy":
             previous.kind, previous.code, previous.label = policy.kind, policy.code, policy.label
             previous.authority, previous.continuation = None, None
         if previous.uncertain_jobs != jobs:
@@ -320,12 +321,24 @@ def observe(stream_dir: Path, sid: str, cwd: str, native: dict, status: dict, at
     return episode
 
 
+def policy_continuation(stream_dir: Path, episode: Episode, role: str) -> dict:
+    goal = artifacts.resolve_current_goal(artifacts._read_stream_state_locked(stream_dir))
+    return {"mode": "permitted-analysis-v1", "role": role, "assignment": POLICY_ANALYSIS,
+            "assignmentSha256": hashlib.sha256(POLICY_ANALYSIS.encode()).hexdigest(),
+            "blockedGoalSha256": hashlib.sha256(goal.encode()).hexdigest(),
+            "policyFailure": {"entryId": episode.failure_entry, "sha256": episode.failure_sha256}}
+
+
+def policy_blocks_goal(stream_dir: Path, goal: str) -> bool:
+    digest = hashlib.sha256(goal.encode()).hexdigest()
+    for sid in artifacts._read_tick_data(stream_dir).get("failures", {}):
+        episode = load(stream_dir, sid)
+        if episode is not None and episode.kind == "content-policy" and (episode.continuation or {}).get("blockedGoalSha256") == digest:
+            return True
+    return False
+
+
 def _admit_recovery(stream_dir: Path, episode: Episode, path: Path, leaf: object, boundary: dict | None, status: dict) -> None:
-    if episode.kind == "content-policy":
-        episode.authority, episode.continuation, episode.detail = None, None, POLICY_BLOCKER
-        save(stream_dir, episode)
-        artifacts.append_log_locked(stream_dir, episode.observed_at, "Content-policy recovery blocked", POLICY_BLOCKER, request_id=f"policy-blocker:{episode.id}")
-        return
     token, allowed = piweb.automatic_admission(status, episode.session, episode.cwd, "recovery")
     if allowed or episode.cancelled:
         return
@@ -333,9 +346,13 @@ def _admit_recovery(stream_dir: Path, episode: Episode, path: Path, leaf: object
     if enrolled is None:
         return
     episode.authority, episode.continuation = enrolled
-    episode.continuation.update(nativeFile=str(path), savedInput={"entryId": episode.saved_entry, "sha256": episode.saved_sha256}, handovers=[])
+    if episode.kind == "content-policy":
+        episode.continuation = policy_continuation(stream_dir, episode, episode.continuation["role"])
+        artifacts.append_log_locked(stream_dir, episode.observed_at, "Content-policy narrowed continuation", f"{POLICY_BLOCKER} Exact native refusal {episode.failure_entry} SHA-256 {episode.failure_sha256}. Lastgood is retained. No rejected assignment or saved input is included in SYNC/RESUME.", request_id=f"policy-narrowed:{episode.id}")
+    else:
+        episode.continuation.update(nativeFile=str(path), savedInput={"entryId": episode.saved_entry, "sha256": episode.saved_sha256}, handovers=[])
     handover = stream_dir / "handover" / episode.continuation["role"] / (episode.session + ".md")
-    if handover.exists():
+    if episode.kind != "content-policy" and handover.exists():
         with sessionlog.regular_reader(handover) as source:
             raw = source.read()
         if raw.splitlines()[:1] != [("session: " + episode.session).encode()]:
