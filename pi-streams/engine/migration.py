@@ -15,6 +15,7 @@ from engine.project import _sync_directory, _write, commit_repo, git, git_blob, 
 
 SOURCES = ("STREAM.md", "DECISIONS.md", "STATE.md")
 TARGETS = frozenset({"ratified", "north_star", "current_objective", "charter", "rules", "history"})
+STATE_TARGETS = frozenset({"current_objective", "rules", "history"})
 
 
 def encoded(data: bytes) -> str:
@@ -67,6 +68,8 @@ class MigrationPlan:
 
     def public(self) -> dict:
         result = {"version": 1, **asdict(self), "ready": self.ready}
+        if not any(row["source"] == "STATE.md" for row in self.mapping):
+            result["limitations"] = ["STATE.md has no explicit mapping and remains archival history only; current objectives, job state and STOPs are not inferred."]
         if self.relay_source is None:
             result.pop("relay_source")
         if self.history_mode == "git":
@@ -141,15 +144,19 @@ def _mapping(sources: dict[str, dict], mapping: list[dict] | None) -> tuple[tupl
         if not isinstance(item, dict) or set(item) != {"source", "start", "end", "target"}:
             raise StreamsError("migration mapping requires exact source/start/end/target fields")
         name, start, end, target = (item[key] for key in ("source", "start", "end", "target"))
-        if not isinstance(name, str) or not isinstance(target, str) or name not in sources or name == "STATE.md" or target not in TARGETS:
+        if not isinstance(name, str) or not isinstance(target, str) or name not in sources or target not in (STATE_TARGETS if name == "STATE.md" else TARGETS):
             raise StreamsError("migration mapping has an unsupported source or target")
-        size = len(base64.b64decode(sources[name]["bytes"]))
-        if type(start) is not int or type(end) is not int or not 0 <= start < end <= size:
+        raw = base64.b64decode(sources[name]["bytes"])
+        if type(start) is not int or type(end) is not int or not 0 <= start < end <= len(raw):
             raise StreamsError("migration mapping has an invalid source byte span")
+        try:
+            raw[start:end].decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise StreamsError("migration mapping must use UTF-8 byte boundaries") from exc
         rows.append(dict(item))
     unresolved = []
     for name, source in sources.items():
-        if name == "STATE.md":
+        if name == "STATE.md" and not any(row["source"] == name for row in rows):
             continue
         offset = 0
         for item in sorted((row for row in rows if row["source"] == name), key=lambda row: row["start"]):
@@ -165,17 +172,30 @@ def _mapping(sources: dict[str, dict], mapping: list[dict] | None) -> tuple[tupl
 
 
 def _state(sources: dict[str, dict], mapping: tuple[dict, ...], identity: str, at: str, count: int, relay_source: dict | None = None) -> bytes:
+    projections = []
     def fragments(target: str) -> list[bytes]:
-        return [base64.b64decode(sources[row["source"]]["bytes"])[row["start"]:row["end"]] for row in mapping if row["target"] == target]
+        parts = []
+        for row in mapping:
+            if row["target"] != target:
+                continue
+            part = base64.b64decode(sources[row["source"]]["bytes"])[row["start"]:row["end"]]
+            if row["source"] == "STATE.md":
+                projections.append({**row, "sha256": digest(part), "source_sha256": sources["STATE.md"]["sha256"]})
+                fence = b"`" * (max([2, *(len(run) for run in re.findall(rb"`+", part))]) + 1)
+                part = fence + b"text\n" + part + (b"" if part.endswith(b"\n") else b"\n") + fence + b"\n"
+            parts.append(part)
+        return parts
 
     authority = [row for row in mapping if row["target"] == "ratified"]
     stars, objectives = fragments("north_star"), fragments("current_objective")
     if len(authority) != 1 or authority[0]["source"] != "STREAM.md" or len(stars) != 1 or len(objectives) > 1:
         raise StreamsError("migration requires one source-backed STREAM authority, one North Star and at most one current objective")
     original = base64.b64decode(sources["STREAM.md"]["bytes"])
-    if authority[0]["start"] and original[authority[0]["start"]-1:authority[0]["start"]] != b"\n":
-        raise StreamsError("migration authority must be an exact complete source line")
     marker = fragments("ratified")[0]
+    if ((authority[0]["start"] and original[authority[0]["start"]-1:authority[0]["start"]] != b"\n")
+            or (authority[0]["end"] < len(original) and not marker.endswith(b"\n"))
+            or len(marker.splitlines()) != 1):
+        raise StreamsError("migration authority must be an exact complete source line")
     if relay_source is not None and marker.strip().lower() in {b"ratified: yes", b"ratified: true"}:
         if not relay_source["instructionDate"]:
             raise StreamsError("A bare legacy affirmative requires its dated standing-grant source provenance")
@@ -184,10 +204,26 @@ def _state(sources: dict[str, dict], mapping: tuple[dict, ...], identity: str, a
         raise StreamsError("migration authority must retain dated source provenance or an explicit ZF notice reference, or remain ratified: no")
     def body(parts: list[bytes]) -> bytes:
         return b"".join(part if part.endswith(b"\n") else part + b"\n" for part in parts)
-    state = (b"## Goals\n" + body([marker]) + b"\n### North Star\n" + body(stars) + b"\n### Current objective\n" + body(objectives)
-             + b"\n### Charter\n" + body(fragments("charter")) + b"\n## Rules\n" + body(fragments("rules"))
-             + f"\n## Log\n### {artifacts._timestamp(at)} Stream artifact migration\nMigration {identity}. Retained exact legacy sources and {count} ordered STATE occurrences. Provenance is retained by the engine; history snapshots remain available on demand.\n".encode())
-    artifacts.parse_state(state)
+    state = b"## Goals\n" + body([marker]) + b"\n"
+    boundaries = {}
+    for target, heading, parts in (
+        ("north_star", b"### North Star\n", stars),
+        ("current_objective", b"### Current objective\n", objectives),
+        ("charter", b"### Charter\n", fragments("charter")),
+        ("rules", b"## Rules\n", fragments("rules")),
+    ):
+        state += heading
+        start = len(state)
+        state += body(parts) + b"\n"
+        boundaries[target] = artifacts.ByteSpan(start, len(state))
+    state += f"## Log\n### {artifacts._timestamp(at)} Stream artifact migration\nMigration {identity}. Retained exact legacy sources and {count} ordered STATE occurrences. Provenance is retained by the engine; history snapshots remain available on demand.\n".encode()
+    if not any(row["source"] == "STATE.md" for row in mapping):
+        state += b"Legacy STATE.md remains archival history only. Current objectives, job state and STOPs are not inferred without explicit STATE mappings.\n"
+    for projection in projections:
+        state += ("STATE projection " + json.dumps(projection, sort_keys=True) + "\n").encode()
+    parsed = artifacts.parse_state(state)
+    if parsed.extras or any(getattr(parsed, target).body != span for target, span in boundaries.items()):
+        raise StreamsError("migration mapping changes canonical field boundaries")
     return state
 
 

@@ -43,6 +43,42 @@ class RatificationSourceTests(unittest.TestCase):
                 self.assertTrue(threads._has_ratified_authority(self.canonical(marker)))
         self.assertFalse(threads._has_ratified_authority(self.canonical("no")))
 
+    def test_calendar_date_sentence_period_preserves_exact_source_marker_without_relay(self):
+        for marker in (
+            b"ratified: 2026-10-16. ZF original notice and later amendment.\r\n",
+            b"ratified: 2024-02-29. ZF leap-day notice.\n",
+            b"ratified: 2026-10-16 ZF original notice.\n",
+            b"ratified: 2026-10-16T12:00:00+08:00 ZF original notice.\n",
+        ):
+            with self.subTest(marker=marker):
+                raw = marker + STREAM[STREAM.index(b"\n") + 1:]
+                (self.stream / "STREAM.md").write_bytes(raw)
+                with mock.patch.dict(os.environ, self.env, clear=True):
+                    plan = migration.plan_migration(self.stream, authority_map(raw), started_at=AT).public()
+                self.assertTrue(plan["ready"], plan["unresolved"])
+                state = artifacts.parse_state(base64.b64decode(plan["state"]))
+                self.assertEqual(state.source[state.authority.start:state.authority.end], marker)
+                self.assertTrue(threads._has_ratified_authority(state))
+                self.assertNotIn("relay_source", plan)
+                source = next(row for row in plan["history"] if row["source"] == "STREAM.md")
+                self.assertEqual(base64.b64decode(source["bytes"]), raw)
+
+    def test_punctuation_does_not_repair_malformed_undated_or_negative_authority(self):
+        for marker in (
+            "2026-10-16.. ZF notice", "2026-10-16, ZF notice", "2026-10-16.foo ZF notice",
+            "2026-02-29. ZF notice", "2026-13-16. ZF notice", "2026-10-32. ZF notice",
+            "20261016. ZF notice", "2026-1-16. ZF notice", "2026-10-16.",
+            "2026-10-16T12:00:00. ZF notice", "no. ZF notice", "no 2026-10-16. ZF notice",
+            "yes. ZF notice", "true. ZF notice", "ZF. notice 42", "ZF notice",
+        ):
+            with self.subTest(marker=marker):
+                self.assertFalse(threads._has_ratified_authority(self.canonical(marker)))
+                raw = STREAM.replace(b"ratified: 2026-10-20 human notice fixture-1", b"ratified: " + marker.encode())
+                (self.stream / "STREAM.md").write_bytes(raw)
+                with mock.patch.dict(os.environ, self.env, clear=True):
+                    plan = migration.plan_migration(self.stream, authority_map(raw), started_at=AT)
+                self.assertFalse(plan.ready)
+
     def test_ambiguous_legacy_marker_cannot_produce_a_dispatch_authorizing_migration(self):
         for marker in ("0", "unknown", "yes", "true", "1"):
             with self.subTest(marker=marker):
