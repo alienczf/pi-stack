@@ -8,6 +8,8 @@ const { SessionMaintenanceController } = await native('dist/server/sessions/sess
 const { SessionMaintenanceStore } = await native('dist/server/sessions/sessionMaintenanceStore.js');
 const { estimateTokens } = await native('node_modules/@earendil-works/pi-coding-agent/dist/core/compaction/index.js');
 const { expandPotetoInvocation } = await native('dist/server/sessions/potetoInvocation.js');
+const { SessionManager } = await native('node_modules/@earendil-works/pi-coding-agent/dist/core/session-manager.js');
+const { PiSessionService } = await native('dist/server/sessions/piSessionService.js');
 
 async function scenario({ oversizedHook = false } = {}) {
     const f = await fixture(Array.from({ length: 4 }, () => response('## Goal\nContinue the bounded implementation assignment.\n## Progress\nThe old exchanges were checked.\n## Next steps\nRead current STATE.')));
@@ -149,6 +151,38 @@ test('an oversized actual provider summary cannot report bounded compaction succ
     await assert.rejects(f.session.compact('Retain permitted facts.', { targetTokens: 150000 }), /did not reduce rebuilt context below 150000/);
     assert(f.session.messages.reduce((sum, message) => sum + estimateTokens(message), 0) >= 150000);
     f.session.dispose();
+});
+
+test('cold service binding and status reconcile only eligible persisted superseded queues without replaying the admitted prefix', async () => {
+    for (const fence of ['none', 'stop', 'question', 'sending', 'uncertain', 'generation']) {
+        const f = await scenario();
+        const ref = f.ref;
+        const control = await f.control.explicitInput(ref);
+        f.store.update(ref, 'dcr-1', op => {
+            op.state = 'superseded'; op.inputSequence = 2; op.lastInputGeneration = control.generation;
+            op.inputs = [{ id: 'already-admitted', sequence: 1, text: 'Do not replay admitted input', kind: 'followUp', images: [], attachments: [], echoUserMessage: true, generation: control.generation, state: fence === 'sending' || fence === 'uncertain' ? fence : 'admitted' }, { id: 'persisted-queued', sequence: 2, text: 'Continue the current authorized fixture unit', kind: 'followUp', images: [], attachments: [], echoUserMessage: true, generation: control.generation, state: 'queued' }];
+        });
+        if (fence === 'stop') await f.control.setAllowed(ref, false);
+        if (fence === 'generation') await f.control.explicitInput(ref);
+        const file = f.manager.getSessionFile();
+        f.session.dispose();
+        const cold = await fixture([response('Current authorized fixture unit continued.')], {}, { manager: SessionManager.open(file), control: f.control, watch: false });
+        const store = new SessionMaintenanceStore(join(f.dir, 'maintenance'));
+        const controller = new SessionMaintenanceController(store, f.control, { current: () => true, busy: session => session.isStreaming, humanInputPending: () => fence === 'question', begin: () => {}, end: () => {}, publish: () => {}, failure: (_, detail) => assert.fail(detail), send: (session, text) => session.prompt(text) });
+        const service = { active: new Map(), maintenance: controller, failureBoundaries: cold.boundaries, events: { publish: () => {} }, reconcileQueuedMaintenance: PiSessionService.prototype.reconcileQueuedMaintenance, sessionForStatusOrDialogClose: async () => cold.session, statusFromSession: session => ({ sessionId: session.sessionId }), publishActivityForEvent: () => {}, abortRunScopedExtensionDialogs: () => {}, scheduleCompactionQueueDrain: () => {}, publishStatus: () => {}, updateSubsessionTracking: () => {} };
+        PiSessionService.prototype.bindRuntime.call(service, { runtime: { session: cold.session }, unsubscribe: () => {} });
+        await PiSessionService.prototype.status.call(service, ref);
+        for (let index = 0; index < 50; index++) await flush();
+        const result = store.get(ref, 'dcr-1');
+        assert.equal(result.inputs[1].state, fence === 'none' ? 'admitted' : 'queued', fence);
+        assert.equal(cold.calls.length, fence === 'none' ? 1 : 0, fence);
+        if (fence === 'none') {
+            assert.equal(cold.calls[0].context.messages.at(-1).content[0].text, 'Continue the current authorized fixture unit');
+            assert.equal(cold.calls[0].model.id, 'gpt-6.1-sol');
+        }
+        assert.equal(f.calls.length, f.compactionCalls);
+        cold.session.dispose();
+    }
 });
 
 test('stop and uncertain maintenance remain fenced', async () => {

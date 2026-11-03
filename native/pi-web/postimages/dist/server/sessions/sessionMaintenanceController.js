@@ -125,7 +125,7 @@ export class SessionMaintenanceController {
     }
     activateQueued(session) {
         const operation = this.store.current(identity(session));
-        if (operation !== undefined && (operation.state === "complete" || operation.state === "superseded"))
+        if (operation !== undefined && operation.cancelledByStop !== true && (operation.state === "complete" || operation.state === "superseded") && operation.inputs.some(input => input.state === "queued") && !operation.inputs.some(input => input.state === "sending" || input.state === "uncertain"))
             this.background(session, this.drain(session, operation.id));
     }
     queue(session, text, kind, images, attachments, echo, deliveryId, potetoGoal) {
@@ -346,7 +346,7 @@ export class SessionMaintenanceController {
                     return;
                 }
                 const control = this.controls.snapshot(ref);
-                if (!control.durable || !control.allowed || control.generation !== operation.lastInputGeneration)
+                if (operation.cancelledByStop === true || !control.durable || !control.allowed || control.generation !== operation.lastInputGeneration)
                     return;
                 if (session.isStreaming || session.isCompacting || session.isBashRunning || this.host.humanInputPending(session))
                     return;

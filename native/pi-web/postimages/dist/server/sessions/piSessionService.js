@@ -1331,7 +1331,14 @@ export class PiSessionService {
         return pageMessagesAtSafeBoundary(historyMessages(session), page);
     }
     async status(ref) {
-        return this.statusFromSession(await this.sessionForStatusOrDialogClose(ref));
+        const session = await this.sessionForStatusOrDialogClose(ref);
+        this.reconcileQueuedMaintenance(session);
+        return this.statusFromSession(session);
+    }
+    reconcileQueuedMaintenance(session) {
+        const boundary = this.failureBoundaries.snapshot(session);
+        if (boundary === undefined || boundary.state === "watching")
+            this.maintenance?.activateQueued(session);
     }
     /**
      * Join-time snapshot of the in-flight assistant stream. The `seq` watermark and
@@ -3066,8 +3073,10 @@ export class PiSessionService {
                 this.scheduleCompactionQueueDrain(session.sessionId);
             if (eventType === "agent_end" || eventType === "compaction_end")
                 this.streamsDcrEvents?.notify(session);
-            if (eventType === "agent_end" || eventType === "compaction_end")
+            if (eventType === "agent_end" || eventType === "compaction_end") {
                 this.controlGoals?.notify(session);
+                this.reconcileQueuedMaintenance(session);
+            }
             if (eventType === "agent_start" || eventType === "agent_end")
                 this.scheduleCompactionQueueDrain(session.sessionId);
             this.publishStatus(session);
@@ -3075,6 +3084,7 @@ export class PiSessionService {
         });
         this.active.set(session.sessionId, active);
         this.streamsDcrEvents?.restore(session);
+        this.reconcileQueuedMaintenance(session);
     }
     scheduleCompactionQueueDrain(sessionId, delayMs = 0) {
         if (!this.compactionPromptQueues.has(sessionId) || this.compactionDrainTimers.has(sessionId))

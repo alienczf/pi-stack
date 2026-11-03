@@ -17,7 +17,7 @@ class NativeModuleTests(unittest.TestCase):
         self.run_native("retry", 13)
 
     def test_actual_maintenance_modules(self):
-        self.run_native("maintenance", 8)
+        self.run_native("maintenance", 9)
 
     def test_actual_recovery_modules(self):
         self.run_native("recovery", 10)
