@@ -327,6 +327,13 @@ def advance_locked(stream: Path, sid: str, episode_id: str, at: str, *, index: P
 def _unresolved(stream: Path, op: Recovery, episode: failure.Episode) -> None:
     if drive.is_paused(stream) or episode.cancelled or episode.uncertain_jobs:
         raise StreamsError("Newer local stop, cancellation or uncertain jobs preserve the failure marker")
+    for item in delivery.receipts(stream):
+        if item["session"] != op.session or item["state"] != "prepared" or item.get("origin") != "drive" or item.get("control", {}).get("state") != "prepared" or item.get("automatic", {}).get("cwd") != op.cwd or item["automatic"].get("sessionId") != op.session:
+            continue
+        unsent = delivery._get(stream, item["id"])
+        unsent.state, unsent.control.state = "blocked", "superseded"
+        unsent.detail = f"Prepared original drive intent was never admitted; superseded by verified recovery {op.id}. Exact original body is retained without transport."
+        delivery._save(stream, unsent)
     if any(item["session"] == op.session and item["state"] not in {"applied", "blocked"} for item in delivery.receipts(stream)):
         raise StreamsError("An unresolved original delivery still owns its evidence/input")
     rows = load_threads(stream / "threads.tsv")

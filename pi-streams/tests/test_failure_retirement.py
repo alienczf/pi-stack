@@ -5,10 +5,14 @@ import copy
 import hashlib
 import json
 import os
+import sys
 from pathlib import Path
 
 import test_failure_dcr as cases
 from tick_support import TickCase, info, reply, row, status
+from support import ROOT
+
+sys.path.insert(0, str(ROOT / 'pi-streams'))
 
 
 class FailureRetirementTests(TickCase):
@@ -97,6 +101,33 @@ class FailureRetirementTests(TickCase):
         self.assertEqual(ticked.returncode, 0, ticked.stderr)
         goals = [item for item in self.stub.requests if item[0] == "POST" and item[1].endswith("/control-goal")]
         self.assertEqual([item[1] for item in goals], ["/api/sessions/returned-fork/control-goal"])
+
+    def test_unsent_original_drive_intent_is_superseded_without_transport_before_retirement(self):
+        self.ready_to_retire()
+        from engine import delivery
+        token = {'sessionId': 'coi', 'cwd': str(self.cwd), 'generation': 'old-owned-generation', 'kind': 'wake'}
+        delivery.prepare_control_locked(self.stream, 'unsent-original', 'coi', 'Retain the authorized current goal', 'goal-revision', 'standing-drive', 1, token)
+        result = self.advance()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        retained = delivery._get(self.stream, 'unsent-original')
+        self.assertEqual((retained.state, retained.control.state), ('blocked', 'superseded'))
+        self.assertIn('never admitted', retained.detail)
+        self.assertEqual(self.state(self.stream)['failure_recoveries']['coi']['phase'], 'complete')
+        self.assertFalse(any(item[1] == '/api/sessions/coi/control-goal' for item in self.stub.requests))
+
+    def test_sending_original_drive_intent_still_blocks_retirement_as_uncertain_effect(self):
+        self.ready_to_retire()
+        from engine import delivery
+        token = {'sessionId': 'coi', 'cwd': str(self.cwd), 'generation': 'old-owned-generation', 'kind': 'wake'}
+        delivery.prepare_control_locked(self.stream, 'unknown-original', 'coi', 'Preserve unknown effect', 'goal-revision', 'standing-drive', 1, token)
+        record = delivery._get(self.stream, 'unknown-original')
+        record.state, record.control.state = 'sending', 'sending'
+        delivery._save(self.stream, record)
+        result = self.advance()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('unresolved original delivery', result.stderr)
+        self.assertEqual((delivery._get(self.stream, record.id).state, self.deletions), ('sending', 0))
+        self.assertTrue((self.stream / 'failures/coi.lastgood').exists())
 
     def test_explicit_resume_from_drive_off_confirms_only_the_released_successor(self):
         self.ready_to_retire(resume_from_off=True)
