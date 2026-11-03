@@ -235,11 +235,7 @@ def continuation_text(op: Operation, stream_dir: Path) -> str:
     if context is None:
         return ""
     if context.get("mode") == "permitted-analysis-v1":
-        return ("Content-policy restricted continuation from a previously permitted checkpoint. "
-                "Do not reread or reconstruct rejected input, original assignments, or original handovers. "
-                "Do not carry the rejected goal into SYNC, summary, or RESUME. STATE remains evidence, not permission to repeat blocked work. "
-                "Only explain the restriction and record a blocker through the Log. No task or external effects are authorized. "
-                f"Preserve bounded role {context['role']}. Refusal evidence {json.dumps(context['policyFailure'], sort_keys=True)}.\n")
+        raise StreamsError("Content-policy blocker. A clean model context and resource view is not proven")
     role = context.get("role")
     assignment = context.get("assignment")
     if not isinstance(role, str) or re.fullmatch(r"[a-z][a-z0-9_-]*", role) is None or not isinstance(assignment, str) or not assignment:
@@ -253,6 +249,8 @@ def continuation_text(op: Operation, stream_dir: Path) -> str:
 
 
 def prepare(index: Path, stream: str, stream_dir: Path, resolved: Coordinator, identity: str, token: dict, *, original: str = "", continuation: dict | None = None) -> Operation:
+    if (continuation or {}).get("mode") == "permitted-analysis-v1":
+        raise StreamsError("Content-policy blocker. A clean model context and resource view is not proven; do not prepare recovery SYNC")
     previous = load(stream_dir, resolved.row.session)
     if previous is not None and (original or previous.phase not in {"complete", "superseded"}):
         if previous.id != identity or previous.recovery_original != original or previous.automatic != token or previous.continuation != continuation:
@@ -266,13 +264,7 @@ def prepare(index: Path, stream: str, stream_dir: Path, resolved: Coordinator, i
         "Do not prune or rotate Log, abort active tools, author RESUME, or retry uncertain external jobs. "
         f"Then run {command}. Make no artifact writes afterward. Finish the turn with the exact acknowledgement returned by that command."
     )
-    if (continuation or {}).get("mode") == "permitted-analysis-v1":
-        text = (f"SYNC/DUMP for restricted policy analysis {identity}. Record the content-policy restriction through the Log without quoting rejected content. "
-                f"Do not copy Current objective or original assignment into this turn. Then run {command}. "
-                "Make no artifact writes afterward. Finish with the exact acknowledgement returned by that command.")
     op = Operation(identity, resolved.row.session, resolved.row.worktree, token, text, recovery_original=original, continuation=continuation)
-    if (continuation or {}).get("mode") == "permitted-analysis-v1":
-        op.compact_instructions = "Retain only permitted checkpoint context, the content-policy restriction, exact refusal hashes and bounded analysis role. Omit rejected input, original assignment and blocked goals. No task effects or policy evasion."
     op.sync_text = continuation_text(op, stream_dir) + op.sync_text
     save(stream_dir, op)
     return op
@@ -287,6 +279,10 @@ def step(index: Path, project: Project, stream: str, stream_dir: Path, resolved:
         return True
     sid, status = resolved.row.session, resolved.native.status
     op = load(stream_dir, sid)
+    if op is not None and (op.continuation or {}).get("mode") == "permitted-analysis-v1":
+        op.phase, op.detail = "blocked", "Content-policy blocker. Persisted restricted DCR has no proven clean context/resource view. No inference, compaction, or RESUME is admitted."
+        save(stream_dir, op)
+        return True
     token, allowed = piweb.automatic_admission(status, sid, resolved.row.worktree, "wake")
     if op is not None and op.phase == "blocked":
         return True
@@ -405,7 +401,7 @@ def step(index: Path, project: Project, stream: str, stream_dir: Path, resolved:
             state = artifacts._read_stream_state_locked(stream_dir)
             require_ratified(stream_dir)
             op.compaction_entry, op.compaction_sha256 = proof["entryId"], proof["sha256"]
-            op.resume_goal = op.continuation["assignment"] if (op.continuation or {}).get("mode") == "permitted-analysis-v1" else artifacts.resolve_current_goal(state)
+            op.resume_goal = artifacts.resolve_current_goal(state)
             op.resume_text = continuation_text(op, stream_dir) + resume_text(stream_dir, op.resume_goal)
             op.phase = "resume-sending"
             save(stream_dir, op)

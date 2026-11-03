@@ -81,6 +81,8 @@ export class SessionFailureRecoveries {
         let operation = this.operations(original).get(id);
         if (operation?.state !== "forked" || operation.forkSessionId === undefined || !this.authorized(operation))
             throw new AutomaticAdmissionRejected("Exact authorized forked recovery operation is required");
+        if ((operation.continuation?.mode === "permitted-analysis-v1" || operation.failure?.kind === "content-policy") && !["status", "close"].includes(request["action"]))
+            throw new AutomaticAdmissionRejected("Content-policy blocker. Historical restricted recovery has no proven clean context/resource view");
         const originalControl = this.control.snapshot({ id: operation.originalSessionId, cwd: operation.cwd });
         if (!originalControl.durable || originalControl.allowed || originalControl.generation !== operation.generation)
             throw new AutomaticAdmissionRejected("A newer original stop/input superseded recovery maintenance");
@@ -220,17 +222,15 @@ export class SessionFailureRecoveries {
         if (at < 0 || failed <= at || createHash("sha256").update(original[at]?.raw ?? "").digest("hex") !== boundary.checkpoint.sha256 || createHash("sha256").update(original[failed]?.raw ?? "").digest("hex") !== boundary.failure.sha256)
             throw new AutomaticAdmissionRejected("Saved recovery evidence hash/branch is unavailable");
         const policyFailure = isContentPolicyFailure(original[failed].value.message);
-        if (policyFailure && original.slice(at + 1, failed).some(({ value }) => value.message?.role === "user" && JSON.stringify(value.message.content).includes("Explain the content-policy restriction and record a blocker. Do not perform the rejected task or any external effects.")))
-            throw new AutomaticAdmissionRejected("Permitted analysis was also rejected. Preserve a durable content-policy blocker without replay");
+        if (policyFailure)
+            throw new AutomaticAdmissionRejected("Content-policy blocker. No clean model context and resource view is proven; preserve original evidence without inference or compaction");
         if (original.slice(failed + 1).some(({ value }) => object(value["message"]) && value["message"]["role"] === "user"))
             throw new AutomaticAdmissionRejected("Later accepted human input needs explicit ordered reconciliation before forking");
         const authority = request["authority"];
         const enrollment = boundary.enrollment;
         const continuation = request["continuation"];
-        const assignment = policyFailure ? continuation : enrollment ?? continuation;
+        const assignment = enrollment ?? continuation;
         const binding = enrollment?.id ?? session.sessionId;
-        if (policyFailure && (!object(continuation) || continuation.mode !== "permitted-analysis-v1" || continuation.assignment !== "Explain the content-policy restriction and record a blocker. Do not perform the rejected task or any external effects." || continuation.role !== (enrollment?.role ?? continuation.role) || !/^[a-f0-9]{64}$/.test(continuation.blockedGoalSha256 ?? "") || hash(continuation.policyFailure) !== hash({ entryId: boundary.failure.entryId, sha256: boundary.failure.sha256 }) || Object.keys(continuation).some(key => !["mode", "role", "assignment", "assignmentSha256", "blockedGoalSha256", "policyFailure"].includes(key))))
-            throw new AutomaticAdmissionRejected("Content-policy blocker. Only exact permitted analysis may recover; never replay rejected content");
         if (authority.policyId !== this.hooks.policy || authority.enrollmentId !== binding || !object(assignment) || typeof assignment.role !== "string" || !/^[a-z][a-z0-9_-]*$/.test(assignment.role) || typeof assignment.assignment !== "string" || !assignment.assignment || createHash("sha256").update(assignment.assignment).digest("hex") !== assignment.assignmentSha256 || boundary.parking?.owned !== true || boundary.parking.generation !== control.generation || unresolvedEffects(original))
             throw new AutomaticAdmissionRejected("Engine policy lacks exact lane assignment, failure-owned parking or resolved effects");
         const authorization = { authority: { kind: "engine-policy", policyId: authority.policyId, enrollmentId: binding }, continuation: structuredClone(assignment) };

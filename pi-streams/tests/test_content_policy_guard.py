@@ -9,7 +9,7 @@ from support import ROOT
 from tick_support import TickCase
 
 sys.path.insert(0, str(ROOT / 'pi-streams'))
-from engine import artifacts, dcr, failure
+from engine import StreamsError, artifacts, dcr, failure
 
 
 POLICY_ERRORS = (
@@ -61,10 +61,10 @@ class ContentPolicyGuardTests(TickCase):
             self.assertEqual([item for item in self.stub.requests if item[0] == 'POST'], [])
         episode = self.state(self.stream)['failures']['coi']
         self.assertEqual((episode['kind'], episode['authority']), ('content-policy', None))
-        self.assertIn('Permitted analysis was also rejected', episode['detail'])
-        self.assertEqual((self.stream / 'STATE.md').read_text().count('Content-policy permitted analysis blocked'), 1)
+        self.assertIn('not proven clean', episode['detail'])
+        self.assertEqual((self.stream / 'STATE.md').read_text().count('Content-policy safe blocker'), 1)
 
-    def test_historical_model_error_gets_only_permitted_analysis_without_rejected_assignment(self):
+    def test_historical_model_error_retains_safe_blocker_without_rejected_assignment_replay(self):
         self.fixture()
         self.listing[:] = [item for item in self.listing if item['id'] != 'returned-fork']
         source = Path(self.log_path('coi'))
@@ -92,7 +92,7 @@ class ContentPolicyGuardTests(TickCase):
         ticked = self.tick('2026-11-03T00:00:00Z')
         self.assertEqual(ticked.returncode, 0, ticked.stderr)
         episode = self.state(self.stream)['failures']['coi']
-        self.assertEqual((episode['kind'], episode['state'], episode['authority']['kind']), ('content-policy', 'parked', 'engine-policy'))
+        self.assertEqual((episode['kind'], episode['state'], episode['authority']), ('content-policy', 'parked', None))
         context = episode['continuation']
         self.assertEqual(context['mode'], 'permitted-analysis-v1')
         self.assertEqual(context['policyFailure'], {'entryId': 'e6', 'sha256': self.digest('coi', 'e6')})
@@ -101,14 +101,12 @@ class ContentPolicyGuardTests(TickCase):
         self.assertNotIn('nativeFile', context)
         self.assertNotIn('handovers', context)
         op = dcr.Operation('safe-policy', 'safe-fork', str(self.cwd), {}, '', continuation=context)
-        text = dcr.continuation_text(op, self.stream)
-        self.assertNotIn('Implement only the assigned fixture unit.', text)
-        self.assertNotIn('<original-assignment>', text)
-        self.assertIn('Do not reread or reconstruct rejected input', text)
+        with self.assertRaisesRegex(StreamsError, 'clean model context'):
+            dcr.continuation_text(op, self.stream)
         self.assertTrue(failure.policy_blocks_goal(self.stream, artifacts.resolve_current_goal(artifacts.parse_state((self.stream / 'STATE.md').read_bytes()))))
         self.assertEqual(self.state(self.stream)['drive']['run_id'], 'retained-drive-intent')
         self.assertTrue(self.state(self.stream)['drive']['enabled'])
         self.assertEqual((self.stream / 'threads.tsv').read_bytes(), before)
         self.assertEqual((self.stream / 'failures/coi.lastgood').read_bytes(), b'e4\n')
         self.assertEqual([item for item in self.stub.requests if item[0] == 'POST'], [])
-        self.assertEqual((self.stream / 'STATE.md').read_text().count('Content-policy narrowed continuation'), 1)
+        self.assertEqual((self.stream / 'STATE.md').read_text().count('Content-policy safe blocker'), 1)

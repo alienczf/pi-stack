@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { fixture, flush, native, response, errorResponse } from './helpers.mjs';
 
 const { SessionFailureRecoveries } = await native('dist/server/sessions/sessionFailureRecovery.js');
-const { SessionManager } = await native('node_modules/@earendil-works/pi-coding-agent/dist/core/session-manager.js');
 const direct = await native('node_modules/@earendil-works/pi-ai/dist/utils/retry.js');
 const nested = await native('node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/utils/retry.js');
 const errors = ['This content was flagged for possible cybersecurity risk', '503 content_policy_violation, please retry your request', '429 usage limit hint with content-policy refusal', 'Request rejected by the content filter', 'Safety policy refusal', 'ResponsibleAIPolicyViolation'];
@@ -62,41 +62,28 @@ test('permitted analysis itself rejected by policy is a durable blocker, not ano
         const boundary = f.boundaries.snapshot(f.session);
         const recovery = new SessionFailureRecoveries(f.control, { policy: 'enrolled-prefix-v1', boundary: session => f.boundaries.snapshot(session), quiescent: () => {}, fork: async () => assert.fail('Rejected analysis must not replay') });
         const continuation = { mode: 'permitted-analysis-v1', role: 'coordinator', assignment, assignmentSha256: createHash('sha256').update(assignment).digest('hex'), blockedGoalSha256: 'b'.repeat(64), policyFailure: { entryId: boundary.failure.entryId, sha256: boundary.failure.sha256 } };
-        await assert.rejects(recovery.fork(f.session, { id: 'policy-repeat', episode: 'repeat', authority: { kind: 'engine-policy', policyId: 'enrolled-prefix-v1', enrollmentId: boundary.enrollment.id }, continuation, expected: { ...boundary, generation: boundary.parking.generation } }), /Permitted analysis was also rejected/);
+        await assert.rejects(recovery.fork(f.session, { id: 'policy-repeat', episode: 'repeat', authority: { kind: 'engine-policy', policyId: 'enrolled-prefix-v1', enrollmentId: boundary.enrollment.id }, continuation, expected: { ...boundary, generation: boundary.parking.generation } }), /Content-policy blocker/);
         assert.equal(recovery.operations(f.session).size, 0);
         assert.equal(f.control.snapshot({ id: f.session.sessionId, cwd: f.dir }).allowed, false);
     } finally { f.session.dispose(); }
 });
 
-test('historical policy record forks only permitted analysis from lastgood and preserves exact model and generation', async () => {
-    const f = await policyPark(errors[0]);
-    let fork;
+test('historical policy records and unsafe saved restricted operations cannot expose prefix, AGENTS or tools to recovery inference', async () => {
+    const f = await policyPark(errors[0], 'REJECTED-ASSIGNMENT-CANARY');
     try {
         const boundary = f.boundaries.snapshot(f.session);
         boundary.failure.kind = 'model-error';
         f.session.sessionManager.appendCustomEntry('pi-web.stream-failure', boundary);
         f.boundaries.records.set(f.session, boundary);
-        const assignment = 'Explain the content-policy restriction and record a blocker. Do not perform the rejected task or any external effects.';
-        const continuation = { mode: 'permitted-analysis-v1', role: 'coordinator', assignment, assignmentSha256: createHash('sha256').update(assignment).digest('hex'), blockedGoalSha256: 'a'.repeat(64), policyFailure: { entryId: boundary.failure.entryId, sha256: boundary.failure.sha256 } };
-        const recoveries = new SessionFailureRecoveries(f.control, { policy: 'enrolled-prefix-v1', boundary: session => f.boundaries.snapshot(session), quiescent: session => assert.equal(session.isStreaming, false), fork: async (session, operation) => {
-            assert.deepEqual(operation.continuation, continuation);
-            const manager = SessionManager.open(session.sessionManager.getSessionFile());
-            manager.createBranchedSession(operation.checkpoint.entryId);
-            fork = await fixture([response('The rejected task remains blocked. No task effects were performed.')], {}, { manager, control: f.control, boundaries: f.boundaries, watch: false });
-            await f.boundaries.holdRecovery(fork.session, operation);
-            return { session: fork.session, cancelled: false };
-        }, resolveFork: async () => fork.session });
-        const request = { id: 'narrow-policy', episode: 'policy-episode', authority: { kind: 'engine-policy', policyId: 'enrolled-prefix-v1', enrollmentId: boundary.enrollment.id }, continuation, expected: { ...boundary, generation: boundary.parking.generation } };
-        const result = await recoveries.fork(f.session, request);
-        assert.equal(result.state, 'forked');
-        assert(!fork.manager.getBranch().some(entry => entry.id === boundary.failure.entryId));
-        const ready = await recoveries.maintenance(f.session, { id: result.id, action: 'prepare', expectedForkGeneration: result.forkGeneration });
-        await f.boundaries.runRecovery(fork.session, ready.operation, () => fork.session.prompt(assignment));
-        const input = fork.calls[0].context.messages.at(-1);
-        assert.equal(input.content[0].text, assignment);
-        assert.equal(fork.calls[0].model.provider, 'openai-codex');
-        assert.equal(fork.calls[0].model.id, 'gpt-6.1-sol');
+        const before = readFileSync(f.manager.getSessionFile());
+        const control = f.control.snapshot({ id: f.session.sessionId, cwd: f.dir });
+        const continuation = { mode: 'permitted-analysis-v1', role: 'coordinator', assignment: 'Explain only the restriction' };
+        const recovery = new SessionFailureRecoveries(f.control, { policy: 'enrolled-prefix-v1', boundary: session => f.boundaries.snapshot(session), quiescent: () => {}, fork: async () => assert.fail('Unsafe policy fork must not exist') });
+        await assert.rejects(recovery.fork(f.session, { id: 'clean-view-unproven', episode: 'policy', authority: { kind: 'engine-policy', policyId: 'enrolled-prefix-v1', enrollmentId: boundary.enrollment.id }, continuation, expected: { ...boundary, generation: control.generation } }), /No clean model context/);
+        await assert.rejects(f.boundaries.runRecovery(f.session, { id: 'old-unsafe-operation', continuation }, () => f.session.prompt('Do not run inherited context')), /Historical restricted operation/);
+        assert.deepEqual(readFileSync(f.manager.getSessionFile()), before);
+        assert.deepEqual(f.control.snapshot({ id: f.session.sessionId, cwd: f.dir }), control);
         assert.equal(f.calls.length, 2);
-        assert.deepEqual(await recoveries.fork(f.session, request), recoveries.operation(f.session, result.id));
-    } finally { fork?.session.dispose(); f.session.dispose(); }
+        assert.equal(recovery.operations(f.session).size, 0);
+    } finally { f.session.dispose(); }
 });

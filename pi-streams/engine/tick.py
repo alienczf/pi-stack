@@ -236,7 +236,7 @@ class StreamTick:
                     if owned is None or owned.status in {Status.done, Status.archived} or terminal_sessions.load(self.stream_dir, sid, owned.worktree) is not None:
                         continue
                     episode = failure.load(self.stream_dir, sid)
-                    if episode is not None and episode.state == "parked" and episode.kind != "usage-limit" and episode.checkpoint is not None and (episode.authority is not None or failure_recovery.load(self.stream_dir, sid) is not None):
+                    if episode is not None and episode.state == "parked" and episode.kind not in {"usage-limit", "content-policy"} and episode.checkpoint is not None and (episode.authority is not None or failure_recovery.load(self.stream_dir, sid) is not None):
                         try:
                             failure_recovery.advance_locked(self.stream_dir, sid, episode.id, self.at, index=self.index, project=self.project)
                         except (StreamsError, OSError) as exc:

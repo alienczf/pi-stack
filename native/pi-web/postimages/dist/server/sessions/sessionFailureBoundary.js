@@ -309,6 +309,8 @@ export class SessionFailureBoundaries {
             this.recoveryScopes.delete(session); };
     }
     async runRecovery(session, operation, action) {
+        if (operation.continuation?.mode === "permitted-analysis-v1" || operation.failure?.kind === "content-policy")
+            throw new AutomaticAdmissionRejected("Content-policy blocker. Historical restricted operation has no proven clean model context/resource view");
         const id = operation.id;
         const record = this.records.get(session);
         if (record?.state !== "recovering" || record.recovery?.id !== id)

@@ -15,7 +15,7 @@ KINDS = {"usage-limit", "transient", "codex-login", "tool-login", "resource", "m
 LABELS = {"usage-limit": "Codex usage limit", "transient": "Transient provider or connection failure", "codex-login": "Expired Codex login", "tool-login": "Tool login expiry", "resource": "Disk or resource exhaustion", "model-error": "Model error or outage", "content-policy": "Content-policy refusal"}
 CONTENT_POLICY = re.compile(r"flagged for possible cybersecurity risk|content[ _-]?(?:policy|filter)|safety[ _-]?(?:policy|filter)|responsible[ _-]?ai[ _-]?policy", re.IGNORECASE)
 POLICY_ANALYSIS = "Explain the content-policy restriction and record a blocker. Do not perform the rejected task or any external effects."
-POLICY_BLOCKER = "Content-policy restriction. The rejected task remains blocked. Only permitted analysis may continue; never reconstruct, retry or rephrase rejected content."
+POLICY_BLOCKER = "Content-policy blocker. Original context, auto-loaded resources and artifact reads are not proven clean. Preserve lastgood and exact refusal evidence without inference, compaction or rejected-content replay. Drive intent remains on for different authorized work."
 TRANSIENT = re.compile(r"overloaded|server.?busy|ECONNRESET|rate.?limit|too many requests|429|500|502|503|504|524|service.?unavailable|server.?error|internal.?error|provider.?returned.?error|network.?error|connection.?(?:error|refused|lost)|other side closed|fetch failed|getaddrinfo|ENOTFOUND|EAI_AGAIN|upstream.?connect|reset before headers|socket hang up|socket connection was closed|timed? out|timeout|terminated|websocket.?(?:closed|error)|ended without|stream ended before (?:message_stop|a terminal response event)|http2 request did not get a response|retry delay|you can retry your request|try your request again|please retry your request|ResourceExhausted", re.IGNORECASE)
 NON_TRANSIENT = re.compile(r"insufficient_quota|quota exceeded|billing|usage.?limit|out of budget|available balance|GoUsageLimitError|FreeUsageLimitError", re.IGNORECASE)
 
@@ -277,9 +277,11 @@ def observe(stream_dir: Path, sid: str, cwd: str, native: dict, status: dict, at
         jobs.append({"id": "saved-unconfirmed-replay", "state": "unknown"})
     policy = classify(observation["provider"], observation["message"], at, tool_error=observation["toolError"])
     if previous is not None and previous.failure_entry == observation["entryId"] and previous.failure_sha256 == observation["sha256"]:
-        if policy.kind == "content-policy" and previous.kind != "content-policy":
+        if policy.kind == "content-policy":
+            if previous.kind != "content-policy":
+                previous.continuation = None
             previous.kind, previous.code, previous.label = policy.kind, policy.code, policy.label
-            previous.authority, previous.continuation = None, None
+            previous.authority = None
         if previous.uncertain_jobs != jobs:
             previous.uncertain_jobs = jobs
             save(stream_dir, previous)
@@ -339,27 +341,26 @@ def policy_blocks_goal(stream_dir: Path, goal: str) -> bool:
 
 
 def _admit_recovery(stream_dir: Path, episode: Episode, path: Path, leaf: object, boundary: dict | None, status: dict) -> None:
+    if episode.kind == "content-policy":
+        from engine.threads import load_threads
+        rows = [row for row in load_threads(stream_dir / "threads.tsv") if row.session == episode.session and row.worktree == episode.cwd]
+        episode.authority = None
+        if (episode.continuation or {}).get("policyFailure") != {"entryId": episode.failure_entry, "sha256": episode.failure_sha256}:
+            episode.continuation = policy_continuation(stream_dir, episode, rows[0].role) if len(rows) == 1 else None
+        episode.detail = POLICY_BLOCKER
+        save(stream_dir, episode)
+        artifacts.append_log_locked(stream_dir, episode.observed_at, "Content-policy safe blocker", f"{POLICY_BLOCKER} Native refusal {episode.failure_entry} SHA-256 {episode.failure_sha256}.", request_id=f"policy-safe-blocker:{episode.id}")
+        return
     token, allowed = piweb.automatic_admission(status, episode.session, episode.cwd, "recovery")
     if allowed or episode.cancelled:
         return
     enrolled = enrolled_authority(stream_dir, episode.session, episode.cwd, path, leaf, boundary, status, token["generation"])
     if enrolled is None:
         return
-    if episode.kind == "content-policy":
-        rejected = next((entry.get("message", {}) for entry, _ in sessionlog.branch_records(path, episode.session, episode.cwd, leaf) if entry["id"] == episode.saved_entry), {})
-        if POLICY_ANALYSIS in json.dumps(rejected.get("content", ""), ensure_ascii=False):
-            episode.authority, episode.continuation, episode.detail = None, None, "Permitted analysis was also rejected. Preserve a durable content-policy blocker without replay."
-            save(stream_dir, episode)
-            artifacts.append_log_locked(stream_dir, episode.observed_at, "Content-policy permitted analysis blocked", f"{episode.detail} Exact refusal {episode.failure_entry} SHA-256 {episode.failure_sha256}.", request_id=f"policy-analysis-blocked:{episode.id}")
-            return
     episode.authority, episode.continuation = enrolled
-    if episode.kind == "content-policy":
-        episode.continuation = policy_continuation(stream_dir, episode, episode.continuation["role"])
-        artifacts.append_log_locked(stream_dir, episode.observed_at, "Content-policy narrowed continuation", f"{POLICY_BLOCKER} Exact native refusal {episode.failure_entry} SHA-256 {episode.failure_sha256}. Lastgood is retained. No rejected assignment or saved input is included in SYNC/RESUME.", request_id=f"policy-narrowed:{episode.id}")
-    else:
-        episode.continuation.update(nativeFile=str(path), savedInput={"entryId": episode.saved_entry, "sha256": episode.saved_sha256}, handovers=[])
+    episode.continuation.update(nativeFile=str(path), savedInput={"entryId": episode.saved_entry, "sha256": episode.saved_sha256}, handovers=[])
     handover = stream_dir / "handover" / episode.continuation["role"] / (episode.session + ".md")
-    if episode.kind != "content-policy" and handover.exists():
+    if handover.exists():
         with sessionlog.regular_reader(handover) as source:
             raw = source.read()
         if raw.splitlines()[:1] != [("session: " + episode.session).encode()]:
