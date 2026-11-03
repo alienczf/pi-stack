@@ -49,7 +49,7 @@
     {
       "path": "dist/server/sessions/sessionFailureBoundary.js",
       "before": "895fcd375f8575e5783531febf7f8a52957c7952bcb27e373a6eb3b4b4e6a134",
-      "after": "60311f37a2c3a09835c8485db1c1e8de35f9cb4643b48a42ea8d38ccf570a4f8",
+      "after": "37f5260b6bfd7b02525f915376368fc9a6fc5e39fc76542430dc9e4de0d4f95c",
       "contentFile": "pi-web/postimages/dist/server/sessions/sessionFailureBoundary.js"
     },
     {
@@ -79,7 +79,7 @@
     {
       "path": "dist/server/sessions/streamTransientRetry.js",
       "before": null,
-      "after": "38d7cf2f3073c0add290068f8312552663b7bb45358b20ab89d905ebba38b985",
+      "after": "a35ec04c7382b4569091b068272252326f35f62aad9eeb4e9eaa4ac713f8c00d",
       "contentFile": "pi-web/postimages/dist/server/sessions/streamTransientRetry.js"
     },
     {
@@ -313,6 +313,28 @@
       "dist/server/sessions/sessionFailureRetirement.js": "3fc10a9e1f9e4c6acc9e4e720c89ecf52856810df96f5d0f52ed8d3ec0d2b934",
       "dist/server/sessions/sessionMaintenanceController.js": "6f615db92e84e596e8de8b4694104729450254f5a000d940b2ab84575414e388",
       "dist/server/sessions/sessionRoutes.js": "35fd5cade7e740181b6e84a6528c1bf8f55ad1a29a22ec4007e47d105d389310",
+      "dist/server/sessions/streamTransientRetry.js": "38d7cf2f3073c0add290068f8312552663b7bb45358b20ab89d905ebba38b985",
+      "dist/shared/apiTypes.d.ts": "22efb9772451ce0bdc4a5847470808720ce030272de50b579de0282fb88fe46b",
+      "dist/shared/apiTypes.js": "07fac1e02b09c8703b6f8e4681324eda7c0e1da36eafc0d3d18a5873b85f9c58",
+      "dist/shared/capabilities.js": "de7dc0e1274a382dd27b26e4cc7e1410b83cba0ac477ba6b1b9d43ad3cc9c10f",
+      "node_modules/@earendil-works/pi-ai/dist/utils/retry.d.ts": "754a374582c439c53a8f19d449877ea1e7643a0542587d0dc19ce005fc9f669a",
+      "node_modules/@earendil-works/pi-ai/dist/utils/retry.js": "7458879d84aabcd99b5f987d403d5e7a3a7ddf4b41b7957867f13a2adbb001f0",
+      "node_modules/@earendil-works/pi-coding-agent/dist/core/agent-session.d.ts": "07ae68d764d7cb4b34ac152b5164060a38b9766c9d4b40e84be33391e94f69c5",
+      "node_modules/@earendil-works/pi-coding-agent/dist/core/agent-session.js": "58be557036d20718f41f12718dc1881da4a0f84012676633c3524e117797498f",
+      "node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/loader.js": "86def744d7d8f9f21a6b1ef161c0535ebcf8b98d152f00501831a9584c5feb46",
+      "node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/types.d.ts": "d285a4531d952ed7ec3b10c621af8771b645e00f108a5db9294d5ec9d43cda8f",
+      "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/utils/retry.d.ts": "754a374582c439c53a8f19d449877ea1e7643a0542587d0dc19ce005fc9f669a",
+      "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/utils/retry.js": "7458879d84aabcd99b5f987d403d5e7a3a7ddf4b41b7957867f13a2adbb001f0"
+    },
+    {
+      "dist/server/sessiond/sessionServiceDependencies.js": "b230917f9ad16c8ab7b554727be4fbef927999bc3b7720d58875d7c03caa3e40",
+      "dist/server/sessions/extensionCallbackOwnership.js": "0a4340157eb3deb6acec137061fafe2849ce33b81612f20e9158ebfbb8e4a75e",
+      "dist/server/sessions/piSessionService.js": "a7d57ca491483f9c902d38aa4944949ff8ad830a9a5e3c264d7d4febe31fd601",
+      "dist/server/sessions/sessionFailureBoundary.js": "60311f37a2c3a09835c8485db1c1e8de35f9cb4643b48a42ea8d38ccf570a4f8",
+      "dist/server/sessions/sessionFailureRecovery.js": "9fb017b3e5c14e8c6203b4e163dc044e3de07969c19e1135bd7072231b77a192",
+      "dist/server/sessions/sessionFailureRetirement.js": "3fc10a9e1f9e4c6acc9e4e720c89ecf52856810df96f5d0f52ed8d3ec0d2b934",
+      "dist/server/sessions/sessionMaintenanceController.js": "6f615db92e84e596e8de8b4694104729450254f5a000d940b2ab84575414e388",
+      "dist/server/sessions/sessionRoutes.js": "e71edb7b44040f19df6c389e1f97c4743ecf36ed9f44d72f6017aae05589f50e",
       "dist/server/sessions/streamTransientRetry.js": "38d7cf2f3073c0add290068f8312552663b7bb45358b20ab89d905ebba38b985",
       "dist/shared/apiTypes.d.ts": "22efb9772451ce0bdc4a5847470808720ce030272de50b579de0282fb88fe46b",
       "dist/shared/apiTypes.js": "07fac1e02b09c8703b6f8e4681324eda7c0e1da36eafc0d3d18a5873b85f9c58",

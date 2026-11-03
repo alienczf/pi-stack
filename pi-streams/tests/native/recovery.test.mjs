@@ -14,10 +14,20 @@ const { SessionFailureRetirements } = await native('dist/server/sessions/session
 const { expandPotetoInvocation } = await native('dist/server/sessions/potetoInvocation.js');
 const { estimateTokens } = await native('node_modules/@earendil-works/pi-coding-agent/dist/core/compaction/index.js');
 
-async function parked(role = 'coordinator', enrolled = true) {
+async function parked(role = 'coordinator', enrolled = true, { settledRetry = false } = {}) {
     const deps = sessionServiceDependencies({});
-    const f = await fixture([...Array.from({ length: 8 }, () => response('A verified good turn. '.repeat(2000))), errorResponse('Codex login expired')], {}, { policy: deps.engineRecoveryPolicy, ...(enrolled ? { enroll: { policyId: 'enrolled-prefix-v1', role, assignment: 'Implement only the bounded native regression in this owned worktree.' } } : {}) });
-    for (let index = 0; index < 8; index++) await f.session.prompt('A good turn ' + index);
+    const f = await fixture([...(settledRetry ? [errorResponse('overloaded')] : []), ...Array.from({ length: 8 }, () => response('A verified good turn. '.repeat(2000))), errorResponse('Codex login expired')], {}, { policy: deps.engineRecoveryPolicy, ...(enrolled ? { enroll: { policyId: 'enrolled-prefix-v1', role, assignment: 'Implement only the bounded native regression in this owned worktree.' } } : {}) });
+    for (let index = 0; index < 8; index++) {
+        if (index === 0 && settledRetry) {
+            const { clock } = await import('./helpers.mjs');
+            const time = clock();
+            try {
+                const scheduled = new Promise(resolve => { const off = f.session.subscribe(event => { if (event.type === 'auto_retry_start') { off(); resolve(); } }); });
+                const run = f.session.prompt('A good turn ' + index);
+                await scheduled; await flush(); await time.advance(5000); await run;
+            } finally { time.restore(); }
+        } else await f.session.prompt('A good turn ' + index);
+    }
     await f.session.prompt('The bounded continuation');
     const boundary = f.boundaries.snapshot(f.session);
     assert.equal(boundary.state, 'parked');
@@ -89,6 +99,9 @@ test('enrolled coordinator and worker fork the actual good prefix without verifi
         assert.equal(retired.state, 'released');
         assert.equal(existsSync(f.manager.getSessionFile()), false);
         assert.equal(f.boundaries.snapshot(fork.session).state, 'watching');
+        const { PiSessionService } = await native('dist/server/sessions/piSessionService.js');
+        const lifecycle = { activeForLookup: () => ({ runtime: { session: fork.session } }), failureBoundaries: f.boundaries };
+        assert.doesNotThrow(() => PiSessionService.prototype.assertFailureLifecycleRecord.call(lifecycle, fork.session.sessionId, fork.dir, fork.manager.getSessionFile()));
         assert.deepEqual(await retirement.retire({ id: f.session.sessionId, cwd: f.dir }, { id: result.id, forkSessionId: fork.session.sessionId }), retired);
         console.log(JSON.stringify({ scenario: 'enrolled-recovery-resume-retirement', role, original: f.session.sessionId, fork: fork.session.sessionId, forkFile: fork.manager.getSessionFile(), cacheFile: retired.cacheFile, compaction: resumed.compactionEntryId, compactionSha256: resumed.compactionSha256, observation: resumed.resume.observation, sourceSha256: retired.sourceSha256 }));
         fork.responses.length = 0;
@@ -113,6 +126,18 @@ test('enrolled coordinator and worker fork the actual good prefix without verifi
         next.session.dispose();
         f.session.dispose(); fork.session.dispose();
     }
+});
+
+test('a recovery fork honors its parent exact settled transient receipts instead of rediscovering old errors', async () => {
+    const f = await parked('coordinator', true, { settledRetry: true });
+    const result = await f.recovery.fork(f.session, f.request);
+    const prepared = await f.recovery.maintenance(f.session, { id: result.id, action: 'prepare', expectedForkGeneration: result.forkGeneration });
+    const fork = f.fork();
+    await f.boundaries.runRecovery(fork.session, prepared.operation, () => fork.session.prompt('Fresh permitted SYNC under current STATE.'));
+    assert.equal(f.boundaries.snapshot(fork.session).state, 'recovering');
+    assert.equal(f.control.snapshot({ id: fork.session.sessionId, cwd: fork.dir }).allowed, true);
+    assert(fork.manager.getBranch().some(entry => entry.customType === 'pi-web.stream-retry' && entry.data.sessionId === f.session.sessionId && entry.data.state === 'resolved'));
+    fork.session.dispose(); f.session.dispose();
 });
 
 test('historical failure-owned parking recovers without enrollment while a newer stop still wins', async () => {

@@ -9,10 +9,27 @@ const evidence = item => ({ entryId: item.value.id, sha256: hash(item.raw) });
 const usage = message => message.provider === "openai-codex" && /usage_limit_reached|usage_not_included|rate_limit_exceeded|chatgpt usage limit|codex usage limit/i.test(message.errorMessage ?? "");
 
 export function retryDispositions(branch, sid, cwd) {
+    const anchor = branch.filter(item => item.value.customType === "pi-web.stream-failure" && item.value.data?.sessionId === sid).at(-1)?.value.data;
+    const parents = new Map();
+    for (const { value } of branch) {
+        const data = value.data;
+        if (value.customType !== "pi-web.stream-failure" || data?.version !== 1 || data.cwd !== cwd || data.root !== anchor?.root || data.stream !== anchor?.stream || !["recovering", "watching"].includes(data.state) || typeof data.recovery?.originalSessionId !== "string" || typeof data.recovery.id !== "string") continue;
+        const previous = parents.get(data.sessionId);
+        if (previous !== undefined && previous !== data.recovery.originalSessionId)
+            throw new AutomaticAdmissionRejected("Retry lineage changed its original session binding");
+        parents.set(data.sessionId, data.recovery.originalSessionId);
+    }
+    const lineage = new Set([sid]);
+    let current = sid;
+    while (parents.has(current)) {
+        current = parents.get(current);
+        if (lineage.has(current)) throw new AutomaticAdmissionRejected("Retry lineage is cyclic");
+        lineage.add(current);
+    }
     const entries = new Map(branch.map((item, index) => [item.value.id, { ...item, index }]));
     const result = new Map();
     for (const { value } of branch) {
-        if (value.customType !== RETRY_TYPE || value.data?.sessionId !== sid) continue;
+        if (value.customType !== RETRY_TYPE || !lineage.has(value.data?.sessionId)) continue;
         const data = value.data;
         const failed = entries.get(data.failure?.entryId);
         if (data.version !== 1 || data.cwd !== cwd || !failed || failed.index >= entries.get(value.id).index || hash(failed.raw) !== data.failure.sha256 || failed.value.message?.stopReason !== "error" || data.identity?.provider !== failed.value.message.provider || data.identity?.model !== failed.value.message.model || typeof data.identity?.thinking !== "string" || typeof data.identity?.generation !== "string" || !Number.isSafeInteger(data.attempt) || data.attempt < 1 || data.delayMs !== 5000 || !["pending", "resolved", "terminal", "cancelled", "uncertain", "superseded"].includes(data.state))
@@ -49,7 +66,8 @@ export function unresolvedEffects(branch) {
             calls.delete(message.toolCallId);
             const details = message.details;
             const id = details?.jobId ?? details?.job_id ?? details?.externalJobId;
-            if (id) {
+            if (typeof id === "string" && id) {
+                jobs.delete("unclassified-shell-submission:" + message.toolCallId);
                 if (["completed", "succeeded", "failed", "cancelled"].includes(details.status)) jobs.delete(id);
                 else jobs.add(id);
             }

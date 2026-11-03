@@ -154,10 +154,33 @@ def verify_good_checkpoint(path: Path, sid: str, cwd: str, leaf: object, checkpo
 
 
 def retry_dispositions(branch: list[tuple[dict, bytes]], sid: str, cwd: str, native_retry: dict | None = None) -> dict[str, dict]:
+    anchor = next((entry.get("data", {}) for entry, _ in reversed(branch) if entry.get("customType") == "pi-web.stream-failure" and isinstance(entry.get("data"), dict) and entry["data"].get("sessionId") == sid), {})
+    parents = {}
+    for entry, _ in branch:
+        if entry.get("customType") != "pi-web.stream-failure":
+            continue
+        data = entry.get("data", {})
+        if not isinstance(data, dict):
+            raise StreamsError("Retry lineage metadata is malformed")
+        recovery = data.get("recovery", {})
+        if not isinstance(recovery, dict):
+            raise StreamsError("Retry lineage ownership is malformed")
+        if data.get("version") != 1 or data.get("cwd") != cwd or any(data.get(key) != anchor.get(key) for key in ("root", "stream")) or data.get("state") not in {"recovering", "watching"} or not isinstance(recovery.get("originalSessionId"), str) or not isinstance(recovery.get("id"), str):
+            continue
+        if data.get("sessionId") in parents and parents[data["sessionId"]] != recovery["originalSessionId"]:
+            raise StreamsError("Retry lineage changed its original session binding")
+        parents[data.get("sessionId")] = recovery["originalSessionId"]
+    lineage = {sid}
+    current = sid
+    while current in parents:
+        current = parents[current]
+        if current in lineage:
+            raise StreamsError("Retry lineage is cyclic")
+        lineage.add(current)
     positions = {entry["id"]: (index, entry, raw) for index, (entry, raw) in enumerate(branch)}
     result = {}
     for index, (entry, _) in enumerate(branch):
-        if entry.get("customType") != "pi-web.stream-retry" or not isinstance(entry.get("data"), dict) or entry["data"].get("sessionId") != sid:
+        if entry.get("customType") != "pi-web.stream-retry" or not isinstance(entry.get("data"), dict) or entry["data"].get("sessionId") not in lineage:
             continue
         data = entry["data"]
         failed = data.get("failure", {})
@@ -190,6 +213,7 @@ def failure_observation(path: Path, sid: str, cwd: str, leaf: object, failure_en
     failed = None
     saved = ("", "")
     uncertain: dict[str, dict[str, str]] = {}
+    pending: set[str] = set()
     for entry, raw in branch:
         if retries.get(entry["id"], {}).get("state") in {"resolved", "pending", "superseded"}:
             continue
@@ -198,11 +222,27 @@ def failure_observation(path: Path, sid: str, cwd: str, leaf: object, failure_en
             continue
         if message.get("role") == "user":
             saved = entry["id"], hashlib.sha256(raw).hexdigest()
+        if message.get("role") == "assistant" and message.get("stopReason") != "error":
+            content = message.get("content", [])
+            for part in content if isinstance(content, list) else []:
+                if not isinstance(part, dict) or part.get("type") != "toolCall":
+                    continue
+                identity = part.get("id")
+                if not isinstance(identity, str) or not identity or identity in pending:
+                    raise StreamsError("External-effect tool-call ownership is ambiguous")
+                pending.add(identity)
+                arguments = part.get("arguments", {})
+                command = arguments.get("command") if isinstance(arguments, dict) else None
+                if part.get("name") == "bash" and (not isinstance(command, str) or re.search(r"\b(sbatch|qsub|nohup)\b|(?:^|[^&])&(?:$|[^&])", command)):
+                    key = "unclassified-shell-submission:" + identity
+                    uncertain[key] = {"id": key, "state": "unknown"}
         if message.get("role") == "toolResult":
+            pending.discard(message.get("toolCallId"))
             details = message.get("details")
             if isinstance(details, dict):
                 job = details.get("jobId", details.get("job_id", details.get("externalJobId")))
                 if isinstance(job, str) and job:
+                    uncertain.pop("unclassified-shell-submission:" + str(message.get("toolCallId")), None)
                     status = str(details.get("status", "unknown"))
                     if status in ("completed", "succeeded", "failed", "cancelled"):
                         uncertain.pop(job, None)
@@ -220,6 +260,9 @@ def failure_observation(path: Path, sid: str, cwd: str, leaf: object, failure_en
                 continue
         failed = {"entryId": entry["id"], "sha256": hashlib.sha256(raw).hexdigest(), "provider": "tool" if is_tool else str(message.get("provider", "unknown")), "message": body if isinstance(body, str) else "", "toolError": is_tool, "savedEntryId": saved[0], "savedSha256": saved[1], "uncertainJobs": []}
     if failed is not None:
+        for identity in sorted(pending):
+            key = "unmatched-tool-call:" + identity
+            uncertain[key] = {"id": key, "state": "unknown"}
         failed["uncertainJobs"] = list(uncertain.values())
     return failed
 

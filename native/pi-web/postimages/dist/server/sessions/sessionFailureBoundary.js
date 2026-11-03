@@ -202,20 +202,23 @@ export function assertFailureLifecycleFile(file, sessionId, cwd) {
         }
         branch.reverse();
         const retries = retryDispositions(branch.map(value => ({ value, raw: rawById.get(value["id"]) })), sessionId, cwd);
-        let watching = false;
+        const owned = branch.filter(entry => entry["type"] === "custom" && entry["customType"] === CUSTOM_TYPE && object(entry["data"]) && entry["data"]["sessionId"] === sessionId);
+        const latest = owned.at(-1)?.data;
+        if (!latest || latest.state !== "watching" || latest.failure !== undefined)
+            throw new AutomaticAdmissionRejected("Parked/recovering or unknown stream failure ownership still requires its engine operation");
+        for (const entry of owned) {
+            const data = entry.data;
+            if (data.version !== 1 || data.cwd !== cwd || typeof data.root !== "string" || !isAbsolute(data.root) || data.root !== latest.root || typeof data.stream !== "string" || data.stream !== latest.stream)
+                throw new AutomaticAdmissionRejected("Failure lifecycle registration identity changed");
+        }
+        if (latest.recovery && (!owned.some(entry => entry.data.state === "recovering" && isDeepStrictEqual(entry.data.recovery, latest.recovery)) || !branch.some(entry => entry.customType === "pi-web.resume-observed" && entry.data?.operationId === latest.recovery.id && entry.data?.sessionId === sessionId && entry.data?.cwd === cwd)))
+            throw new AutomaticAdmissionRejected("Released recovery has no owned hold and completed RESUME evidence");
         for (const entry of branch) {
-            if (entry["type"] === "custom" && entry["customType"] === CUSTOM_TYPE && object(entry["data"]) && entry["data"]["sessionId"] === sessionId) {
-                if (entry["data"]["version"] !== 1 || entry["data"]["cwd"] !== cwd || typeof entry["data"]["root"] !== "string" || !isAbsolute(entry["data"]["root"]) || typeof entry["data"]["stream"] !== "string" || entry["data"]["state"] !== "watching")
-                    throw new AutomaticAdmissionRejected("Parked/recovering or unconfirmed stream failure requires its scoped verified retirement operation");
-                watching = true;
-            }
-            if (watching && retries.has(entry["id"]) && !["resolved", "superseded"].includes(retries.get(entry["id"]).state))
+            if (retries.has(entry["id"]) && !["resolved", "superseded"].includes(retries.get(entry["id"]).state))
                 throw new AutomaticAdmissionRejected("Persisted retry has no completed native settlement");
-            if (watching && object(entry["message"]) && failure(entry["message"]) !== undefined && !["resolved", "superseded"].includes(retries.get(entry["id"])?.state))
+            if (object(entry["message"]) && failure(entry["message"]) !== undefined && !["resolved", "superseded"].includes(retries.get(entry["id"])?.state))
                 throw new AutomaticAdmissionRejected("Persisted stream failure remains parked before lifecycle retirement");
         }
-        if (!watching)
-            throw new AutomaticAdmissionRejected("Inherited stream failure metadata has unknown fork ownership; preserve this session");
         stable();
     }
     finally {

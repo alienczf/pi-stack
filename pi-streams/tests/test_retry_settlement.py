@@ -33,6 +33,22 @@ class RetrySettlementTests(TickCase):
         with self.assertRaisesRegex(StreamsError, 'retry'):
             sessionlog.failure_observation(path, sid, cwd, 'r')
 
+    def test_recovery_fork_honors_only_linked_parent_settlements(self):
+        path, parent, cwd, _ = self.branch()
+        fork = self.tmp / 'recovery-fork.jsonl'
+        lines = path.read_bytes().splitlines(keepends=True)
+        header = {'type': 'session', 'version': 3, 'id': 'returned-fork', 'cwd': cwd, 'parentSession': str(path)}
+        boundary = {'version': 1, 'sessionId': 'returned-fork', 'cwd': cwd, 'root': cwd, 'stream': 'fixture', 'state': 'recovering', 'recovery': {'id': 'owned-recovery', 'originalSessionId': parent}}
+        held = {'type': 'custom', 'id': 'held', 'parentId': 'r', 'customType': 'pi-web.stream-failure', 'data': boundary}
+        def publish():
+            fork.write_bytes((json.dumps(header) + '\n').encode() + b''.join(lines[1:]) + (json.dumps(held) + '\n').encode())
+        publish()
+        self.assertIsNone(sessionlog.failure_observation(fork, 'returned-fork', cwd, 'held'))
+        boundary['recovery']['originalSessionId'] = 'unrelated-session'
+        publish()
+        observed = sessionlog.failure_observation(fork, 'returned-fork', cwd, 'held')
+        self.assertEqual(observed['entryId'], 'e2')
+
     def test_pending_native_retry_holds_only_with_exact_live_owner(self):
         path, sid, cwd, data = self.branch(pending=True)
         self.assertIsNone(sessionlog.failure_observation(path, sid, cwd, 'r', native_retry=data))

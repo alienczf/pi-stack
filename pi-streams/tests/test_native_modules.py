@@ -14,13 +14,13 @@ ROOT = Path(__file__).resolve().parents[2]
 @unittest.skipUnless(os.environ.get("PI_STACK_NATIVE_TEST_ROOT"), "set PI_STACK_NATIVE_TEST_ROOT to the patched disposable package")
 class NativeModuleTests(unittest.TestCase):
     def test_actual_retry_modules(self):
-        self.run_native("retry", 12)
+        self.run_native("retry", 13)
 
     def test_actual_maintenance_modules(self):
         self.run_native("maintenance", 8)
 
     def test_actual_recovery_modules(self):
-        self.run_native("recovery", 8)
+        self.run_native("recovery", 9)
 
     def test_actual_callback_ownership_modules(self):
         self.run_native("callbacks", 5)

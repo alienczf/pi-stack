@@ -170,6 +170,22 @@ test('unresolved external jobs and unclassified shell submissions are not retrie
     }
 });
 
+test('a proven completed external job can retry inference without repeating its submission', async () => {
+    let submissions = 0;
+    const tool = { name: 'bash', label: 'Controlled job', description: 'No real shell', parameters: { type: 'object', properties: { command: { type: 'string' } } }, execute: async () => { submissions++; return { content: [{ type: 'text', text: 'Known completed job' }], details: { jobId: 'owned-completed-job', status: 'completed' } }; } };
+    const call = { ...response('', 'toolUse'), content: [{ type: 'toolCall', id: 'submitted', name: 'bash', arguments: { command: 'sbatch controlled-job' } }] };
+    const f = await fixture([call, errorResponse('503 overloaded'), response('Continued permitted work')], { bash: tool });
+    const time = clock();
+    try {
+        const scheduled = event(f.session, 'auto_retry_start');
+        const run = f.session.prompt('Reconcile the completed job without resubmission');
+        await scheduled; await flush(); await time.advance(5000); await run;
+        assert.equal(submissions, 1);
+        assert.equal(f.calls.length, 3);
+        assert.equal(f.boundaries.snapshot(f.session).state, 'watching');
+    } finally { time.restore(); f.session.dispose(); }
+});
+
 test('unwatched sessions retain their configured exponential retry delays', async () => {
     const f = await fixture([errorResponse('overloaded'), errorResponse('overloaded'), response()], {}, { watch: false });
     const time = clock();

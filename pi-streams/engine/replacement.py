@@ -250,6 +250,7 @@ def rotate_locked(index: Path, project: Project, stream_id: str) -> str:
         if resolved is None:
             raise StreamsError("no designated coordinator for a new explicit replacement")
         _idle(resolved)
+        piweb.require_settings(resolved.native.status, resolved.row.model, resolved.row.thinking)
         if checkpoint.get("session") != resolved.row.session or checkpoint.get("cwd") != str(stream):
             raise StreamsError("checkpoint does not belong to the designated coordinator")
         _validate_checkpoint_inputs(stream, checkpoint, project)
@@ -279,10 +280,14 @@ def rotate_locked(index: Path, project: Project, stream_id: str) -> str:
         _write(cache, ack["raw"].decode("utf-8"))
         if cache.read_bytes() != ack["raw"]:
             raise StreamsError("checkpoint evidence cache did not retain exact native bytes")
-        operation = {"checkpoint": checkpoint["id"], "source": resolved.row.session, "owner": f"rotation:{checkpoint['id']}", "phase": "archiving", "state": checkpoint["state"], "prompt": _pickup(stream) + f"\nRead the retained coordinator handover {stream / checkpoint['handover']} before task effects.", "entry": ack["entry"], "sha256": ack["sha256"], "generation": control["generation"]}
+        operation = {"checkpoint": checkpoint["id"], "source": resolved.row.session, "owner": f"rotation:{checkpoint['id']}", "phase": "archiving", "state": checkpoint["state"], "prompt": _pickup(stream) + f"\nRead the retained coordinator handover {stream / checkpoint['handover']} before task effects.", "entry": ack["entry"], "sha256": ack["sha256"], "generation": control["generation"], "model": resolved.row.model, "thinking": resolved.row.thinking}
         _save(stream, "coordinator_rotation", operation)
     if not isinstance(operation, dict):
         raise StreamsError("rotation operation is malformed")
+    source = next((row for row in rows if row.session == operation.get("source") and row.role == "coordinator"), None)
+    if source is None or operation.get("model", source.model) != source.model or operation.get("thinking", source.thinking) != source.thinking:
+        raise StreamsError("Rotation source model/thinking changed beyond its frozen registry intent")
+    project = replace(project, coordinator=replace(project.coordinator, model=source.model, thinking=source.thinking))
     if operation.get("state") != _digest(stream / "STATE.md"):
         raise StreamsError("checkpoint STATE changed during replacement; explicit reconciliation required")
     if operation.get("phase") == "archiving":

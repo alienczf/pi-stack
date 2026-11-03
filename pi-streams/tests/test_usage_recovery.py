@@ -120,6 +120,17 @@ class UsageRecoveryTests(TickCase):
         self.assertFalse(self.stub.automatic_admissions["coi"]["allowed"])
         self.assertEqual(self.episode()["retry_id"],"")
 
+    def test_unclassified_shell_submission_blocks_usage_reset_like_native_recovery(self):
+        submission = {**reply(''), 'stopReason': 'toolUse', 'content': [{'type': 'toolCall', 'id': 'submitted', 'name': 'bash', 'arguments': {'command': 'sbatch controlled-job'}}]}
+        result = {'role': 'toolResult', 'toolCallId': 'submitted', 'toolName': 'bash', 'isError': False, 'content': [{'type': 'text', 'text': 'Submission accepted'}], 'details': {'exitCode': 0}}
+        self.write_log('coi', str(self.stream), user('Inspect the already-submitted job without resubmission'), submission, result, failure(self.error))
+        self.routes(leaf='e4')
+        self.assertEqual(self.tick('2026-10-06T12:00:00Z').returncode, 0)
+        self.assertEqual(self.episode()['uncertain_jobs'], [{'id': 'unclassified-shell-submission:submitted', 'state': 'unknown'}])
+        self.assertEqual(self.tick('2026-10-06T13:00:00Z').returncode, 0)
+        self.assertFalse(any(item[1].endswith('/control-goal') for item in self.stub.requests))
+        self.assertFalse(self.stub.automatic_admissions['coi']['allowed'])
+
     def test_submitted_uncertain_job_is_retained_instead_of_resubmitted_at_reset(self):
         self.write_log("coi",str(self.stream),user("Reconcile the submitted private job"),{"role":"toolResult","toolCallId":"submit-call","toolName":"private-submit","isError":False,"details":{"jobId":"submitted-job-42","status":"submitted"},"content":[{"type":"text","text":"Labelled already-submitted job fixture"}]},failure(self.error))
         self.routes(leaf="e3")

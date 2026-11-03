@@ -355,7 +355,7 @@ def cmd_drive(args: argparse.Namespace) -> int:
                 if resolved is None:
                     raise StreamsError("drive control requires the designated exact native coordinator")
                 from engine import piweb
-                piweb.require_settings(resolved.native.status, project.coordinator.model, project.coordinator.thinking)
+                piweb.require_settings(resolved.native.status, resolved.row.model, resolved.row.thinking)
                 result = drive.enable(stream_dir, resolved)
     print(json.dumps(result, sort_keys=True))
     return 0

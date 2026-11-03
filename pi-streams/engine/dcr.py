@@ -307,7 +307,7 @@ def step(index: Path, project: Project, stream: str, stream_dir: Path, resolved:
         identity = uuid.uuid4().hex
         op = prepare(index, stream, stream_dir, resolved, identity, token)
     try:
-        piweb.require_settings(status, resolved.row.model if op.recovery_original else project.coordinator.model, resolved.row.thinking if op.recovery_original else project.coordinator.thinking)
+        piweb.require_settings(status, resolved.row.model, resolved.row.thinking)
         if status.get("maintenanceSupport") != "checkpoint-input-v1" or status.get("potetoInvocationSupport") != "exact-goal-v1" or status.get("dcrEventSupport") != "phase-v1":
             op.phase, op.detail = "blocked", "Native checkpoint, exact mode and idle-event capabilities are required."
             save(stream_dir, op)

@@ -149,6 +149,35 @@ class CoordinatorReuseTests(TickCase):
         self.assertIn(str(report), prompts[-1])
         self.assertFalse(any(item[1].endswith('/abort') for item in self.stub.requests))
 
+    def test_checkpoint_free_rotation_keeps_source_model_instead_of_project_default(self):
+        table = self.stream / 'threads.tsv'
+        table.write_text(table.read_text().replace('openai-codex/gpt-6-astra', 'openai-codex/gpt-6.1-sol', 1))
+        report = self.stream / 'handover/coordinator/current.md'
+        report.parent.mkdir(parents=True)
+        report.write_text('session: current\nContinue only the current authorized goal.\n')
+        self.write_log('current', str(self.stream), {'role': 'assistant', 'content': [{'type': 'text', 'text': 'A normal successful turn.'}], 'stopReason': 'stop'})
+        path = Path(self.log_path('current'))
+        entries = [json.loads(line) for line in path.read_text().splitlines()]
+        entries[-1]['id'] = 'checkpoint-ack'
+        path.write_text(''.join(json.dumps(entry) + '\n' for entry in entries))
+        successor_status = None
+        for method, route, _, body in self.stub.routes:
+            if method == 'GET' and route == '/api/sessions/current/status':
+                body['model']['id'] = 'gpt-6.1-sol'
+            if method == 'GET' and route == '/api/sessions/successor/status':
+                successor_status = body
+        def configure(body):
+            successor_status['model'] = {'provider': body['provider'], 'id': body['modelId']}
+            return 200, {'ok': True}
+        self.stub.set_routes([('POST', '/api/sessions/successor/model', 200, configure), *self.stub.routes])
+        result = self.run_streams('rotate', 'etl')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        configured = [item[3] for item in self.stub.requests if item[1] == '/api/sessions/successor/model']
+        self.assertEqual(configured, [{'provider': 'openai-codex', 'modelId': 'gpt-6.1-sol'}])
+        successor = next(line for line in self.rows(self.stream).splitlines() if line.startswith('successor\t'))
+        self.assertIn('openai-codex/gpt-6.1-sol\txhigh\tactive', successor)
+        self.assertFalse(any(item[1] == '/api/sessions/current/model' for item in self.stub.requests))
+
     def test_prearchive_retry_refuses_changed_handover_instead_of_guessing_through_checkpoint(self):
         self.checkpoint()
         with mock.patch.dict(os.environ, self.env, clear=True), stream_lock(self.stream):
