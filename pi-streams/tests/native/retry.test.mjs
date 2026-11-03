@@ -99,6 +99,30 @@ test('a completed tool does not execute again during inference retry', async () 
     } finally { time.restore(); f.session.dispose(); }
 });
 
+test('completed local redirected bash retries inference without repeating the command', async () => {
+    const { createBashTool } = await native('node_modules/@earendil-works/pi-coding-agent/dist/core/tools/bash.js');
+    const call = { ...response('', 'toolUse'), content: [{ type: 'toolCall', id: 'redirected-local', name: 'bash', arguments: { command: 'printf verified >> fixture.log 2>&1' } }] };
+    let f, executions = 0;
+    const bash = { ...createBashTool('.'), execute: (...args) => { executions++; return createBashTool(f.dir).execute(...args); } };
+    f = await fixture([call, errorResponse('503 overloaded'), response('Verified continued inference')], { bash });
+    const time = clock();
+    try {
+        const scheduled = event(f.session, 'auto_retry_start');
+        const run = f.session.prompt('Run the owned local command once and continue');
+        await scheduled; await flush();
+        assert.equal(readFileSync(f.dir + '/fixture.log', 'utf8'), 'verified');
+        assert.deepEqual(time.delays(), [5000]);
+        await time.advance(5000); await run;
+        assert.equal(executions, 1);
+        assert.equal(readFileSync(f.dir + '/fixture.log', 'utf8'), 'verified');
+        assert.equal(f.calls.length, 3);
+        assert.deepEqual(f.calls.map(c => [c.model.provider, c.model.id, c.options.reasoning]), Array(3).fill(['openai-codex', 'gpt-6.1-sol', 'xhigh']));
+        assert.equal(receipts(f).at(-1).state, 'resolved');
+        assert.equal(f.boundaries.snapshot(f.session).state, 'watching');
+        assertFailureLifecycleFile(f.manager.getSessionFile(), f.session.sessionId, f.dir);
+    } finally { time.restore(); f.session.dispose(); }
+});
+
 test('lost live retry ownership and corrupt settlement refuse cold lifecycle', async () => {
     const f = await fixture([errorResponse('overloaded'), response()]);
     const time = clock();

@@ -207,6 +207,80 @@ def retry_dispositions(branch: list[tuple[dict, bytes]], sid: str, cwd: str, nat
     return result
 
 
+def shell_submission(command: object) -> bool:
+    """Find lexical submission evidence, not proof that a script is read-only."""
+    if not isinstance(command, str):
+        return True
+    operators = ("&>>", "&>", "&&", "||", "|&", ">>", "<>", ">|", ">&", "<&", ">", "<", ";", "|", "&", "\n")
+    redirects = {"&>>", "&>", ">>", "<>", ">|", ">&", "<&", ">", "<"}
+    opaque_words = {"sbatch", "qsub", "nohup", "eval", "source", ".", "sh", "bash", "dash", "ksh", "zsh", "fish"}
+    tokens: list[tuple[str, str]] = []
+    word: str | None = None
+    index = 0
+    while index < len(command):
+        char = command[index]
+        if char == "\\":
+            index += 1
+            if index == len(command):
+                return True
+            if command[index] != "\n":
+                word = (word or "") + command[index]
+            index += 1
+            continue
+        if char in ("'", '"'):
+            quote = char
+            word = word or ""
+            index += 1
+            while index < len(command) and command[index] != quote:
+                char = command[index]
+                if quote == '"' and char in "$`":
+                    return True
+                if quote == '"' and char == "\\" and index + 1 < len(command) and command[index + 1] in '$`"\\\n':
+                    index += 1
+                    char = command[index]
+                    if char == "\n":
+                        index += 1
+                        continue
+                word += char
+                index += 1
+            if index == len(command):
+                return True
+            index += 1
+            continue
+        if char == "#" and word is None:
+            while index < len(command) and command[index] != "\n":
+                index += 1
+            continue
+        if char in "$`(){}\x00" or command.startswith(("<<", ";;", ";&"), index):
+            return True
+        operator = next((value for value in operators if command.startswith(value, index)), None)
+        if char in " \t" or operator is not None:
+            if word is not None:
+                tokens.append(("word", word))
+                word = None
+            if operator is not None:
+                tokens.append(("redirect" if operator in redirects else "operator", operator))
+                index += len(operator)
+            else:
+                index += 1
+            continue
+        word = (word or "") + char
+        index += 1
+    if word is not None:
+        tokens.append(("word", word))
+    target = False
+    for kind, text in tokens:
+        if target:
+            if kind != "word":
+                return True
+            target = False
+        elif kind == "redirect":
+            target = True
+        elif kind == "operator" and text == "&" or kind == "word" and text.rsplit("/", 1)[-1] in opaque_words:
+            return True
+    return target or not tokens or tokens[-1] in [("operator", value) for value in ("&&", "||", "|", "|&")]
+
+
 def failure_observation(path: Path, sid: str, cwd: str, leaf: object, failure_entry: str | None = None, *, native_retry: dict | None = None) -> dict | None:
     branch = branch_records(path, sid, cwd, leaf)
     retries = retry_dispositions(branch, sid, cwd, native_retry)
@@ -233,7 +307,7 @@ def failure_observation(path: Path, sid: str, cwd: str, leaf: object, failure_en
                 pending.add(identity)
                 arguments = part.get("arguments", {})
                 command = arguments.get("command") if isinstance(arguments, dict) else None
-                if part.get("name") == "bash" and (not isinstance(command, str) or re.search(r"\b(sbatch|qsub|nohup)\b|(?:^|[^&])&(?:$|[^&])", command)):
+                if part.get("name") == "bash" and shell_submission(command):
                     key = "unclassified-shell-submission:" + identity
                     uncertain[key] = {"id": key, "state": "unknown"}
         if message.get("role") == "toolResult":
