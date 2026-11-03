@@ -43,13 +43,13 @@
     {
       "path": "dist/server/sessions/piSessionService.js",
       "before": "6dffb11184022a43dfa3238284ab828679e47ca65c618178617766bee667a3ab",
-      "after": "c83204f8e022601fe1fb2fa6a18f1f803ffd2b7158afb1daa66b87d6c3da390b",
+      "after": "ee5f8b29270b26c7a709c726b44fb251219852f18ab3fba64964ca7ffc2d3e1c",
       "contentFile": "pi-web/postimages/dist/server/sessions/piSessionService.js"
     },
     {
       "path": "dist/server/sessions/sessionFailureBoundary.js",
       "before": "895fcd375f8575e5783531febf7f8a52957c7952bcb27e373a6eb3b4b4e6a134",
-      "after": "6c7856f4facd907689523e2732fdb8a3f1b707b02f18fba1397d1ca6acc9b251",
+      "after": "fedd23c9049e0601a657baa18b2ec4ecf39d4998e5cf205bc6dc4091a686c0c3",
       "contentFile": "pi-web/postimages/dist/server/sessions/sessionFailureBoundary.js"
     },
     {
@@ -73,7 +73,7 @@
     {
       "path": "dist/server/sessions/sessionRoutes.js",
       "before": "30f4d816e7355f8e564920cf8eb2040894b9cd665f1ede4714ec12ceb8068551",
-      "after": "1fa44e6a09c15f7515211183837d81c9cbfacbda7c19c16e1bcf45d9851c60be",
+      "after": "2516197866c88b24807a07a8c827587bb50ff4bdf7ab32b00464366881f874ed",
       "contentFile": "pi-web/postimages/dist/server/sessions/sessionRoutes.js"
     },
     {
@@ -85,7 +85,7 @@
     {
       "path": "dist/shared/apiTypes.d.ts",
       "before": "e158e31dd561bd0b528fd922dd68812eb6d57e0a0e68b1438d8853102e1159ac",
-      "after": "90427b6bb91042660692dbb45b042f654be5ca2102ac6050c02e3d3437f48ba7",
+      "after": "1e4ba597f43574e725c1c6eb9fbdc8ec916af9ff35e00c513952c5f8fe5d6864",
       "contentFile": "pi-web/postimages/dist/shared/apiTypes.d.ts"
     },
     {
@@ -153,6 +153,12 @@
       "before": "09378e1dd8fe338a836cb69375c10140ebc81c0ffe3d04de36ce77b040a05017",
       "after": "a702a201b3627fc2efe4e8a989d9d98314690669f761925ecc92f635016f0a71",
       "contentFile": "pi-web/postimages/dist/server/sessions/automaticAdmissionStore.js"
+    },
+    {
+      "path": "dist/server/sessions/cleanPolicyAnalysis.js",
+      "before": null,
+      "after": "b175f366c75042de6dafc33f063b909c5f40b8ae87558d9eb35dd3a6d21b59f8",
+      "contentFile": "pi-web/postimages/dist/server/sessions/cleanPolicyAnalysis.js"
     }
   ],
   "inputs": [
@@ -177,6 +183,7 @@
       "node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/types.d.ts": "d3fb9d55d312e47df861507aeef41c1183261c3a577588dc2ddb1c97cc909d6e",
       "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/utils/retry.d.ts": "7bd72530a16a91d5cc5336b52614cc01326bb22dec1c1c64b57b60e39a8d681a",
       "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/utils/retry.js": "916476be8a85ad16f9de3d0cfc3eb341b3290445fde3717593b139fd7ee31b7b",
+      "dist/server/sessions/cleanPolicyAnalysis.js": null,
       "dist/server/sessions/automaticAdmissionStore.js": "09378e1dd8fe338a836cb69375c10140ebc81c0ffe3d04de36ce77b040a05017"
     },
     {
@@ -200,6 +207,7 @@
       "node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/types.d.ts": "d285a4531d952ed7ec3b10c621af8771b645e00f108a5db9294d5ec9d43cda8f",
       "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/utils/retry.d.ts": "7bd72530a16a91d5cc5336b52614cc01326bb22dec1c1c64b57b60e39a8d681a",
       "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/utils/retry.js": "916476be8a85ad16f9de3d0cfc3eb341b3290445fde3717593b139fd7ee31b7b",
+      "dist/server/sessions/cleanPolicyAnalysis.js": null,
       "dist/server/sessions/automaticAdmissionStore.js": "09378e1dd8fe338a836cb69375c10140ebc81c0ffe3d04de36ce77b040a05017"
     },
     {
@@ -223,6 +231,7 @@
       "node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/types.d.ts": "d285a4531d952ed7ec3b10c621af8771b645e00f108a5db9294d5ec9d43cda8f",
       "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/utils/retry.d.ts": "7bd72530a16a91d5cc5336b52614cc01326bb22dec1c1c64b57b60e39a8d681a",
       "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/utils/retry.js": "916476be8a85ad16f9de3d0cfc3eb341b3290445fde3717593b139fd7ee31b7b",
+      "dist/server/sessions/cleanPolicyAnalysis.js": null,
       "dist/server/sessions/automaticAdmissionStore.js": "09378e1dd8fe338a836cb69375c10140ebc81c0ffe3d04de36ce77b040a05017"
     },
     {
@@ -246,6 +255,7 @@
       "node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/types.d.ts": "d285a4531d952ed7ec3b10c621af8771b645e00f108a5db9294d5ec9d43cda8f",
       "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/utils/retry.d.ts": "7bd72530a16a91d5cc5336b52614cc01326bb22dec1c1c64b57b60e39a8d681a",
       "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/utils/retry.js": "916476be8a85ad16f9de3d0cfc3eb341b3290445fde3717593b139fd7ee31b7b",
+      "dist/server/sessions/cleanPolicyAnalysis.js": null,
       "dist/server/sessions/automaticAdmissionStore.js": "09378e1dd8fe338a836cb69375c10140ebc81c0ffe3d04de36ce77b040a05017"
     },
     {
@@ -269,6 +279,7 @@
       "node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/types.d.ts": "d285a4531d952ed7ec3b10c621af8771b645e00f108a5db9294d5ec9d43cda8f",
       "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/utils/retry.d.ts": "7bd72530a16a91d5cc5336b52614cc01326bb22dec1c1c64b57b60e39a8d681a",
       "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/utils/retry.js": "916476be8a85ad16f9de3d0cfc3eb341b3290445fde3717593b139fd7ee31b7b",
+      "dist/server/sessions/cleanPolicyAnalysis.js": null,
       "dist/server/sessions/automaticAdmissionStore.js": "09378e1dd8fe338a836cb69375c10140ebc81c0ffe3d04de36ce77b040a05017"
     },
     {
@@ -292,6 +303,7 @@
       "node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/types.d.ts": "d285a4531d952ed7ec3b10c621af8771b645e00f108a5db9294d5ec9d43cda8f",
       "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/utils/retry.d.ts": "7bd72530a16a91d5cc5336b52614cc01326bb22dec1c1c64b57b60e39a8d681a",
       "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/utils/retry.js": "916476be8a85ad16f9de3d0cfc3eb341b3290445fde3717593b139fd7ee31b7b",
+      "dist/server/sessions/cleanPolicyAnalysis.js": null,
       "dist/server/sessions/automaticAdmissionStore.js": "09378e1dd8fe338a836cb69375c10140ebc81c0ffe3d04de36ce77b040a05017"
     },
     {
@@ -315,6 +327,7 @@
       "node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/types.d.ts": "d285a4531d952ed7ec3b10c621af8771b645e00f108a5db9294d5ec9d43cda8f",
       "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/utils/retry.d.ts": "7bd72530a16a91d5cc5336b52614cc01326bb22dec1c1c64b57b60e39a8d681a",
       "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/utils/retry.js": "916476be8a85ad16f9de3d0cfc3eb341b3290445fde3717593b139fd7ee31b7b",
+      "dist/server/sessions/cleanPolicyAnalysis.js": null,
       "dist/server/sessions/automaticAdmissionStore.js": "09378e1dd8fe338a836cb69375c10140ebc81c0ffe3d04de36ce77b040a05017"
     },
     {
@@ -338,6 +351,7 @@
       "node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/types.d.ts": "d285a4531d952ed7ec3b10c621af8771b645e00f108a5db9294d5ec9d43cda8f",
       "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/utils/retry.d.ts": "754a374582c439c53a8f19d449877ea1e7643a0542587d0dc19ce005fc9f669a",
       "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/utils/retry.js": "7458879d84aabcd99b5f987d403d5e7a3a7ddf4b41b7957867f13a2adbb001f0",
+      "dist/server/sessions/cleanPolicyAnalysis.js": null,
       "dist/server/sessions/automaticAdmissionStore.js": "09378e1dd8fe338a836cb69375c10140ebc81c0ffe3d04de36ce77b040a05017"
     },
     {
@@ -361,6 +375,7 @@
       "node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/types.d.ts": "d285a4531d952ed7ec3b10c621af8771b645e00f108a5db9294d5ec9d43cda8f",
       "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/utils/retry.d.ts": "754a374582c439c53a8f19d449877ea1e7643a0542587d0dc19ce005fc9f669a",
       "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/utils/retry.js": "7458879d84aabcd99b5f987d403d5e7a3a7ddf4b41b7957867f13a2adbb001f0",
+      "dist/server/sessions/cleanPolicyAnalysis.js": null,
       "dist/server/sessions/automaticAdmissionStore.js": "09378e1dd8fe338a836cb69375c10140ebc81c0ffe3d04de36ce77b040a05017"
     },
     {
@@ -384,6 +399,7 @@
       "node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/types.d.ts": "d285a4531d952ed7ec3b10c621af8771b645e00f108a5db9294d5ec9d43cda8f",
       "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/utils/retry.d.ts": "754a374582c439c53a8f19d449877ea1e7643a0542587d0dc19ce005fc9f669a",
       "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/utils/retry.js": "7458879d84aabcd99b5f987d403d5e7a3a7ddf4b41b7957867f13a2adbb001f0",
+      "dist/server/sessions/cleanPolicyAnalysis.js": null,
       "dist/server/sessions/automaticAdmissionStore.js": "09378e1dd8fe338a836cb69375c10140ebc81c0ffe3d04de36ce77b040a05017"
     },
     {
@@ -407,6 +423,7 @@
       "node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/types.d.ts": "d285a4531d952ed7ec3b10c621af8771b645e00f108a5db9294d5ec9d43cda8f",
       "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/utils/retry.d.ts": "754a374582c439c53a8f19d449877ea1e7643a0542587d0dc19ce005fc9f669a",
       "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/utils/retry.js": "f9da58e19e17df4d4f7caef5fbc09210d46e74cf34de7dc88b5bf4ca62f19528",
+      "dist/server/sessions/cleanPolicyAnalysis.js": null,
       "dist/server/sessions/automaticAdmissionStore.js": "09378e1dd8fe338a836cb69375c10140ebc81c0ffe3d04de36ce77b040a05017"
     },
     {
@@ -430,6 +447,7 @@
       "node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/types.d.ts": "d285a4531d952ed7ec3b10c621af8771b645e00f108a5db9294d5ec9d43cda8f",
       "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/utils/retry.d.ts": "754a374582c439c53a8f19d449877ea1e7643a0542587d0dc19ce005fc9f669a",
       "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/utils/retry.js": "f9da58e19e17df4d4f7caef5fbc09210d46e74cf34de7dc88b5bf4ca62f19528",
+      "dist/server/sessions/cleanPolicyAnalysis.js": null,
       "dist/server/sessions/automaticAdmissionStore.js": "09378e1dd8fe338a836cb69375c10140ebc81c0ffe3d04de36ce77b040a05017"
     },
     {
@@ -453,6 +471,7 @@
       "node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/types.d.ts": "d285a4531d952ed7ec3b10c621af8771b645e00f108a5db9294d5ec9d43cda8f",
       "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/utils/retry.d.ts": "754a374582c439c53a8f19d449877ea1e7643a0542587d0dc19ce005fc9f669a",
       "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/utils/retry.js": "f9da58e19e17df4d4f7caef5fbc09210d46e74cf34de7dc88b5bf4ca62f19528",
+      "dist/server/sessions/cleanPolicyAnalysis.js": null,
       "dist/server/sessions/automaticAdmissionStore.js": "09378e1dd8fe338a836cb69375c10140ebc81c0ffe3d04de36ce77b040a05017"
     },
     {
@@ -476,6 +495,7 @@
       "node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/types.d.ts": "d285a4531d952ed7ec3b10c621af8771b645e00f108a5db9294d5ec9d43cda8f",
       "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/utils/retry.d.ts": "754a374582c439c53a8f19d449877ea1e7643a0542587d0dc19ce005fc9f669a",
       "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/utils/retry.js": "f9da58e19e17df4d4f7caef5fbc09210d46e74cf34de7dc88b5bf4ca62f19528",
+      "dist/server/sessions/cleanPolicyAnalysis.js": null,
       "dist/server/sessions/automaticAdmissionStore.js": "09378e1dd8fe338a836cb69375c10140ebc81c0ffe3d04de36ce77b040a05017"
     },
     {
@@ -499,6 +519,7 @@
       "node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/types.d.ts": "d285a4531d952ed7ec3b10c621af8771b645e00f108a5db9294d5ec9d43cda8f",
       "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/utils/retry.d.ts": "754a374582c439c53a8f19d449877ea1e7643a0542587d0dc19ce005fc9f669a",
       "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/utils/retry.js": "f9da58e19e17df4d4f7caef5fbc09210d46e74cf34de7dc88b5bf4ca62f19528",
+      "dist/server/sessions/cleanPolicyAnalysis.js": null,
       "dist/server/sessions/automaticAdmissionStore.js": "09378e1dd8fe338a836cb69375c10140ebc81c0ffe3d04de36ce77b040a05017"
     },
     {
@@ -522,6 +543,7 @@
       "node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/types.d.ts": "d285a4531d952ed7ec3b10c621af8771b645e00f108a5db9294d5ec9d43cda8f",
       "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/utils/retry.d.ts": "754a374582c439c53a8f19d449877ea1e7643a0542587d0dc19ce005fc9f669a",
       "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/utils/retry.js": "f9da58e19e17df4d4f7caef5fbc09210d46e74cf34de7dc88b5bf4ca62f19528",
+      "dist/server/sessions/cleanPolicyAnalysis.js": null,
       "dist/server/sessions/automaticAdmissionStore.js": "09378e1dd8fe338a836cb69375c10140ebc81c0ffe3d04de36ce77b040a05017"
     },
     {
@@ -545,6 +567,7 @@
       "node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/types.d.ts": "d285a4531d952ed7ec3b10c621af8771b645e00f108a5db9294d5ec9d43cda8f",
       "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/utils/retry.d.ts": "754a374582c439c53a8f19d449877ea1e7643a0542587d0dc19ce005fc9f669a",
       "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/utils/retry.js": "f9da58e19e17df4d4f7caef5fbc09210d46e74cf34de7dc88b5bf4ca62f19528",
+      "dist/server/sessions/cleanPolicyAnalysis.js": null,
       "dist/server/sessions/automaticAdmissionStore.js": "09378e1dd8fe338a836cb69375c10140ebc81c0ffe3d04de36ce77b040a05017"
     },
     {
@@ -568,6 +591,7 @@
       "node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/types.d.ts": "d285a4531d952ed7ec3b10c621af8771b645e00f108a5db9294d5ec9d43cda8f",
       "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/utils/retry.d.ts": "754a374582c439c53a8f19d449877ea1e7643a0542587d0dc19ce005fc9f669a",
       "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/utils/retry.js": "f9da58e19e17df4d4f7caef5fbc09210d46e74cf34de7dc88b5bf4ca62f19528",
+      "dist/server/sessions/cleanPolicyAnalysis.js": null,
       "dist/server/sessions/automaticAdmissionStore.js": "09378e1dd8fe338a836cb69375c10140ebc81c0ffe3d04de36ce77b040a05017"
     },
     {
@@ -591,6 +615,7 @@
       "node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/types.d.ts": "d285a4531d952ed7ec3b10c621af8771b645e00f108a5db9294d5ec9d43cda8f",
       "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/utils/retry.d.ts": "754a374582c439c53a8f19d449877ea1e7643a0542587d0dc19ce005fc9f669a",
       "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/utils/retry.js": "f9da58e19e17df4d4f7caef5fbc09210d46e74cf34de7dc88b5bf4ca62f19528",
+      "dist/server/sessions/cleanPolicyAnalysis.js": null,
       "dist/server/sessions/automaticAdmissionStore.js": "09378e1dd8fe338a836cb69375c10140ebc81c0ffe3d04de36ce77b040a05017"
     },
     {
@@ -614,6 +639,7 @@
       "node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/types.d.ts": "d285a4531d952ed7ec3b10c621af8771b645e00f108a5db9294d5ec9d43cda8f",
       "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/utils/retry.d.ts": "754a374582c439c53a8f19d449877ea1e7643a0542587d0dc19ce005fc9f669a",
       "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/utils/retry.js": "f9da58e19e17df4d4f7caef5fbc09210d46e74cf34de7dc88b5bf4ca62f19528",
+      "dist/server/sessions/cleanPolicyAnalysis.js": null,
       "dist/server/sessions/automaticAdmissionStore.js": "09378e1dd8fe338a836cb69375c10140ebc81c0ffe3d04de36ce77b040a05017"
     },
     {
@@ -637,6 +663,55 @@
       "node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/types.d.ts": "d285a4531d952ed7ec3b10c621af8771b645e00f108a5db9294d5ec9d43cda8f",
       "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/utils/retry.d.ts": "754a374582c439c53a8f19d449877ea1e7643a0542587d0dc19ce005fc9f669a",
       "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/utils/retry.js": "f9da58e19e17df4d4f7caef5fbc09210d46e74cf34de7dc88b5bf4ca62f19528",
+      "dist/server/sessions/cleanPolicyAnalysis.js": null,
+      "dist/server/sessions/automaticAdmissionStore.js": "09378e1dd8fe338a836cb69375c10140ebc81c0ffe3d04de36ce77b040a05017"
+    },
+    {
+      "dist/server/sessiond/sessionServiceDependencies.js": "b230917f9ad16c8ab7b554727be4fbef927999bc3b7720d58875d7c03caa3e40",
+      "dist/server/sessions/extensionCallbackOwnership.js": "0a4340157eb3deb6acec137061fafe2849ce33b81612f20e9158ebfbb8e4a75e",
+      "dist/server/sessions/piSessionService.js": "c83204f8e022601fe1fb2fa6a18f1f803ffd2b7158afb1daa66b87d6c3da390b",
+      "dist/server/sessions/sessionFailureBoundary.js": "6c7856f4facd907689523e2732fdb8a3f1b707b02f18fba1397d1ca6acc9b251",
+      "dist/server/sessions/sessionFailureRecovery.js": "e00deaf2e002c7af583ba1b2ac41c3c5a36d27f112dc8e89aff05cc5a4f9ac9e",
+      "dist/server/sessions/sessionFailureRetirement.js": "3fc10a9e1f9e4c6acc9e4e720c89ecf52856810df96f5d0f52ed8d3ec0d2b934",
+      "dist/server/sessions/sessionMaintenanceController.js": "80cc1445cef466f157c9872d95d4e62dfebc2c3ae126280d18043cb56fcac9f4",
+      "dist/server/sessions/sessionRoutes.js": "1fa44e6a09c15f7515211183837d81c9cbfacbda7c19c16e1bcf45d9851c60be",
+      "dist/server/sessions/streamTransientRetry.js": "4d872bf1b23024fed02c4f89c9c5b4c98db3dcc3fa3589fa60b3aebbe1695aa1",
+      "dist/shared/apiTypes.d.ts": "90427b6bb91042660692dbb45b042f654be5ca2102ac6050c02e3d3437f48ba7",
+      "dist/shared/apiTypes.js": "07fac1e02b09c8703b6f8e4681324eda7c0e1da36eafc0d3d18a5873b85f9c58",
+      "dist/shared/capabilities.js": "de7dc0e1274a382dd27b26e4cc7e1410b83cba0ac477ba6b1b9d43ad3cc9c10f",
+      "node_modules/@earendil-works/pi-ai/dist/utils/retry.d.ts": "754a374582c439c53a8f19d449877ea1e7643a0542587d0dc19ce005fc9f669a",
+      "node_modules/@earendil-works/pi-ai/dist/utils/retry.js": "f9da58e19e17df4d4f7caef5fbc09210d46e74cf34de7dc88b5bf4ca62f19528",
+      "node_modules/@earendil-works/pi-coding-agent/dist/core/agent-session.d.ts": "07ae68d764d7cb4b34ac152b5164060a38b9766c9d4b40e84be33391e94f69c5",
+      "node_modules/@earendil-works/pi-coding-agent/dist/core/agent-session.js": "7697c64428dc0a6c9d1ab99c6a52dbf9437cbc1cf57471f7e13bf3b41b3728cc",
+      "node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/loader.js": "86def744d7d8f9f21a6b1ef161c0535ebcf8b98d152f00501831a9584c5feb46",
+      "node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/types.d.ts": "d285a4531d952ed7ec3b10c621af8771b645e00f108a5db9294d5ec9d43cda8f",
+      "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/utils/retry.d.ts": "754a374582c439c53a8f19d449877ea1e7643a0542587d0dc19ce005fc9f669a",
+      "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/utils/retry.js": "f9da58e19e17df4d4f7caef5fbc09210d46e74cf34de7dc88b5bf4ca62f19528",
+      "dist/server/sessions/automaticAdmissionStore.js": "a702a201b3627fc2efe4e8a989d9d98314690669f761925ecc92f635016f0a71",
+      "dist/server/sessions/cleanPolicyAnalysis.js": null
+    },
+    {
+      "dist/server/sessiond/sessionServiceDependencies.js": "b230917f9ad16c8ab7b554727be4fbef927999bc3b7720d58875d7c03caa3e40",
+      "dist/server/sessions/extensionCallbackOwnership.js": "0a4340157eb3deb6acec137061fafe2849ce33b81612f20e9158ebfbb8e4a75e",
+      "dist/server/sessions/piSessionService.js": "be59593af81c8e1de5102faea8971958acf02261e34eadd0d9c5734f23758138",
+      "dist/server/sessions/sessionFailureBoundary.js": "fedd23c9049e0601a657baa18b2ec4ecf39d4998e5cf205bc6dc4091a686c0c3",
+      "dist/server/sessions/sessionFailureRecovery.js": "e00deaf2e002c7af583ba1b2ac41c3c5a36d27f112dc8e89aff05cc5a4f9ac9e",
+      "dist/server/sessions/sessionFailureRetirement.js": "3fc10a9e1f9e4c6acc9e4e720c89ecf52856810df96f5d0f52ed8d3ec0d2b934",
+      "dist/server/sessions/sessionMaintenanceController.js": "80cc1445cef466f157c9872d95d4e62dfebc2c3ae126280d18043cb56fcac9f4",
+      "dist/server/sessions/sessionRoutes.js": "e4b728d206550f70ecdd797f91c504f3db8bcae5707f09e807812a5dba30c151",
+      "dist/server/sessions/streamTransientRetry.js": "4d872bf1b23024fed02c4f89c9c5b4c98db3dcc3fa3589fa60b3aebbe1695aa1",
+      "dist/shared/apiTypes.d.ts": "869f1a8f9e6e5bb56fa46e4e45229da11bc613cb9d92586dfb41a04853744e06",
+      "dist/shared/apiTypes.js": "07fac1e02b09c8703b6f8e4681324eda7c0e1da36eafc0d3d18a5873b85f9c58",
+      "dist/shared/capabilities.js": "de7dc0e1274a382dd27b26e4cc7e1410b83cba0ac477ba6b1b9d43ad3cc9c10f",
+      "node_modules/@earendil-works/pi-ai/dist/utils/retry.d.ts": "754a374582c439c53a8f19d449877ea1e7643a0542587d0dc19ce005fc9f669a",
+      "node_modules/@earendil-works/pi-ai/dist/utils/retry.js": "f9da58e19e17df4d4f7caef5fbc09210d46e74cf34de7dc88b5bf4ca62f19528",
+      "node_modules/@earendil-works/pi-coding-agent/dist/core/agent-session.d.ts": "07ae68d764d7cb4b34ac152b5164060a38b9766c9d4b40e84be33391e94f69c5",
+      "node_modules/@earendil-works/pi-coding-agent/dist/core/agent-session.js": "7697c64428dc0a6c9d1ab99c6a52dbf9437cbc1cf57471f7e13bf3b41b3728cc",
+      "node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/loader.js": "86def744d7d8f9f21a6b1ef161c0535ebcf8b98d152f00501831a9584c5feb46",
+      "node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/types.d.ts": "d285a4531d952ed7ec3b10c621af8771b645e00f108a5db9294d5ec9d43cda8f",
+      "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/utils/retry.d.ts": "754a374582c439c53a8f19d449877ea1e7643a0542587d0dc19ce005fc9f669a",
+      "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/utils/retry.js": "f9da58e19e17df4d4f7caef5fbc09210d46e74cf34de7dc88b5bf4ca62f19528",
+      "dist/server/sessions/cleanPolicyAnalysis.js": "b175f366c75042de6dafc33f063b909c5f40b8ae87558d9eb35dd3a6d21b59f8",
       "dist/server/sessions/automaticAdmissionStore.js": "09378e1dd8fe338a836cb69375c10140ebc81c0ffe3d04de36ce77b040a05017"
     }
   ]

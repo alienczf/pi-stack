@@ -290,6 +290,16 @@ export function registerSessionRoutes(app, sessions, eventHub, prefix = "") {
             return reply.code(mutationErrorStatus(error)).send({ error: errorMessage(error) });
         }
     });
+    app.post(`${prefix}/sessions/:sessionId/failure-recovery/analysis`, async (request, reply) => {
+        try {
+            const body = optionalRecord(request.body);
+            if (sessions.analyzePolicyFailure === undefined)
+                throw new AutomaticAdmissionRejected("Owned isolated policy analysis is unavailable");
+            return await sessions.analyzePolicyFailure(sessionLookupFromBody(request.params.sessionId, body), body);
+        } catch (error) {
+            return reply.code(mutationErrorStatus(error)).send({ error: errorMessage(error) });
+        }
+    });
     app.post(`${prefix}/sessions/:sessionId/failure-recovery/fork`, async (request, reply) => {
         try {
             const body = optionalRecord(request.body);

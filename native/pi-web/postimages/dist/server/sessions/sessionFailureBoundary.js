@@ -225,6 +225,8 @@ export function assertFailureLifecycleFile(file, sessionId, cwd) {
             if (before.dev !== path.dev || before.ino !== path.ino || !path.isFile() || before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs || after.size !== path.size || after.mtimeMs !== path.mtimeMs || after.ctimeMs !== path.ctimeMs)
                 throw new AutomaticAdmissionRejected("Failure lifecycle file changed during observation");
         };
+        if (values.some(value => value["customType"] === "pi-web.clean-policy-analysis"))
+            throw new AutomaticAdmissionRejected("Private metadata analysis cannot enter ordinary session lifecycle or project resources");
         const registered = values.some(value => value["type"] === "custom" && value["customType"] === CUSTOM_TYPE);
         if (!registered) {
             stable();

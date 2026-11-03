@@ -1017,6 +1017,7 @@ export interface SessionStatus {
     failureRetirementSupport?: "singular-original-v1";
     failureForkSupport?: "engine-prefix-v1";
     engineFailureRecoverySupport?: "enrolled-prefix-v1";
+    cleanPolicyAnalysisSupport?: "clean-policy-analysis-v1";
     streamRetrySupport?: "entry-bound-v1";
     streamRetry?: StreamRetryDisposition;
     failureBoundarySupport?: "persisted-turn-v1";

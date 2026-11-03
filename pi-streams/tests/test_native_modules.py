@@ -31,6 +31,9 @@ class NativeModuleTests(unittest.TestCase):
     def test_actual_policy_nonreplay_guard(self):
         self.run_native("policy", 4)
 
+    def test_actual_clean_policy_metadata_analysis(self):
+        self.run_native("clean-policy-analysis", 8)
+
     def test_actual_blocked_goal_dispatch(self):
         self.run_native("blocked-goals", 3)
 

@@ -260,6 +260,18 @@ def recovery_readiness(sid: str, cwd: str, status: dict, kind: str) -> bool:
     return result.get("resourceReady") is True and (kind not in {"codex-login", "usage-limit"} or result.get("authenticated") is True)
 
 
+def analyze_policy(sid: str, cwd: str, request: dict, model: str, thinking: str) -> dict:
+    result = call(["failure-analysis", sid, "--cwd", cwd], stdin=json.dumps(request, ensure_ascii=False)).get("result")
+    provider, model_id = split_model(model)
+    if (not isinstance(result, dict) or result.get("version") != 1 or result.get("basis") != "clean-policy-analysis-v1"
+        or result.get("id") != request["id"] or result.get("originalSessionId") != sid or result.get("cwd") != cwd
+        or result.get("failure") != request["expected"]["failure"] or result.get("blockedGoalSha256") != request["blockedGoalSha256"]
+        or result.get("originalTaskBlocked") is not True or result.get("provider") != provider or result.get("model") != model_id or result.get("thinking") != thinking
+        or result.get("state") not in {"analyzed", "blocked", "rejected", "superseded", "uncertain"} or not isinstance(result.get("audit"), dict)):
+        raise StreamsError("Clean metadata analysis returned an unconfirmed basis, source, model or blocker")
+    return result
+
+
 def fork_failure(sid: str, cwd: str, request: dict) -> dict:
     result = call(["failure-fork", sid, "--cwd", cwd], stdin=json.dumps(request, ensure_ascii=False)).get("result")
     if not isinstance(result, dict) or result.get("version") != 1 or result.get("originalSessionId") != sid or result.get("cwd") != cwd or result.get("id") != request.get("id"):
