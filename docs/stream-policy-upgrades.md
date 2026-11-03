@@ -18,13 +18,19 @@ The engine encloses active STATE selections in literal code fences so legacy hea
 
 A plan without STATE mappings retains the existing archival-only behavior. Its `limitations` and migration Log state that current objectives, job state and STOPs are not inferred. A ready plan is not proof that its classification preserves unknown active work or authorizes a resume. Review the source-backed classifications before applying it.
 
-## Repair a historical prefix before canonical Goals
+## Repair a classified prefix before canonical Goals
 
-1. Classify the exact prefix as historical. Obtain its byte count from the selected source. Do not classify unknown active instructions automatically.
-2. Run `pi-streams migrate STREAM --repair-plan --prefix-history-bytes N --home HOME`. The suffix must already be valid canonical STATE with unchanged owned Log bytes.
-3. Save the plan, then run `pi-streams migrate STREAM --repair-apply PLAN.json --home HOME`. The engine retains the entire original STATE by hash and changes only the classified prefix. Use `--repair-resume` after interruption.
+1. Classify the exact prefix explicitly. Obtain its UTF-8 byte count from the selected source. The selection must end at a complete line boundary. Do not infer that a completion heading or STOP is historical.
+2. For current instructions, run `pi-streams migrate STREAM --repair-plan --prefix-rules-bytes N --home HOME`. The engine retains the exact prefix visibly as active Rules inside a literal code fence. Existing Rules follow without changes.
+3. Only for a genuinely historical prefix, use `--prefix-history-bytes N` instead. The two classification options are mutually exclusive. Missing or unknown classifications refuse planning.
+4. Review and save the plan, then run `pi-streams migrate STREAM --repair-apply PLAN.json --home HOME`. The engine archives the entire original STATE with its exact bytes and SHA-256. Use `--repair-resume` after interruption.
+5. Run `pi-streams status STREAM --json --home HOME` and inspect the reported STATE path. Confirm that current STOP instructions remain in Rules. Repair does not resume work or enable drive.
 
-This operation refuses other corruption, unregistered nonempty Log and pending Log ownership. Those cases need an explicit source-backed repair plan. It does not invent Goals, rulings, handovers or a completed objective.
+The suffix must already be valid canonical STATE with unchanged owned Log bytes. Goals, ratification, North Star, current objective, Charter, existing Rules, optional sections, and Log entries retain their original bytes and order. The Log ownership record is unchanged. An unregistered empty Log acquires the empty ownership record.
+
+Version-2 plans bind the explicit prefix disposition, full source, projection, Log ownership, and planning Git parent. Source, retained archive, Log ownership, overlapping staged edits, or Git-parent drift refuses application or interrupted resumption. Existing version-1 historical plans and retained journals remain supported with their original source checks.
+
+This operation refuses malformed UTF-8, empty active Rules, other suffix corruption, unregistered nonempty Log, and pending Log ownership. Those cases need an explicit source-backed repair plan. It does not invent Goals, rulings, handovers, grants, dates, or a completed objective.
 
 ## Upgrade AGENTS and record policy
 
