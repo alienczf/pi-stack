@@ -26,7 +26,7 @@ class NativeModuleTests(unittest.TestCase):
         self.run_native("policy", 4)
 
     def test_actual_blocked_goal_dispatch(self):
-        self.run_native("blocked-goals", 2)
+        self.run_native("blocked-goals", 3)
 
     def test_actual_callback_ownership_modules(self):
         self.run_native("callbacks", 5)

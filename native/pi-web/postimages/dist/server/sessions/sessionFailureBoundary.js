@@ -36,19 +36,35 @@ export function assertGoalNotBlocked(session, text) {
     if (!session.sessionManager.getBranch().some(entry => entry.message?.role === "user"))
         return;
     const goal = fingerprint(text), sent = [], received = [];
-    let matching = false, saved;
+    let prompt, saved;
+    const settle = () => {
+        if (prompt?.state === "progress") {
+            sent.length = 0;
+            received.length = 0;
+        }
+        else if (prompt?.state === "blocked") {
+            sent.push(prompt.id);
+            received.push(prompt.evidence);
+        }
+    };
     for (const { value, raw } of persistedBranch(session)) {
         const message = value.message;
         if (message?.role === "user") {
-            matching = fingerprint(contentText(message.content)) === goal;
-            if (matching) sent.push(String(value.id));
+            settle();
+            prompt = fingerprint(contentText(message.content)) === goal ? { id: String(value.id) } : undefined;
         }
-        if (matching && message?.role === "assistant" && /(?:^|\n)\s*(?:\*\*|#{1,6}\s*)?(?:blocked\b|blocker\b|cannot proceed\b|unable to proceed\b)/i.test(contentText(message.content)))
-            received.push({ entryId: String(value.id), sha256: createHash("sha256").update(raw).digest("hex") });
+        if (prompt && message?.role === "assistant" && message.stopReason === "stop") {
+            const answer = contentText(message.content);
+            const blocked = /(?:^|\n)\s*(?:\*\*|#{1,6}\s*)?(?:blocked\b|blocker\b|cannot proceed\b|unable to proceed\b)/i.test(answer);
+            const progress = !blocked && /\b(?:completed?|implemented|verified|passed|validated|resolved|installed)\b/i.test(answer) && !/\b(?:not|never|no)\s+(?:\w+\s+){0,2}(?:completed?|implemented|verified|passed|validated|resolved|installed)\b|\bfailed\b/i.test(answer);
+            prompt.state = blocked ? "blocked" : progress ? "progress" : undefined;
+            prompt.evidence = { entryId: String(value.id), sha256: createHash("sha256").update(raw).digest("hex") };
+        }
         if (value.customType === "pi-web.blocked-goal" && value.data?.fingerprint === goal)
             saved = value.data;
     }
-    if (sent.length < 3 || received.length === 0)
+    settle();
+    if (sent.length < 3)
         return;
     const disposition = { version: 1, sessionId: session.sessionId, cwd: session.sessionManager.getCwd(), fingerprint: goal, sent, received, disposition: "suppressed" };
     if (!isDeepStrictEqual(saved, disposition)) {

@@ -30,6 +30,23 @@ test('actual control entry suppresses the fourth blocked goal even after cold re
     } finally { cold.session.dispose(); }
 });
 
+test('successful progress does not become blocked history and resets earlier blocked outcomes', async () => {
+    for (const answers of [
+        ['Completed permitted unit one and verified its artifact.', 'Passed the authorized integration check.', 'Blocked. A new dependency is unavailable.'],
+        ['Blocked. Missing fixture dependency.', 'Installed and verified the authorized dependency.', 'Validated the artifact and passed its check.'],
+    ]) {
+        const f = await fixture([...answers.map(text => response(text)), response('Continued the authorized unit.')]);
+        const goal = 'Verify the bounded offline unit';
+        for (const _ of answers) await f.session.prompt(goal);
+        const service = { automaticAdmissionStore: f.control, controlGoals: { submit: async (session, request) => { await session.prompt(request.text); return { state: 'ended' }; } }, assertWritable: async () => {}, maintenanceSession: async () => f.session };
+        try {
+            assert.equal((await PiSessionService.prototype.controlGoal.call(service, { id: f.session.sessionId, cwd: f.dir }, { id: 'permitted-fourth', text: goal })).state, 'ended');
+            assert.equal(f.calls.length, 4);
+            assert.equal(f.control.snapshot({ id: f.session.sessionId, cwd: f.dir }).allowed, true);
+        } finally { f.session.dispose(); }
+    }
+});
+
 test('completed units with no blockers and different authorized goals still dispatch', async () => {
     const f = await fixture(Array.from({ length: 4 }, () => response('Finite unit complete. No blockers. Standing goal unfinished.')));
     const ref = { id: f.session.sessionId, cwd: f.dir };

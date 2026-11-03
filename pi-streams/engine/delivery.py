@@ -296,6 +296,9 @@ def acknowledge_locked(stream_dir: Path, identity: str, session: str, state: str
     if state == "blocked":
         from engine import blocked_goals
         blocked_goals.receive(stream_dir, record.control.goal if record.control else record.body, "delivery:" + identity, sent=identity if record.state in {"transport_accepted", "consumed", "sending", "uncertain"} else "")
+    elif state == "applied":
+        from engine import blocked_goals
+        blocked_goals.progress(stream_dir, record.control.goal if record.control else record.body, identity)
     record.state = state
     record.detail = detail
     return _save(stream_dir, record)
