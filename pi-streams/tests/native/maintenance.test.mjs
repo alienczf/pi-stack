@@ -185,6 +185,31 @@ test('cold service binding and status reconcile only eligible persisted supersed
     }
 });
 
+test('mandatory maintenance on a small session performs actual native summarization instead of failing Nothing to compact', async () => {
+    const f = await fixture([response('A verified good small-session turn.'), response('Summary of the verified small-session turn.'), response('Resumed the authorized small-session unit.')]);
+    try {
+        await f.session.prompt('Verify the small owned fixture unit.');
+        const store = new SessionMaintenanceStore(join(f.dir, 'small-maintenance'));
+        const sends = [];
+        const controller = new SessionMaintenanceController(store, f.control, { current: () => true, busy: session => session.isStreaming, humanInputPending: () => false, begin: () => {}, end: () => {}, publish: () => {}, failure: (_, detail) => assert.fail(detail), send: (session, text, images, echo, goal, admitted) => { admitted?.(text); const run = session.prompt(text); sends.push(run); return run; } });
+        const ref = { id: f.session.sessionId, cwd: f.dir };
+        const generation = f.control.snapshot(ref).generation;
+        const before = f.session.messages.reduce((sum, message) => sum + estimateTokens(message), 0);
+        assert(before < 150000);
+        controller.start(f.session, { id: 'small-dcr', instructions: 'Retain the verified small unit and current scope.' }, { sessionId: ref.id, cwd: ref.cwd, generation, entryId: f.manager.getLeafId() });
+        while (controller.compacting.size) await flush();
+        const result = controller.status(f.session, 'small-dcr');
+        assert.equal(result.state, 'complete', result.detail);
+        assert.equal(f.manager.getEntry(result.compactionEntryId).type, 'compaction');
+        assert.equal(f.calls.length, 2);
+        assert(JSON.stringify(f.calls[1].context).includes('A verified good small-session turn.'));
+        controller.resume(f.session, { id: 'small-dcr', text: 'Continue the authorized small-session unit.', deliveryId: 'small-dcr:resume', compactionEntryId: result.compactionEntryId, inputSequence: 0, automaticAdmission: { sessionId: ref.id, cwd: ref.cwd, generation, kind: 'resume' } });
+        await Promise.all(sends); await flush();
+        assert.equal(controller.status(f.session, 'small-dcr').resume.observation.kind, 'assistant-stop');
+        assert(f.calls.every(call => call.model.provider === 'openai-codex' && call.model.id === 'gpt-6.1-sol'));
+    } finally { f.session.dispose(); }
+});
+
 test('stop and uncertain maintenance remain fenced', async () => {
     const f = await scenario();
     await f.control.setAllowed(f.ref, false);
