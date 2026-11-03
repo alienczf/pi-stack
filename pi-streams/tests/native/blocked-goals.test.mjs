@@ -7,7 +7,7 @@ const { SessionManager } = await native('node_modules/@earendil-works/pi-coding-
 
 test('actual control entry suppresses the fourth blocked goal even after cold reopen without changing generation or model', async () => {
     const goal = 'Verify the bounded offline fixture unit.';
-    const f = await fixture(Array.from({ length: 3 }, () => response('Blocked. The authorized fixture dependency is unavailable.')));
+    const f = await fixture(Array.from({ length: 3 }, () => response('BLOCKED_UNIT_91c is blocked. The authorized fixture dependency is unavailable.')));
     for (let index = 0; index < 3; index++) await f.session.prompt(goal);
     const file = f.manager.getSessionFile();
     f.session.dispose();

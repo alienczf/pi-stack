@@ -33,7 +33,7 @@ class BlockedGoalTests(TickCase):
             self.assertEqual(len(self.goal_posts()), 1)
             for goal in self.stub.control_goals.values():
                 goal['state'] = 'ended'
-            blocked = reply('Blocked. The required toolchain is unavailable. Do not repeat this unit.')
+            blocked = reply('BLOCKED_UNIT_91c is blocked. The required toolchain is unavailable. Do not repeat this unit.')
             blocked['timestamp'] += number
             self.write_log('coord', str(self.stream), blocked)
         for number in range(3, 6):

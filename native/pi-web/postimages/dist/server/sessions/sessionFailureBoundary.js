@@ -55,7 +55,7 @@ export function assertGoalNotBlocked(session, text) {
         }
         if (prompt && message?.role === "assistant" && message.stopReason === "stop") {
             const answer = contentText(message.content);
-            const blocked = /(?:^|\n)\s*(?:\*\*|#{1,6}\s*)?(?:blocked\b|blocker\b|cannot proceed\b|unable to proceed\b)/i.test(answer);
+            const blocked = /(?:^|\n)\s*(?:\*\*|#{1,6}\s*)?(?:blocked\b|blocker\b|cannot proceed\b|unable to proceed\b)|\b(?:is|remains)\s+blocked\b|\bcannot proceed\b|\bunable to proceed\b/i.test(answer);
             const progress = !blocked && /\b(?:completed?|implemented|verified|passed|validated|resolved|installed)\b/i.test(answer) && !/\b(?:not|never|no)\s+(?:\w+\s+){0,2}(?:completed?|implemented|verified|passed|validated|resolved|installed)\b|\bfailed\b/i.test(answer);
             prompt.state = blocked ? "blocked" : progress ? "progress" : undefined;
             prompt.evidence = { entryId: String(value.id), sha256: createHash("sha256").update(raw).digest("hex") };

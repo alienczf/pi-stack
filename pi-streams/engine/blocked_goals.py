@@ -6,7 +6,7 @@ from pathlib import Path
 
 from engine import StreamsError, artifacts, clock, sessionlog
 
-BLOCKED = re.compile(r'(?im)^\s*(?:\*\*|#{1,6}\s*)?(?:blocked\b|blocker\b|cannot proceed\b|unable to proceed\b)')
+BLOCKED = re.compile(r'(?im)^\s*(?:\*\*|#{1,6}\s*)?(?:blocked\b|blocker\b|cannot proceed\b|unable to proceed\b)|\b(?:is|remains)\s+blocked\b|\bcannot proceed\b|\bunable to proceed\b')
 PROGRESS = re.compile(r'\b(?:completed?|implemented|verified|passed|validated|resolved|installed)\b', re.IGNORECASE)
 NEGATIVE = re.compile(r'\b(?:not|never|no)\s+(?:\w+\s+){0,2}(?:completed?|implemented|verified|passed|validated|resolved|installed)\b|\bfailed\b', re.IGNORECASE)
 
@@ -113,5 +113,5 @@ def permit(stream: Path, goal: str) -> bool:
     artifacts._save_tick_data(stream, data)
     if suppressed:
         epoch = hashlib.sha256('\n'.join(streak).encode()).hexdigest()
-        artifacts.append_log_locked(stream, clock.stamp(clock.now()), 'Blocked-goal escalation', f'Goal fingerprint {key}. Three distinct prompts have consecutive blocked outcomes without reported progress. Identical prompts are suppressed. Keep drive intent on. Select a different authorized strategy or unit; this blocker is not North Star completion.', request_id=f'blocked-goal:{key}:{epoch}')
+        artifacts.append_log_locked(stream, clock.stamp(clock.now()), 'Blocked-goal escalation', f'Blocked unit {" ".join(goal.removeprefix("/poteto-mode ").split())[:300]}. Goal fingerprint {key}. Three distinct prompts have consecutive blocked outcomes without reported progress. Identical prompts are suppressed. Keep drive intent on. Select a different authorized strategy or unit; this blocker is not North Star completion.', request_id=f'blocked-goal:{key}:{epoch}')
     return not suppressed
