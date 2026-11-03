@@ -53,6 +53,35 @@ class FailureMarkerTests(TickCase):
         self.assertFalse(any(item[0] == "POST" for item in self.stub.requests))
         self.assertIsNone(self.state(self.stream)["failures"]["coi"]["authority"])
 
+    def test_historical_heuristics_recompute_from_exact_retained_branch_without_clearing_real_jobs(self):
+        path = Path(self.log_path("coi"))
+        entries = [json.loads(line) for line in path.read_text().splitlines()]
+        for part, command in zip(entries[2]["message"]["content"], ("printf verified > fixture.log 2>&1", "sleep 1 &")):
+            part.update(name="bash", arguments={"command": command})
+        path.write_text("".join(json.dumps(entry) + "\n" for entry in entries))
+        self.routes()
+        first = self.tick("2026-10-06T12:00:00Z")
+        self.assertEqual(first.returncode, 0, first.stderr)
+        state_path = self.stream / "log/tick-state.json"
+        state = self.state(self.stream)
+        real_jobs = [{"id": "unclassified-shell-submission:call-B", "state": "unknown"}]
+        self.assertEqual(state["failures"]["coi"]["uncertain_jobs"], real_jobs)
+        historical = [{"id": "unclassified-shell-submission:call-A", "state": "unknown"}, *real_jobs]
+        state["failures"]["coi"]["uncertain_jobs"] = historical
+        state_path.write_text(json.dumps(state))
+        retained = path.read_bytes()
+        path.write_bytes(retained.replace(b'"parentId": "e5"', b'"parentId": "missing"'))
+        refused = self.tick("2026-10-06T12:01:00Z")
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertEqual(self.state(self.stream)["failures"]["coi"]["uncertain_jobs"], historical)
+        path.write_bytes(retained)
+        observed = self.tick("2026-10-06T12:02:00Z")
+        self.assertEqual(observed.returncode, 0, observed.stderr)
+        self.assertEqual(self.state(self.stream)["failures"]["coi"]["uncertain_jobs"], real_jobs)
+        self.assertEqual(path.read_bytes(), retained)
+        self.assertEqual((self.stream / "failures/coi.lastgood").read_bytes(), b"e4\n")
+        self.assertFalse(any(item[0] == "POST" for item in self.stub.requests))
+
     def test_later_sdk_fence_noise_cannot_replace_the_original_native_failure_identity(self):
         with open(self.log_path("coi"),"a") as native:
             native.write(json.dumps({"type":"message","id":"e7","parentId":"e6","message":failure("Labelled SDK fence error, not another provider failure")})+"\n")

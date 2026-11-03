@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import test from 'node:test';
-import { existsSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fixture, flush, native, response, errorResponse } from './helpers.mjs';
 
@@ -14,9 +14,13 @@ const { SessionFailureRetirements } = await native('dist/server/sessions/session
 const { expandPotetoInvocation } = await native('dist/server/sessions/potetoInvocation.js');
 const { estimateTokens } = await native('node_modules/@earendil-works/pi-coding-agent/dist/core/compaction/index.js');
 
-async function parked(role = 'coordinator', enrolled = true, { settledRetry = false } = {}) {
+async function parked(role = 'coordinator', enrolled = true, { settledRetry = false, redirected = false } = {}) {
     const deps = sessionServiceDependencies({});
-    const f = await fixture([...(settledRetry ? [errorResponse('overloaded')] : []), ...Array.from({ length: 8 }, () => response('A verified good turn. '.repeat(2000))), errorResponse('Codex login expired')], {}, { policy: deps.engineRecoveryPolicy, ...(enrolled ? { enroll: { policyId: 'enrolled-prefix-v1', role, assignment: 'Implement only the bounded native regression in this owned worktree.' } } : {}) });
+    const { createBashTool } = await native('node_modules/@earendil-works/pi-coding-agent/dist/core/tools/bash.js');
+    let f;
+    const tools = redirected ? { bash: { ...createBashTool('.'), execute: (...args) => createBashTool(f.dir).execute(...args) } } : {};
+    const call = { ...response('', 'toolUse'), content: [{ type: 'toolCall', id: 'redirected-local', name: 'bash', arguments: { command: 'printf verified >> fixture.log 2>&1' } }] };
+    f = await fixture([...(settledRetry ? [errorResponse('overloaded')] : []), ...(redirected ? [call] : []), ...Array.from({ length: 8 }, () => response('A verified good turn. '.repeat(2000))), errorResponse('Codex login expired')], tools, { policy: deps.engineRecoveryPolicy, ...(enrolled ? { enroll: { policyId: 'enrolled-prefix-v1', role, assignment: 'Implement only the bounded native regression in this owned worktree.' } } : {}) });
     for (let index = 0; index < 8; index++) {
         if (index === 0 && settledRetry) {
             const { clock } = await import('./helpers.mjs');
@@ -138,6 +142,24 @@ test('a recovery fork honors its parent exact settled transient receipts instead
     assert.equal(f.control.snapshot({ id: fork.session.sessionId, cwd: fork.dir }).allowed, true);
     assert(fork.manager.getBranch().some(entry => entry.customType === 'pi-web.stream-retry' && entry.data.sessionId === f.session.sessionId && entry.data.state === 'resolved'));
     fork.session.dispose(); f.session.dispose();
+});
+
+test('historical parked lane recovers after a completed local redirected command without replay', async () => {
+    const f = await parked('implementation', false, { redirected: true });
+    try {
+        assert.equal(readFileSync(join(f.dir, 'fixture.log'), 'utf8'), 'verified');
+        const result = await f.recovery.fork(f.session, f.request);
+        assert.equal(result.state, 'forked');
+        assert.equal(f.forks(), 1);
+        assert.equal(f.fork().session.model.id, 'gpt-6.1-sol');
+        assert.equal(f.fork().session.thinkingLevel, 'xhigh');
+        const prepared = await f.recovery.maintenance(f.session, { id: result.id, action: 'prepare', expectedForkGeneration: result.forkGeneration });
+        await f.boundaries.runRecovery(f.fork().session, prepared.operation, () => f.fork().session.prompt('Continue the bounded assignment without replaying the completed local command.'));
+        assert.equal(f.boundaries.snapshot(f.fork().session).state, 'recovering');
+        assert.equal(f.fork().calls.length, 1);
+        assert.equal(readFileSync(join(f.dir, 'fixture.log'), 'utf8'), 'verified');
+        assert.equal(f.control.snapshot({ id: f.session.sessionId, cwd: f.dir }).allowed, false);
+    } finally { f.fork()?.session.dispose(); f.session.dispose(); }
 });
 
 test('historical failure-owned parking recovers without enrollment while a newer stop still wins', async () => {

@@ -52,6 +52,66 @@ export function retryDispositions(branch, sid, cwd) {
     return result;
 }
 
+function shellSubmission(command) {
+    if (typeof command !== "string") return true;
+    const operators = ["&>>", "&>", "&&", "||", "|&", ">>", "<>", ">|", ">&", "<&", ">", "<", ";", "|", "&", "\n"];
+    const redirects = new Set(["&>>", "&>", ">>", "<>", ">|", ">&", "<&", ">", "<"]);
+    const opaqueWords = new Set(["sbatch", "qsub", "nohup", "eval", "source", ".", "sh", "bash", "dash", "ksh", "zsh", "fish"]);
+    const tokens = [];
+    let word, index = 0;
+    while (index < command.length) {
+        let char = command[index];
+        if (char === "\\") {
+            if (++index === command.length) return true;
+            if (command[index] !== "\n") word = (word ?? "") + command[index];
+            index++;
+            continue;
+        }
+        if (char === "'" || char === '"') {
+            const quote = char;
+            word ??= "";
+            index++;
+            while (index < command.length && command[index] !== quote) {
+                char = command[index];
+                if (quote === '"' && "$`".includes(char)) return true;
+                if (quote === '"' && char === "\\" && index + 1 < command.length && '$`"\\\n'.includes(command[index + 1])) {
+                    char = command[++index];
+                    if (char === "\n") { index++; continue; }
+                }
+                word += char;
+                index++;
+            }
+            if (index === command.length) return true;
+            index++;
+            continue;
+        }
+        if (char === "#" && word === undefined) {
+            while (index < command.length && command[index] !== "\n") index++;
+            continue;
+        }
+        if ("$`(){}\0".includes(char) || ["<<", ";;", ";&"].some(value => command.startsWith(value, index))) return true;
+        const operator = operators.find(value => command.startsWith(value, index));
+        if (" \t".includes(char) || operator !== undefined) {
+            if (word !== undefined) { tokens.push(["word", word]); word = undefined; }
+            if (operator !== undefined) tokens.push([redirects.has(operator) ? "redirect" : "operator", operator]);
+            index += operator?.length ?? 1;
+            continue;
+        }
+        word = (word ?? "") + char;
+        index++;
+    }
+    if (word !== undefined) tokens.push(["word", word]);
+    let target = false;
+    for (const [kind, text] of tokens) {
+        if (target) {
+            if (kind !== "word") return true;
+            target = false;
+        } else if (kind === "redirect") target = true;
+        else if (kind === "operator" && text === "&" || kind === "word" && opaqueWords.has(text.split("/").at(-1))) return true;
+    }
+    return target || !tokens.length || tokens.at(-1)[0] === "operator" && ["&&", "||", "|", "|&"].includes(tokens.at(-1)[1]);
+}
+
 export function unresolvedEffects(branch) {
     const calls = new Set(), jobs = new Set();
     for (const { value } of branch) {
@@ -60,7 +120,7 @@ export function unresolvedEffects(branch) {
         if (message.role === "assistant" && message.stopReason !== "error")
             for (const part of message.content ?? []) if (part.type === "toolCall") {
                 calls.add(part.id);
-                if (part.name === "bash" && /\b(sbatch|qsub|nohup)\b|(?:^|[^&])&(?:$|[^&])/.test(part.arguments?.command ?? "")) jobs.add("unclassified-shell-submission:" + part.id);
+                if (part.name === "bash" && shellSubmission(part.arguments?.command)) jobs.add("unclassified-shell-submission:" + part.id);
             }
         if (message.role === "toolResult") {
             calls.delete(message.toolCallId);
