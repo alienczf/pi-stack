@@ -453,6 +453,8 @@ class StreamTick:
         # idle reports idle once too, which tells its coordinator that it waits.
         old = self.state.sessions.get(row.session, Seen(busy=True))
         native = self.listing(row.worktree).get(row.session, {}) if status.get("conditionalAdmissionSupport") == "generation-cas-v1" else {}
+        if native.get("archived") is True:
+            raise piweb.TerminalSession(row.session, "archived", "Exact native listing confirms archived session; a stale status runtime is not release authority")
         parked = self.observe_failure(row, native, status) if native else False
         # The last resend stopped after queue/clear, so what is not queued now was dropped.
         # A replayed prompt starts the thread again, whatever the status said before it.

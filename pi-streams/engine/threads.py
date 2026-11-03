@@ -729,6 +729,10 @@ def close_stream(index: Path, project: Project, stream_id: str) -> CloseResult:
     report: list[str] = []
     from engine import terminal_sessions
     for row in open_threads:
+        prior = terminal_sessions.load(stream_dir, row.session, row.worktree)
+        if prior is not None and prior["state"] == "missing":
+            report.append(f"missing {row.session} {row.role}; registry and handover evidence retained, no archive claimed")
+            continue
         outcome = terminal_sessions.archive(stream_dir, row.session, row.worktree, explicit=True)
         if outcome != "archived":
             raise StreamsError(f"Session {row.session} is {outcome}; no archive or handover is invented")

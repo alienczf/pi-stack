@@ -57,6 +57,32 @@ class TerminalTickTests(TickCase):
         self.assertEqual(self.state(stream)['terminal_sessions']['old-worker']['state'], 'archived')
         self.assertIn('old-worker\treview', self.rows(stream))
 
+    def test_archived_listing_wins_even_when_native_status_still_returns200(self):
+        stream = self.make_stream(self.home, 'etl', row('coord', 'coordinator', str(self.home / 'etl')) + row('old-worker', 'review', '/owned/review'))
+        self.stub.set_routes([('GET', '/api/sessions/old-worker/status', 200, {**status('old-worker'), 'conditionalAdmissionSupport': 'generation-cas-v1'}), ('GET', '/api/sessions', 200, [info('coord', str(stream), self.log_path('coord')), {**info('old-worker', '/owned/review', '/missing/original.jsonl'), 'archived': True}])])
+        for index in range(3):
+            ticked = self.tick(f'2026-11-03T03:0{index}:00Z')
+            self.assertEqual(ticked.returncode, 0, ticked.stderr)
+            self.assertEqual(sum(r[1] == '/api/sessions/old-worker/status' for r in self.stub.requests), 1 if index == 0 else 0)
+        self.assertEqual(self.state(stream)['terminal_sessions']['old-worker']['state'], 'archived')
+        self.assertIn('old-worker\treview', self.rows(stream))
+
+    def test_close_retains_missing_worker_registry_and_handover_without_claiming_archive_success(self):
+        stream = self.make_stream(self.home, 'etl', row('coord', 'coordinator', str(self.home / 'etl')) + row('missing-worker', 'review', '/owned/review'))
+        handover = stream / 'handover/review/missing-worker.md'
+        handover.parent.mkdir(parents=True)
+        handover.write_text('session: missing-worker\nVerified fixture handover before supported fixture deletion.\n')
+        self.stub.set_routes([('GET', '/api/sessions/missing-worker/status', 404, {'error': 'Session not found'})])
+        self.assertEqual(self.tick('2026-11-03T03:00:00Z').returncode, 0)
+        self.stub.requests.clear()
+        closed = self.run_streams('close', 'etl')
+        self.assertEqual(closed.returncode, 0, closed.stderr)
+        self.assertIn('missing missing-worker review', closed.stdout)
+        self.assertNotIn('archived missing-worker', closed.stdout)
+        self.assertIn('missing-worker\treview', self.rows(stream))
+        self.assertTrue(handover.is_file())
+        self.assertFalse(any(r[1].startswith('/api/sessions/missing-worker/') for r in self.stub.requests))
+
     def test_unknown_archive_effect_is_retained_without_repeated_native_calls(self):
         stream = self.make_stream(self.home, 'etl', row('coord', 'coordinator', str(self.home / 'etl'), status='done'))
         self.stub.set_routes([('POST', '/api/sessions/coord/archive', 503, {'error': 'Controlled lost archive reply'})])
