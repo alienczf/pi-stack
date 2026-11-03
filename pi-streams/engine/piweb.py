@@ -145,8 +145,12 @@ def automatic_admission(session: dict[str, object], sid: str, cwd: str, kind: st
     return {"sessionId": sid, "cwd": native_cwd, "generation": generation, "kind": kind}, raw["allowed"]
 
 
-def set_automatic_admission(sid: str, allowed: bool, *, expected_generation: str | None = None) -> dict[str, object]:
+def set_automatic_admission(sid: str, allowed: bool, *, expected_generation: str | None = None, initialize_if_absent: bool = False) -> dict[str, object]:
+    if initialize_if_absent and (not allowed or expected_generation is not None):
+        raise StreamsError("initial automatic admission requires on without an expected generation")
     flags = [] if expected_generation is None else ["--expected-generation", expected_generation]
+    if initialize_if_absent:
+        flags = ["--initialize-if-absent"]
     data = call(["automatic-admission", sid, "on" if allowed else "off", *flags])
     result = data.get("result")
     if not isinstance(result, dict) or result.get("sessionId") != sid or result.get("durable") is not True or result.get("allowed") is not allowed or not isinstance(result.get("generation"), str) or not result["generation"]:

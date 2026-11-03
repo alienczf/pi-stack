@@ -56,11 +56,19 @@ def is_paused(stream_dir: Path) -> bool:
 def enable(stream_dir: Path, resolved: Coordinator) -> dict:
     artifacts._read_stream_state_locked(stream_dir)
     require_ratified(stream_dir)
-    token, _allowed = piweb.automatic_admission(resolved.native.status, resolved.row.session, resolved.row.worktree, "wake")
+    raw = resolved.native.status.get("automaticAdmission")
+    initial = (
+        isinstance(raw, dict) and raw.get("generation") == "unarmed"
+        and raw.get("durable") is False and raw.get("allowed") is False
+        and raw.get("sessionId") == resolved.row.session
+        and raw.get("cwd") == str(Path(resolved.row.worktree).resolve())
+    )
+    generation = None if initial else piweb.automatic_admission(resolved.native.status, resolved.row.session, resolved.row.worktree, "wake")[0]["generation"]
     piweb.require_control_goal(resolved.row.session)
     record = Drive(run_id=uuid.uuid4().hex, remote_state="on-unconfirmed")
     save(stream_dir, record)
-    remote = piweb.set_automatic_admission(resolved.row.session, True, expected_generation=token["generation"])
+    remote = piweb.set_automatic_admission(resolved.row.session, True, expected_generation=generation, initialize_if_absent=initial)
+    piweb.automatic_admission({"automaticAdmission": remote}, resolved.row.session, resolved.row.worktree, "wake")
     record.enabled, record.remote_state, record.remote_generation = True, "on-confirmed", str(remote["generation"])
     return save(stream_dir, record)
 

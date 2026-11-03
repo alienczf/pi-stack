@@ -245,7 +245,9 @@ def main(argv: list[str]) -> int:
     control = sub.add_parser("automatic-admission")
     control.add_argument("sid")
     control.add_argument("mode", choices=("on", "off"))
-    control.add_argument("--expected-generation", help="compare the exact saved receiving epoch atomically; never renew it")
+    condition = control.add_mutually_exclusive_group()
+    condition.add_argument("--expected-generation", help="compare the exact saved receiving epoch atomically; never renew it")
+    condition.add_argument("--initialize-if-absent", action="store_true", help="create the first durable epoch only if no receiving record exists; preserve any existing epoch")
     readiness = sub.add_parser("failure-readiness")
     readiness.add_argument("sid")
     readiness.add_argument("--cwd", required=True)
@@ -379,10 +381,15 @@ def main(argv: list[str]) -> int:
     if args.cmd == "commands":
         return cmd_commands(args.sid)
     if args.cmd == "automatic-admission":
+        if args.initialize_if_absent and args.mode != "on":
+            return out({"ok": False, "error": "initial admission requires on"}, False)
         body = {"allowed": args.mode == "on"}
+        if args.initialize_if_absent:
+            body["initializeIfAbsent"] = True
         if args.expected_generation is not None:
             body["expectedGeneration"] = args.expected_generation
-        code, data = req("POST", f"/api/sessions/{args.sid}/automatic-admission", body)
+        suffix = "/initialize" if args.initialize_if_absent else ""
+        code, data = req("POST", f"/api/sessions/{args.sid}/automatic-admission{suffix}", body)
         ok = code == 200 and isinstance(data, dict) and not data.get("error")
         return out({"ok": ok, "status": code, "result": data}, ok)
     method, suffix, _positionals, build = VERBS[args.cmd]

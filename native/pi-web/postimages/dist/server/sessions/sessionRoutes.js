@@ -397,11 +397,26 @@ export function registerSessionRoutes(app, sessions, eventHub, prefix = "") {
             return reply.code(mutationErrorStatus(error)).send({ error: errorMessage(error) });
         }
     });
+    app.post(`${prefix}/sessions/:sessionId/automatic-admission/initialize`, async (request, reply) => {
+        try {
+            const body = optionalRecord(request.body);
+            if (body["allowed"] !== true || body["initializeIfAbsent"] !== true || body["expectedGeneration"] !== undefined)
+                throw new AutomaticAdmissionRejected("Initial control requires allowed=true, initializeIfAbsent=true and no expectedGeneration");
+            if (sessions.setAutomaticAdmission === undefined)
+                throw new AutomaticAdmissionRejected("Durable automatic admission capability is unavailable");
+            return await sessions.setAutomaticAdmission(sessionLookupFromBody(request.params.sessionId, body), true, undefined, true);
+        }
+        catch (error) {
+            return reply.code(mutationErrorStatus(error)).send({ error: errorMessage(error) });
+        }
+    });
     app.post(`${prefix}/sessions/:sessionId/automatic-admission`, async (request, reply) => {
         try {
             const body = optionalRecord(request.body);
             if (typeof body["allowed"] !== "boolean")
                 throw new Error("allowed must be a boolean");
+            if (body["initializeIfAbsent"] !== undefined)
+                throw new AutomaticAdmissionRejected("Initial control requires the absent-only initialize endpoint");
             if (sessions.setAutomaticAdmission === undefined)
                 throw new AutomaticAdmissionRejected("Durable automatic admission capability is unavailable");
             if (body["expectedGeneration"] !== undefined)

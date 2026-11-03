@@ -882,6 +882,10 @@ export interface SessionControlGoal {
     state: "queued" | "sending" | "ended" | "uncertain" | "superseded";
     detail?: string;
 }
+export type AutomaticAdmissionControlRequest = { cwd?: string } & (
+    | { allowed: true; initializeIfAbsent: true; expectedGeneration?: never }
+    | { allowed: boolean; expectedGeneration?: string; initializeIfAbsent?: never }
+);
 export interface AutomaticAdmissionState {
     sessionId: string;
     cwd: string;

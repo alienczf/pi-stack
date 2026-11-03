@@ -2221,7 +2221,9 @@ export class PiSessionService {
         this.unregisterSubsession(session.sessionId);
         await this.forgetUnreadSessions([{ sessionId: session.sessionId, cwd: session.sessionManager.getCwd() }]);
     }
-    async setAutomaticAdmission(ref, allowed, expectedGeneration) {
+    async setAutomaticAdmission(ref, allowed, expectedGeneration, initializeIfAbsent) {
+        if (initializeIfAbsent !== undefined && (initializeIfAbsent !== true || allowed !== true || expectedGeneration !== undefined))
+            throw new AutomaticAdmissionRejected("Initial control requires allowed=true, initializeIfAbsent=true and no expectedGeneration");
         if (this.automaticAdmissionStore === undefined)
             throw new AutomaticAdmissionRejected("Durable automatic admission capability is unavailable");
         const target = await this.automaticControlIdentity(ref);
@@ -2232,11 +2234,13 @@ export class PiSessionService {
             this.failureBoundaries.assertAdmission(await this.getOrOpen(target));
         if (expectedGeneration !== undefined && (typeof expectedGeneration !== "string" || expectedGeneration === ""))
             throw new AutomaticAdmissionRejected("Conditional control requires its exact saved generation");
-        const state = expectedGeneration === undefined
-            ? await this.automaticAdmissionStore.setAllowed(target, allowed)
-            : await this.automaticAdmissionStore.setAllowedAtGeneration(target, allowed, expectedGeneration);
+        const state = initializeIfAbsent === true
+            ? await this.automaticAdmissionStore.initializeIfAbsent(target)
+            : expectedGeneration === undefined
+                ? await this.automaticAdmissionStore.setAllowed(target, allowed)
+                : await this.automaticAdmissionStore.setAllowedAtGeneration(target, allowed, expectedGeneration);
         const active = this.activeForLookup(target);
-        if (active !== undefined)
+        if (active !== undefined && initializeIfAbsent !== true)
             this.controlGoals?.notify(active.runtime.session);
         return state;
     }
