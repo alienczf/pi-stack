@@ -14,7 +14,9 @@ Recovery reuses the existing good-prefix fork journal, registry compare-and-set,
 
 The extension loader binds declarations to the actual loaded extension and source hash. Live active or unknown owners block replacement. Safe-to-drop owners provide an awaited cancellation receipt and a fresh ownership snapshot inside native exclusion. Loaded idle extensions and completed historical subagent messages do not alone block recovery. The adapters inspect real state, including batched subagent notifications, result delivery, schedules, pending web work, prompt loops/restoration, Cursor runs, and notebook preview work.
 
-Completed compaction with no unresolved input or RESUME owner can become superseded after verified newer receiving input or stop. This releases obsolete maintenance ownership, not stopped admission. Failed, uncertain, sending, and otherwise unresolved maintenance stays fenced.
+Maintenance compaction measures the actual rebuilt message context and requires fewer than 150000 estimated tokens before RESUME. It uses local retention settings, not a global settings mutation. Context above the target becomes a native summary with its raw history retained. An oversized extension summary falls back to native provider summarization. An oversized provider summary fails without a successful completion claim. Both pi-ai copies at the package root and under pi-coding-agent are version/hash guarded. Watched manual summarization retries use the same fixed 5000 ms delay.
+
+Completed compaction accepts only validated transparent failure-checkpoint and watcher metadata behind its physical leaf. Newer receiving input, stop, or a nontransparent changed checkpoint supersedes empty completed ownership. This releases obsolete maintenance ownership, not stopped admission. Failed, uncertain, sending, and otherwise unresolved maintenance stays fenced.
 
 `pi-streams/engine/relay.py` is an authenticated adapter boundary. Its caller supplies a transport authenticator and a trusted principal mapping. Body-supplied principal labels are not authentication. Verified scoped Grok Bot relays can record ZF's dated rules or exact words without human retyping. The repository does not supply or claim a live production Grok Bot transport. Relay provenance is separate from native recovery ownership.
 
@@ -22,7 +24,7 @@ Completed compaction with no unresolved input or RESUME owner can become superse
 
 The installer applies the overlay to existing and newly installed package paths. It checks every selected package before the first patch write. It does not upgrade an incompatible existing package or restart a running daemon. Unsupported versions, changed bytes, escaping symlinks, and unowned mixed trees refuse application.
 
-Each package uses `.pi-stack-overlay.pending` during application. An interrupted operation can reconcile only the same manifest and known preimage/postimage bytes. A fully patched tree is a no-op. Unexpected bytes remain an error, not permission to replace another patch.
+Each package uses `.pi-stack-overlay.pending` during application. An interrupted operation can reconcile only the same manifest and known preimage/postimage bytes. A fully patched tree is a no-op. Complete known adopted overlay trees are accepted upgrade inputs. The manifest lists their exact per-file hashes. Unowned mixtures of pristine, older, and new source bytes still refuse. Unexpected bytes remain an error, not permission to replace another patch.
 
 `PI_STACK_NATIVE_ROOT` and `PI_STACK_NATIVE_EXTENSIONS_ROOT` select explicit disposable package roots for verification. `PI_STACK_SKIP_PACKAGES=1` skips native mutation unless an explicit native root is supplied. `PI_STACK_SKIP_NATIVE_OVERLAY=1` explicitly skips this delivery and prints that native healing was not installed. The legacy fake-package installer checks use that skip when no native fixture is supplied.
 

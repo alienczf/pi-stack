@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { estimateTokens } from "@earendil-works/pi-coding-agent";
 import { AutomaticAdmissionRejected, parseAutomaticAdmission } from "./automaticAdmissionStore.js";
 import { maintenanceEvidence } from "./sessionMaintenanceEvidence.js";
 import { canonicalizeStoredCwd } from "../workingDirectory.js";
@@ -13,6 +14,16 @@ function operationId(value) {
     if (typeof value !== "string" || value.trim() !== value || value === "" || /[\r\n\0]/.test(value))
         throw new AutomaticAdmissionRejected("Maintenance requires a stable operation id");
     return value;
+}
+const contextTokens = session => session.messages.reduce((sum, message) => sum + estimateTokens(message), 0);
+function transparentSuffix(session, operation, branch = persistedFailureBranch(session)) {
+    const at = branch.findIndex(item => item.value.id === operation.compactionEntryId);
+    if (at < 0) return false;
+    const prior = branch.slice(0, at).filter(item => item.value.customType === "pi-web.stream-failure" && item.value.data?.sessionId === session.sessionId).at(-1)?.value.data;
+    return branch.slice(at + 1).every(({ value }) => value.type === "custom" && (
+        value.customType === "pi-web.stream-failure" && ["watching", "recovering"].includes(value.data?.state) && !value.data.failure && JSON.stringify(value.data) === JSON.stringify(prior)
+        || value.customType === "pi-web.streams-dcr" && value.data?.version === undefined && value.data?.sessionId === session.sessionId && value.data?.cwd === operation.cwd && value.data?.id === operation.id && value.data?.generation === operation.generation && value.data?.state === "active"
+    ));
 }
 export class SessionMaintenanceController {
     constructor(store, controls, host) {
@@ -43,7 +54,7 @@ export class SessionMaintenanceController {
             throw new AutomaticAdmissionRejected("Maintenance requires the expected idle checkpoint without pending human input");
         if (session.sessionManager.getLeafId() !== expected.entryId || session.sessionManager.appendCustomEntry === undefined)
             throw new AutomaticAdmissionRejected("Maintenance checkpoint is stale or native marker capability is unavailable");
-        const operation = this.store.create(ref, { version: 1, id, sessionId: ref.id, cwd: ref.cwd, entryId: expected.entryId, generation: expected.generation, instructions: request["instructions"], state: "prepared", inputSequence: 0, lastInputGeneration: expected.generation, inputs: [] });
+        const operation = this.store.create(ref, { version: 1, id, sessionId: ref.id, cwd: ref.cwd, entryId: expected.entryId, generation: expected.generation, instructions: request["instructions"], targetTokens: 150000, tokensBefore: contextTokens(session), state: "prepared", inputSequence: 0, lastInputGeneration: expected.generation, inputs: [] });
         const opKey = key(ref, id);
         this.compacting.set(opKey, session);
         try {
@@ -71,7 +82,9 @@ export class SessionMaintenanceController {
                 const evidence = maintenanceEvidence(session.sessionFile, operation);
                 operation = this.store.update(ref, id, (current) => {
                     Object.assign(current, evidence);
-                    current.state = evidence.compactionEntryId === undefined ? "uncertain" : "complete";
+                    current.tokensAfter = contextTokens(session);
+                    current.targetTokens = 150000;
+                    current.state = evidence.compactionEntryId === undefined ? "uncertain" : current.tokensAfter < current.targetTokens ? "complete" : "failed";
                     if (evidence.compactionEntryId === undefined)
                         current.detail = "Interrupted maintenance has no proven completed native compaction; do not replay";
                 });
@@ -95,7 +108,8 @@ export class SessionMaintenanceController {
             if (evidence.compactionSha256 !== operation.compactionSha256 || at < 0)
                 throw new AutomaticAdmissionRejected("Completed maintenance compaction proof changed; preserve ownership");
             const newerInput = branch.slice(at + 1).some(item => item.value.message?.role === "user");
-            if (control.durable && (control.generation !== operation.generation || newerInput))
+            const checkpointChanged = session.sessionManager.getLeafId() !== operation.compactionEntryId && !transparentSuffix(session, operation, branch);
+            if (control.durable && (control.generation !== operation.generation || newerInput || checkpointChanged))
                 operation = this.store.update(ref, id, current => { current.state = "superseded"; current.detail = "Verified completed compaction was superseded by newer receiving input or stop; no RESUME is replayed"; });
         }
         return operation;
@@ -189,8 +203,8 @@ export class SessionMaintenanceController {
             return operation;
         }
         this.controls.assertCurrent(ref, automatic);
-        if (!this.host.current(session) || this.host.busy(session) || this.host.humanInputPending(session) || operation.state !== "complete" || operation.compactionEntryId === undefined || operation.compactionEntryId !== request["compactionEntryId"] || request["inputSequence"] !== operation.inputSequence || operation.inputSequence !== 0 || automatic.generation !== operation.generation || session.sessionManager.getLeafId() !== operation.compactionEntryId)
-            throw new AutomaticAdmissionRejected("Maintenance RESUME checkpoint, generation or newer input was superseded");
+        if (!this.host.current(session) || this.host.busy(session) || this.host.humanInputPending(session) || operation.state !== "complete" || operation.compactionEntryId === undefined || operation.compactionEntryId !== request["compactionEntryId"] || request["inputSequence"] !== operation.inputSequence || operation.inputSequence !== 0 || automatic.generation !== operation.generation || !transparentSuffix(session, operation) || operation.targetTokens !== 150000 || !Number.isSafeInteger(operation.tokensAfter) || operation.tokensAfter >= operation.targetTokens || contextTokens(session) >= operation.targetTokens)
+            throw new AutomaticAdmissionRejected("Maintenance RESUME checkpoint, generation, context target or newer input was superseded");
         const evidence = maintenanceEvidence(session.sessionFile, operation);
         if (evidence.compactionSha256 !== operation.compactionSha256)
             throw new AutomaticAdmissionRejected("Persisted compaction evidence changed before RESUME");
@@ -280,12 +294,15 @@ export class SessionMaintenanceController {
     async compact(session, id) {
         const ref = identity(session), opKey = key(ref, id);
         try {
-            await session.compact(this.required(ref, id).instructions);
+            await session.compact(this.required(ref, id).instructions, { targetTokens: 150000 });
             const operation = this.required(ref, id);
+            const tokensAfter = contextTokens(session);
+            if (!Number.isSafeInteger(tokensAfter) || tokensAfter >= 150000)
+                throw new Error("Native compaction did not reduce rebuilt context below 150000 tokens");
             const evidence = maintenanceEvidence(session.sessionFile, operation);
             if (!this.host.current(session) || evidence.compactionEntryId === undefined)
                 throw new Error("Completed native compaction evidence or owning runtime is unavailable");
-            this.store.update(ref, id, (current) => { Object.assign(current, evidence); if (current.state !== "superseded")
+            this.store.update(ref, id, (current) => { Object.assign(current, evidence, { tokensAfter, targetTokens: 150000 }); if (current.state !== "superseded")
                 current.state = current.inputs.length === 0 ? "complete" : "superseded"; });
         }
         catch (error) {

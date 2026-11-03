@@ -53,6 +53,22 @@ test('all bundled transient classes remain eligible after usage exclusions', asy
     f.session.dispose();
 });
 
+test('actual AgentSession retries server-busy and ECONNRESET from its resolved nested pi-ai copy', async () => {
+    for (const message of ['server busy', 'ECONNRESET']) {
+        const f = await fixture([errorResponse(message), response('Continued on the same model')]);
+        const time = clock();
+        try {
+            const scheduled = event(f.session, 'auto_retry_start');
+            const run = f.session.prompt('Continue the bounded unit');
+            await scheduled; await flush();
+            assert.deepEqual(time.delays(), [5000]);
+            await time.advance(5000); await run;
+            assert.equal(f.calls.length, 2);
+            assert.equal(f.boundaries.snapshot(f.session).state, 'watching');
+        } finally { time.restore(); f.session.dispose(); }
+    }
+});
+
 test('Codex usage codes and quota/billing never enter watched retry', async () => {
     for (const text of ['rate_limit_exceeded', 'usage_limit_reached', 'usage_not_included', 'ChatGPT usage limit', 'Codex usage limit', 'insufficient_quota 429', 'quota exceeded 503', 'billing 500', 'usage-limit 429', 'usage limit 503', 'usage_limit 429']) {
         const f = await fixture([errorResponse(text)]);

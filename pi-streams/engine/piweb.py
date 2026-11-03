@@ -55,7 +55,7 @@ def call(args: list[str], stdin: str | None = None) -> dict[str, object]:
         receipt = data.get("result", {}).get("admission") if isinstance(data.get("result"), dict) else None
         if args[0] == "failure-fork" and data.get("status") == 409 and isinstance(receipt, dict) and receipt.get("state") == "refused-before-effect":
             raise RecoveryRefused(detail, receipt)
-        error = PromptRejected if args[0] in ("prompt", "compact", "maintenance-resume", "control-goal") and data.get("status") in (400, 404, 409, 422) else StreamsError
+        error = PromptRejected if args[0] in ("prompt", "compact", "maintenance-resume", "control-goal", "failure-maintenance") and data.get("status") in (400, 404, 409, 422) else StreamsError
         raise error(f"pi-web-cli {' '.join(args)} failed: {detail}")
     return data
 

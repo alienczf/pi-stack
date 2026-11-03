@@ -97,6 +97,19 @@ class MaintenanceAdapterTests(EngineCase):
                 piweb.compact_at_checkpoint(self.sid, self.operation_id, self.expected, "unused")
         self.assertEqual([request[0] for request in self.stub.requests], ["GET"])
 
+    def test_recovery_maintenance_409_is_a_known_supersession_not_an_unknown_send(self):
+        route = f'/api/sessions/{self.sid}/failure-recovery/maintenance'
+        self.stub.set_routes([('POST', route, 409, {'error': 'Checkpoint or generation superseded'})])
+        with mock.patch.dict(os.environ, self.env, clear=True):
+            with self.assertRaises(piweb.PromptRejected):
+                piweb.failure_maintenance(self.sid, self.cwd, {'id': self.operation_id, 'action': 'resume'})
+        self.assertEqual(sum(request[1] == route for request in self.stub.requests), 1)
+        self.stub.set_routes([('POST', route, 503, {'error': 'Unknown receiving outcome'})])
+        with mock.patch.dict(os.environ, self.env, clear=True):
+            with self.assertRaises(StreamsError) as caught:
+                piweb.failure_maintenance(self.sid, self.cwd, {'id': self.operation_id, 'action': 'resume'})
+        self.assertNotIsInstance(caught.exception, piweb.PromptRejected)
+
     def test_saved_resume_and_explicit_reconcile_preserve_body_sequence_and_generation(self):
         token = {"sessionId": self.sid, "cwd": self.cwd, "generation": "saved-generation", "kind": "resume"}
         text = "exact engine resume\r\nGoal: 'quoted'"

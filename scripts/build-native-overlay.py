@@ -10,7 +10,7 @@ from pathlib import Path
 import subprocess
 
 EXTENSIONS = {"pi-subagents": "0.58.0", "pi-web-access": "0.26.0", "pi-prompt-template-model": "0.12.2", "pi-cursor-sdk": "0.1.5", "pi-jupyter": "0.1.0"}
-PACKAGES = {"package.json": ("@jmfederico/pi-web", "1.202607.3"), **{f"node_modules/@earendil-works/{name}/package.json": (f"@earendil-works/{name}", "0.82.1") for name in ("pi-coding-agent", "pi-ai", "pi-agent-core")}}
+PACKAGES = {"package.json": ("@jmfederico/pi-web", "1.202607.3"), **{f"node_modules/@earendil-works/{name}/package.json": (f"@earendil-works/{name}", "0.82.1") for name in ("pi-coding-agent", "pi-ai", "pi-agent-core")}, "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/package.json": ("@earendil-works/pi-ai", "0.82.1")}
 
 
 def digest(raw):

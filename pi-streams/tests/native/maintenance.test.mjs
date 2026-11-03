@@ -2,18 +2,27 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
-import { fixture, flush, native, response } from './helpers.mjs';
+import { clock, errorResponse, fixture, flush, native, response } from './helpers.mjs';
 
 const { SessionMaintenanceController } = await native('dist/server/sessions/sessionMaintenanceController.js');
 const { SessionMaintenanceStore } = await native('dist/server/sessions/sessionMaintenanceStore.js');
 const { estimateTokens } = await native('node_modules/@earendil-works/pi-coding-agent/dist/core/compaction/index.js');
 const { expandPotetoInvocation } = await native('dist/server/sessions/potetoInvocation.js');
 
-async function scenario() {
+async function scenario({ oversizedHook = false } = {}) {
     const f = await fixture(Array.from({ length: 4 }, () => response('## Goal\nContinue the bounded implementation assignment.\n## Progress\nThe old exchanges were checked.\n## Next steps\nRead current STATE.')));
+    if (oversizedHook) {
+        const { loadExtensionFromFactory, createExtensionRuntime } = await native('node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/loader.js');
+        const { createEventBus } = await native('node_modules/@earendil-works/pi-coding-agent/dist/core/event-bus.js');
+        const { writeFileSync } = await import('node:fs');
+        const source = join(f.dir, 'oversized-summary.mjs'); writeFileSync(source, 'export default function extension() {}');
+        const extension = await loadExtensionFromFactory(pi => pi.on('session_before_compact', event => ({ compaction: { summary: 'Oversized extension summary '.repeat(30000), firstKeptEntryId: event.preparation.firstKeptEntryId, tokensBefore: event.preparation.tokensBefore } })), f.dir, createEventBus(), createExtensionRuntime(), source);
+        f.extensions.extensions.push(extension);
+        f.session._buildRuntime({ activeToolNames: [], includeAllExtensionTools: false });
+    }
     for (let index = 0; index < 8; index++) {
-        f.manager.appendMessage({ role: 'user', content: 'Historical context '.repeat(2000), timestamp: Date.now() });
-        f.manager.appendMessage(response('Historical evidence '.repeat(2000)));
+        f.manager.appendMessage({ role: 'user', content: 'Historical context '.repeat(3000), timestamp: Date.now() });
+        f.manager.appendMessage(response('Historical evidence '.repeat(3000)));
     }
     f.session.agent.state.messages = f.manager.buildSessionContext().messages;
     const ref = { id: f.session.sessionId, cwd: f.dir };
@@ -29,7 +38,11 @@ async function scenario() {
     const operation = controller.status(f.session, 'dcr-1');
     assert.equal(operation.state, 'complete', JSON.stringify({ operation, failures }));
     const after = f.session.messages.reduce((sum, message) => sum + estimateTokens(message), 0);
+    assert(before > 150000, `${before} must exceed the maintenance threshold`);
+    assert(after < 150000, `${after} must be below the maintenance threshold`);
     assert(after < before, `${after} must be less than ${before}`);
+    assert.equal(operation.tokensAfter, after);
+    assert.equal(operation.targetTokens, 150000);
     assert.equal(f.manager.getEntry(operation.compactionEntryId).type, 'compaction');
     return { ...f, ref, store, controller, work, operation, before, after, compactionCalls: f.calls.length };
 }
@@ -70,6 +83,71 @@ test('completed compaction superseded by newer explicit input releases only obso
     const source = readFileSync(f.manager.getSessionFile(), 'utf8');
     assert(source.includes('A newer authorized objective'));
     assert(source.includes(f.operation.compactionEntryId));
+    f.session.dispose();
+});
+
+test('oversized extension summaries fall back to actual provider compaction below the target', async () => {
+    const f = await scenario({ oversizedHook: true });
+    assert.equal(f.manager.getEntry(f.operation.compactionEntryId).fromHook, false);
+    assert(f.calls.length > 0, 'native provider summarization actually ran');
+    assert.equal(f.session.settingsManager.getCompactionSettings().keepRecentTokens, 20000);
+    f.session.dispose();
+});
+
+test('transparent failure-checkpoint metadata does not supersede completed compaction RESUME', async () => {
+    const f = await scenario();
+    f.manager.appendCustomEntry('pi-web.stream-failure', f.boundaries.snapshot(f.session));
+    f.controller.resume(f.session, { id: 'dcr-1', text: 'Continue permitted current goal', deliveryId: 'dcr-1:resume', compactionEntryId: f.operation.compactionEntryId, inputSequence: 0, automaticAdmission: { sessionId: f.ref.id, cwd: f.ref.cwd, generation: f.operation.generation, kind: 'resume' } });
+    await Promise.all([...f.work]); await flush();
+    assert.equal(f.controller.status(f.session, 'dcr-1').state, 'resumed');
+    f.session.dispose();
+});
+
+test('unknown changed checkpoint releases obsolete completed maintenance without replay', async () => {
+    const f = await scenario();
+    f.manager.appendCustomEntry('extension.changed-checkpoint', { state: 'newer' });
+    assert.equal(f.controller.status(f.session, 'dcr-1').state, 'superseded');
+    assert.equal(f.controller.blocksAutomatic(f.session), false);
+    assert.equal(f.calls.length, f.compactionCalls);
+    f.session.dispose();
+});
+
+test('watched native summarization retries at fixed five seconds without changing global retry settings', async () => {
+    const f = await fixture([errorResponse('503 overloaded'), errorResponse('fetch failed'), response('A concise summary of permitted work.')]);
+    for (let index = 0; index < 8; index++) {
+        f.manager.appendMessage({ role: 'user', content: 'Historical context '.repeat(3000), timestamp: Date.now() });
+        f.manager.appendMessage(response('Historical evidence '.repeat(3000)));
+    }
+    f.manager.appendCustomEntry('pi-web.maintenance', { id: 'bounded-summary' });
+    f.session.agent.state.messages = f.manager.buildSessionContext().messages;
+    const time = clock();
+    const scheduled = () => new Promise(resolve => { const off = f.session.subscribe(event => { if (event.type === 'summarization_retry_scheduled') { off(); resolve(event); } }); });
+    try {
+        let waiting = scheduled();
+        const run = f.session.compact('Retain current permitted goal.', { targetTokens: 150000 });
+        await waiting; await flush();
+        assert.deepEqual(time.delays(), [5000]);
+        await time.advance(4999); assert.equal(f.calls.length, 1);
+        waiting = scheduled(); await time.advance(1); await waiting; await flush();
+        assert.deepEqual(time.delays(), [5000]);
+        await time.advance(5000);
+        const result = await run;
+        assert(result.estimatedTokensAfter < 150000);
+        assert.equal(f.calls.length, 3);
+        assert.equal(f.session.settingsManager.getRetrySettings().baseDelayMs, 2000);
+    } finally { time.restore(); f.session.dispose(); }
+});
+
+test('an oversized actual provider summary cannot report bounded compaction success', async () => {
+    const f = await fixture([response('Provider summary remains oversized. '.repeat(30000))]);
+    for (let index = 0; index < 8; index++) {
+        f.manager.appendMessage({ role: 'user', content: 'Historical context '.repeat(3000), timestamp: Date.now() });
+        f.manager.appendMessage(response('Historical evidence '.repeat(3000)));
+    }
+    f.manager.appendCustomEntry('pi-web.maintenance', { id: 'oversized-summary' });
+    f.session.agent.state.messages = f.manager.buildSessionContext().messages;
+    await assert.rejects(f.session.compact('Retain permitted facts.', { targetTokens: 150000 }), /did not reduce rebuilt context below 150000/);
+    assert(f.session.messages.reduce((sum, message) => sum + estimateTokens(message), 0) >= 150000);
     f.session.dispose();
 });
 

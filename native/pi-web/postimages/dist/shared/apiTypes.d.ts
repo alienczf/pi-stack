@@ -960,6 +960,9 @@ export interface FailureRetirement {
 }
 export type FailureRetirementReceipt = Omit<FailureRetirement, "sourceBase64">;
 export interface SessionMaintenance {
+    targetTokens: 150000;
+    tokensBefore: number;
+    tokensAfter?: number;
     version: 1;
     id: string;
     sessionId: string;
@@ -1001,6 +1004,8 @@ export interface SessionStatus {
     automaticAdmission?: AutomaticAdmissionState;
     rotationSafety?: RotationSafety;
     maintenanceSupport?: "checkpoint-input-v1";
+    maintenanceTargetSupport?: "below-150000-v1";
+    recoveryReadinessSupport?: "same-provider-v1";
     resumeObservationSupport?: "completed-assistant-v1";
     potetoInvocationSupport?: "exact-goal-v1";
     dcrEventSupport?: "phase-v1";

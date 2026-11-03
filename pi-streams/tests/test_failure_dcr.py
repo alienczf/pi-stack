@@ -76,7 +76,7 @@ class FailureDcrTests(TickCase):
         with open(self.log_path("returned-fork"), "ab") as target:
             target.write(raw)
         self.fork_status["rotationSafety"]["entryId"] = "native-compaction"
-        self.native.update(state="complete", compactionEntryId="native-compaction", compactionSha256=hashlib.sha256(raw).hexdigest())
+        self.native.update(state="complete", compactionEntryId="native-compaction", compactionSha256=hashlib.sha256(raw).hexdigest(), targetTokens=150000, tokensAfter=5000)
         advanced = self.advance()
         self.assertEqual(advanced.returncode, 0, advanced.stderr)
         self.assertEqual(self.state(self.stream)["dcr_operations"]["returned-fork"]["phase"], "resuming")

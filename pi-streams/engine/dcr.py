@@ -386,6 +386,9 @@ def step(index: Path, project: Project, stream: str, stream_dir: Path, resolved:
             proof = piweb.compaction_result(op.cwd, sid, op.id, original=op.recovery_original)
             if proof is None:
                 return True
+            tokens_after = native.get("tokensAfter")
+            if native.get("targetTokens") != THRESHOLD or type(tokens_after) is not int or tokens_after >= THRESHOLD or tokens_after < 0:
+                raise StreamsError("Native compaction has no verified rebuilt context below 150000 tokens")
             artifacts._rotate_log_locked(stream_dir)
             state = artifacts._read_stream_state_locked(stream_dir)
             require_ratified(stream_dir)
