@@ -56,7 +56,7 @@ def load(stream_dir: Path, sid: str) -> Operation | None:
     if value is None:
         return None
     try:
-        op = Operation(**value)
+        op = Operation(**{key: item for key, item in value.items() if key != "recovery_instructions"})
         if op.session != sid or op.phase not in PHASES or not op.id or not Path(op.cwd).is_absolute() or op.automatic.get("sessionId") != sid or op.automatic.get("cwd") != op.cwd or op.automatic.get("kind") != "wake":
             raise ValueError("mismatched DCR owner or phase")
         return op

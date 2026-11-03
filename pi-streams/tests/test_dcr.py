@@ -83,6 +83,30 @@ class DcrTests(TickCase):
             f"/poteto-mode {goal}"
         )
 
+    def test_legacy_saved_operation_keeps_ownership_without_retired_recovery_text(self) -> None:
+        operation = self.start()
+        data = self.state(self.stream)
+        data["dcr_operations"]["coord"]["recovery_instructions"] = "Retired recovery text must never become continuation input."
+        (self.stream / "log/tick-state.json").write_text(json.dumps(data))
+        self.routes(operation=operation)
+        observed = self.run_streams("status", "etl", "--json")
+        self.assertEqual(observed.returncode, 0, observed.stderr)
+        summary = json.loads(observed.stdout)["streams"][0]["maintenance"]
+        self.assertEqual(summary, [{"id": operation["id"], "session": "coord", "phase": "sync-admitted", "detail": "", "compactionEntry": ""}])
+        restored = dcr.load(self.stream, "coord")
+        self.assertEqual(restored.automatic, operation["automatic"])
+        self.assertEqual(restored.sync_text, operation["sync_text"])
+        dcr.save(self.stream, restored)
+        self.assertEqual(self.operation(), operation)
+
+    def test_unknown_saved_operation_fields_still_refuse(self) -> None:
+        self.start()
+        data = self.state(self.stream)
+        data["dcr_operations"]["coord"]["unrecognized_operation_field"] = True
+        (self.stream / "log/tick-state.json").write_text(json.dumps(data))
+        with self.assertRaisesRegex(StreamsError, "invalid saved DCR operation"):
+            dcr.load(self.stream, "coord")
+
     def test_exact_150k_trigger_coalesces_while_busy_and_never_replaces_sid(self) -> None:
         self.routes(tokens=149999)
         first = self.tick("2026-10-06T12:00:00Z")
