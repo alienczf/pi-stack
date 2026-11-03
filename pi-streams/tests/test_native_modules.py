@@ -28,6 +28,9 @@ class NativeModuleTests(unittest.TestCase):
     def test_actual_blocked_goal_dispatch(self):
         self.run_native("blocked-goals", 3)
 
+    def test_actual_source_control_correlation(self):
+        self.run_native("source-correlation", 2)
+
     def test_actual_callback_ownership_modules(self):
         self.run_native("callbacks", 5)
 

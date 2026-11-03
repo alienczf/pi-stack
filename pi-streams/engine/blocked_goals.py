@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from pathlib import Path
 
@@ -28,30 +29,40 @@ def _record(data: dict, goal: str) -> dict:
     old = records.get(key)
     if old is not None and (not isinstance(old, dict) or not all(isinstance(old.get(name), list) for name in ('sent', 'received'))):
         raise StreamsError('Invalid blocked-goal record')
-    if old is None or old.get('version') != 2:
-        records[key] = {'version': 2, 'outcomes': {}, 'sent': [], 'received': [], 'disposition': 'tracking', **({'legacy': old} if old is not None else {})}
+    if old is None or old.get('version') != 3:
+        outcomes = {}
+        if old is not None and old.get('version') == 2:
+            for target, outcome in old.get('outcomes', {}).items():
+                retained = [value for value in outcome.get('evidence', []) if value in {'delivery:' + target, 'applied:' + target}]
+                if retained:
+                    outcomes[target] = {**outcome, 'state': 'progress' if 'applied:' + target in retained else 'blocked', 'evidence': retained}
+        records[key] = {'version': 3, 'outcomes': outcomes, 'sent': [], 'received': [], 'disposition': 'tracking', **({'legacy': old, 'run_offsets': old.get('run_offsets', {})} if old is not None else {})}
     record = records[key]
     if not isinstance(record.get('outcomes'), dict) or any(not isinstance(item, dict) or item.get('state') not in {'blocked', 'progress'} or type(item.get('sequence')) is not int or item['sequence'] < 1 or not isinstance(item.get('evidence'), list) or any(not isinstance(value, str) for value in item['evidence']) for item in record['outcomes'].values()):
         raise StreamsError('Invalid blocked-prompt outcomes')
     return record
 
 
-def observe(stream: Path, goal: str, sid: str, native_file: str, *, dispatch: str = '') -> None:
-    evidence = sessionlog.last_assistant(Path(native_file), evidence=True)
-    if evidence is None or evidence['message'].get('stopReason') != 'stop':
+def observe(stream: Path, goal: str, sid: str, native_file: str, *, dispatch: str = '', leaf: object = None) -> None:
+    candidates = [item for item in _deliveries(stream, goal) if item['session'] == sid and item.get('control', {}).get('state') == 'ended']
+    if not candidates or leaf is None:
         return
-    content = evidence['message'].get('content', [])
+    target = next((item for item in candidates if item['id'] == dispatch), None) if dispatch else max(candidates, key=lambda item: item['control']['sequence'])
+    if target is None or target['control'].get('checkpoint') is None:
+        return
+    try:
+        result = sessionlog.control_outcome(Path(native_file), sid, str(stream), leaf, target['control']['checkpoint'], target['control']['goal'])
+    except (StreamsError, OSError, ValueError):
+        return
+    if result is None:
+        return
+    evidence, proof = result
+    content = json.loads(evidence.raw)['message'].get('content', [])
     text = content if isinstance(content, str) else '\n'.join(part.get('text', '') for part in content if isinstance(part, dict) and part.get('type') == 'text')
     blocked = bool(BLOCKED.search(text))
     if not blocked and (not PROGRESS.search(text) or NEGATIVE.search(text)):
         return
-    candidates = [item for item in _deliveries(stream, goal) if item['session'] == sid and (item['state'] in {'transport_accepted', 'consumed', 'applied'} or item.get('control', {}).get('state') == 'ended')]
-    if not candidates:
-        return
-    target = next((item for item in candidates if item['id'] == dispatch), None) if dispatch else max(candidates, key=lambda item: item.get('control', {}).get('sequence', 0))
-    if target is None:
-        return
-    _receive(stream, goal, target['id'], f"{sid}:{evidence['entryId']}:{evidence['sha256']}", 'blocked' if blocked else 'progress', native=True)
+    _receive(stream, goal, target['id'], f'{sid}:{evidence.entry_id}:{evidence.sha256}', 'blocked' if blocked else 'progress', native=proof)
 
 
 def receive(stream: Path, goal: str, identity: str, *, sent: str = '') -> None:
@@ -63,7 +74,7 @@ def progress(stream: Path, goal: str, identity: str) -> None:
     _receive(stream, goal, identity, 'applied:' + identity, 'progress')
 
 
-def _receive(stream: Path, goal: str, target: str, evidence: str, state: str, *, native: bool = False) -> None:
+def _receive(stream: Path, goal: str, target: str, evidence: str, state: str, *, native: dict | None = None) -> None:
     candidates = {item['id']: item for item in _deliveries(stream, goal)}
     if target not in candidates:
         return
@@ -74,6 +85,10 @@ def _receive(stream: Path, goal: str, target: str, evidence: str, state: str, *,
     if state == 'progress' and fingerprint(goal) not in data.get('blocked_goals', {}):
         return
     record = _record(data, goal)
+    if native is not None:
+        for identity, item in record['outcomes'].items():
+            if identity != target and (evidence in item['evidence'] or item.get('native', {}).get('userEntryId') == native['userEntryId'] and candidates.get(identity, {}).get('session') == candidate['session']):
+                return
     outcome = record['outcomes'].get(target)
     if outcome is None:
         control = candidates[target].get('control', {})
@@ -85,9 +100,11 @@ def _receive(stream: Path, goal: str, target: str, evidence: str, state: str, *,
         sequence = offsets.get(run, maximum) + control.get('sequence', 1)
         outcome = {'sequence': sequence, 'state': state, 'evidence': []}
         record['outcomes'][target] = outcome
-    if native and evidence in outcome['evidence']:
+    if native is not None and (outcome.get('native') is not None or 'applied:' + target in outcome['evidence']):
         return
-    if native or state == 'progress' or outcome['state'] != 'progress':
+    if native is not None:
+        outcome['native'] = native
+    if native is not None or state == 'progress' or outcome['state'] != 'progress':
         outcome['state'] = state
     if evidence not in outcome['evidence']:
         outcome['evidence'].append(evidence)

@@ -267,6 +267,52 @@ def failure_observation(path: Path, sid: str, cwd: str, leaf: object, failure_en
     return failed
 
 
+def control_checkpoint(path: Path, sid: str, cwd: str, leaf: object) -> dict:
+    branch = branch_records(path, sid, cwd, leaf)
+    entry, raw = branch[-1]
+    proof = read_record(path, sid, entry['id'], hashlib.sha256(raw).hexdigest())
+    with regular_reader(path) as handle:
+        lines = sum(1 for _ in handle)
+    return {'path': str(path), 'entryId': proof.entry_id, 'sha256': proof.sha256, 'lines': lines}
+
+
+def control_outcome(path: Path, sid: str, cwd: str, leaf: object, checkpoint: dict, goal: str) -> tuple[EvidenceRecord, dict] | None:
+    if checkpoint.get('path') != str(path) or type(checkpoint.get('lines')) is not int:
+        return None
+    branch = branch_records(path, sid, cwd, leaf)
+    positions = {entry['id']: index for index, (entry, _) in enumerate(branch)}
+    start = positions.get(checkpoint.get('entryId'))
+    if start is None:
+        return None
+    read_record(path, sid, checkpoint['entryId'], checkpoint['sha256'])
+    tail = branch[start + 1:]
+    users = [(entry, raw) for entry, raw in tail if entry.get('message', {}).get('role') == 'user']
+    if len(users) != 1:
+        return None
+    user, raw = users[0]
+    message = user['message']
+    content = message.get('content', [])
+    text = content if isinstance(content, str) else '\n'.join(part.get('text', '') for part in content if isinstance(part, dict) and part.get('type') == 'text')
+    if not text.startswith('<skill name="poteto-mode"') or not text.endswith('</skill>\n\n' + goal):
+        return None
+    owned = read_record(path, sid, user['id'], hashlib.sha256(raw).hexdigest())
+    if owned.line_number <= checkpoint['lines']:
+        return None
+    result = None
+    for entry, raw in branch[positions[user['id']] + 1:]:
+        message = entry.get('message', {})
+        if message.get('role') == 'assistant':
+            if message.get('stopReason') in {'error', 'aborted', 'length'}:
+                return None
+            if message.get('stopReason') == 'stop':
+                if result is not None:
+                    return None
+                result = read_record(path, sid, entry['id'], hashlib.sha256(raw).hexdigest())
+    if result is None or result.line_number <= owned.line_number:
+        return None
+    return result, {'userEntryId': owned.entry_id, 'userSha256': owned.sha256, 'assistantEntryId': result.entry_id, 'assistantSha256': result.sha256}
+
+
 def successful_control_completion(path: Path, sid: str, cwd: str, leaf: object, prefix: str, goal: str) -> bool:
     active = False
     completed = False

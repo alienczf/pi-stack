@@ -8,7 +8,7 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from engine import StreamsError, artifacts, clock, piweb
+from engine import StreamsError, artifacts, clock, piweb, sessionlog
 
 STATES = {"prepared", "sending", "transport_accepted", "consumed", "applied", "blocked", "uncertain"}
 
@@ -20,6 +20,7 @@ class GoalControl:
     goal: str
     revision: str
     state: str = "prepared"
+    checkpoint: dict | None = None
 
 
 @dataclass
@@ -68,6 +69,9 @@ def _records(data: dict) -> dict[str, Delivery]:
                 control = record.control
                 if control is None or not all(isinstance(item, str) and item for item in (control.run_id, control.goal, control.revision)) or type(control.sequence) is not int or control.sequence < 1 or control.state not in ("prepared", "queued", "sending", "ended", "uncertain", "superseded") or record.body != "/poteto-mode " + control.goal or record.automatic is None or record.automatic["kind"] != "wake":
                     raise ValueError("invalid current-goal control intent")
+                checkpoint = control.checkpoint
+                if checkpoint is not None and (not isinstance(checkpoint, dict) or set(checkpoint) != {'path', 'entryId', 'sha256', 'lines'} or not all(isinstance(checkpoint[key], str) and checkpoint[key] for key in ('path', 'entryId', 'sha256')) or re.fullmatch(r'[0-9a-f]{64}', checkpoint['sha256']) is None or type(checkpoint['lines']) is not int or checkpoint['lines'] < 2):
+                    raise ValueError("invalid current-goal native checkpoint")
             elif record.control is not None:
                 raise ValueError("control facts belong only to an automatic drive delivery")
             if not isinstance(record.detail, str) or (record.origin == "tick" and not record.events):
@@ -207,6 +211,16 @@ def send_locked(stream_dir: Path, identity: str) -> dict:
     if not blocked_goals.permit(stream_dir, record.control.goal if record.control else record.body):
         record.state, record.detail = "blocked", "Blocked-goal escalation suppresses identical prompts. Select a different authorized unit."
         return _save(stream_dir, record)
+    if record.control is not None:
+        record.control.checkpoint = None
+        leaf = status.get('rotationSafety', {}).get('entryId')
+        if isinstance(leaf, str) and leaf:
+            sources = [item for item in piweb.list_sessions(str(stream_dir)) if item.get('id') == record.session]
+            if len(sources) == 1 and isinstance(sources[0].get('path'), str):
+                try:
+                    record.control.checkpoint = sessionlog.control_checkpoint(Path(sources[0]['path']), record.session, str(stream_dir), leaf)
+                except (StreamsError, OSError, ValueError):
+                    pass
     record.state = "sending"
     _save(stream_dir, record)
     try:

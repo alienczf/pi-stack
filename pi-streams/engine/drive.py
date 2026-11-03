@@ -159,7 +159,7 @@ def step(stream_dir: Path, resolved: Coordinator | None, stalled: bool, *, maint
     from engine import blocked_goals
     native_file = resolved.native.info.get("path")
     if isinstance(native_file, str) and previous is not None and previous.control.revision == revision and previous.control.state == "ended":
-        blocked_goals.observe(stream_dir, goal, resolved.row.session, native_file, dispatch=previous.id)
+        blocked_goals.observe(stream_dir, goal, resolved.row.session, native_file, dispatch=previous.id, leaf=resolved.native.status.get('rotationSafety', {}).get('entryId'))
     if not blocked_goals.permit(stream_dir, goal):
         return True
     record.sequence += 1
