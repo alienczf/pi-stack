@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import json
+import sys
+from support import ROOT
+
+sys.path.insert(0, str(ROOT / "pi-streams"))
 
 import test_failure_recovery as cases
 from tick_support import TickCase
@@ -17,14 +21,12 @@ class EnginePolicyRecoveryTests(TickCase):
 
     def test_enrolled_coordinator_recovers_without_verifier_or_fresh_handover(self):
         self.fixture(policy=True)
-        self.assertIsNone(self.episode['ratification'])
         self.assertFalse((self.stream / 'handover/coordinator/coi.md').exists())
         result = self.advance()
         self.assertEqual(result.returncode, 0, result.stderr)
         operation = self.state(self.stream)['failure_recoveries']['coi']
         self.assertEqual(operation['phase'], 'bound')
         self.assertEqual(operation['request']['authority'], {'kind': 'engine-policy', 'policyId': 'enrolled-prefix-v1', 'enrollmentId': 'fresh-lane'})
-        self.assertNotIn('ratification', operation['request'])
         self.assertFalse(any(item[1].endswith('/ratify') for item in self.stub.requests))
         self.assertEqual((self.stream / 'failures/coi.lastgood').read_text(), 'e4\n')
 
@@ -70,11 +72,11 @@ class EnginePolicyRecoveryTests(TickCase):
         self.fixture(policy=True)
         path = self.stream / 'log/tick-state.json'
         data = self.state(self.stream)
-        data['failures']['coi']['ratification'] = {'noticeId': 'invented'}
+        data['failures']['coi']['authority'] = {'kind': 'arbitrary-label'}
         path.write_text(json.dumps(data))
         result = self.advance()
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn('ambiguous', result.stderr)
+        self.assertIn('authority', result.stderr)
         self.assertFalse(any(item[1].endswith('/fork') for item in self.stub.requests))
 
     def test_newer_stop_never_uses_policy_to_rearm_or_fork(self):

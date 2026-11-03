@@ -34,6 +34,21 @@ class NativeOverlayTests(unittest.TestCase):
         self.assertEqual((self.root / "a.js").read_text(), "export const value = 2;\n")
         self.assertEqual(self.overlay.apply(self.root, self.manifest), "already-applied")
 
+    def test_complete_known_upgrade_is_allowed_but_mixed_generations_refuse(self):
+        known = {}
+        for item in self.manifest["files"]:
+            known[item["path"]] = self.digest("export const value = 0;\n")
+            (self.root / item["path"]).write_text("export const value = 0;\n")
+            item["content"] = "export const value = 2;\n"
+            item.pop("edits")
+        self.manifest["inputs"] = [known]
+        (self.root / "a.js").write_text("export const value = 1;\n")
+        with self.assertRaisesRegex(ValueError, "mixed"):
+            self.overlay.apply(self.root, self.manifest)
+        (self.root / "a.js").write_text("export const value = 0;\n")
+        self.assertEqual(self.overlay.apply(self.root, self.manifest), "applied")
+        self.assertEqual(self.overlay.apply(self.root, self.manifest), "already-applied")
+
     def test_preflight_every_file_before_mutation(self):
         (self.root / "b.js").write_text("unexpected bytes")
         with self.assertRaisesRegex(ValueError, "hash"):

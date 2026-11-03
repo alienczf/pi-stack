@@ -7,6 +7,7 @@ import difflib
 import hashlib
 import json
 from pathlib import Path
+import subprocess
 
 EXTENSIONS = {"pi-subagents": "0.58.0", "pi-web-access": "0.26.0", "pi-prompt-template-model": "0.12.2", "pi-cursor-sdk": "0.1.5", "pi-jupyter": "0.1.0"}
 PACKAGES = {"package.json": ("@jmfederico/pi-web", "1.202607.3"), **{f"node_modules/@earendil-works/{name}/package.json": (f"@earendil-works/{name}", "0.82.1") for name in ("pi-coding-agent", "pi-ai", "pi-agent-core")}}
@@ -16,7 +17,7 @@ def digest(raw):
     return hashlib.sha256(raw).hexdigest()
 
 
-def build(pristine, edited, paths):
+def build(pristine, edited, paths, *, postimages=None):
     result = {"id": "harness-heal-v1", "packages": {}, "files": []}
     for path, (name, version) in PACKAGES.items():
         raw = (pristine / path).read_bytes()
@@ -30,7 +31,12 @@ def build(pristine, edited, paths):
         if old == new:
             continue
         item = {"path": path, "before": None if old is None else digest(old), "after": digest(new)}
-        if old is None:
+        if postimages is not None:
+            destination = postimages / path
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(new)
+            item["contentFile"] = str(destination.relative_to(Path(__file__).resolve().parents[1] / "native"))
+        elif old is None:
             item["content"] = new.decode()
         else:
             before, after = old.decode().splitlines(keepends=True), new.decode().splitlines(keepends=True)
@@ -52,7 +58,20 @@ if __name__ == "__main__":
     parser.add_argument("edited", type=Path)
     parser.add_argument("paths", nargs="+")
     parser.add_argument("--extension", choices=EXTENSIONS)
+    parser.add_argument("--postimages", type=Path, help="write auditable full postimage sources below native/")
+    parser.add_argument("--accept-revision", action="append", default=[], help="accept a complete known overlay tree from this git revision")
     args = parser.parse_args()
     if args.extension:
         PACKAGES = {"package.json": (args.extension, EXTENSIONS[args.extension])}
-    print(json.dumps(build(args.pristine, args.edited, args.paths), indent=2, ensure_ascii=False))
+    result = build(args.pristine, args.edited, args.paths, postimages=args.postimages)
+    if args.postimages:
+        result["id"] = "continuous-recovery-v2"
+    if args.accept_revision:
+        result["inputs"] = []
+        for revision in args.accept_revision:
+            previous = json.loads(subprocess.check_output(["git", "show", f"{revision}:native/pi-web/manifest.json"], text=True))
+            known = {item["path"]: item["after"] for item in previous["files"]}
+            tree = {item["path"]: known.get(item["path"], item["before"]) for item in result["files"]}
+            if tree not in result["inputs"]:
+                result["inputs"].append(tree)
+    print(json.dumps(result, indent=2, ensure_ascii=False))

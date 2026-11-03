@@ -23,7 +23,7 @@ async function parked(role = 'coordinator', enrolled = true) {
     assert.equal(boundary.state, 'parked');
     const authority = { kind: 'engine-policy', policyId: 'enrolled-prefix-v1', enrollmentId: boundary.enrollment?.id ?? f.session.sessionId };
     let forks = 0, fork;
-    const recovery = new SessionFailureRecoveries(f.control, undefined, { policy: deps.engineRecoveryPolicy, boundary: session => f.boundaries.snapshot(session), quiescent: session => assert.equal(session.isStreaming || session.isCompacting || session.isBashRunning, false), fork: async (session, operation) => {
+    const recovery = new SessionFailureRecoveries(f.control, { policy: deps.engineRecoveryPolicy, boundary: session => f.boundaries.snapshot(session), quiescent: session => assert.equal(session.isStreaming || session.isCompacting || session.isBashRunning, false), fork: async (session, operation) => {
         forks++;
         const manager = SessionManager.open(session.sessionManager.getSessionFile());
         manager.createBranchedSession(operation.checkpoint.entryId);
@@ -40,7 +40,6 @@ async function parked(role = 'coordinator', enrolled = true) {
 test('enrolled coordinator and worker fork the actual good prefix without verifier, handover or failed acknowledgement', async () => {
     for (const role of ['coordinator', 'implementation']) {
         const f = await parked(role);
-        assert.equal(f.recovery.verifierConfigured(), false);
         const result = await f.recovery.fork(f.session, f.request);
         assert.equal(result.state, 'forked');
         assert.equal(result.authority.kind, 'engine-policy');
@@ -129,10 +128,9 @@ test('actual service recovery adapter crosses the parked 409 boundary while ordi
     f.fork().session.dispose(); f.session.dispose();
 });
 
-test('a caller cannot replace engine policy with invented notice authority', async () => {
+test('a caller cannot replace engine-owned policy with arbitrary authority', async () => {
     const f = await parked();
-    const request = { ...f.request }; delete request.authority;
-    request.ratification = { entryId: 'invented', sha256: '0'.repeat(64) };
+    const request = { ...f.request, authority: { kind: 'arbitrary-label' } };
     await assert.rejects(f.recovery.fork(f.session, request), /authority/);
     assert.equal(f.forks(), 0);
     f.session.dispose();

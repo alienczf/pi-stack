@@ -88,6 +88,7 @@ def apply_locked(root: Path, manifest: dict, *, check: bool) -> str:
     if journal.exists() and read_regular(journal) != expected_journal:
         raise ValueError("overlay journal belongs to a different manifest")
     states, updates = [], []
+    actuals = {}
     seen = set()
     for item in manifest["files"]:
         path = owned_path(root, item["path"])
@@ -96,13 +97,16 @@ def apply_locked(root: Path, manifest: dict, *, check: bool) -> str:
         seen.add(path)
         raw = read_regular(path) if path.exists() else None
         actual = None if raw is None else digest(raw)
+        actuals[item["path"]] = actual
         if actual == item["after"]:
             states.append("after")
             continue
-        if actual != item["before"]:
+        if actual not in [item["before"], *(tree.get(item["path"]) for tree in manifest.get("inputs", []))]:
             raise ValueError(f"unexpected source hash {item['path']}")
         states.append("before")
-        if raw is None:
+        if "contentFile" in item:
+            patched = read_regular(owned_path(MANIFEST.parents[1], item["contentFile"]))
+        elif "content" in item:
             patched = item["content"].encode()
         else:
             patched = raw.decode("utf-8")
@@ -114,7 +118,9 @@ def apply_locked(root: Path, manifest: dict, *, check: bool) -> str:
         if digest(patched) != item["after"]:
             raise ValueError(f"overlay postimage hash mismatch {item['path']}")
         updates.append((path, patched, stat.S_IMODE(path.stat().st_mode) if path.exists() else 0o644))
-    if "before" in states and "after" in states and not journal.exists():
+    pristine = {item["path"]: item["before"] for item in manifest["files"]}
+    postimage = {item["path"]: item["after"] for item in manifest["files"]}
+    if not journal.exists() and actuals not in [pristine, postimage, *manifest.get("inputs", [])]:
         raise ValueError("unowned mixed original/patched tree")
     if check:
         return "already-applied" if not updates else "ready"

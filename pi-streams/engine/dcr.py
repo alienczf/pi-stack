@@ -44,7 +44,6 @@ class Operation:
     completed_leaf: str = ""
     detail: str = ""
     recovery_original: str = ""
-    recovery_instructions: str = ""
     observation: dict | None = None
     continuation: dict | None = None
 
@@ -93,9 +92,9 @@ def resume_text(stream_dir: Path, goal: str) -> str:
         "Resolve the current objective in STATE Goals, falling back to its North Star.\n"
         "Open history/, context/ and its README index, checks/, or handover/ only on demand.\n"
         "Historical entries do not override current Goals or Rules.\n"
-        "Do not self-remedy environment/auth/resource failures or write new rules, skills,\n"
-        "or memory because of them. Park and append a Log entry via the engine;\n"
-        "the human repairs them.\n"
+        "Runtime failures use engine-owned recovery under the standing charter. Preserve stops,\n"
+        "newer input, unknown effects and bounded role. Never read tokens, repair credentials,\n"
+        "switch provider/model or replay rejected content. Record failures through the Log.\n"
         f"/poteto-mode {goal}"
     )
 
@@ -247,10 +246,10 @@ def continuation_text(op: Operation, stream_dir: Path) -> str:
             f"<original-assignment>\n{assignment}\n</original-assignment>\n")
 
 
-def prepare(index: Path, stream: str, stream_dir: Path, resolved: Coordinator, identity: str, token: dict, *, original: str = "", instructions: str = "", continuation: dict | None = None) -> Operation:
+def prepare(index: Path, stream: str, stream_dir: Path, resolved: Coordinator, identity: str, token: dict, *, original: str = "", continuation: dict | None = None) -> Operation:
     previous = load(stream_dir, resolved.row.session)
     if previous is not None and (original or previous.phase not in {"complete", "superseded"}):
-        if previous.id != identity or previous.recovery_original != original or previous.automatic != token or previous.recovery_instructions != instructions or previous.continuation != continuation:
+        if previous.id != identity or previous.recovery_original != original or previous.automatic != token or previous.continuation != continuation:
             raise StreamsError("Another DCR operation owns the returned fork")
         return previous
     command = shlex.join([str(Path(__file__).resolve().parents[2] / "bin/pi-streams"), "dcr", "ready", stream, "--home", str(index), "--session", resolved.row.session, "--operation", identity])
@@ -261,7 +260,7 @@ def prepare(index: Path, stream: str, stream_dir: Path, resolved: Coordinator, i
         "Do not prune or rotate Log, abort active tools, author RESUME, or retry uncertain external jobs. "
         f"Then run {command}. Make no artifact writes afterward. Finish the turn with the exact acknowledgement returned by that command."
     )
-    op = Operation(identity, resolved.row.session, resolved.row.worktree, token, text, recovery_original=original, recovery_instructions=instructions, continuation=continuation)
+    op = Operation(identity, resolved.row.session, resolved.row.worktree, token, text, recovery_original=original, continuation=continuation)
     op.sync_text = continuation_text(op, stream_dir) + op.sync_text
     save(stream_dir, op)
     return op
@@ -392,7 +391,7 @@ def step(index: Path, project: Project, stream: str, stream_dir: Path, resolved:
             require_ratified(stream_dir)
             op.compaction_entry, op.compaction_sha256 = proof["entryId"], proof["sha256"]
             op.resume_goal = artifacts.resolve_current_goal(state)
-            op.resume_text = continuation_text(op, stream_dir) + ("Explicitly ratified exceptional instructions:\n" + op.recovery_instructions + "\n" if op.recovery_instructions else "") + resume_text(stream_dir, op.resume_goal)
+            op.resume_text = continuation_text(op, stream_dir) + resume_text(stream_dir, op.resume_goal)
             op.phase = "resume-sending"
             save(stream_dir, op)
             piweb.resume_maintenance(sid, op.id, op.compaction_entry, 0, {**op.automatic, "kind": "resume"}, f"{op.id}:resume", op.resume_text, poteto_goal=op.resume_goal, original=op.recovery_original)

@@ -22,11 +22,11 @@ class FailureRecoveryTests(TickCase):
         self.seed("coi", self.cwd)
         self.original = self.body(cwd=self.cwd)
         self.original["model"]["id"] = model
-        self.original.update(failureRatificationConfigured=True, failureForkSupport="ratified-prefix-v1", failureMaintenanceSupport="operation-scoped-v1")
+        self.original.update(failureForkSupport="engine-prefix-v1", failureMaintenanceSupport="operation-scoped-v1")
         self.original["rotationSafety"].update(callbackInventory="native-and-extension-v1", callbacksKnown=True, nativeChildCallbacks=[])
         self.policy = policy
         if policy:
-            self.original.update(failureRatificationConfigured=False, engineFailureRecoverySupport="enrolled-prefix-v1")
+            self.original.update(engineFailureRecoverySupport="enrolled-prefix-v1")
             enrollment = {"id": "fresh-lane", "policyId": "enrolled-prefix-v1", "role": role, "assignment": "Implement only the assigned fixture unit.", "assignmentSha256": hashlib.sha256(b"Implement only the assigned fixture unit.").hexdigest(), "generation": "initial-coi"}
             self.original["failureBoundary"].update(enrollment=enrollment, parking={"generation": "native-parked-coi", "owned": True})
             source = Path(self.log_path("coi"))
@@ -48,7 +48,7 @@ class FailureRecoveryTests(TickCase):
         self.assertTrue(self.episode["recovery_id"], "Standing charter recovery needs no notice verifier")
         proof = {"authority": self.episode["authority"], "continuation": self.episode["continuation"]}
         self.request = {"cwd": str(self.cwd), "id": self.episode["recovery_id"], "episode": self.episode["id"], "expected": {**self.original["failureBoundary"], "generation": "native-parked-coi"}, **proof}
-        self.result = {"version": 1, "id": self.request["id"], "episode": self.episode["id"], "originalSessionId": "coi", "cwd": str(self.cwd), "root": str(self.stream), "stream": "etl", "checkpoint": target["checkpoint"], "failure": target["failure"], "intentSha256": hashlib.sha256(json.dumps(self.request, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest(), "authority": self.episode["authority"], "instructions": "", "generation": "frozen-original", "state": "forked", "forkSessionId": "returned-fork", "forkFile": self.log_path("returned-fork"), "forkGeneration": "held-generation"}
+        self.result = {"version": 1, "id": self.request["id"], "episode": self.episode["id"], "originalSessionId": "coi", "cwd": str(self.cwd), "root": str(self.stream), "stream": "etl", "checkpoint": target["checkpoint"], "failure": target["failure"], "intentSha256": hashlib.sha256(json.dumps(self.request, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest(), "authority": self.episode["authority"], "generation": "frozen-original", "state": "forked", "forkSessionId": "returned-fork", "forkFile": self.log_path("returned-fork"), "forkGeneration": "held-generation"}
         originals = Path(self.log_path("coi")).read_bytes().splitlines(keepends=True)
         header = {"type": "session", "version": 3, "id": "returned-fork", "cwd": str(self.cwd), "parentSession": self.log_path("coi")}
         prefix_end = next(index for index, raw in enumerate(originals) if json.loads(raw).get("id") == "e4") + 1

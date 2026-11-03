@@ -5,7 +5,7 @@ import hashlib
 import re
 import stat
 import uuid
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -96,8 +96,6 @@ class Episode:
     authorized_model: str = ""
     authorized_thinking: str = ""
     checkpoint: dict[str, str] | None = None
-    ratification: dict | None = None
-    verification: dict | None = None
     recovery_id: str = ""
     authority: dict | None = None
     continuation: dict | None = None
@@ -139,10 +137,10 @@ def load(stream_dir: Path, sid: str) -> Episode | None:
     if value is None:
         return None
     try:
-        result = Episode(**value)
+        result = Episode(**{key: item for key, item in value.items() if key in {field.name for field in fields(Episode)}})
         if result.session != sid or result.kind not in KINDS or not result.id or not Path(result.cwd).is_absolute() or clock.parse(result.observed_at) is None or not isinstance(result.uncertain_jobs, list) or type(result.cancelled) is not bool or type(result.pause_owned) is not bool:
             raise ValueError("mismatched failure ownership or metadata")
-        if result.authority is not None and (not isinstance(result.authority, dict) or result.authority.get("kind") != "engine-policy" or result.authority.get("policyId") != "enrolled-prefix-v1" or not isinstance(result.authority.get("enrollmentId"), str) or not result.authority["enrollmentId"] or result.ratification is not None or not isinstance(result.continuation, dict)):
+        if result.authority is not None and (not isinstance(result.authority, dict) or result.authority.get("kind") != "engine-policy" or result.authority.get("policyId") != "enrolled-prefix-v1" or not isinstance(result.authority.get("enrollmentId"), str) or not result.authority["enrollmentId"] or not isinstance(result.continuation, dict)):
             raise ValueError("invalid or ambiguous saved recovery authority")
         return result
     except (TypeError, ValueError) as exc:
@@ -273,7 +271,7 @@ def observe(stream_dir: Path, sid: str, cwd: str, native: dict, status: dict, at
         if previous.uncertain_jobs != jobs:
             previous.uncertain_jobs = jobs
             save(stream_dir, previous)
-        if previous.kind != "usage-limit" and previous.authority is None and previous.ratification is None:
+        if previous.kind != "usage-limit" and previous.authority is None:
             _admit_recovery(stream_dir, previous, Path(path), leaf, boundary, status)
         _publish_marker(stream_dir, previous, checkpoint)
         return previous
