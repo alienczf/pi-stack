@@ -222,7 +222,7 @@ def observe(stream_dir: Path, sid: str, cwd: str, native: dict, status: dict, at
         raise StreamsError("parked native boundary lacks its exact failure evidence")
     if failed is not None and (not isinstance(failed, dict) or not isinstance(failed.get("entryId"), str) or not isinstance(failed.get("sha256"), str)):
         raise StreamsError("native failure identity/hash is unconfirmed")
-    observation = sessionlog.failure_observation(Path(path), sid, cwd, leaf, failed["entryId"] if failed else None)
+    observation = sessionlog.failure_observation(Path(path), sid, cwd, leaf, failed["entryId"] if failed else None, native_retry=status.get("streamRetry") if status.get("streamRetrySupport") == "entry-bound-v1" else None)
     if observation is None:
         return previous
     checkpoint = None

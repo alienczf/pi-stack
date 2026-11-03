@@ -153,12 +153,42 @@ def verify_good_checkpoint(path: Path, sid: str, cwd: str, leaf: object, checkpo
     raise StreamsError("good-turn checkpoint is absent or is not before the native failure")
 
 
-def failure_observation(path: Path, sid: str, cwd: str, leaf: object, failure_entry: str | None = None) -> dict | None:
+def retry_dispositions(branch: list[tuple[dict, bytes]], sid: str, cwd: str, native_retry: dict | None = None) -> dict[str, dict]:
+    positions = {entry["id"]: (index, entry, raw) for index, (entry, raw) in enumerate(branch)}
+    result = {}
+    for index, (entry, _) in enumerate(branch):
+        if entry.get("customType") != "pi-web.stream-retry" or not isinstance(entry.get("data"), dict) or entry["data"].get("sessionId") != sid:
+            continue
+        data = entry["data"]
+        failed = data.get("failure", {})
+        identity = data.get("identity", {})
+        source = positions.get(failed.get("entryId"))
+        if source is None or source[0] >= index or data.get("version") != 1 or data.get("cwd") != cwd or hashlib.sha256(source[2]).hexdigest() != failed.get("sha256") or source[1].get("message", {}).get("stopReason") != "error" or any(not isinstance(identity.get(key), str) or not identity[key] for key in ("provider", "model", "thinking", "generation")) or any(identity[key] != source[1]["message"].get(key) for key in ("provider", "model")) or type(data.get("attempt")) is not int or data["attempt"] < 1 or data.get("delayMs") != 5000 or data.get("state") not in {"pending", "resolved", "terminal", "cancelled", "uncertain"}:
+            raise StreamsError("Native retry disposition changed exact entry/hash or identity")
+        prior = result.get(failed["entryId"])
+        if prior is not None and (prior["identity"] != identity or prior["attempt"] != data["attempt"] or prior["state"] != "pending" and prior != data):
+            raise StreamsError("Native retry disposition changed immutable settlement")
+        if data["state"] == "resolved":
+            completion = data.get("completion", {})
+            target = positions.get(completion.get("entryId"))
+            if target is None or not source[0] < target[0] < index or hashlib.sha256(target[2]).hexdigest() != completion.get("sha256") or target[1].get("message", {}).get("role") != "assistant" or target[1]["message"].get("stopReason") == "aborted" or any(target[1]["message"].get(key) != identity[key] for key in ("provider", "model")) or any(value.get("message", {}).get("role") == "user" or value.get("type") in {"model_change", "thinking_level_change"} for value, _ in branch[source[0]+1:target[0]]):
+                raise StreamsError("Native retry has no exact ordered same-identity completion")
+        result[failed["entryId"]] = data
+    for data in result.values():
+        if data["state"] in {"cancelled", "uncertain"} or data["state"] == "pending" and data != native_retry:
+            raise StreamsError("Native retry ownership is cancelled, uncertain or unavailable; no replay")
+    return result
+
+
+def failure_observation(path: Path, sid: str, cwd: str, leaf: object, failure_entry: str | None = None, *, native_retry: dict | None = None) -> dict | None:
     branch = branch_records(path, sid, cwd, leaf)
+    retries = retry_dispositions(branch, sid, cwd, native_retry)
     failed = None
     saved = ("", "")
     uncertain: dict[str, dict[str, str]] = {}
     for entry, raw in branch:
+        if retries.get(entry["id"], {}).get("state") in {"resolved", "pending"}:
+            continue
         message = entry.get("message")
         if not isinstance(message, dict):
             continue

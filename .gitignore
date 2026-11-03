@@ -5,3 +5,4 @@ settings.json.pi-stack-tmp
 .plugins/
 __pycache__/
 *.pyc
+.harness-heal/

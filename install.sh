@@ -491,8 +491,23 @@ resolve_node_tool() {
 	return 1
 }
 
+apply_native_overlay() {
+	if [[ "${PI_STACK_SKIP_PACKAGES:-}" == 1 && -z "${PI_STACK_NATIVE_ROOT:-}" ]]; then
+		printf 'Native overlay skipped with package effects. Set PI_STACK_NATIVE_ROOT for a disposable target.\n'
+		return 0
+	fi
+	local root="${PI_STACK_NATIVE_ROOT:-}"
+	if [[ -z "$root" ]]; then
+		local executable
+		executable="$(resolve_node_tool pi-web)"
+		root="$(dirname "$(dirname "$(readlink -f "$executable")")")"
+	fi
+	python3 "$here/scripts/apply-native-overlay.py" "$root"
+}
+
 ensure_pi_web() {
 	if resolve_node_tool pi-web >/dev/null; then
+		apply_native_overlay
 		return 0
 	fi
 	printf 'npm install -g @jmfederico/pi-web --allow-scripts=node-pty\n'
@@ -514,6 +529,7 @@ ensure_pi_web() {
 		printf 'npm install -g @jmfederico/pi-web did not put pi-web on PATH\n' >&2
 		return 1
 	fi
+	apply_native_overlay
 	PATH="$node_path" "$pi_web" install
 }
 
