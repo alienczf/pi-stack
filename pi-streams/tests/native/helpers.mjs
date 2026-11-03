@@ -16,7 +16,7 @@ const { AutomaticAdmissionStore } = await native('dist/server/sessions/automatic
 const { SessionFailureBoundaries } = await native('dist/server/sessions/sessionFailureBoundary.js');
 const { AssistantMessageEventStream } = await native('node_modules/@earendil-works/pi-ai/dist/utils/event-stream.js');
 
-export const model = { provider: 'openai-codex', id: 'gpt-6.1-sol', name: 'Controlled fixture', api: 'openai-codex-responses', baseUrl: 'http://127.0.0.1:9', reasoning: true, input: ['text'], contextWindow: 400000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
+export const model = { provider: 'openai-codex', id: 'gpt-6.1-sol', name: 'Controlled fixture', api: 'openai-codex-responses', baseUrl: 'http://127.0.0.1:9', reasoning: true, thinkingLevelMap: { xhigh: 'xhigh' }, input: ['text'], contextWindow: 400000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
 export const response = (text = 'continued', stopReason = 'stop') => ({ role: 'assistant', content: [{ type: 'text', text }], api: model.api, provider: model.provider, model: model.id, stopReason, timestamp: Date.now(), usage: { input: 100, output: 10, cacheRead: 0, cacheWrite: 0, totalTokens: 110, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } });
 export const errorResponse = text => ({ ...response('', 'error'), content: [], errorMessage: text });
 export function provider(result) {

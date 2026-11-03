@@ -42,6 +42,7 @@ import { SessionControlGoalController } from "./sessionControlGoal.js";
 import { assertFailureLifecycleFile, assertGoalNotBlocked, persistedFailureBranch, SessionFailureBoundaries } from "./sessionFailureBoundary.js";
 import { SessionFailureRecoveries } from "./sessionFailureRecovery.js";
 import { SessionFailureRetirements } from "./sessionFailureRetirement.js";
+import { CleanPolicyAnalyses } from "./cleanPolicyAnalysis.js";
 const noopLogger = { info() { } };
 const DEFAULT_UNREAD_PUBLICATION_RETRY_MS = 1_000;
 /**
@@ -396,6 +397,11 @@ export class PiSessionService {
             delete: async (record, id, guard) => { if (this.archiveStore.deleteRecoveryOriginal === undefined)
                 throw new AutomaticAdmissionRejected("Scoped archive deletion is unavailable"); await this.archiveStore.deleteRecoveryOriginal(record, id, guard); await this.forgetUnreadSessions([record]); },
             release: (session, operation) => this.failureBoundaries.releaseRecovery(session, operation),
+        });
+        this.cleanPolicyAnalyses = deps.maintenanceDirectory === undefined || deps.automaticAdmissionStore === undefined || deps.engineRecoveryPolicy !== "enrolled-prefix-v1" ? undefined : new CleanPolicyAnalyses(join(deps.maintenanceDirectory, "clean-policy-analysis"), deps.automaticAdmissionStore, {
+            modelRuntime: deps.modelRuntime,
+            boundary: session => this.failureBoundaries.snapshot(session),
+            quiescent: session => this.assertRecoveryQuiescent(session),
         });
         this.failureRecoveries = new SessionFailureRecoveries(deps.automaticAdmissionStore, {
             policy: deps.engineRecoveryPolicy,
@@ -1604,6 +1610,15 @@ export class PiSessionService {
         const disk = statfsSync(session.sessionManager.getCwd());
         return { sessionId: session.sessionId, cwd: session.sessionManager.getCwd(), provider: session.model.provider, model: session.model.id, authenticated: auth.authenticated === true, resourceReady: disk.bavail > 0 && disk.ffree > 0 };
     }
+    async analyzePolicyFailure(ref, request) {
+        if (this.cleanPolicyAnalyses === undefined || !isPiSessionRef(ref))
+            throw new AutomaticAdmissionRejected("Owned isolated policy analysis is unavailable");
+        await this.assertWritable(ref, true);
+        const session = await this.getOrOpen(ref);
+        if (session.sessionId !== ref.id || session.sessionManager.getCwd() !== ref.cwd)
+            throw new AutomaticAdmissionRejected("Clean analysis requires the exact original session and cwd");
+        return this.cleanPolicyAnalyses.run(session, request);
+    }
     async forkFailureAtCheckpoint(ref, request) {
         await this.assertWritable(ref, true);
         const session = await this.getOrOpen(ref);
@@ -2751,6 +2766,8 @@ export class PiSessionService {
         }
     }
     async createSessionRuntime(sessionManager, cwd, options, startup) {
+        if (sessionManager.getEntries().some(entry => entry.customType === "pi-web.clean-policy-analysis"))
+            throw new AutomaticAdmissionRejected("Private metadata analysis cannot reopen with ordinary tools or project resources");
         startup.report(STARTUP_PHASE_RUNTIME);
         const delegationToolsEnabled = options.creationProvenance !== "tracked-subsession"
             && await sessionAllowsDelegationTools(sessionManager, this.sessionManager);
@@ -3519,6 +3536,7 @@ export class PiSessionService {
         const failureBoundary = this.failureBoundaries.snapshot(session);
         return {
             sessionId: session.sessionId,
+            ...(this.cleanPolicyAnalyses === undefined ? {} : { cleanPolicyAnalysisSupport: "clean-policy-analysis-v1" }),
             ...(this.failureBoundaries.supported(session) ? { recoveryReadinessSupport: "same-provider-v1", streamRetrySupport: "entry-bound-v1", streamRetry: this.failureBoundaries.retrySnapshot(session), ...(this.failureRecoveries.policyConfigured() ? { engineFailureRecoverySupport: "enrolled-prefix-v1" } : {}) } : {}),
             ...(this.failureBoundaries.supported(session) ? { ...(this.failureRetirements === undefined ? {} : { failureRetirementSupport: "singular-original-v1" }), ...(this.maintenance === undefined ? {} : { failureMaintenanceSupport: "operation-scoped-v1" }), failureForkSupport: "engine-prefix-v1", failureBoundarySupport: "persisted-turn-v1", ...(failureBoundary === undefined ? {} : { failureBoundary }) } : {}),
             ...(this.automaticAdmissionStore === undefined ? {} : { conditionalAdmissionSupport: "generation-cas-v1", automaticAdmission: this.automaticAdmissionStore.snapshot({ id: session.sessionId, cwd: session.sessionManager.getCwd() }), rotationSafety: this.rotationSafety(session) }),

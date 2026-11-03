@@ -104,6 +104,7 @@ class Episode:
     recovery_id: str = ""
     authority: dict | None = None
     continuation: dict | None = None
+    analysis: dict | None = None
     reset_at: str = ""
     reset_source: str = ""
     saved_entry: str = ""
@@ -173,6 +174,8 @@ def receipts(stream_dir: Path) -> list[dict]:
         episode = load(stream_dir, sid)
         if episode is not None:
             result.append({"id": episode.id, "session": episode.session, "kind": episode.kind, "label": episode.label, "state": episode.state, "resetAt": episode.reset_at, "resetSource": episode.reset_source, "retryState": episode.retry_state, "detail": episode.detail, "notificationState": (episode.notification or {}).get("state", "pending"), "uncertainJobs": episode.uncertain_jobs, "checkpoint": None if episode.checkpoint is None else {key: episode.checkpoint[key] for key in ("entryId", "sha256")}})
+            if episode.analysis is not None:
+                result[-1]["analysis"] = episode.analysis
             from engine.failure_recovery import load as recovery
             operation = recovery(stream_dir, sid)
             if operation is not None:
@@ -347,9 +350,26 @@ def _admit_recovery(stream_dir: Path, episode: Episode, path: Path, leaf: object
         episode.authority = None
         if (episode.continuation or {}).get("policyFailure") != {"entryId": episode.failure_entry, "sha256": episode.failure_sha256}:
             episode.continuation = policy_continuation(stream_dir, episode, rows[0].role) if len(rows) == 1 else None
-        episode.detail = POLICY_BLOCKER
+        episode.detail = POLICY_BLOCKER + (" Separate metadata analysis " + episode.analysis["state"] + ". Original task remains blocked." if episode.analysis is not None else "")
         save(stream_dir, episode)
         artifacts.append_log_locked(stream_dir, episode.observed_at, "Content-policy safe blocker", f"{POLICY_BLOCKER} Native refusal {episode.failure_entry} SHA-256 {episode.failure_sha256}.", request_id=f"policy-safe-blocker:{episode.id}")
+        if status.get("cleanPolicyAnalysisSupport") == "clean-policy-analysis-v1" and episode.analysis is None and episode.continuation is not None and not episode.uncertain_jobs and not episode.cancelled:
+            from engine.threads import require_ratified
+            require_ratified(stream_dir)
+            token, allowed = piweb.automatic_admission(status, episode.session, episode.cwd, "recovery")
+            if allowed or not episode.authorized_model or not episode.authorized_thinking or boundary is None or boundary.get("parking") != {"generation": token["generation"], "owned": True}:
+                return
+            piweb.require_settings(status, episode.authorized_model, episode.authorized_thinking)
+            request = {"id": episode.id + "-analysis", "basis": "clean-policy-analysis-v1", "expected": {**boundary, "generation": token["generation"]}, "blockedGoalSha256": episode.continuation["blockedGoalSha256"]}
+            episode.analysis = {"id": request["id"], "basis": request["basis"], "state": "sending"}
+            save(stream_dir, episode)
+            try:
+                episode.analysis = piweb.analyze_policy(episode.session, episode.cwd, request, episode.authorized_model, episode.authorized_thinking)
+            except StreamsError as exc:
+                episode.analysis.update(state="uncertain", detail=str(exc))
+            episode.detail = POLICY_BLOCKER + " Separate metadata analysis " + episode.analysis["state"] + ". Original task remains blocked. No fork, compaction, RESUME or acceptance."
+            save(stream_dir, episode)
+            artifacts.append_log_locked(stream_dir, episode.observed_at, "Separate policy metadata analysis", f"Analysis {request['id']} is {episode.analysis['state']}. Basis clean-policy-analysis-v1. Original task remains blocked. Audit evidence: {episode.analysis.get('audit', {})}. No task recovery or acceptance is claimed.", request_id=f"policy-analysis:{episode.id}")
         return
     token, allowed = piweb.automatic_admission(status, episode.session, episode.cwd, "recovery")
     if allowed or episode.cancelled:

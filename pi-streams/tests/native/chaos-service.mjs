@@ -55,10 +55,42 @@ const calls = [];
 const events = [];
 const requests = [];
 let authenticated = true;
-const runtime = { refresh: async () => ({}), getAvailableSnapshot: () => [model], hasConfiguredAuth: () => true, checkAuth: async () => ({ authenticated }), isUsingOAuth: () => false, getAuth: async () => ({ auth: {} }), getProviders: () => [], getAll: () => [model], getAvailable: async () => [model], getModel: (provider, id) => provider === model.provider && id === model.id ? model : undefined, registerProvider: () => {}, unregisterProvider: () => {}, registerNativeProvider: () => {} };
+const runtime = { refresh: async () => ({}), getAvailableSnapshot: () => [model], hasConfiguredAuth: () => true, checkAuth: async () => ({ authenticated }), isUsingOAuth: () => false, getAuth: async () => ({ auth: {} }), streamSimple: (selected, context, options) => controlledStream(selected, context, options, options.sessionId, scratch), getProviders: () => [], getAll: () => [model], getAvailable: async () => [model], getModel: (provider, id) => provider === model.provider && id === model.id ? model : undefined, registerProvider: () => {}, unregisterProvider: () => {}, registerNativeProvider: () => {} };
 const textOf = message => typeof message?.content === 'string' ? message.content : (message?.content ?? []).filter(p => p.type === 'text').map(p => p.text).join('\n');
 const response = (text, error, tokens = 100) => ({ role: 'assistant', content: error ? [] : [{ type: 'text', text }], api: model.api, provider: model.provider, model: model.id, stopReason: error ? 'error' : 'stop', ...(error ? { errorMessage: error } : {}), timestamp: Date.now(), usage: { input: tokens, output: 10, cacheRead: 0, cacheWrite: 0, totalTokens: tokens + 10, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } });
 const execute = promisify(execFile);
+function controlledStream(selected, context, options, sid, cwd) {
+    assert.equal(selected.provider, model.provider);
+    assert.equal(selected.id, model.id);
+    const title = context.systemPrompt?.startsWith('Generate a concise title');
+    const summary = context.systemPrompt?.startsWith('You are a context summarization assistant');
+    const call = { summary, session: sid, at: Date.now(), monotonicMs: performance.now(), provider: selected.provider, model: selected.id, reasoning: options.reasoning, title, systemPrompt: context.systemPrompt, messages: structuredClone(context.messages), tools: structuredClone(context.tools) };
+    calls.push(call);
+    const stream = new AssistantMessageEventStream();
+    void (async () => {
+        const plan = title || summary ? {} : (plans.get(sid)?.shift() ?? {});
+        const last = textOf(context.messages.findLast(m => m.role === 'user'));
+        let text = plan.text ?? (summary ? '## Goal\nContinue only the current permitted goal in STATE.\n## Progress\nHistorical fixture exchanges were checked.\n## Next steps\nRead STATE and retain the bounded role.' : owned.has(sid) ? 'Permitted fixture work completed. The authorized overall outcome remains unfinished.' : 'The content-policy refusal applies to the original task. Only failure metadata was analyzed. Preserve evidence and keep the original task blocked.');
+        if (!title && !summary && !plan.error && last.includes('SYNC/DUMP for same-session DCR')) {
+            const operation = /SYNC\/DUMP for same-session DCR ([a-zA-Z0-9-]+)/.exec(last)?.[1];
+            const streamRoot = findStream(cwd);
+            const args = ['dcr', 'ready', streamRoot.split(sep).at(-1), '--home', process.env.CHAOS_INDEX, '--session', sid, '--operation', operation];
+            journal({ effect: 'controlled-agent-dcr-ready', session: sid, args });
+            const result = await execute(process.env.PI_STREAMS_BIN, args, { cwd, timeout: 30000 });
+            text = JSON.parse(result.stdout).acknowledgement;
+        }
+        call.result = { text, error: plan.error ?? null };
+        const message = response(text, plan.error, context.messages.reduce((sum, message) => sum + estimateTokens(message), 0));
+        stream.push(plan.error ? { type: 'error', reason: 'error', error: message } : { type: 'done', reason: 'stop', message });
+        stream.end();
+    })().catch(error => {
+        call.fixtureError = String(error);
+        const message = response('', 'Controlled fixture error: ' + error.message);
+        stream.push({ type: 'error', reason: 'error', error: message });
+        stream.end();
+    });
+    return stream;
+}
 async function createRuntime({ cwd, sessionManager, agentDir }) {
     assert(resolve(cwd).startsWith(scratch + sep), 'session cwd must be owned');
     const sid = sessionManager.getSessionId();
@@ -67,38 +99,7 @@ async function createRuntime({ cwd, sessionManager, agentDir }) {
     const extensions = { extensions: [], errors: [], runtime: createExtensionRuntime() };
     const skill = join(scratch, 'poteto-mode.md');
     const loader = { getExtensions: () => extensions, getPrompts: () => ({ prompts: [], diagnostics: [] }), getSkills: () => ({ skills: [{ name: 'poteto-mode', filePath: skill, baseDir: scratch }], diagnostics: [] }), getThemes: () => ({ themes: [], diagnostics: [] }), getAgentsFiles: () => ({ agentsFiles: [] }), getSystemPrompt: () => 'Isolated controlled verification. No tools, network, credentials, or external effects.', getAppendSystemPrompt: () => [] };
-    const agent = new Agent({ initialState: { model, messages: sessionManager.buildSessionContext().messages, thinkingLevel: 'xhigh', tools: [], systemPrompt: loader.getSystemPrompt() }, streamFn: (selected, context, options) => {
-        assert.equal(selected.provider, model.provider);
-        assert.equal(selected.id, model.id);
-        const title = context.systemPrompt?.startsWith('Generate a concise title');
-        const summary = context.systemPrompt?.startsWith('You are a context summarization assistant');
-        const call = { summary, session: sid, at: Date.now(), monotonicMs: performance.now(), provider: selected.provider, model: selected.id, reasoning: options.reasoning, title, systemPrompt: context.systemPrompt, messages: structuredClone(context.messages) };
-        calls.push(call);
-        const stream = new AssistantMessageEventStream();
-        void (async () => {
-            const plan = title || summary ? {} : (plans.get(sid)?.shift() ?? {});
-            const last = textOf(context.messages.findLast(m => m.role === 'user'));
-            let text = plan.text ?? (summary ? '## Goal\nContinue only the current permitted goal in STATE.\n## Progress\nHistorical fixture exchanges were checked.\n## Next steps\nRead STATE and retain the bounded role.' : 'Permitted fixture work completed. The authorized overall outcome remains unfinished.');
-            if (!title && !summary && !plan.error && last.includes('SYNC/DUMP for same-session DCR')) {
-                const operation = /SYNC\/DUMP for same-session DCR ([a-zA-Z0-9-]+)/.exec(last)?.[1];
-                const streamRoot = findStream(cwd);
-                const args = ['dcr', 'ready', streamRoot.split(sep).at(-1), '--home', process.env.CHAOS_INDEX, '--session', sid, '--operation', operation];
-                journal({ effect: 'controlled-agent-dcr-ready', session: sid, args });
-                const result = await execute(process.env.PI_STREAMS_BIN, args, { cwd, timeout: 30000 });
-                text = JSON.parse(result.stdout).acknowledgement;
-            }
-            call.result = { text, error: plan.error ?? null };
-            const message = response(text, plan.error, context.messages.reduce((sum, message) => sum + estimateTokens(message), 0));
-            stream.push(plan.error ? { type: 'error', reason: 'error', error: message } : { type: 'done', reason: 'stop', message });
-            stream.end();
-        })().catch(error => {
-            call.fixtureError = String(error);
-            const message = response('', 'Controlled fixture error: ' + error.message);
-            stream.push({ type: 'error', reason: 'error', error: message });
-            stream.end();
-        });
-        return stream;
-    } });
+    const agent = new Agent({ initialState: { model, messages: sessionManager.buildSessionContext().messages, thinkingLevel: 'xhigh', tools: [], systemPrompt: loader.getSystemPrompt() }, streamFn: (selected, context, options) => controlledStream(selected, context, options, sid, cwd) });
     const settingsManager = SettingsManager.inMemory({ compaction: { enabled: false }, retry: { enabled: true, maxRetries: 3, baseDelayMs: 2000 } });
     const session = new AgentSession({ agent, sessionManager, settingsManager, resourceLoader: loader, cwd, modelRuntime: runtime, baseToolsOverride: {} });
     session.subscribe(event => {
@@ -150,6 +151,21 @@ app.post('/__chaos/plan', async request => {
     plans.set(session, responses);
     if (ready !== undefined) authenticated = ready;
     return { armed: true };
+});
+app.post('/__chaos/policy-canaries', async request => {
+    const { session: sid, canary } = request.body;
+    assert(owned.has(sid));
+    assert.equal(typeof canary, 'string');
+    const session = await sessions.getOrOpen(sid);
+    const active = sessions.active.get(sid).runtime;
+    const cwd = session.sessionManager.getCwd();
+    for (const path of [join(cwd, 'AGENTS.md'), join(cwd, 'handover-canary.md'), join(scratch, 'AGENTS.md'), join(scratch, 'agent', 'AGENTS.md')]) writeFileSync(path, canary);
+    active.services.resourceLoader.getSystemPrompt = () => 'Source system ' + canary;
+    active.services.resourceLoader.getAgentsFiles = () => ({ agentsFiles: [{ path: join(cwd, 'AGENTS.md'), content: canary }] });
+    session.sessionManager.appendMessage({ role: 'user', content: 'Inclusive checkpoint contains ' + canary, timestamp: Date.now() });
+    session.sessionManager.appendMessage(response('Verified historical evidence ' + canary));
+    session.agent.state.messages = session.sessionManager.buildSessionContext().messages;
+    return { seeded: true };
 });
 app.post('/__chaos/history', async request => {
     const { session: sid } = request.body;

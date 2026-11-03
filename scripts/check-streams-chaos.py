@@ -260,6 +260,7 @@ class Sandbox:
 
     def cleanup(self):
         result = {'streams': [], 'sessions': [], 'processStopped': self.proc is None, 'pathRemoved': False}
+        retain_scratch = False
         try:
             if self.proc is not None and self.proc.poll() is None and self.url:
                 before = self.control('snapshot')
@@ -288,7 +289,17 @@ class Sandbox:
                         result['sessions'].append({'session': sid, 'state': 'already-archived-or-retired'})
                         continue
                     response = self.web('archive', sid, required=False)
-                    result['sessions'].append({'session': sid, 'state': 'archived' if response.get('ok') else 'archive-refused', 'response': response})
+                    disposition = 'archived' if response.get('ok') else 'archive-refused'
+                    policy_proof = self.logs / 'clean-analysis-evidence.json'
+                    if disposition == 'archive-refused' and policy_proof.exists():
+                        proof = json.loads(policy_proof.read_text())
+                        receipt = proof['receipt']
+                        if (receipt['originalSessionId'] == sid and receipt['basis'] == 'clean-policy-analysis-v1'
+                                and receipt['originalTaskBlocked'] is True and receipt['state'] == 'analyzed'
+                                and Path(item['file']).read_bytes() == proof['sourceSession'].encode()
+                                and hashlib.sha256(Path(item['file']).read_bytes()).hexdigest() == proof['sourceSha256']):
+                            disposition, retain_scratch = 'retained-policy-blocker', True
+                    result['sessions'].append({'session': sid, 'state': disposition, 'response': response})
                 save(self.logs / 'cleanup-after.json', self.control('snapshot'))
         except Exception as error:
             result['error'] = str(error)
@@ -305,8 +316,13 @@ class Sandbox:
                 result['processStopped'] = self.proc.poll() is not None
                 result['processReturncode'] = self.proc.returncode
             check((self.scratch / '.chaos-owner').read_text() == self.owner, 'cleanup ownership changed')
-            self.journal(effect='remove-owned-scratch-before-effect', path=str(self.scratch))
-            shutil.rmtree(self.scratch)
+            if retain_scratch:
+                self.journal(effect='retain-policy-source-and-audit', path=str(self.scratch))
+                result['retainedPath'] = str(self.scratch)
+                result['retentionReason'] = 'Original policy refusal and isolated analysis remain durable evidence. No archive or retirement is claimed.'
+            else:
+                self.journal(effect='remove-owned-scratch-before-effect', path=str(self.scratch))
+                shutil.rmtree(self.scratch)
             result['pathRemoved'] = not self.scratch.exists()
             save(self.logs / 'cleanup.json', result)
         return result
@@ -426,21 +442,47 @@ def policy_narrowing(sandbox):
     sandbox.objective(name, rejected)
     path = stream / 'STATE.md'
     path.write_text(path.read_text().replace('## Rules\n', '## Rules\nThe standing fixture grant permits documentation-only unit SAFE_DOC_UNIT_6a if the current restricted unit is rejected. Do not replay the rejected goal or assignment. Record the policy evidence.\n', 1))
+    sandbox.control('policy-canaries', {'session': sid, 'canary': rejected})
     sandbox.plan(sid, {'error': 'This content was flagged for possible cybersecurity risk'})
     sandbox.prompt(sid, rejected)
-    for _ in range(10):
+    time.sleep(.2)
+    status = sandbox.status(sid)
+    native = next(item for item in sandbox.control('snapshot')['evidence'] if item['session'] == sid)
+    original = Path(native['file']).read_bytes()
+    charter = path.read_bytes().partition(b'## Log')[0]
+    generation = status['automaticAdmission']['generation']
+    for _ in range(4):
         sandbox.tick(required=False)
     evidence = sandbox.snapshot()
     state = sandbox.state(stream)
-    operation = state.get('failure_recoveries', {}).get(sid, {})
-    if not operation or operation.get('phase') != 'complete':
-        raise NotImplementedError('safe policy continuation is not implemented or did not complete; native error and engine durable blocker are in native-evidence.json and commands.json')
-    recovery_calls = [c for c in evidence['calls'] if c['session'] == operation['fork'] and not c['title']]
-    check(recovery_calls, 'policy recovery did not continue')
-    check(all(rejected not in json.dumps(c['messages']) for c in recovery_calls), 'rejected objective/assignment replayed into recovery context')
-    check('content-policy' in (stream / 'STATE.md').read_text().lower(), 'policy evidence absent from STATE')
+    episode = state.get('failures', {}).get(sid, {})
+    analysis = episode.get('analysis') or {}
+    if not analysis:
+        raise NotImplementedError('clean isolated metadata analysis is unavailable; the original policy blocker remains required')
+    check(analysis.get('state') == 'analyzed', f'clean metadata analysis did not complete: {analysis}')
+    check(analysis.get('basis') == 'clean-policy-analysis-v1' and analysis.get('originalTaskBlocked') is True, 'analysis was mislabeled as ordinary recovery')
+    check(episode['state'] == 'parked' and episode['authority'] is None, 'original rejected task was released')
+    check(sid not in state.get('failure_recoveries', {}), 'policy analysis invented an inclusive-prefix fork')
+    check(episode['continuation']['blockedGoalSha256'] == hashlib.sha256(rejected.encode()).hexdigest(), 'rejected-goal fingerprint changed')
+    recovery_calls = [c for c in evidence['calls'] if c['session'] == analysis['analysisSessionId']]
+    check(len(recovery_calls) == 1 and not recovery_calls[0]['title'] and not recovery_calls[0]['summary'], 'not exactly one actual metadata inference')
+    check(recovery_calls[0]['reasoning'] == 'xhigh' and recovery_calls[0]['tools'] == [], 'model settings or native tool view changed')
+    check(rejected not in json.dumps(recovery_calls), 'complete metadata inference leaked a rejected canary')
+    check(Path(native['file']).read_bytes() == original, 'source session was mutated')
+    check(Path(analysis['audit']['retainedSource']).read_bytes() == original, 'exact original audit snapshot absent')
+    check(hashlib.sha256(original).hexdigest() == analysis['audit']['sourceSha256'], 'source audit hash changed')
+    check(analysis['audit']['sourceSha256'] not in json.dumps(recovery_calls), 'audit evidence was sent to the model')
+    private_file = Path(analysis['analysisFile']).read_text()
+    check(rejected not in private_file and '"type":"compaction"' not in private_file and 'resume-observed' not in private_file, 'private analysis copied context or invented maintenance completion')
+    check(path.read_bytes().partition(b'## Log')[0] == charter, 'Goals, Charter or Rules changed')
+    after = sandbox.status(sid)
+    check(after['automaticAdmission']['generation'] == generation, 'original parked generation changed')
+    check((after['model']['provider'], after['model']['id'], after['thinkingLevel']) == ('openai-codex', 'gpt-6.1-sol', 'xhigh'), 'original model or thinking changed')
+    check(any(r['url'].endswith('/failure-recovery/analysis') and r.get('status') == 200 for r in evidence['requests']), 'actual CLI -> HTTP -> PiSessionService analysis path absent')
+    check('Separate policy metadata analysis' in path.read_text(), 'analysis audit was not recorded in the Log')
+    save(sandbox.logs / 'clean-analysis-evidence.json', {'receipt': analysis, 'sourceSha256': hashlib.sha256(original).hexdigest(), 'sourceSession': original.decode(), 'privateSession': private_file, 'contexts': recovery_calls, 'compactionContexts': [], 'compactionPermitted': False})
     sandbox.drive_on(stream)
-    return {'fork': operation['fork'], 'phase': operation['phase'], 'rejectedReplay': False}
+    return {'analysis': analysis['analysisSessionId'], 'basis': analysis['basis'], 'state': analysis['state'], 'originalTaskBlocked': True, 'rejectedReplay': False, 'sourceBytesPreserved': True, 'noForkCompactionOrResumeClaim': True}
 
 
 def blocked_loop(sandbox):
