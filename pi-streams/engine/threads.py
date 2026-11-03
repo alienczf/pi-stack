@@ -178,7 +178,12 @@ def designated_coordinator(rows: list[Thread]) -> Thread | None:
     active = [row for row in rows if row.role == "coordinator" and row.status is Status.active]
     if len(active) > 1:
         raise StreamsError("multiple active coordinator designations; explicit reconciliation required")
-    return active[0] if active else None
+    if active:
+        return active[0]
+    parked = [row for row in rows if row.role == "coordinator" and row.status in {Status.parked, Status.waiting_quota}]
+    if len(parked) > 1:
+        raise StreamsError("multiple parked coordinator designations; explicit reconciliation required")
+    return parked[0] if parked else None
 
 
 def _native_session(session_id: str, cwd: Path, listing: list[dict[str, object]] | None = None) -> NativeSession:

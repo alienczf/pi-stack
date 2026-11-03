@@ -56,10 +56,11 @@ def is_paused(stream_dir: Path) -> bool:
 def enable(stream_dir: Path, resolved: Coordinator) -> dict:
     artifacts._read_stream_state_locked(stream_dir)
     require_ratified(stream_dir)
+    token, _allowed = piweb.automatic_admission(resolved.native.status, resolved.row.session, resolved.row.worktree, "wake")
     piweb.require_control_goal(resolved.row.session)
     record = Drive(run_id=uuid.uuid4().hex, remote_state="on-unconfirmed")
     save(stream_dir, record)
-    remote = piweb.set_automatic_admission(resolved.row.session, True)
+    remote = piweb.set_automatic_admission(resolved.row.session, True, expected_generation=token["generation"])
     record.enabled, record.remote_state, record.remote_generation = True, "on-confirmed", str(remote["generation"])
     return save(stream_dir, record)
 

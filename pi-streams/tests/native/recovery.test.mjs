@@ -208,24 +208,26 @@ test('native known pre-effect refusal carries exact admission proof and can late
     f.fork().session.dispose(); f.session.dispose();
 });
 
-test('explicit operator resume binds a stopped historical lane without rearming the failed original', async () => {
-    const f = await parked('coordinator', false);
-    const { PiSessionService } = await native('dist/server/sessions/piSessionService.js');
-    const ref = { id: f.session.sessionId, cwd: f.dir };
-    const stopped = await f.control.setAllowed(ref, false);
-    const boundary = f.boundaries.snapshot(f.session);
-    assert.notEqual(boundary.parking.generation, stopped.generation);
-    const service = { assertWritable: async () => {}, getOrOpen: async () => f.session, failureRecoveries: f.recovery, failureBoundaries: f.boundaries, assertRecoveryQuiescent: session => assert.equal(session.isStreaming, false) };
-    const resumed = await PiSessionService.prototype.resumeFailure.call(service, ref, { expected: { ...boundary, generation: stopped.generation } });
-    assert.equal(resumed.parking.owned, true);
-    assert.equal(f.control.snapshot(ref).allowed, false);
-    assert.notEqual(resumed.parking.generation, stopped.generation);
-    f.request.expected = { ...resumed, generation: resumed.parking.generation };
-    const result = await f.recovery.fork(f.session, f.request);
-    assert.equal(result.state, 'forked');
-    assert.equal(f.control.snapshot(ref).allowed, false);
-    assert.notEqual(result.forkSessionId, ref.id);
-    f.fork().session.dispose(); f.session.dispose();
+test('explicit operator resume binds stopped historical coordinator and worker lanes without rearming originals', async () => {
+    for (const role of ['coordinator', 'implementation']) {
+        const f = await parked(role, false);
+        const { PiSessionService } = await native('dist/server/sessions/piSessionService.js');
+        const ref = { id: f.session.sessionId, cwd: f.dir };
+        const stopped = await f.control.setAllowed(ref, false);
+        const boundary = f.boundaries.snapshot(f.session);
+        assert.notEqual(boundary.parking.generation, stopped.generation);
+        const service = { assertWritable: async () => {}, getOrOpen: async () => f.session, failureRecoveries: f.recovery, failureBoundaries: f.boundaries, assertRecoveryQuiescent: session => assert.equal(session.isStreaming, false) };
+        const resumed = await PiSessionService.prototype.resumeFailure.call(service, ref, { expected: { ...boundary, generation: stopped.generation } });
+        assert.equal(resumed.parking.owned, true);
+        assert.equal(f.control.snapshot(ref).allowed, false);
+        assert.notEqual(resumed.parking.generation, stopped.generation);
+        f.request.expected = { ...resumed, generation: resumed.parking.generation };
+        const result = await f.recovery.fork(f.session, f.request);
+        assert.equal(result.state, 'forked');
+        assert.equal(f.control.snapshot(ref).allowed, false);
+        assert.notEqual(result.forkSessionId, ref.id);
+        f.fork().session.dispose(); f.session.dispose();
+    }
 });
 
 test('explicit resume refuses a racing stop and accepted input after the failure', async () => {
@@ -242,6 +244,27 @@ test('explicit resume refuses a racing stop and accepted input after the failure
         assert.equal(f.forks(), 0);
         f.session.dispose();
     }
+});
+
+test('ordinary native enable rejects a stop racing after the saved generation', async () => {
+    const f = await fixture([response('A verified good turn')]);
+    await f.session.prompt('A bounded permitted objective');
+    const { PiSessionService } = await native('dist/server/sessions/piSessionService.js');
+    const ref = { id: f.session.sessionId, cwd: f.dir };
+    const before = f.control.snapshot(ref);
+    let stopped;
+    const service = {
+        automaticAdmissionStore: f.control,
+        automaticControlIdentity: async () => ref,
+        assertWritable: async () => { stopped = await f.control.setAllowed(ref, false); },
+        failureBoundaries: f.boundaries,
+        getOrOpen: async () => f.session,
+        activeForLookup: () => undefined,
+    };
+    await assert.rejects(PiSessionService.prototype.setAutomaticAdmission.call(service, ref, true, before.generation), /stale/);
+    assert.equal(stopped.allowed, false);
+    assert.deepEqual(f.control.snapshot(ref), stopped);
+    f.session.dispose();
 });
 
 test('a caller cannot replace engine-owned policy with arbitrary authority', async () => {

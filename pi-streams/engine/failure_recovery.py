@@ -9,7 +9,7 @@ from pathlib import Path
 
 from engine import StreamsError, artifacts, dcr, delivery, drive, failure, piweb, sessionlog
 from engine.project import _write
-from engine.threads import Coordinator, Status, _native_session, dump_threads, load_threads, require_ratified
+from engine.threads import Coordinator, Status, _native_session, designated_coordinator, dump_threads, load_threads, require_ratified
 
 
 @dataclass
@@ -133,12 +133,14 @@ def resume_parked_locked(stream: Path, at: str, *, index: Path, project, operato
         if any(op is not None and op.fork == row.session and op.phase != "complete" for op in operations):
             continue
         try:
+            if row.role == "coordinator" and load(stream, row.session) is None and designated_coordinator(load_threads(stream / "threads.tsv")) != row:
+                raise StreamsError("Explicit resume preserves the designated coordinator")
             native = _native_session(row.session, Path(row.worktree))
             piweb.register_stream_failure(row.session, row.worktree, stream, native.status)
             episode = failure.observe(stream, row.session, row.worktree, native.info, native.status, at, row.model, row.thinking)
-            explicit = operator_resume and not drive.load(stream).enabled and row.role == "coordinator"
+            explicit = operator_resume
             if episode is None or episode.state != "parked":
-                if explicit:
+                if explicit and not drive.load(stream).enabled and row.role == "coordinator":
                     piweb.require_settings(native.status, row.model, row.thinking)
                     drive.enable(stream, Coordinator(row, native))
                 continue
@@ -163,7 +165,8 @@ def resume_parked_locked(stream: Path, at: str, *, index: Path, project, operato
                     episode = failure.observe(stream, row.session, row.worktree, native.info, native.status, at, row.model, row.thinking)
                     if episode.kind != "usage-limit" and episode.authority is None:
                         raise StreamsError("Explicit resume has no native good-prefix recovery ownership")
-                drive.request_resume(stream, row.session)
+                if row.role == "coordinator" or not drive.load(stream).enabled:
+                    drive.request_resume(stream, row.session)
             if episode.kind == "usage-limit":
                 failure.step(stream, episode, native.status, at, native.info)
                 results.append({"session": row.session, "state": episode.state, "phase": episode.retry_state})
@@ -229,8 +232,10 @@ def advance_locked(stream: Path, sid: str, episode_id: str, at: str, *, index: P
     if op is None or op.phase == "fork-refused":
         from engine.replacement import _idle
         _idle(Coordinator(row, native))
-        if row.status not in (Status.active, Status.waiting_quota):
+        if row.status not in (Status.active, Status.waiting_quota, Status.parked):
             raise StreamsError("Original registry is not available for scoped recovery")
+        if row.role == "coordinator" and designated_coordinator(rows) != row:
+            raise StreamsError("Recovery preserves the designated coordinator; no second active coordinator")
         authorization = {"authority": episode.authority, "continuation": episode.continuation}
         request = {"cwd": episode.cwd, "id": episode.recovery_id, "episode": episode.id, "expected": {**native.status["failureBoundary"], "generation": token["generation"]}, **authorization}
         if op is not None and op.request != request:
@@ -274,6 +279,8 @@ def advance_locked(stream: Path, sid: str, episode_id: str, at: str, *, index: P
         if live or fresh["generation"] != op.result["generation"]:
             raise StreamsError("Newer stop/input superseded verified fork binding")
     if op.phase == "forked":
+        if row.role == "coordinator" and designated_coordinator(rows) != row:
+            raise StreamsError("Recovery binding preserves the designated coordinator")
         op.fork, op.fork_file = op.result["forkSessionId"], op.result["forkFile"]
         if any(item.session == op.fork for item in rows):
             raise StreamsError("Returned SID already has a registry owner")

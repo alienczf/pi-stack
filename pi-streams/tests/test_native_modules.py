@@ -20,7 +20,7 @@ class NativeModuleTests(unittest.TestCase):
         self.run_native("maintenance", 8)
 
     def test_actual_recovery_modules(self):
-        self.run_native("recovery", 9)
+        self.run_native("recovery", 10)
 
     def test_actual_callback_ownership_modules(self):
         self.run_native("callbacks", 5)
