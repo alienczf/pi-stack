@@ -27,12 +27,6 @@ class UsageRecoveryTests(TickCase):
         self.assertIn("failures",data,"Known explicit native failure must retain a typed episode")
         return data["failures"]["coi"]
 
-    def synthetic_notification_receipt(self):
-        path=self.stream/"log/tick-state.json"
-        data=json.loads(path.read_text())
-        data["failures"]["coi"]["notification"]={"state":"delivered","deliveryId":"labelled-synthetic-offhost-receipt","route":"verified-zf-dm-v1"}
-        path.write_text(json.dumps(data))  # Contract fixture only, never a real Slack delivery claim.
-
     def test_unchanged_error_gets_one_saved_reconciliation_trial_at_reset_without_prior_success(self):
         captured=self.tick("2026-10-06T12:00:00Z")
         self.assertEqual(captured.returncode,0,captured.stderr)
@@ -42,7 +36,6 @@ class UsageRecoveryTests(TickCase):
         self.assertEqual(episode["saved_entry"],"e1")
         self.assertNotIn("must-not-copy-account",json.dumps(episode))
         self.assertFalse(self.stub.automatic_admissions["coi"]["allowed"])
-        self.synthetic_notification_receipt()
         early=self.tick("2026-10-06T12:09:59Z")
         self.assertEqual(early.returncode,0,early.stderr)
         self.assertFalse(any(item[0]=="POST" and item[1].endswith("/control-goal") for item in self.stub.requests))
@@ -64,7 +57,6 @@ class UsageRecoveryTests(TickCase):
 
     def test_recovery_is_not_claimed_until_the_exact_reconciliation_input_has_native_completion(self):
         self.assertEqual(self.tick("2026-10-06T12:00:00Z").returncode,0)
-        self.synthetic_notification_receipt()
         self.assertEqual(self.tick("2026-10-06T12:10:00Z").returncode,0)
         episode=self.episode()
         self.stub.control_goals[episode["retry_id"]]["state"]="ended"
@@ -89,9 +81,22 @@ class UsageRecoveryTests(TickCase):
         self.assertTrue(self.episode()["retry_id"])
         self.assertIsNone(self.episode()["notification"], "a progress notice cannot become an invented DM receipt")
 
+    def test_unknown_quota_reset_polls_with_safe_same_provider_reconciliation(self):
+        self.error = 'insufficient_quota 429'
+        self.write_log('coi', str(self.stream), user('Continue only the authorized unit'), failure(self.error))
+        self.routes()
+        self.assertEqual(self.tick('2026-10-06T12:00:00Z').returncode, 0)
+        self.assertEqual(self.episode()['kind'], 'usage-limit')
+        self.assertEqual(self.tick('2026-10-06T12:00:59Z').returncode, 0)
+        self.assertFalse(any(item[1].endswith('/control-goal') for item in self.stub.requests))
+        self.assertEqual(self.tick('2026-10-06T12:01:00Z').returncode, 0)
+        goals = [item for item in self.stub.requests if item[1].endswith('/control-goal')]
+        self.assertEqual(len(goals), 1)
+        self.assertIn('Never replay an arbitrary shell submission', goals[0][3]['text'])
+        self.assertFalse(any(item[1].endswith('/model') for item in self.stub.requests))
+
     def test_unconfirmed_local_off_blocks_reset_trial_even_if_remote_parked_epoch_is_unchanged(self):
         self.assertEqual(self.tick("2026-10-06T12:00:00Z").returncode,0)
-        self.synthetic_notification_receipt()
         parked=dict(self.stub.automatic_admissions["coi"])
         self.stub.simulate_conditional_controls=False
         self.stub.set_routes([("POST","/api/sessions/coi/automatic-admission",503,{"error":"Labelled unavailable off publication"}),*self.stub.routes])
@@ -108,7 +113,6 @@ class UsageRecoveryTests(TickCase):
 
     def test_newer_real_stop_cannot_be_rearmed_by_reset_ready_snapshot(self):
         self.assertEqual(self.tick("2026-10-06T12:00:00Z").returncode,0)
-        self.synthetic_notification_receipt()
         self.stub.automatic_admissions["coi"].update(generation="newer-genuine-stop",allowed=False)
         result=self.tick("2026-10-06T13:00:00Z")
         self.assertEqual(result.returncode,0,result.stderr)
@@ -121,7 +125,6 @@ class UsageRecoveryTests(TickCase):
         self.routes(leaf="e3")
         self.assertEqual(self.tick("2026-10-06T12:00:00Z").returncode,0)
         self.assertEqual(self.episode()["uncertain_jobs"],[{"id":"submitted-job-42","state":"submitted"}])
-        self.synthetic_notification_receipt()
         later=self.tick("2026-10-06T13:00:00Z")
         self.assertEqual(later.returncode,0,later.stderr)
         self.assertFalse(any(item[0]=="POST" for item in self.stub.requests))
@@ -141,7 +144,6 @@ class UsageRecoveryTests(TickCase):
         self.assertEqual(episode["failure_entry"],"e3")
         self.assertEqual(episode["failure_sha256"],hashlib.sha256(raw).hexdigest())
         self.assertEqual(episode["uncertain_jobs"],[{"id":"after-error-job","state":"submitted"}])
-        self.synthetic_notification_receipt()
         later=self.tick("2026-10-07T12:00:00Z")
         self.assertEqual(later.returncode,0,later.stderr)
         self.assertFalse(any(item[0]=="POST" for item in self.stub.requests))
@@ -155,7 +157,6 @@ class UsageRecoveryTests(TickCase):
         self.assertEqual(observed.returncode,0,observed.stderr)
         self.assertEqual(self.episode()["kind"],"tool-login")
         self.assertEqual(self.episode()["saved_entry"],"e1")
-        self.synthetic_notification_receipt()
         later=self.tick("2026-10-07T12:00:00Z")
         self.assertEqual(later.returncode,0,later.stderr)
         self.assertFalse(any(item[0]=="POST" for item in self.stub.requests))
@@ -181,7 +182,6 @@ class UsageRecoveryTests(TickCase):
     def test_genuine_later_input_epoch_keeps_saved_trial_parked_even_with_notification(self):
         self.assertEqual(self.tick("2026-10-06T12:00:00Z").returncode,0)
         first=self.episode()
-        self.synthetic_notification_receipt()
         self.stub.automatic_admissions["coi"].update(generation="later-human-input",allowed=False)
         self.write_log("coi",str(self.stream),user("Reconcile the original authorized step without duplicate external submissions."),failure(self.error),user("A genuinely newer authorized instruction, not a retry permission"))
         self.routes(leaf="e3")
@@ -193,7 +193,6 @@ class UsageRecoveryTests(TickCase):
 
     def test_failed_trial_and_process_restart_do_not_replenish_the_same_saved_reset(self):
         self.assertEqual(self.tick("2026-10-06T12:00:00Z").returncode,0)
-        self.synthetic_notification_receipt()
         self.assertEqual(self.tick("2026-10-06T12:10:00Z").returncode,0)
         first=self.episode()
         self.write_log("coi",str(self.stream),user("Reconcile the original authorized step without duplicate external submissions."),failure(self.error),user(first["retry_body"]),failure(self.error))
@@ -212,7 +211,6 @@ class UsageRecoveryTests(TickCase):
         self.assertEqual(first.returncode,0,first.stderr)
         episode=self.episode()
         self.assertEqual(episode["kind"],"codex-login")
-        self.synthetic_notification_receipt()
         self.write_log("coi",str(self.stream),user("Original authorized task"),failure("Labelled expired Codex login: session expired"),user("fixed, please continue"),reply("Unrelated successful readiness response"))
         self.routes(leaf="e4")
         later=self.tick("2026-10-07T12:00:00Z")

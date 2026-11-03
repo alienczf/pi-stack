@@ -48,7 +48,7 @@ test('all bundled transient classes remain eligible after usage exclusions', asy
     const { StreamTransientRetry } = await native('dist/server/sessions/streamTransientRetry.js');
     const f = await fixture();
     const policy = new StreamTransientRetry(f.session, f.control, () => [], () => true);
-    for (const text of ['overloaded', 'rate limit', 'too many requests', '429', '500', '502', '503', '504', '524', 'service unavailable', 'server error', 'internal error', 'provider returned error', 'network error', 'connection error', 'connection refused', 'connection lost', 'other side closed', 'fetch failed', 'getaddrinfo', 'ENOTFOUND', 'EAI_AGAIN', 'upstream connect', 'reset before headers', 'socket hang up', 'socket connection was closed', 'timed out', 'timeout', 'terminated', 'websocket closed', 'websocket error', 'ended without', 'stream ended before message_stop', 'stream ended before a terminal response event', 'http2 request did not get a response', 'retry delay', 'you can retry your request', 'try your request again', 'please retry your request', 'ResourceExhausted'])
+    for (const text of ['overloaded', 'servers are currently overloaded', 'server busy', 'ECONNRESET', 'rate limit', 'too many requests', '429', '500', '502', '503', '504', '524', 'service unavailable', 'server error', 'internal error', 'provider returned error', 'network error', 'connection error', 'connection refused', 'connection lost', 'other side closed', 'fetch failed', 'getaddrinfo', 'ENOTFOUND', 'EAI_AGAIN', 'upstream connect', 'reset before headers', 'socket hang up', 'socket connection was closed', 'timed out', 'timeout', 'terminated', 'websocket closed', 'websocket error', 'ended without', 'stream ended before message_stop', 'stream ended before a terminal response event', 'http2 request did not get a response', 'retry delay', 'you can retry your request', 'try your request again', 'please retry your request', 'ResourceExhausted'])
         assert.equal(policy.eligible(errorResponse(text)), true, text);
     f.session.dispose();
 });
@@ -169,6 +169,37 @@ test('unwatched sessions retain their configured exponential retry delays', asyn
         assert.equal(f.calls.length, 3);
         assert.equal(receipts(f).length, 0);
     } finally { time.restore(); f.session.dispose(); }
+});
+
+test('newer admitted input before retry preparation and during sleep completes without replay', async () => {
+    for (const phase of ['before-prepare', 'during-sleep']) {
+        const f = await fixture([errorResponse('overloaded'), response('Newer objective completed')]);
+        const time = clock();
+        let queued = false;
+        try {
+            if (phase === 'before-prepare') f.session.agent.subscribe(async event => {
+                if (event.type === 'agent_end' && !queued) {
+                    queued = true;
+                    await f.control.explicitInput({ id: f.session.sessionId, cwd: f.dir });
+                    await f.session.steer('Newer permitted objective');
+                }
+            });
+            const scheduled = phase === 'during-sleep' ? event(f.session, 'auto_retry_start') : undefined;
+            const run = f.session.prompt('Original bounded objective');
+            if (scheduled) {
+                await scheduled; await flush();
+                await f.control.explicitInput({ id: f.session.sessionId, cwd: f.dir });
+                await f.session.steer('Newer permitted objective');
+                await time.advance(5000);
+            }
+            await run;
+            assert.equal(f.calls.length, 2, phase);
+            assert.equal(f.manager.getBranch().filter(entry => entry.message?.role === 'user').length, 2);
+            assert.equal(receipts(f).at(-1).state, 'superseded', phase);
+            assert.equal(f.boundaries.snapshot(f.session).state, 'watching', phase);
+            assertFailureLifecycleFile(f.manager.getSessionFile(), f.session.sessionId, f.dir);
+        } finally { time.restore(); f.session.dispose(); }
+    }
 });
 
 test('stop generation and accepted input win the retry deadline', async () => {

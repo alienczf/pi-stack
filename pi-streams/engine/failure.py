@@ -13,7 +13,7 @@ from engine import StreamsError, artifacts, clock, dcr, piweb, sessionlog
 
 KINDS = {"usage-limit", "transient", "codex-login", "tool-login", "resource", "model-error"}
 LABELS = {"usage-limit": "Codex usage limit", "transient": "Transient provider or connection failure", "codex-login": "Expired Codex login", "tool-login": "Tool login expiry", "resource": "Disk or resource exhaustion", "model-error": "Model error or outage"}
-TRANSIENT = re.compile(r"overloaded|rate.?limit|too many requests|429|500|502|503|504|524|service.?unavailable|server.?error|internal.?error|provider.?returned.?error|network.?error|connection.?(?:error|refused|lost)|other side closed|fetch failed|getaddrinfo|ENOTFOUND|EAI_AGAIN|upstream.?connect|reset before headers|socket hang up|socket connection was closed|timed? out|timeout|terminated|websocket.?(?:closed|error)|ended without|stream ended before (?:message_stop|a terminal response event)|http2 request did not get a response|retry delay|you can retry your request|try your request again|please retry your request|ResourceExhausted", re.IGNORECASE)
+TRANSIENT = re.compile(r"overloaded|server.?busy|ECONNRESET|rate.?limit|too many requests|429|500|502|503|504|524|service.?unavailable|server.?error|internal.?error|provider.?returned.?error|network.?error|connection.?(?:error|refused|lost)|other side closed|fetch failed|getaddrinfo|ENOTFOUND|EAI_AGAIN|upstream.?connect|reset before headers|socket hang up|socket connection was closed|timed? out|timeout|terminated|websocket.?(?:closed|error)|ended without|stream ended before (?:message_stop|a terminal response event)|http2 request did not get a response|retry delay|you can retry your request|try your request again|please retry your request|ResourceExhausted", re.IGNORECASE)
 NON_TRANSIENT = re.compile(r"insufficient_quota|quota exceeded|billing|usage.?limit|out of budget|available balance|GoUsageLimitError|FreeUsageLimitError", re.IGNORECASE)
 
 
@@ -48,7 +48,7 @@ def classify(provider: str, message: str, observed_at: str, *, tool_error: bool 
         explicit_code = re.search(r"\b(usage_limit_reached|usage_not_included|rate_limit_exceeded)\b", text)
         if explicit_code:
             code = explicit_code[1]
-    usage = provider == "openai-codex" and (code in {"usage_limit_reached", "usage_not_included", "rate_limit_exceeded"} or "chatgpt usage limit" in text or "codex usage limit" in text)
+    usage = (provider == "openai-codex" and (code in {"usage_limit_reached", "usage_not_included", "rate_limit_exceeded"} or "chatgpt usage limit" in text or "codex usage limit" in text)) or bool(re.search(r"insufficient_quota|quota exceeded|usage.?limit", text))
     if usage:
         reset, source = "", ""
         raw = data.get("resets_at", data.get("reset_at")) if data else None
@@ -124,6 +124,9 @@ class Episode:
 def retry_ready(episode: Episode, now: str, generation: str, allowed: bool) -> bool:
     reset, current = clock.parse(episode.reset_at), clock.parse(now)
     consumed = clock.parse(episode.retry_reset)
+    observed = clock.parse(episode.observed_at)
+    if reset is None and observed is not None:
+        reset = (consumed or observed) + timedelta(seconds=60)
     return bool(episode.kind == "usage-limit" and episode.pause_owned and not episode.cancelled and not episode.uncertain_jobs
         and episode.saved_entry and episode.saved_sha256 and episode.pause_generation == generation and not allowed
         and reset is not None and current is not None and current >= reset and (consumed is None or reset > consumed))
@@ -379,11 +382,13 @@ def step(stream_dir: Path, episode: Episode, status: dict, at: str, native_info:
         save(stream_dir, episode)
         return True
     piweb.require_settings(status, episode.authorized_model, episode.authorized_thinking)
+    if not piweb.recovery_readiness(episode.session, episode.cwd, status, episode.kind):
+        return True
     artifacts._rotate_log_locked(stream_dir)
     goal = artifacts.resolve_current_goal(artifacts._read_stream_state_locked(stream_dir))
     prefix = (f"Usage-reset reconciliation for failure episode {episode.id}. The interrupted owned native input is {episode.saved_entry} SHA-256 {episode.saved_sha256}. "
               "Reconcile that saved step under the latest STATE. Never replay an arbitrary shell submission, resubmit an uncertain external job, revive cancelled work, or repair environment/auth/resources. If safe job status/idempotence is unknown, park and report.\n")
-    episode.retry_reset, episode.retry_id, episode.retry_state = episode.reset_at, uuid.uuid4().hex, "rearming"
+    episode.retry_reset, episode.retry_id, episode.retry_state = episode.reset_at or at, uuid.uuid4().hex, "rearming"
     episode.retry_goal, episode.retry_body = goal, prefix + dcr.resume_text(stream_dir, goal)
     save(stream_dir, episode)
     try:

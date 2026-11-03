@@ -30,7 +30,7 @@ function failure(message) {
     const tool = message["role"] === "toolResult" && message["isError"] === true;
     if (!tool && !(message["role"] === "assistant" && message["stopReason"] === "error"))
         return undefined;
-    if (!tool && message["provider"] === "openai-codex" && /usage_limit_reached|usage_not_included|rate_limit_exceeded|chatgpt usage limit|codex usage limit/i.test(text))
+    if (!tool && (/insufficient_quota|quota exceeded|usage.?limit/i.test(text) || message["provider"] === "openai-codex" && /usage_not_included|rate_limit_exceeded/i.test(text)))
         return undefined;
     if (/ENOSPC|no space left|resource exhausted|out of memory/i.test(text))
         return "resource";
@@ -208,9 +208,9 @@ export function assertFailureLifecycleFile(file, sessionId, cwd) {
                     throw new AutomaticAdmissionRejected("Parked/recovering or unconfirmed stream failure requires its scoped verified retirement operation");
                 watching = true;
             }
-            if (watching && retries.has(entry["id"]) && retries.get(entry["id"]).state !== "resolved")
+            if (watching && retries.has(entry["id"]) && !["resolved", "superseded"].includes(retries.get(entry["id"]).state))
                 throw new AutomaticAdmissionRejected("Persisted retry has no completed native settlement");
-            if (watching && object(entry["message"]) && failure(entry["message"]) !== undefined && retries.get(entry["id"])?.state !== "resolved")
+            if (watching && object(entry["message"]) && failure(entry["message"]) !== undefined && !["resolved", "superseded"].includes(retries.get(entry["id"])?.state))
                 throw new AutomaticAdmissionRejected("Persisted stream failure remains parked before lifecycle retirement");
         }
         if (!watching)
@@ -246,7 +246,7 @@ export class SessionFailureBoundaries {
     assertAdmission(session) {
         const record = this.records.get(session);
         if (record !== undefined && (record.state !== "watching" || record.recovery !== undefined && this.permitsRelease?.(session, record.recovery.id, record.recovery.originalSessionId) !== true))
-            throw new AutomaticAdmissionRejected("Stream failure is parked; only authenticated exact-point recovery may replace the original");
+            throw new AutomaticAdmissionRejected("Stream failure is parked; only its engine-owned good-prefix recovery may replace the original");
     }
     assertInternalAdmission(session) {
         const record = this.records.get(session);
@@ -414,7 +414,7 @@ export class SessionFailureBoundaries {
         if (!this.supported(session) || session.sessionId === operation.originalSessionId || !cwdPathsEqual(session.sessionManager.getCwd(), operation.cwd))
             throw new AutomaticAdmissionRejected("Recovery fork identity or receiving boundary is unavailable");
         this.attach(session);
-        const held = { version: 1, sessionId: session.sessionId, cwd: session.sessionManager.getCwd(), root: operation.root, stream: operation.stream, state: "recovering", recovery: { id: operation.id, originalSessionId: operation.originalSessionId } };
+        const held = { version: 1, sessionId: session.sessionId, cwd: session.sessionManager.getCwd(), root: operation.root, stream: operation.stream, state: "recovering", enrollment: { ...operation.continuation, id: session.sessionId, policyId: this.enginePolicy, generation: operation.generation }, recovery: { id: operation.id, originalSessionId: operation.originalSessionId } };
         this.records.set(session, held);
         try {
             session.sessionManager.appendCustomEntry?.(CUSTOM_TYPE, structuredClone(held));
@@ -446,7 +446,7 @@ export class SessionFailureBoundaries {
                 if (!object(message))
                     continue;
                 const disposition = retries.get(value["id"]);
-                if (disposition?.state === "resolved") continue;
+                if (["resolved", "superseded"].includes(disposition?.state)) continue;
                 if (disposition?.state === "pending" && this.retries.get(session)?.owns(disposition)) continue;
                 if (disposition && ["pending", "cancelled", "uncertain"].includes(disposition.state))
                     throw new AutomaticAdmissionRejected("Retry ownership was cancelled or lost; no automatic replay");

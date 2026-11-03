@@ -796,7 +796,7 @@ export type StreamRetryDisposition = {
     failure: { entryId: string; sha256: string };
     identity: { provider: string; model: string; thinking: string; generation: string };
     attempt: number; delayMs: 5000;
-} & ({ state: "pending"; phase: "scheduled" | "attempting" } | { state: "resolved"; completion: { entryId: string; sha256: string } } | { state: "terminal" | "cancelled" | "uncertain"; detail?: string });
+} & ({ state: "pending"; phase: "scheduled" | "attempting" } | { state: "resolved"; completion: { entryId: string; sha256: string } } | { state: "superseded"; input: { entryId: string; sha256: string } } | { state: "terminal" | "cancelled" | "uncertain"; detail?: string; reason?: "new-input" });
 export interface SessionFailureBoundary {
     enrollment?: { id: string; policyId: "enrolled-prefix-v1"; role: string; assignment: string; assignmentSha256: string; generation: string };
     parking?: { generation: string; owned: boolean };

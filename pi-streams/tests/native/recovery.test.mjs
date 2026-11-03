@@ -91,6 +91,26 @@ test('enrolled coordinator and worker fork the actual good prefix without verifi
         assert.equal(f.boundaries.snapshot(fork.session).state, 'watching');
         assert.deepEqual(await retirement.retire({ id: f.session.sessionId, cwd: f.dir }, { id: result.id, forkSessionId: fork.session.sessionId }), retired);
         console.log(JSON.stringify({ scenario: 'enrolled-recovery-resume-retirement', role, original: f.session.sessionId, fork: fork.session.sessionId, forkFile: fork.manager.getSessionFile(), cacheFile: retired.cacheFile, compaction: resumed.compactionEntryId, compactionSha256: resumed.compactionSha256, observation: resumed.resume.observation, sourceSha256: retired.sourceSha256 }));
+        fork.responses.length = 0;
+        fork.responses.push(errorResponse('A terminal provider model error'));
+        await fork.session.prompt('Continue the same bounded assignment');
+        const secondBoundary = f.boundaries.snapshot(fork.session);
+        assert.equal(secondBoundary.state, 'parked');
+        assert.equal(secondBoundary.enrollment.id, fork.session.sessionId);
+        assert.equal(secondBoundary.enrollment.role, role);
+        assert.equal(secondBoundary.parking.owned, true);
+        let next;
+        const secondRecovery = new SessionFailureRecoveries(f.control, { policy: 'enrolled-prefix-v1', boundary: session => f.boundaries.snapshot(session), quiescent: session => assert.equal(session.isStreaming, false), fork: async (session, operation) => {
+            const manager = SessionManager.open(session.sessionManager.getSessionFile());
+            manager.createBranchedSession(operation.checkpoint.entryId);
+            next = await fixture([], {}, { manager, control: f.control, boundaries: f.boundaries, watch: false });
+            await f.boundaries.holdRecovery(next.session, operation);
+            return { session: next.session, cancelled: false };
+        } });
+        const second = await secondRecovery.fork(fork.session, { id: 'second-owned-recovery', episode: 'second-episode', authority: { kind: 'engine-policy', policyId: 'enrolled-prefix-v1', enrollmentId: fork.session.sessionId }, expected: { ...secondBoundary, generation: secondBoundary.parking.generation } });
+        assert.equal(second.state, 'forked');
+        assert.notEqual(second.forkSessionId, fork.session.sessionId);
+        next.session.dispose();
         f.session.dispose(); fork.session.dispose();
     }
 });
@@ -124,6 +144,41 @@ test('actual service recovery adapter crosses the parked 409 boundary while ordi
     await assert.rejects(service.assertWritable(ref), /parked/);
     const result = await PiSessionService.prototype.forkFailureAtCheckpoint.call(service, ref, f.request);
     assert.equal(result.state, 'forked');
+    assert.equal(f.forks(), 1);
+    f.fork().session.dispose(); f.session.dispose();
+});
+
+test('actual same-provider readiness detects simulated auth refresh without token inspection', async () => {
+    const f = await parked();
+    const { PiSessionService } = await native('dist/server/sessions/piSessionService.js');
+    let authenticated = false;
+    f.session.modelRuntime.checkAuth = async provider => { assert.equal(provider, 'openai-codex'); return { authenticated }; };
+    const service = { assertWritable: async () => {}, getOrOpen: async () => f.session };
+    const ref = { id: f.session.sessionId, cwd: f.dir };
+    assert.equal((await PiSessionService.prototype.recoveryReadiness.call(service, ref)).authenticated, false);
+    authenticated = true;
+    const ready = await PiSessionService.prototype.recoveryReadiness.call(service, ref);
+    assert.equal(ready.authenticated, true);
+    assert.equal(ready.provider, 'openai-codex');
+    assert.equal(ready.model, 'gpt-6.1-sol');
+    assert.equal(ready.resourceReady, true);
+    f.session.dispose();
+});
+
+test('native known pre-effect refusal carries exact admission proof and can later fork once', async () => {
+    const f = await parked();
+    const { AutomaticAdmissionRejected } = await native('dist/server/sessions/automaticAdmissionStore.js');
+    const quiescent = f.recovery.hooks.quiescent;
+    f.recovery.hooks.quiescent = () => { throw new AutomaticAdmissionRejected('Controlled busy boundary'); };
+    await assert.rejects(f.recovery.fork(f.session, f.request), error => {
+        assert.equal(error.admission.state, 'refused-before-effect');
+        assert.equal(error.admission.id, f.request.id);
+        assert.match(error.admission.intentSha256, /^[0-9a-f]{64}$/);
+        return true;
+    });
+    assert.equal(f.forks(), 0);
+    f.recovery.hooks.quiescent = quiescent;
+    assert.equal((await f.recovery.fork(f.session, f.request)).state, 'forked');
     assert.equal(f.forks(), 1);
     f.fork().session.dispose(); f.session.dispose();
 });

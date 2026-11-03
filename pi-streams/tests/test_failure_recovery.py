@@ -118,6 +118,21 @@ class FailureRecoveryTests(TickCase):
         self.assertEqual(self.state(self.stream)["failure_recoveries"]["coi"]["phase"], "bound")
         self.assertEqual(sum(item[1].endswith("/fork") for item in self.stub.requests), 1)
 
+    def test_known_pre_effect_refusal_retries_same_operation_without_duplicate_fork(self):
+        self.fixture()
+        receipt = {"state": "refused-before-effect", "id": self.request["id"], "intentSha256": self.result["intentSha256"]}
+        self.routes[-1] = ("POST", "/api/sessions/coi/failure-recovery/fork", 409, {"error": "controlled idle boundary refusal", "admission": receipt})
+        self.stub.set_routes(self.routes)
+        self.assertNotEqual(self.advance().returncode, 0)
+        self.assertEqual(self.state(self.stream)["failure_recoveries"]["coi"]["phase"], "fork-refused")
+        self.routes[-1] = ("POST", "/api/sessions/coi/failure-recovery/fork", 200, self.fork_response)
+        self.stub.set_routes(self.routes)
+        self.assertEqual(self.advance().returncode, 0)
+        self.assertEqual(self.state(self.stream)["failure_recoveries"]["coi"]["phase"], "bound")
+        self.assertEqual(sum(item[1].endswith('/fork') for item in self.stub.requests), 2)
+        entries = [json.loads(line) for line in Path(self.log_path('coi')).read_text().splitlines()]
+        self.assertEqual(sum(entry.get('customType') == 'pi-web.failure-recovery' for entry in entries), 1)
+
     def test_unknown_fork_result_never_replays_the_effect(self):
         self.fixture()
         self.routes[-1] = ("POST", "/api/sessions/coi/failure-recovery/fork", 503, {"error": "Labelled unknown acceptance"})

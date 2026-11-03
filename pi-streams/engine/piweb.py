@@ -35,6 +35,12 @@ class PromptRejected(StreamsError):
     pass
 
 
+class RecoveryRefused(StreamsError):
+    def __init__(self, detail: str, receipt: dict):
+        super().__init__(detail)
+        self.receipt = receipt
+
+
 def call(args: list[str], stdin: str | None = None) -> dict[str, object]:
     proc = _run(args, stdin)
     try:
@@ -46,6 +52,9 @@ def call(args: list[str], stdin: str | None = None) -> dict[str, object]:
         raise StreamsError(f"pi-web-cli {' '.join(args)} returned {type(data).__name__}")
     if proc.returncode != 0 or data.get("ok") is False:
         detail = proc.stderr.strip() or proc.stdout.strip()
+        receipt = data.get("result", {}).get("admission") if isinstance(data.get("result"), dict) else None
+        if args[0] == "failure-fork" and data.get("status") == 409 and isinstance(receipt, dict) and receipt.get("state") == "refused-before-effect":
+            raise RecoveryRefused(detail, receipt)
         error = PromptRejected if args[0] in ("prompt", "compact", "maintenance-resume", "control-goal") and data.get("status") in (400, 404, 409, 422) else StreamsError
         raise error(f"pi-web-cli {' '.join(args)} failed: {detail}")
     return data
@@ -211,6 +220,16 @@ def register_stream_failure(sid: str, cwd: str, stream_dir: Path, status: dict, 
     status["failureBoundary"] = result
     if starting and result["state"] != "watching":
         raise StreamsError("Native failure registration is parked or unconfirmed; no opening task was sent")
+
+
+def recovery_readiness(sid: str, cwd: str, status: dict, kind: str) -> bool:
+    if status.get("recoveryReadinessSupport") != "same-provider-v1":
+        return True
+    result = call(["failure-readiness", sid, "--cwd", cwd]).get("result")
+    model = status.get("model", {})
+    if not isinstance(result, dict) or result.get("sessionId") != sid or result.get("cwd") != cwd or result.get("provider") != model.get("provider") or result.get("model") != model.get("id"):
+        raise StreamsError("Readiness changed exact session or provider/model")
+    return result.get("resourceReady") is True and (kind not in {"codex-login", "usage-limit"} or result.get("authenticated") is True)
 
 
 def fork_failure(sid: str, cwd: str, request: dict) -> dict:

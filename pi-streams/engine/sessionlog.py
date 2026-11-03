@@ -163,11 +163,15 @@ def retry_dispositions(branch: list[tuple[dict, bytes]], sid: str, cwd: str, nat
         failed = data.get("failure", {})
         identity = data.get("identity", {})
         source = positions.get(failed.get("entryId"))
-        if source is None or source[0] >= index or data.get("version") != 1 or data.get("cwd") != cwd or hashlib.sha256(source[2]).hexdigest() != failed.get("sha256") or source[1].get("message", {}).get("stopReason") != "error" or any(not isinstance(identity.get(key), str) or not identity[key] for key in ("provider", "model", "thinking", "generation")) or any(identity[key] != source[1]["message"].get(key) for key in ("provider", "model")) or type(data.get("attempt")) is not int or data["attempt"] < 1 or data.get("delayMs") != 5000 or data.get("state") not in {"pending", "resolved", "terminal", "cancelled", "uncertain"}:
+        if source is None or source[0] >= index or data.get("version") != 1 or data.get("cwd") != cwd or hashlib.sha256(source[2]).hexdigest() != failed.get("sha256") or source[1].get("message", {}).get("stopReason") != "error" or any(not isinstance(identity.get(key), str) or not identity[key] for key in ("provider", "model", "thinking", "generation")) or any(identity[key] != source[1]["message"].get(key) for key in ("provider", "model")) or type(data.get("attempt")) is not int or data["attempt"] < 1 or data.get("delayMs") != 5000 or data.get("state") not in {"pending", "resolved", "terminal", "cancelled", "uncertain", "superseded"}:
             raise StreamsError("Native retry disposition changed exact entry/hash or identity")
         prior = result.get(failed["entryId"])
-        if prior is not None and (prior["identity"] != identity or prior["attempt"] != data["attempt"] or prior["state"] != "pending" and prior != data):
+        if prior is not None and (prior["identity"] != identity or prior["attempt"] != data["attempt"] or prior["state"] != "pending" and not (prior["state"] == "cancelled" and prior.get("reason") == "new-input" and data["state"] == "superseded") and prior != data):
             raise StreamsError("Native retry disposition changed immutable settlement")
+        if data["state"] == "superseded":
+            target = positions.get(data.get("input", {}).get("entryId"))
+            if target is None or not source[0] < target[0] < index or hashlib.sha256(target[2]).hexdigest() != data["input"].get("sha256") or target[1].get("message", {}).get("role") != "user":
+                raise StreamsError("Superseded native retry has no exact newer admitted input")
         if data["state"] == "resolved":
             completion = data.get("completion", {})
             target = positions.get(completion.get("entryId"))
@@ -187,7 +191,7 @@ def failure_observation(path: Path, sid: str, cwd: str, leaf: object, failure_en
     saved = ("", "")
     uncertain: dict[str, dict[str, str]] = {}
     for entry, raw in branch:
-        if retries.get(entry["id"], {}).get("state") in {"resolved", "pending"}:
+        if retries.get(entry["id"], {}).get("state") in {"resolved", "pending", "superseded"}:
             continue
         message = entry.get("message")
         if not isinstance(message, dict):

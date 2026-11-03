@@ -87,6 +87,35 @@ test('all five real idle adapters clear and an actual batched subagent completio
     }
 });
 
+test('stale watcher errors and queued restart timers cannot reactivate dropped ownership', async () => {
+    const { createJiti } = await native('node_modules/@earendil-works/pi-coding-agent/node_modules/jiti/lib/jiti.mjs');
+    const jiti = createJiti(import.meta.url, { interopDefault: true });
+    const { createResultWatcher } = await jiti.import(resolve(root, '../extensions/pi-subagents/src/runs/background/result-watcher.ts'));
+    const fs = await import('node:fs');
+    const f = await fixture();
+    const errors = [], scheduled = [];
+    let watches = 0;
+    const state = { currentSessionId: f.session.sessionId, watcher: null, watcherRestartTimer: null };
+    const watcher = createResultWatcher({ events: createEventBus() }, state, f.dir, 60000, {
+        platform: 'linux', resultScanLogging: 'off',
+        fs: { ...fs, watch: () => { watches++; return { on: (_, handler) => { errors.push(handler); }, close: () => {}, unref: () => {} }; } },
+        timers: { setTimeout: callback => { scheduled.push(callback); return { unref() {} }; }, clearTimeout: () => {}, setInterval: () => ({ unref() {} }), clearInterval: () => {} },
+    });
+    watcher.startResultWatcher();
+    assert.equal(watches, 1);
+    const failure = Object.assign(new Error('Controlled watcher failure'), { code: 'ENOENT' });
+    const log = console.error; console.error = () => {};
+    try { errors[0](failure); } finally { console.error = log; }
+    assert.equal(scheduled.length, 1);
+    watcher.stopResultWatcher();
+    errors[0](failure);
+    scheduled[0]();
+    assert.equal(watches, 1);
+    assert.equal(scheduled.length, 1);
+    assert.equal(watcher.callbackState().resources, false);
+    f.session.dispose();
+});
+
 test('unknown failed-load and declaration exceptions refuse rather than infer no callbacks', async () => {
     const f = await fixture();
     assert.equal(callbackInventory({ extensions: [{ resolvedPath: '/unknown' }], errors: [] }).known, false);

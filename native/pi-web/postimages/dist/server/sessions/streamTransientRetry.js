@@ -15,11 +15,16 @@ export function retryDispositions(branch, sid, cwd) {
         if (value.customType !== RETRY_TYPE || value.data?.sessionId !== sid) continue;
         const data = value.data;
         const failed = entries.get(data.failure?.entryId);
-        if (data.version !== 1 || data.cwd !== cwd || !failed || failed.index >= entries.get(value.id).index || hash(failed.raw) !== data.failure.sha256 || failed.value.message?.stopReason !== "error" || data.identity?.provider !== failed.value.message.provider || data.identity?.model !== failed.value.message.model || typeof data.identity?.thinking !== "string" || typeof data.identity?.generation !== "string" || !Number.isSafeInteger(data.attempt) || data.attempt < 1 || data.delayMs !== 5000 || !["pending", "resolved", "terminal", "cancelled", "uncertain"].includes(data.state))
+        if (data.version !== 1 || data.cwd !== cwd || !failed || failed.index >= entries.get(value.id).index || hash(failed.raw) !== data.failure.sha256 || failed.value.message?.stopReason !== "error" || data.identity?.provider !== failed.value.message.provider || data.identity?.model !== failed.value.message.model || typeof data.identity?.thinking !== "string" || typeof data.identity?.generation !== "string" || !Number.isSafeInteger(data.attempt) || data.attempt < 1 || data.delayMs !== 5000 || !["pending", "resolved", "terminal", "cancelled", "uncertain", "superseded"].includes(data.state))
             throw new AutomaticAdmissionRejected("Native retry disposition has changed entry/hash or identity");
         const prior = result.get(data.failure.entryId);
-        if (prior && (!equal(prior.identity, data.identity) || prior.attempt !== data.attempt || prior.state !== "pending" && !equal(prior, data)))
+        if (prior && (!equal(prior.identity, data.identity) || prior.attempt !== data.attempt || prior.state !== "pending" && !(prior.state === "cancelled" && prior.reason === "new-input" && data.state === "superseded") && !equal(prior, data)))
             throw new AutomaticAdmissionRejected("Native retry disposition changed immutable attempt or terminal settlement");
+        if (data.state === "superseded") {
+            const input = entries.get(data.input?.entryId);
+            if (!input || input.index <= failed.index || input.index >= entries.get(value.id).index || hash(input.raw) !== data.input.sha256 || input.value.message?.role !== "user")
+                throw new AutomaticAdmissionRejected("Superseded retry has no exact newer admitted input");
+        }
         if (data.state === "resolved") {
             const completion = entries.get(data.completion?.entryId);
             if (!completion || completion.index <= failed.index || completion.index >= entries.get(value.id).index || hash(completion.raw) !== data.completion.sha256 || completion.value.message?.role !== "assistant" || completion.value.message.provider !== data.identity.provider || completion.value.message.model !== data.identity.model || completion.value.message.stopReason === "aborted" || branch.slice(failed.index + 1, completion.index).some(item => item.value.message?.role === "user" || item.value.type === "model_change" || item.value.type === "thinking_level_change"))
@@ -86,9 +91,17 @@ export class StreamTransientRetry {
             if (data.state === "pending") this.save({ ...data, state: "uncertain", detail: "The live retry owner was lost; no inference is replayed" });
     }
     async messageEnded(message, entryId) {
-        if (!this.watching() || message.role !== "assistant") return;
+        if (!this.watching()) return;
         const branch = this.branch(this.session);
-        const item = branch.find(item => item.value.id === entryId);
+        if (message.role === "user") {
+            const input = branch.find(item => item.value.id === entryId);
+            for (const data of retryDispositions(branch, this.session.sessionId, this.session.sessionManager.getCwd()).values())
+                if (data.state === "cancelled" && data.reason === "new-input") this.save({ ...data, state: "superseded", input: evidence(input) });
+            return;
+        }
+        if (message.role !== "assistant") return;
+        const persisted =  this.branch(this.session);
+        const item = persisted.find(item => item.value.id === entryId);
         if (!item) throw new AutomaticAdmissionRejected("Retry response is not persisted");
         if (this.active) {
             let unchanged = false;
@@ -102,7 +115,16 @@ export class StreamTransientRetry {
             this.save({ version: 1, sessionId: this.session.sessionId, cwd: this.session.sessionManager.getCwd(), failure: evidence(item), identity: this.identity(), attempt: this.session._retryAttempt, delayMs: 5000, state: "terminal", detail: "The configured native retry count is exhausted" });
         }
     }
+    async yieldToInput() {
+        const control = this.control.snapshot({ id: this.session.sessionId, cwd: this.session.sessionManager.getCwd() });
+        if (this.active && control.durable && control.allowed && (this.session.pendingMessageCount || control.generation !== this.active.identity.generation)) {
+            this.save({ ...this.active, state: "cancelled", reason: "new-input", detail: "Newer accepted input owns continuation; failed inference is not replayed" });
+            return true;
+        }
+        return false;
+    }
     async cancel(detail) {
+        if (await this.yieldToInput()) return;
         if (this.active) {
             this.save({ ...this.active, state: "cancelled", detail });
             await this.cancelled();

@@ -42,7 +42,7 @@ export async function fixture(responses = [], tools = {}, options = {}) {
     await control.initialize({ id: session.sessionId, cwd: dir });
     const boundaries = options.boundaries ?? new SessionFailureBoundaries(control, undefined, options.policy);
     if (options.watch !== false) await boundaries.watch(session, { stream: 'fixture', root: dir, ...(options.enroll ? { enroll: options.enroll } : {}) });
-    return { dir, session, manager, calls, control, boundaries, loader, extensions };
+    return { dir, session, manager, calls, control, boundaries, loader, extensions, responses };
 }
 
 export async function flush() {

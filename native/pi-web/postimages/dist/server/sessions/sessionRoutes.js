@@ -271,6 +271,15 @@ export function registerSessionRoutes(app, sessions, eventHub, prefix = "") {
             return reply.code(mutationErrorStatus(error)).send({ error: errorMessage(error) });
         }
     });
+    app.get(`${prefix}/sessions/:sessionId/failure-recovery/readiness`, async (request, reply) => {
+        try {
+            if (sessions.recoveryReadiness === undefined)
+                throw new AutomaticAdmissionRejected("Safe recovery readiness is unavailable");
+            return await sessions.recoveryReadiness(sessionLookupFromBody(request.params.sessionId, optionalRecord(request.query)));
+        } catch (error) {
+            return reply.code(mutationErrorStatus(error)).send({ error: errorMessage(error) });
+        }
+    });
     app.post(`${prefix}/sessions/:sessionId/failure-recovery/fork`, async (request, reply) => {
         try {
             const body = optionalRecord(request.body);
@@ -279,7 +288,7 @@ export function registerSessionRoutes(app, sessions, eventHub, prefix = "") {
             return await sessions.forkFailureAtCheckpoint(sessionLookupFromBody(request.params.sessionId, body), body);
         }
         catch (error) {
-            return reply.code(mutationErrorStatus(error)).send({ error: errorMessage(error) });
+            return reply.code(mutationErrorStatus(error)).send({ error: errorMessage(error), ...(error instanceof AutomaticAdmissionRejected && error.admission ? { admission: error.admission } : {}) });
         }
     });
     app.post(`${prefix}/sessions/:sessionId/failure-boundary`, async (request, reply) => {

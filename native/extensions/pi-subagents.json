@@ -52,15 +52,31 @@
     {
       "path": "src/runs/background/result-watcher.ts",
       "before": "a9149e48ff972bcf8e70cbbdb9aede702890c6e5e657259e51345124ed964e77",
-      "after": "bd84be3e560194b3bb9138cbe10b247f92e297923d043416e310713710dd4c63",
+      "after": "fb63fdd2b3ff4e8634cd03f60365c395f848e79c835ddee9822bdc9392504e67",
       "edits": [
         {
           "old": "\tprimeExistingResults: (options?: { triggerTurn?: boolean }) => void;\n\trefreshResultDelivery: () => void;\n\tstopResultWatcher: () => void;\n} {\n\tconst fsApi = deps.fs ?? fs;\n\tconst timers = deps.timers ?? { setTimeout, clearTimeout, setInterval, clearInterval };\n",
           "new": "\tprimeExistingResults: (options?: { triggerTurn?: boolean }) => void;\n\trefreshResultDelivery: () => void;\n\tstopResultWatcher: () => void;\n\tcallbackState: () => { owners: string[]; resources: boolean; revision: number };\n} {\n\tconst fsApi = deps.fs ?? fs;\n\tconst timers = deps.timers ?? { setTimeout, clearTimeout, setInterval, clearInterval };\n"
         },
         {
+          "old": "\t\treturn [...files];\n\t};\n\tconst primeExistingResults = (options: { triggerTurn?: boolean } = {}) => {\n\t\ttry {\n\t\t\tconst triggerTurn = options.triggerTurn !== false;\n\t\t\tconst stats: ResultScanStats = { files: 0, scheduled: 0, startedAt: Date.now() };\n",
+          "new": "\t\treturn [...files];\n\t};\n\tconst primeExistingResults = (options: { triggerTurn?: boolean } = {}) => {\n\t\tif (!deliveryActive) return;\n\t\ttry {\n\t\t\tconst triggerTurn = options.triggerTurn !== false;\n\t\t\tconst stats: ResultScanStats = { files: 0, scheduled: 0, startedAt: Date.now() };\n"
+        },
+        {
+          "old": "\t};\n\n\tconst startPolling = (reason: unknown) => {\n\t\tstate.watcher?.close();\n\t\tstate.watcher = null;\n\t\tclearResultScan();\n",
+          "new": "\t};\n\n\tconst startPolling = (reason: unknown) => {\n\t\tif (!deliveryActive || activeSessionId !== state.currentSessionId) return;\n\t\tstate.watcher?.close();\n\t\tstate.watcher = null;\n\t\tclearResultScan();\n"
+        },
+        {
+          "old": "\t};\n\n\tconst scheduleRestart = () => {\n\t\tclearResultScan();\n\t\tif (state.watcherRestartTimer) return;\n\t\tstate.watcherRestartTimer = timers.setTimeout(() => {\n\t\t\tstate.watcherRestartTimer = null;\n\t\t\ttry {\n\t\t\t\tfsApi.mkdirSync(resultsDir, { recursive: true });\n",
+          "new": "\t};\n\n\tconst scheduleRestart = () => {\n\t\tif (!deliveryActive || activeSessionId !== state.currentSessionId) return;\n\t\tclearResultScan();\n\t\tif (state.watcherRestartTimer) return;\n\t\tconst restartEpoch = deliveryEpoch;\n\t\tstate.watcherRestartTimer = timers.setTimeout(() => {\n\t\t\tif (!deliveryActive || restartEpoch !== deliveryEpoch || activeSessionId !== state.currentSessionId) return;\n\t\t\tstate.watcherRestartTimer = null;\n\t\t\ttry {\n\t\t\t\tfsApi.mkdirSync(resultsDir, { recursive: true });\n"
+        },
+        {
           "old": "\t\t}\n\t\ttry {\n\t\t\tconst watchDir = resolveWatchPath(resultsDir, fsApi.realpathSync.native);\n\t\t\tstate.watcher = fsApi.watch(watchDir, (_event, file) => {\n\t\t\t\tif (!file) {\n\t\t\t\t\tprimeExistingResults();\n\t\t\t\t\treturn;\n",
           "new": "\t\t}\n\t\ttry {\n\t\t\tconst watchDir = resolveWatchPath(resultsDir, fsApi.realpathSync.native);\n\t\t\tconst watcherEpoch = deliveryEpoch;\n\t\t\tstate.watcher = fsApi.watch(watchDir, (_event, file) => {\n\t\t\t\tif (!deliveryActive || watcherEpoch !== deliveryEpoch || activeSessionId !== state.currentSessionId) return;\n\t\t\t\tif (!file) {\n\t\t\t\t\tprimeExistingResults();\n\t\t\t\t\treturn;\n"
+        },
+        {
+          "old": "\t\t\t\t}\n\t\t\t});\n\t\t\tstate.watcher.on(\"error\", (error) => {\n\t\t\t\tif (shouldPoll(error)) return startPolling(error);\n\t\t\t\tconsole.error(`Subagent result watcher failed for '${resultsDir}':`, error);\n\t\t\t\tstate.watcher?.close();\n",
+          "new": "\t\t\t\t}\n\t\t\t});\n\t\t\tstate.watcher.on(\"error\", (error) => {\n\t\t\t\tif (!deliveryActive || watcherEpoch !== deliveryEpoch || activeSessionId !== state.currentSessionId) return;\n\t\t\t\tif (shouldPoll(error)) return startPolling(error);\n\t\t\t\tconsole.error(`Subagent result watcher failed for '${resultsDir}':`, error);\n\t\t\t\tstate.watcher?.close();\n"
         },
         {
           "old": "\t\tidentityCache.clear();\n\t};\n\n\treturn { startResultWatcher, transitionResultDelivery, primeExistingResults, stopResultWatcher, refreshResultDelivery: () => { primeExistingResults(); startDemandPolling(); } };\n}\n",

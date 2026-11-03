@@ -86,6 +86,11 @@ def _parser() -> argparse.ArgumentParser:
     advance.add_argument("--session", required=True)
     advance.add_argument("--episode", required=True)
 
+    resume = sub.add_parser("resume")
+    resume.add_argument("stream", nargs="?")
+    resume.add_argument("--all-parked", action="store_true", required=True)
+    resume.add_argument("--home")
+
     maintenance = sub.add_parser("dcr")
     maintenance_sub = maintenance.add_subparsers(dest="dcr_cmd", required=True)
     for name in ("ready", "advance"):
@@ -367,6 +372,20 @@ def cmd_failure(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_resume(args: argparse.Namespace) -> int:
+    index = resolve_index(args.home)
+    with index_lock(index):
+        project = resolve_project(index)
+        selected = [row for row in stream_rows(index, args.stream) if row.project == project.info.name]
+    results = []
+    for row in selected:
+        stream = Path(row.path)
+        with stream_lock(stream):
+            results.extend(failure_recovery.resume_parked_locked(stream, clock.stamp(clock.now()), index=index, project=project))
+    print(json.dumps(results, sort_keys=True))
+    return 0
+
+
 def cmd_dcr(args: argparse.Namespace) -> int:
     index = resolve_index(args.home)
     with index_lock(index):
@@ -470,6 +489,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_state(args)
         if args.cmd == "failure":
             return cmd_failure(args)
+        if args.cmd == "resume":
+            return cmd_resume(args)
         if args.cmd == "dcr":
             return cmd_dcr(args)
         if args.cmd == "drive":

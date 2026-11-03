@@ -175,6 +175,12 @@ export class SessionFailureRecoveries {
         try {
             return await result;
         }
+        catch (error) {
+            const control = this.control?.snapshot({ id: session.sessionId, cwd: session.sessionManager.getCwd() });
+            if (error instanceof AutomaticAdmissionRejected && control?.durable && control.generation === request.expected.generation && !this.operations(session).has(id))
+                error.admission = { state: "refused-before-effect", id, intentSha256: intent };
+            throw error;
+        }
         finally {
             if (this.running.get(key)?.result === result)
                 this.running.delete(key);

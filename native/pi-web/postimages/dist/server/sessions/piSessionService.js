@@ -1,4 +1,4 @@
-import { statSync } from "node:fs";
+import { statSync, statfsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { readFile, writeFile } from "node:fs/promises";
@@ -1574,6 +1574,16 @@ export class PiSessionService {
             this.publishActivity(session, "bash failed", "error", message);
             this.publishStatus(session);
         });
+    }
+    async recoveryReadiness(ref) {
+        await this.assertWritable(ref, true);
+        const session = await this.getOrOpen(ref);
+        if (session.sessionId !== sessionIdFromLookup(ref) || !session.model)
+            throw new AutomaticAdmissionRejected("Readiness requires the exact owned provider/model");
+        await session.modelRuntime.refresh?.();
+        const auth = await session.modelRuntime.checkAuth(session.model.provider);
+        const disk = statfsSync(session.sessionManager.getCwd());
+        return { sessionId: session.sessionId, cwd: session.sessionManager.getCwd(), provider: session.model.provider, model: session.model.id, authenticated: auth.authenticated === true, resourceReady: disk.bavail > 0 && disk.ffree > 0 };
     }
     async forkFailureAtCheckpoint(ref, request) {
         await this.assertWritable(ref, true);
@@ -3483,7 +3493,7 @@ export class PiSessionService {
         const failureBoundary = this.failureBoundaries.snapshot(session);
         return {
             sessionId: session.sessionId,
-            ...(this.failureBoundaries.supported(session) ? { streamRetrySupport: "entry-bound-v1", streamRetry: this.failureBoundaries.retrySnapshot(session), ...(this.failureRecoveries.policyConfigured() ? { engineFailureRecoverySupport: "enrolled-prefix-v1" } : {}) } : {}),
+            ...(this.failureBoundaries.supported(session) ? { recoveryReadinessSupport: "same-provider-v1", streamRetrySupport: "entry-bound-v1", streamRetry: this.failureBoundaries.retrySnapshot(session), ...(this.failureRecoveries.policyConfigured() ? { engineFailureRecoverySupport: "enrolled-prefix-v1" } : {}) } : {}),
             ...(this.failureBoundaries.supported(session) ? { ...(this.failureRetirements === undefined ? {} : { failureRetirementSupport: "singular-original-v1" }), ...(this.maintenance === undefined ? {} : { failureMaintenanceSupport: "operation-scoped-v1" }), failureForkSupport: "engine-prefix-v1", failureBoundarySupport: "persisted-turn-v1", ...(failureBoundary === undefined ? {} : { failureBoundary }) } : {}),
             ...(this.automaticAdmissionStore === undefined ? {} : { conditionalAdmissionSupport: "generation-cas-v1", automaticAdmission: this.automaticAdmissionStore.snapshot({ id: session.sessionId, cwd: session.sessionManager.getCwd() }), rotationSafety: this.rotationSafety(session) }),
             ...(this.maintenance === undefined || session.sessionManager.appendCustomEntry === undefined ? {} : { maintenanceSupport: "checkpoint-input-v1" }),
