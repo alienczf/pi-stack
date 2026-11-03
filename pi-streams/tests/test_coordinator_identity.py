@@ -185,7 +185,11 @@ class CoordinatorIdentityTests(EngineCase):
         meta.write_text(json.dumps({'pending': [{'at': '2026-10-23T00:00:00Z', 'kind': 'subscription', 'session': '', 'role': '', 'detail': 'labelled private event'}]}))
         before = self.table.read_bytes()
         result = self.run_streams('tick')
-        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(meta.read_text())['terminal_sessions']['current']['state'], 'missing')
+        self.stub.requests.clear()
+        self.assertEqual(self.run_streams('tick').returncode, 0)
+        self.assertEqual(self.stub.requests, [])
         self.no_mutations()
         self.assertEqual(self.table.read_bytes(), before)
 

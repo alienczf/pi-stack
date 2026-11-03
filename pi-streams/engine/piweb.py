@@ -35,6 +35,16 @@ class PromptRejected(StreamsError):
     pass
 
 
+class TerminalSession(StreamsError):
+    def __init__(self, sid: str, state: str, detail: str):
+        super().__init__(detail)
+        self.sid, self.state = sid, state
+
+
+class ArchiveRejected(StreamsError):
+    pass
+
+
 class RecoveryRefused(StreamsError):
     def __init__(self, detail: str, receipt: dict):
         super().__init__(detail)
@@ -52,6 +62,13 @@ def call(args: list[str], stdin: str | None = None) -> dict[str, object]:
         raise StreamsError(f"pi-web-cli {' '.join(args)} returned {type(data).__name__}")
     if proc.returncode != 0 or data.get("ok") is False:
         detail = proc.stderr.strip() or proc.stdout.strip()
+        status = data.get("status")
+        if args[0] in {"status", "archive"} and status in {404, 410}:
+            raise TerminalSession(args[1], "missing", detail)
+        if args[0] == "status" and status == 409 and "archived" in detail.casefold():
+            raise TerminalSession(args[1], "archived", detail)
+        if args[0] == "archive" and status in {400, 409, 422}:
+            raise ArchiveRejected(detail)
         receipt = data.get("result", {}).get("admission") if isinstance(data.get("result"), dict) else None
         if args[0] == "failure-fork" and data.get("status") == 409 and isinstance(receipt, dict) and receipt.get("state") == "refused-before-effect":
             raise RecoveryRefused(detail, receipt)

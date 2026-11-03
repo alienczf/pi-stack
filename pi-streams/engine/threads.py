@@ -189,6 +189,8 @@ def designated_coordinator(rows: list[Thread]) -> Thread | None:
 def _native_session(session_id: str, cwd: Path, listing: list[dict[str, object]] | None = None) -> NativeSession:
     items = piweb.list_sessions(str(cwd)) if listing is None else listing
     matches = [item for item in items if item.get("id") == session_id]
+    if not matches:
+        raise piweb.TerminalSession(session_id, "missing", f"session {session_id} has no unique exact native identity for cwd {cwd}")
     if len(matches) != 1:
         raise StreamsError(f"session {session_id} has no unique exact native identity for cwd {cwd}")
     info = matches[0]
@@ -196,13 +198,13 @@ def _native_session(session_id: str, cwd: Path, listing: list[dict[str, object]]
     if not isinstance(native_cwd, str) or Path(native_cwd).resolve() != cwd.resolve():
         raise StreamsError(f"session {session_id} native cwd does not match {cwd}")
     if info.get("archived") is True:
-        raise StreamsError(f"session {session_id} is archived; refusing to reopen it through status")
+        raise piweb.TerminalSession(session_id, "archived", f"session {session_id} is archived; refusing to reopen it through status")
     status = piweb.session_status(session_id)
     piweb.require_identity(status, session_id)
     return NativeSession(info, status)
 
 
-def resolve_coordinator(stream_dir: Path, rows: list[Thread] | None = None) -> Coordinator | None:
+def resolve_coordinator(stream_dir: Path, rows: list[Thread] | None = None, *, listings: dict | None = None) -> Coordinator | None:
     assert_artifacts_ready(stream_dir)
     rows = load_threads(stream_dir / "threads.tsv") if rows is None else rows
     row = designated_coordinator(rows)
@@ -211,6 +213,8 @@ def resolve_coordinator(stream_dir: Path, rows: list[Thread] | None = None) -> C
     if Path(row.worktree).resolve() != stream_dir.resolve():
         raise StreamsError(f"coordinator {row.session} registry cwd does not match {stream_dir}")
     listing = piweb.list_sessions(str(stream_dir))
+    if listings is not None:
+        listings[str(stream_dir)] = {item['id']: item for item in listing if isinstance(item.get('id'), str)}
     retired = {item.session for item in rows if item.role == "coordinator" and item.status is Status.archived}
     for item in listing:
         if item.get("id") in retired and item.get("archived") is not True:
@@ -388,8 +392,10 @@ def _one_stream(stream_id: str, stream_dir: Path) -> dict[str, object]:
         ratified = is_ratified((stream_dir / "STREAM.md").read_text(encoding="utf-8"))
     rows = load_threads(stream_dir / "threads.tsv")
     counts = {name: 0 for name in ("active", "waiting_quota", "done", "archived")}
-    coordinator = resolve_coordinator(stream_dir, rows)
-    if coordinator is None:
+    from engine import terminal_sessions
+    terminal = {row.session for row in rows if terminal_sessions.load(stream_dir, row.session, row.worktree) is not None}
+    coordinator = resolve_coordinator(stream_dir, [row for row in rows if row.session not in terminal])
+    if coordinator is None and not any(row.role == "coordinator" and (row.status in {Status.done, Status.archived} or row.session in terminal) for row in rows):
         raise StreamsError(f"stream {stream_id} has no designated active coordinator")
     threads: list[Thread] = []
     for row in rows:
@@ -397,14 +403,14 @@ def _one_stream(stream_id: str, stream_dir: Path) -> dict[str, object]:
             continue
         counts[row.status.value] = counts.get(row.status.value, 0) + 1
         threads.append(row)
-    session = coordinator.native.status
-    coord_state = _coordinator_state(coordinator.row.session, session)
-    coord_cost = _as_cost(session["cost"])
+    session = coordinator.native.status if coordinator is not None else {}
+    coord_state = _coordinator_state(coordinator.row.session, session) if coordinator is not None else None
+    coord_cost = _as_cost(session.get("cost")) if coordinator is not None else 0
     # pi-web opens a runtime to answer status for an idle session, so finished
     # threads are counted but not queried.
     thread_cost: int | float = 0
     for row in threads:
-        if row.status not in (Status.active, Status.waiting_quota):
+        if row.status not in (Status.active, Status.waiting_quota) or row.session in terminal:
             continue
         session = piweb.session_status(row.session)
         thread_cost += _as_cost(session.get("cost"))
@@ -721,8 +727,11 @@ def close_stream(index: Path, project: Project, stream_id: str) -> CloseResult:
         # A busy close may already have archived this worker without committing its evidence.
         handovers.append(relative)
     report: list[str] = []
+    from engine import terminal_sessions
     for row in open_threads:
-        piweb.archive(row.session)
+        outcome = terminal_sessions.archive(stream_dir, row.session, row.worktree, explicit=True)
+        if outcome != "archived":
+            raise StreamsError(f"Session {row.session} is {outcome}; no archive or handover is invented")
         transition(row, Status.archived)
         save_threads(path, rows)
         report.append(f"archived {row.session} {row.role}")

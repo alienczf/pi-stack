@@ -7,7 +7,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from engine import StreamsError, artifacts, clock, dcr, delivery, drive, failure, failure_recovery, piweb, replacement, sessionlog, tickhealth
+from engine import StreamsError, artifacts, clock, dcr, delivery, drive, failure, failure_recovery, piweb, replacement, sessionlog, terminal_sessions, tickhealth
 from engine.project import (
     Project,
     StreamRow,
@@ -223,10 +223,18 @@ class StreamTick:
         try:
             self.state = load_state(self.state_path)
             self.loaded = True
+            self.rows = load_threads(self.rows_path)
+            if self.rows and all(row.status in {Status.done, Status.archived} for row in self.rows):
+                self.archive_done()
+                self.flush()
+                return
             self.drive_enabled = drive.load(self.stream_dir).enabled
             self.automatic_paused = drive.is_paused(self.stream_dir)
             if not self.automatic_paused:
                 for sid in artifacts._read_tick_data(self.stream_dir).get("failures", {}):
+                    owned = next((row for row in self.rows if row.session == sid), None)
+                    if owned is None or owned.status in {Status.done, Status.archived} or terminal_sessions.load(self.stream_dir, sid, owned.worktree) is not None:
+                        continue
                     episode = failure.load(self.stream_dir, sid)
                     if episode is not None and episode.state == "parked" and episode.kind != "usage-limit" and episode.checkpoint is not None and (episode.authority is not None or failure_recovery.load(self.stream_dir, sid) is not None):
                         try:
@@ -241,10 +249,18 @@ class StreamTick:
                 except (StreamsError, OSError) as exc:
                     self.fail(f"rotation: {exc}")
             self.rows = load_threads(self.rows_path)
-            self.coordinator_resolution = resolve_coordinator(self.stream_dir, self.rows)
+            terminal_coordinators = {row.session for row in self.rows if row.role == "coordinator" and terminal_sessions.load(self.stream_dir, row.session, row.worktree) is not None}
+            try:
+                self.coordinator_resolution = resolve_coordinator(self.stream_dir, [row for row in self.rows if row.session not in terminal_coordinators], listings=self.listings)
+            except piweb.TerminalSession as exc:
+                row = next(row for row in self.rows if row.session == exc.sid)
+                terminal_sessions.save(self.stream_dir, row.session, row.worktree, exc.state, str(exc))
+                if exc.state == "archived":
+                    transition(row, Status.archived)
+                    self.rows_dirty = True
             if self.coordinator_resolution is not None:
                 resolved = self.coordinator_resolution
-                self.listings[resolved.row.worktree] = {resolved.row.session: resolved.native.info}
+                self.listings.setdefault(resolved.row.worktree, {resolved.row.session: resolved.native.info})
                 self.stalled = drive.is_stalled(resolved.native.status)
                 self.failure_owned = self.observe_failure(resolved.row, resolved.native.info, resolved.native.status)
             if not self.automatic_paused and not self.failure_owned:
@@ -370,8 +386,15 @@ class StreamTick:
         observed: set[str] = set()
         for row in self.rows:
             if row.role != "coordinator" and row.status in (Status.active, Status.waiting_quota):
+                if terminal_sessions.load(self.stream_dir, row.session, row.worktree) is not None:
+                    continue
                 try:
                     self.observe_thread(row)
+                except piweb.TerminalSession as exc:
+                    terminal_sessions.save(self.stream_dir, row.session, row.worktree, exc.state, str(exc))
+                    if exc.state == "archived":
+                        transition(row, Status.archived)
+                        self.rows_dirty = True
                 except (StreamsError, OSError) as exc:
                     self.observations_failed = True
                     self.fail(f"observation {row.session}: {exc}")
@@ -420,6 +443,9 @@ class StreamTick:
         self.rows_dirty = True
 
     def observe_thread(self, row: Thread) -> None:
+        known = next((listing[row.session] for listing in self.listings.values() if row.session in listing), None)
+        if known is not None and known.get("archived") is True:
+            raise piweb.TerminalSession(row.session, "archived", "Exact native listing confirms archived session")
         status = piweb.session_status(row.session)
         piweb.require_identity(status, row.session)
         # A spawned thread starts on a prompt, so one first seen idle has finished it,
@@ -497,6 +523,10 @@ class StreamTick:
     def wake(self) -> None:
         if self.automatic_paused or self.failure_owned or self.dcr_owned or self.drive_owned or self.observations_failed and not self.drive_enabled:
             return
+        if self.coordinator() is None:
+            if self.state.pending and not any(row.role == "coordinator" for row in self.rows):
+                raise StreamsError("no designated coordinator; explicit new/adoption or rotation recovery is required")
+            return
         current = delivery.current_tick(self.stream_dir)
         if current is not None:
             if current["state"] == "applied":
@@ -537,20 +567,30 @@ class StreamTick:
         for row in self.rows:
             if row.role != "coordinator" or row.status is not Status.done:
                 continue
+            prior = terminal_sessions.load(self.stream_dir, row.session, row.worktree)
+            if prior is not None:
+                if prior["state"] == "archived":
+                    transition(row, Status.archived)
+                    self.rows_dirty = True
+                continue
             listing = self.listing(row.worktree)
             info = listing.get(row.session)
             if info is not None and info.get("archived") is True:
+                terminal_sessions.save(self.stream_dir, row.session, row.worktree, "archived", "Exact native listing confirms archive.")
                 transition(row, Status.archived)
                 self.rows_dirty = True
                 continue
-            status = _native_session(row.session, Path(row.worktree), list(listing.values())).status
+            try:
+                status = _native_session(row.session, Path(row.worktree), list(listing.values())).status
+            except piweb.TerminalSession as exc:
+                terminal_sessions.save(self.stream_dir, row.session, row.worktree, exc.state, str(exc))
+                continue
             if _working(status):
                 continue
-            require_ratified(self.stream_dir)
-            piweb.archive(row.session)
-            transition(row, Status.archived)
-            self.rows_dirty = True
-            self.emit("archived", row)
+            if terminal_sessions.archive(self.stream_dir, row.session, row.worktree) == "archived":
+                transition(row, Status.archived)
+                self.rows_dirty = True
+                self.emit("archived", row)
 
 
 def find_claims(streams: list[tuple[str, Path]]) -> dict[str, list[Claim]] | None:
