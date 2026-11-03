@@ -69,7 +69,7 @@ class GeneratedStateContractTests(EngineCase):
         self.assertIn("pi-streams state append", role)
         self.assertIn("pi-streams state objective", role)
         self.assertIn("never prune or rotate", role)
-        for stale in ("Read STREAM.md", "Read context/README.md every turn", "continue on the default", "matching checks/ script passes", "Rewrite STATE.md before ending"):
+        for stale in ("Read STREAM.md", "Read context/README.md every turn", "continue on the default", "matching checks/ script passes", "Rewrite STATE.md before ending", "Only ZF or a human-specified explicit cap ends driving", "Never mark North Star completed"):
             self.assertNotIn(stale, role)
 
     def test_worker_brief_uses_state_and_disables_overlay_planning(self) -> None:
