@@ -25,6 +25,9 @@ class NativeModuleTests(unittest.TestCase):
     def test_actual_callback_ownership_modules(self):
         self.run_native("callbacks", 5)
 
+    def test_actual_rotation_guard(self):
+        self.run_native("rotation", 2)
+
     def test_actual_disabled_child_ownership(self):
         self.run_native("callbacks-child", 1)
 

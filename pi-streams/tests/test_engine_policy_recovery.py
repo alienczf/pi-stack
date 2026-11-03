@@ -79,6 +79,16 @@ class EnginePolicyRecoveryTests(TickCase):
         self.assertIn('authority', result.stderr)
         self.assertFalse(any(item[1].endswith('/fork') for item in self.stub.requests))
 
+    def test_rotate_uses_owned_lastgood_without_a_live_checkpoint(self):
+        self.fixture()
+        self.assertNotIn('coordinator_checkpoint', self.state(self.stream))
+        self.assertEqual((self.stream / 'failures/coi.lastgood').read_text(), 'e4\n')
+        result = self.run_streams('rotate', 'etl')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(result.stdout.endswith('returned-fork\n'))
+        self.assertEqual(self.state(self.stream)['failure_recoveries']['coi']['phase'], 'bound')
+        self.assertFalse(any(item[1].endswith('/archive') or item[1].endswith('/abort') for item in self.stub.requests))
+
     def test_newer_stop_never_uses_policy_to_rearm_or_fork(self):
         self.fixture(policy=True)
         self.stub.automatic_admissions['coi']['generation'] = 'human-stop'

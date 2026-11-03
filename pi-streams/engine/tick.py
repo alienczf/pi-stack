@@ -7,7 +7,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from engine import StreamsError, artifacts, clock, dcr, delivery, drive, failure, failure_recovery, piweb, sessionlog, tickhealth
+from engine import StreamsError, artifacts, clock, dcr, delivery, drive, failure, failure_recovery, piweb, replacement, sessionlog, tickhealth
 from engine.project import (
     Project,
     StreamRow,
@@ -234,6 +234,12 @@ class StreamTick:
                         except (StreamsError, OSError) as exc:
                             self.typed_failures.add(sid)
                             self.fail(f"recovery {sid}: {exc}")
+            rotation = artifacts._read_tick_data(self.stream_dir).get("coordinator_rotation")
+            if not self.automatic_paused and isinstance(rotation, dict) and rotation.get("phase") != "complete":
+                try:
+                    replacement.rotate_locked(self.index, self.project, self.stream)
+                except (StreamsError, OSError) as exc:
+                    self.fail(f"rotation: {exc}")
             self.rows = load_threads(self.rows_path)
             self.coordinator_resolution = resolve_coordinator(self.stream_dir, self.rows)
             if self.coordinator_resolution is not None:

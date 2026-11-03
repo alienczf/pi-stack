@@ -34,11 +34,12 @@ import { SessionUnreadStore } from "./sessionUnreadStore.js";
 import { AutomaticAdmissionRejected, parseAutomaticAdmission } from "./automaticAdmissionStore.js";
 import { SessionMaintenanceController } from "./sessionMaintenanceController.js";
 import { callbackInventory, prepareCallbackDrops } from "./extensionCallbackOwnership.js";
+import { unresolvedEffects } from "./streamTransientRetry.js";
 import { SessionMaintenanceStore } from "./sessionMaintenanceStore.js";
 import { expandPotetoInvocation, supportsPotetoInvocation } from "./potetoInvocation.js";
 import { StreamsDcrEvents } from "./streamsDcrEvents.js";
 import { SessionControlGoalController } from "./sessionControlGoal.js";
-import { assertFailureLifecycleFile, SessionFailureBoundaries } from "./sessionFailureBoundary.js";
+import { assertFailureLifecycleFile, persistedFailureBranch, SessionFailureBoundaries } from "./sessionFailureBoundary.js";
 import { SessionFailureRecoveries } from "./sessionFailureRecovery.js";
 import { SessionFailureRetirements } from "./sessionFailureRetirement.js";
 const noopLogger = { info() { } };
@@ -1946,6 +1947,8 @@ export class PiSessionService {
         if (!this.isCurrentActiveSession(session) || this.isSessionEntryMutationActive(session) || sessionHasActiveWork(session, this.compactionQueuedMessages(session.sessionId).length)) {
             throw new AutomaticAdmissionRejected("Stop current session activity before replacement");
         }
+        if (unresolvedEffects(persistedFailureBranch(session)))
+            throw new AutomaticAdmissionRejected("Replacement retains unresolved external effects; no replay or retirement");
         if (safety.entryId !== entryId || !safety.callbacksKnown || safety.nativeChildCallbacks.length > 0 || this.pendingAskStore.pendingAsk(session.sessionId) !== undefined || this.pendingExtensionDialogStore.pendingDialogs(session.sessionId).length > 0) {
             throw new AutomaticAdmissionRejected("Replacement checkpoint is stale or has unresolved native input/callback ownership");
         }
