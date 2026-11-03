@@ -53,36 +53,7 @@
       "path": "src/runs/background/result-watcher.ts",
       "before": "a9149e48ff972bcf8e70cbbdb9aede702890c6e5e657259e51345124ed964e77",
       "after": "fb63fdd2b3ff4e8634cd03f60365c395f848e79c835ddee9822bdc9392504e67",
-      "edits": [
-        {
-          "old": "\tprimeExistingResults: (options?: { triggerTurn?: boolean }) => void;\n\trefreshResultDelivery: () => void;\n\tstopResultWatcher: () => void;\n} {\n\tconst fsApi = deps.fs ?? fs;\n\tconst timers = deps.timers ?? { setTimeout, clearTimeout, setInterval, clearInterval };\n",
-          "new": "\tprimeExistingResults: (options?: { triggerTurn?: boolean }) => void;\n\trefreshResultDelivery: () => void;\n\tstopResultWatcher: () => void;\n\tcallbackState: () => { owners: string[]; resources: boolean; revision: number };\n} {\n\tconst fsApi = deps.fs ?? fs;\n\tconst timers = deps.timers ?? { setTimeout, clearTimeout, setInterval, clearInterval };\n"
-        },
-        {
-          "old": "\t\treturn [...files];\n\t};\n\tconst primeExistingResults = (options: { triggerTurn?: boolean } = {}) => {\n\t\ttry {\n\t\t\tconst triggerTurn = options.triggerTurn !== false;\n\t\t\tconst stats: ResultScanStats = { files: 0, scheduled: 0, startedAt: Date.now() };\n",
-          "new": "\t\treturn [...files];\n\t};\n\tconst primeExistingResults = (options: { triggerTurn?: boolean } = {}) => {\n\t\tif (!deliveryActive) return;\n\t\ttry {\n\t\t\tconst triggerTurn = options.triggerTurn !== false;\n\t\t\tconst stats: ResultScanStats = { files: 0, scheduled: 0, startedAt: Date.now() };\n"
-        },
-        {
-          "old": "\t};\n\n\tconst startPolling = (reason: unknown) => {\n\t\tstate.watcher?.close();\n\t\tstate.watcher = null;\n\t\tclearResultScan();\n",
-          "new": "\t};\n\n\tconst startPolling = (reason: unknown) => {\n\t\tif (!deliveryActive || activeSessionId !== state.currentSessionId) return;\n\t\tstate.watcher?.close();\n\t\tstate.watcher = null;\n\t\tclearResultScan();\n"
-        },
-        {
-          "old": "\t};\n\n\tconst scheduleRestart = () => {\n\t\tclearResultScan();\n\t\tif (state.watcherRestartTimer) return;\n\t\tstate.watcherRestartTimer = timers.setTimeout(() => {\n\t\t\tstate.watcherRestartTimer = null;\n\t\t\ttry {\n\t\t\t\tfsApi.mkdirSync(resultsDir, { recursive: true });\n",
-          "new": "\t};\n\n\tconst scheduleRestart = () => {\n\t\tif (!deliveryActive || activeSessionId !== state.currentSessionId) return;\n\t\tclearResultScan();\n\t\tif (state.watcherRestartTimer) return;\n\t\tconst restartEpoch = deliveryEpoch;\n\t\tstate.watcherRestartTimer = timers.setTimeout(() => {\n\t\t\tif (!deliveryActive || restartEpoch !== deliveryEpoch || activeSessionId !== state.currentSessionId) return;\n\t\t\tstate.watcherRestartTimer = null;\n\t\t\ttry {\n\t\t\t\tfsApi.mkdirSync(resultsDir, { recursive: true });\n"
-        },
-        {
-          "old": "\t\t}\n\t\ttry {\n\t\t\tconst watchDir = resolveWatchPath(resultsDir, fsApi.realpathSync.native);\n\t\t\tstate.watcher = fsApi.watch(watchDir, (_event, file) => {\n\t\t\t\tif (!file) {\n\t\t\t\t\tprimeExistingResults();\n\t\t\t\t\treturn;\n",
-          "new": "\t\t}\n\t\ttry {\n\t\t\tconst watchDir = resolveWatchPath(resultsDir, fsApi.realpathSync.native);\n\t\t\tconst watcherEpoch = deliveryEpoch;\n\t\t\tstate.watcher = fsApi.watch(watchDir, (_event, file) => {\n\t\t\t\tif (!deliveryActive || watcherEpoch !== deliveryEpoch || activeSessionId !== state.currentSessionId) return;\n\t\t\t\tif (!file) {\n\t\t\t\t\tprimeExistingResults();\n\t\t\t\t\treturn;\n"
-        },
-        {
-          "old": "\t\t\t\t}\n\t\t\t});\n\t\t\tstate.watcher.on(\"error\", (error) => {\n\t\t\t\tif (shouldPoll(error)) return startPolling(error);\n\t\t\t\tconsole.error(`Subagent result watcher failed for '${resultsDir}':`, error);\n\t\t\t\tstate.watcher?.close();\n",
-          "new": "\t\t\t\t}\n\t\t\t});\n\t\t\tstate.watcher.on(\"error\", (error) => {\n\t\t\t\tif (!deliveryActive || watcherEpoch !== deliveryEpoch || activeSessionId !== state.currentSessionId) return;\n\t\t\t\tif (shouldPoll(error)) return startPolling(error);\n\t\t\t\tconsole.error(`Subagent result watcher failed for '${resultsDir}':`, error);\n\t\t\t\tstate.watcher?.close();\n"
-        },
-        {
-          "old": "\t\tidentityCache.clear();\n\t};\n\n\treturn { startResultWatcher, transitionResultDelivery, primeExistingResults, stopResultWatcher, refreshResultDelivery: () => { primeExistingResults(); startDemandPolling(); } };\n}\n",
-          "new": "\t\tidentityCache.clear();\n\t};\n\n\treturn { startResultWatcher, transitionResultDelivery, primeExistingResults, stopResultWatcher, refreshResultDelivery: () => { primeExistingResults(); startDemandPolling(); }, callbackState: () => ({ owners: [...pendingTriggerTurn.keys(), ...processing].sort(), resources: state.watcher !== null || state.watcherRestartTimer !== null || resultScanTimer !== null, revision: deliveryEpoch }) };\n}\n"
-        }
-      ]
+      "contentFile": "extensions/postimages/pi-subagents/src/runs/background/result-watcher.ts"
     },
     {
       "path": "src/runs/background/scheduled-runs.ts",
@@ -94,6 +65,22 @@
           "new": "\t\t}\n\t}\n\n\tcallbackOwners(): string[] {\n\t\treturn [...this.timers.keys(), ...this.observedAsyncIds].sort();\n\t}\n\n\tobservedCompletionRunIds(): Set<string> {\n\t\treturn new Set(this.observedAsyncIds);\n\t}\n"
         }
       ]
+    }
+  ],
+  "inputs": [
+    {
+      "index.ts": "a2f11dbe8e200bd8c590441316a9c6ab222318d2aa738670dedcf0e72592dde3",
+      "src/extension/index.ts": "477af5fc3b32610ff4e201bc58ff350936d9af8490580c98421c641871636686",
+      "src/runs/background/notify.ts": "4445c6069959244f91083b10d18e5d4ef6fabfd117f6d2643e2774441092db41",
+      "src/runs/background/result-watcher.ts": "bd84be3e560194b3bb9138cbe10b247f92e297923d043416e310713710dd4c63",
+      "src/runs/background/scheduled-runs.ts": "7a827fd6dff3e6dd7457dfef2266141f088ef64f3006d9d5f7aaa5b071627ef0"
+    },
+    {
+      "index.ts": "3ca5ae0732d8363c9a89ca18c19f4837d6b67865b65f1a9cc58db320dd2fffad",
+      "src/extension/index.ts": "477af5fc3b32610ff4e201bc58ff350936d9af8490580c98421c641871636686",
+      "src/runs/background/notify.ts": "4445c6069959244f91083b10d18e5d4ef6fabfd117f6d2643e2774441092db41",
+      "src/runs/background/result-watcher.ts": "bd84be3e560194b3bb9138cbe10b247f92e297923d043416e310713710dd4c63",
+      "src/runs/background/scheduled-runs.ts": "7a827fd6dff3e6dd7457dfef2266141f088ef64f3006d9d5f7aaa5b071627ef0"
     }
   ]
 }
