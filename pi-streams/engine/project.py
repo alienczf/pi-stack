@@ -793,7 +793,11 @@ def resolve_project(index: Path, cwd: Path | None = None) -> Project:
 
 
 def assert_artifacts_ready(stream: Path) -> None:
-    path = stream / "log/migration.json"
+    for name in ("migration.json", "state-repair.json"):
+        _assert_operation_ready(stream, stream / "log" / name)
+
+
+def _assert_operation_ready(stream: Path, path: Path) -> None:
     if not path.exists() and not path.is_symlink():
         return
     if path.is_symlink() or path.parent.is_symlink() or not path.is_file():

@@ -5,7 +5,7 @@ import json
 import sys
 from pathlib import Path
 
-from engine import StreamsError, artifacts, clock, dcr, delivery, drive, failure, failure_recovery, migration, relay, replacement
+from engine import StreamsError, artifacts, clock, dcr, delivery, drive, failure, failure_recovery, migration, relay, replacement, state_repair
 from engine.doctor import run_doctor
 from engine.project import (
     STATE_SCHEMA,
@@ -114,7 +114,12 @@ def _parser() -> argparse.ArgumentParser:
     migration_mode.add_argument("--plan", action="store_true", help="show a source-backed migration plan without changing artifacts")
     migration_mode.add_argument("--apply", metavar="PLAN_FILE", help="apply the exact reviewed source-backed plan")
     migration_mode.add_argument("--resume", action="store_true", help="resume only the already recorded migration")
+    migration_mode.add_argument("--repair-plan", action="store_true", help="plan an exact history-prefix repair of canonical STATE")
+    migration_mode.add_argument("--repair-apply", metavar="PLAN_FILE", help="apply the exact source-backed canonical prefix repair")
+    migration_mode.add_argument("--repair-resume", action="store_true", help="resume only the recorded canonical prefix repair")
+    migrate.add_argument("--prefix-history-bytes", type=int, help="explicit byte count classified as historical prefix before canonical Goals")
     migrate.add_argument("--mapping", help="explicit JSON byte-span authority/history map")
+    migrate.add_argument("--history-mode", choices=("git", "snapshot"), default="git", help="snapshot retains exact source bytes with migration-start timestamps and avoids a Git history walk")
     migrate.add_argument("--relay-source", help="exact dated standing-grant source JSON for the migration plan; not transport authentication")
 
     upgrade = sub.add_parser("upgrade")
@@ -196,17 +201,25 @@ def _open_stream(index: Path, project_name: str, stream_id: str) -> Path:
 
 
 def cmd_migrate(args: argparse.Namespace) -> int:
-    if (args.mapping or args.relay_source) and not args.plan:
+    if (args.mapping or args.relay_source or args.history_mode != "git") and not args.plan:
         raise StreamsError("--mapping and --relay-source are only for --plan; application requires the exact reviewed plan file")
     mapping = json.loads(migration.regular_bytes(Path(args.mapping))) if args.mapping else None
-    document = json.loads(migration.regular_bytes(Path(args.apply))) if args.apply else None
+    if args.prefix_history_bytes is not None and not args.repair_plan:
+        raise StreamsError("--prefix-history-bytes is only for --repair-plan")
+    document_file = args.apply or args.repair_apply
+    document = json.loads(migration.regular_bytes(Path(document_file))) if document_file else None
     source = relay.source_provenance(migration.regular_bytes(Path(args.relay_source)), args.stream) if args.relay_source else None
     index = resolve_index(args.home)
     with index_lock(index):
         project = resolve_project(index)
         stream = require_stream(index, project.info.name, args.stream, allow_migration=True)
         with stream_lock(stream):
-            result = migration.plan_migration(stream, mapping, relay_source=source).public() if args.plan else migration.apply_migration_locked(stream, document)
+            if args.repair_plan:
+                result = state_repair.plan(stream, args.prefix_history_bytes)
+            elif args.repair_apply or args.repair_resume:
+                result = state_repair.apply_locked(stream, document)
+            else:
+                result = migration.plan_migration(stream, mapping, relay_source=source, history_mode=args.history_mode).public() if args.plan else migration.apply_migration_locked(stream, document)
     print(json.dumps(result, sort_keys=True))
     return 0
 

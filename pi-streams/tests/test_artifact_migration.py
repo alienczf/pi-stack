@@ -201,6 +201,19 @@ class MigrationPlanningTests(EngineCase):
         with self.assertRaisesRegex(StreamsError, "regular"):
             self.plan(authority_map())
 
+    def test_snapshot_history_mode_retains_exact_old_layout_without_git_history_traversal(self):
+        mapping = self.tmp / 'mapping.json'
+        mapping.write_text(json.dumps(authority_map()))
+        result = self.run_streams('migrate', 'legacy', '--plan', '--mapping', str(mapping), '--history-mode', 'snapshot')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        planned = json.loads(result.stdout)
+        self.assertEqual(planned['history_mode'], 'snapshot')
+        self.assertTrue(planned['ready'])
+        self.assertTrue(all(item['time_source'] == 'migration-start-fallback' and item['git_commit'] is None for item in planned['history']))
+        with mock.patch.dict(os.environ, self.env, clear=True), mock.patch('engine.migration._versions', side_effect=AssertionError('No Git history traversal in snapshot mode')):
+            checked = migration.plan_migration(self.stream, authority_map(), started_at=AT, history_mode='snapshot')
+        self.assertEqual(b''.join(base64.b64decode(part['bytes']) for part in checked.history if part['source'] == 'STATE.md'), self.old)
+
     def test_cli_plan_selects_registered_root_only_and_never_calls_native(self):
         mapping = self.tmp / "mapping.json"
         mapping.write_text(json.dumps(authority_map()))

@@ -59,6 +59,7 @@ class MigrationPlan:
     unresolved: tuple[dict, ...]
     state: str | None
     relay_source: dict | None = None
+    history_mode: str = "git"
 
     @property
     def ready(self) -> bool:
@@ -68,6 +69,8 @@ class MigrationPlan:
         result = {"version": 1, **asdict(self), "ready": self.ready}
         if self.relay_source is None:
             result.pop("relay_source")
+        if self.history_mode == "git":
+            result.pop("history_mode")
         return result
 
 
@@ -106,12 +109,12 @@ def _versions(root: Path, name: str) -> list[tuple[str, bytes, str]]:
     return result
 
 
-def _history(root: Path, sources: dict[str, dict], at: str) -> tuple[dict, ...]:
+def _history(root: Path, sources: dict[str, dict], at: str, mode: str = "git") -> tuple[dict, ...]:
     result = []
     for name, source in sources.items():
         raw = base64.b64decode(source["bytes"])
         spans = state_parts(raw) if name == "STATE.md" else [(0, len(raw))]
-        versions = _versions(root, name)
+        versions = _versions(root, name) if mode == "git" else []
         for occurrence, (start, end) in enumerate(spans, 1):
             part = raw[start:end]
             introduced = None
@@ -188,9 +191,11 @@ def _state(sources: dict[str, dict], mapping: tuple[dict, ...], identity: str, a
     return state
 
 
-def plan_migration(stream: Path, mapping: list[dict] | None = None, *, started_at: str | None = None, relay_source: dict | None = None) -> MigrationPlan:
+def plan_migration(stream: Path, mapping: list[dict] | None = None, *, started_at: str | None = None, relay_source: dict | None = None, history_mode: str = "git") -> MigrationPlan:
     if stream.is_symlink() or not stream.is_dir():
         raise StreamsError("migration requires a real selected stream root, not a symlink")
+    if history_mode not in {"git", "snapshot"}:
+        raise StreamsError("Unknown migration history mode")
     root = stream.resolve()
     for name in ("history", "failures"):
         path = root / name
@@ -229,15 +234,17 @@ def plan_migration(stream: Path, mapping: list[dict] | None = None, *, started_a
     if relay_source is not None:
         relay.validate_provenance(relay_source, root.name)
         seed["relay_source"] = relay_source
+    if history_mode != "git":
+        seed["history_mode"] = history_mode
     identity = digest(json.dumps(seed, sort_keys=True, separators=(",", ":")).encode())
-    history = _history(root, sources, at)
+    history = _history(root, sources, at, history_mode)
     state = None
     if not unresolved:
         try:
             state = encoded(_state(sources, rows, identity, at, sum(part["source"] == "STATE.md" for part in history), relay_source))
         except StreamsError as exc:
             unresolved.append({"source": "STREAM.md", "start": 0, "end": len(base64.b64decode(sources["STREAM.md"]["bytes"])), "target": "unresolved", "reason": str(exc)})
-    return MigrationPlan(identity, str(root), at, sources, config, rows, history, tuple(unresolved), state, relay_source)
+    return MigrationPlan(identity, str(root), at, sources, config, rows, history, tuple(unresolved), state, relay_source, history_mode)
 
 
 def _json(value: object) -> str:
@@ -264,6 +271,11 @@ def _restore_plan(root: Path, document: dict) -> MigrationPlan:
         if relay_source is not None:
             relay.validate_provenance(relay_source, root.name)
             seed["relay_source"] = relay_source
+        history_mode = document.get("history_mode", "git")
+        if history_mode not in {"git", "snapshot"}:
+            raise ValueError("Unknown history mode")
+        if history_mode != "git":
+            seed["history_mode"] = history_mode
         identity = digest(_json(seed).encode())
         history = []
         for name in SOURCES:
@@ -285,7 +297,7 @@ def _restore_plan(root: Path, document: dict) -> MigrationPlan:
                 if part["time_source"] == "migration-start-fallback":
                     if timestamp != at or part["git_commit"] is not None:
                         raise ValueError("invalid fallback time")
-                elif part["time_source"] == "git-exact-entry-introduction":
+                elif part["time_source"] == "git-exact-entry-introduction" and history_mode == "git":
                     commit = part["git_commit"]
                     if not isinstance(commit, str) or re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", commit) is None:
                         raise ValueError("invalid Git provenance")
@@ -297,7 +309,7 @@ def _restore_plan(root: Path, document: dict) -> MigrationPlan:
                     raise ValueError("unknown history time provenance")
                 history.append(part)
         state = encoded(_state(sources, rows, identity, at, sum(item["source"] == "STATE.md" for item in history), relay_source))
-        restored = MigrationPlan(identity, str(root), at, sources, config, rows, tuple(history), (), state, relay_source)
+        restored = MigrationPlan(identity, str(root), at, sources, config, rows, tuple(history), (), state, relay_source, history_mode)
         if _json(restored.public()) != _json(document):
             raise ValueError("plan changed or has unsupported fields")
         return restored
@@ -441,7 +453,7 @@ def apply_migration_locked(stream: Path, document: dict | None = None) -> dict:
         if document is None:
             raise StreamsError("no migration to resume; supply an explicitly reviewed --apply plan")
         plan = _restore_plan(root, document)
-        fresh = plan_migration(root, list(plan.mapping), started_at=plan.started_at, relay_source=plan.relay_source)
+        fresh = plan_migration(root, list(plan.mapping), started_at=plan.started_at, relay_source=plan.relay_source, history_mode=plan.history_mode)
         if _json(fresh.public()) != _json(plan.public()):
             raise StreamsError("migration sources or plan changed before application")
         if artifacts._read_tick_data(root).get("state_log") is not None:
