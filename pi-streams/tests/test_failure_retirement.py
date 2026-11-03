@@ -25,8 +25,8 @@ class FailureRetirementTests(TickCase):
     compacted = cases.FailureDcrTests.compacted
     observed = cases.FailureDcrTests.observed
 
-    def ready_to_retire(self, role="coordinator"):
-        self.start(role)
+    def ready_to_retire(self, role="coordinator", *, resume_from_off=False):
+        self.start(role, resume_from_off=resume_from_off)
         self.compacted()
         self.observed()
         self.assertEqual(self.advance().returncode, 0)
@@ -97,6 +97,20 @@ class FailureRetirementTests(TickCase):
         self.assertEqual(ticked.returncode, 0, ticked.stderr)
         goals = [item for item in self.stub.requests if item[0] == "POST" and item[1].endswith("/control-goal")]
         self.assertEqual([item[1] for item in goals], ["/api/sessions/returned-fork/control-goal"])
+
+    def test_explicit_resume_from_drive_off_confirms_only_the_released_successor(self):
+        self.ready_to_retire(resume_from_off=True)
+        self.assertTrue(self.state(self.stream)['drive']['enabled'])
+        self.assertEqual(self.state(self.stream)['drive']['remote_state'], 'on-unconfirmed')
+        result = self.advance()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        drive = self.state(self.stream)['drive']
+        self.assertTrue(drive['enabled'])
+        self.assertEqual(drive['remote_state'], 'on-confirmed')
+        self.assertEqual(drive['remote_generation'], 'maintenance-generation')
+        self.assertEqual(drive['resume_original'], '')
+        self.assertEqual(self.state(self.stream)['failure_recoveries']['coi']['phase'], 'complete')
+        self.assertFalse(any(item[1] == '/api/sessions/coi/automatic-admission' and item[3].get('allowed') is True for item in self.stub.requests))
 
     def test_worker_retirement_never_changes_the_owned_worktree(self):
         self.ready_to_retire("research")

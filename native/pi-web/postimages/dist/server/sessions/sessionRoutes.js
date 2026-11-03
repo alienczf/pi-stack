@@ -271,6 +271,16 @@ export function registerSessionRoutes(app, sessions, eventHub, prefix = "") {
             return reply.code(mutationErrorStatus(error)).send({ error: errorMessage(error) });
         }
     });
+    app.post(`${prefix}/sessions/:sessionId/failure-recovery/resume`, async (request, reply) => {
+        try {
+            if (sessions.resumeFailure === undefined)
+                throw new AutomaticAdmissionRejected("Explicit parked resume is unavailable");
+            const body = optionalRecord(request.body);
+            return await sessions.resumeFailure(sessionLookupFromBody(request.params.sessionId, body), body);
+        } catch (error) {
+            return reply.code(mutationErrorStatus(error)).send({ error: errorMessage(error) });
+        }
+    });
     app.get(`${prefix}/sessions/:sessionId/failure-recovery/readiness`, async (request, reply) => {
         try {
             if (sessions.recoveryReadiness === undefined)

@@ -183,6 +183,42 @@ test('native known pre-effect refusal carries exact admission proof and can late
     f.fork().session.dispose(); f.session.dispose();
 });
 
+test('explicit operator resume binds a stopped historical lane without rearming the failed original', async () => {
+    const f = await parked('coordinator', false);
+    const { PiSessionService } = await native('dist/server/sessions/piSessionService.js');
+    const ref = { id: f.session.sessionId, cwd: f.dir };
+    const stopped = await f.control.setAllowed(ref, false);
+    const boundary = f.boundaries.snapshot(f.session);
+    assert.notEqual(boundary.parking.generation, stopped.generation);
+    const service = { assertWritable: async () => {}, getOrOpen: async () => f.session, failureRecoveries: f.recovery, failureBoundaries: f.boundaries, assertRecoveryQuiescent: session => assert.equal(session.isStreaming, false) };
+    const resumed = await PiSessionService.prototype.resumeFailure.call(service, ref, { expected: { ...boundary, generation: stopped.generation } });
+    assert.equal(resumed.parking.owned, true);
+    assert.equal(f.control.snapshot(ref).allowed, false);
+    assert.notEqual(resumed.parking.generation, stopped.generation);
+    f.request.expected = { ...resumed, generation: resumed.parking.generation };
+    const result = await f.recovery.fork(f.session, f.request);
+    assert.equal(result.state, 'forked');
+    assert.equal(f.control.snapshot(ref).allowed, false);
+    assert.notEqual(result.forkSessionId, ref.id);
+    f.fork().session.dispose(); f.session.dispose();
+});
+
+test('explicit resume refuses a racing stop and accepted input after the failure', async () => {
+    for (const action of ['stop', 'input']) {
+        const f = await parked();
+        const ref = { id: f.session.sessionId, cwd: f.dir };
+        const expected = { ...f.boundaries.snapshot(f.session), generation: f.control.snapshot(ref).generation };
+        if (action === 'stop') await f.control.setAllowed(ref, false);
+        else f.manager.appendMessage({ role: 'user', content: 'A newer explicit objective', timestamp: Date.now() });
+        const generation = f.control.snapshot(ref).generation;
+        await assert.rejects(f.boundaries.resume(f.session, expected), /superseded|Newer accepted input/);
+        assert.equal(f.control.snapshot(ref).generation, generation);
+        assert.equal(f.control.snapshot(ref).allowed, false);
+        assert.equal(f.forks(), 0);
+        f.session.dispose();
+    }
+});
+
 test('a caller cannot replace engine-owned policy with arbitrary authority', async () => {
     const f = await parked();
     const request = { ...f.request, authority: { kind: 'arbitrary-label' } };

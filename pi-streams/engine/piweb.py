@@ -222,6 +222,13 @@ def register_stream_failure(sid: str, cwd: str, stream_dir: Path, status: dict, 
         raise StreamsError("Native failure registration is parked or unconfirmed; no opening task was sent")
 
 
+def resume_failure(sid: str, cwd: str, expected: dict) -> dict:
+    result = call(["failure-resume", sid, "--cwd", cwd], stdin=json.dumps({"expected": expected}, ensure_ascii=False)).get("result")
+    if not isinstance(result, dict) or result.get("sessionId") != sid or result.get("cwd") != cwd or result.get("state") != "parked" or result.get("checkpoint") != expected.get("checkpoint") or result.get("failure") != expected.get("failure") or result.get("parking", {}).get("owned") is not True:
+        raise StreamsError("Explicit parked resume has no exact receiving-owned failure boundary")
+    return result
+
+
 def recovery_readiness(sid: str, cwd: str, status: dict, kind: str) -> bool:
     if status.get("recoveryReadinessSupport") != "same-provider-v1":
         return True

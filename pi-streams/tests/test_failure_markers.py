@@ -47,8 +47,11 @@ class FailureMarkerTests(TickCase):
         self.assertEqual(saved["failure_entry"],"e6")
         self.assertEqual((self.stream/"STATE.md").read_bytes().split(b"## Log",1)[0],before)
         self.assertFalse(any(item[0]=="POST" for item in self.stub.requests))
-        self.assertEqual(self.tick("2026-10-07T12:00:00Z").returncode,0)
+        repeated = self.tick("2026-10-07T12:00:00Z")
+        self.assertEqual(repeated.returncode,0,repeated.stderr)
         self.assertEqual(marker.read_bytes(),b"e4\n")
+        self.assertFalse(any(item[0] == "POST" for item in self.stub.requests))
+        self.assertIsNone(self.state(self.stream)["failures"]["coi"]["authority"])
 
     def test_later_sdk_fence_noise_cannot_replace_the_original_native_failure_identity(self):
         with open(self.log_path("coi"),"a") as native:

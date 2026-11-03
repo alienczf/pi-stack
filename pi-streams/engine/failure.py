@@ -373,6 +373,9 @@ def step(stream_dir: Path, episode: Episode, status: dict, at: str, native_info:
             else:
                 episode.retry_state = "retained"
             save(stream_dir, episode)
+            if episode.state == "recovered":
+                from engine.drive import confirm_resume
+                confirm_resume(stream_dir, episode.session, episode.session, episode.cwd, episode.retry_generation)
         return True
     token, allowed = piweb.automatic_admission(status, episode.session, episode.cwd, "recovery")
     if not retry_ready(episode, at, token["generation"], allowed) or status.get("pendingAsk") or status.get("pendingExtensionDialogs") or status.get("pendingMessageCount", 0):

@@ -70,7 +70,7 @@ class FailureRecoveryTests(TickCase):
 
     def fork_response(self, body):
         self.assertEqual(body, self.request)
-        self.append("coi", "fork-result", "registered-policy", "pi-web.failure-recovery", self.result)
+        self.append("coi", "fork-result", self.original["rotationSafety"]["entryId"], "pi-web.failure-recovery", self.result)
         self.original["rotationSafety"]["entryId"] = "fork-result"
         self.stub.automatic_admissions["coi"]["generation"] = "frozen-original"
         return 200, self.result

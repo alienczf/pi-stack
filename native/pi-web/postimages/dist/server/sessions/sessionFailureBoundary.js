@@ -1,10 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { isRetryableAssistantError } from "@earendil-works/pi-ai/compat";
 import { closeSync, constants, fstatSync, fsyncSync, lstatSync, openSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { cwdPathsEqual } from "../workingDirectory.js";
 import { AutomaticAdmissionRejected } from "./automaticAdmissionStore.js";
-import { StreamTransientRetry, retryDispositions } from "./streamTransientRetry.js";
+import { StreamTransientRetry, retryDispositions, unresolvedEffects } from "./streamTransientRetry.js";
 const CUSTOM_TYPE = "pi-web.stream-failure";
 function object(value) { return typeof value === "object" && value !== null && !Array.isArray(value); }
 function evidence(value) { return object(value) && typeof value["entryId"] === "string" && value["entryId"] !== "" && typeof value["sha256"] === "string" && /^[a-f0-9]{64}$/.test(value["sha256"]); }
@@ -382,6 +383,25 @@ export class SessionFailureBoundaries {
             catch { /* Runtime admission remains fenced if stop publication also fails. */ }
             throw new AutomaticAdmissionRejected("Failure registration durability is uncertain; no first task is admitted");
         }
+    }
+    async resume(session, expected) {
+        const previous = this.snapshot(session);
+        if (this.enginePolicy !== "enrolled-prefix-v1" || previous?.state !== "parked" || !previous.checkpoint || !previous.failure || !object(expected) || !isDeepStrictEqual({ ...previous, generation: expected.generation }, expected))
+            throw new AutomaticAdmissionRejected("Explicit resume requires the exact parked failure and good checkpoint");
+        const ref = { id: session.sessionId, cwd: session.sessionManager.getCwd() };
+        const control = this.control.snapshot(ref);
+        if (!control.durable || control.allowed || control.generation !== expected.generation || session.isStreaming || session.isCompacting || session.isBashRunning || session.pendingMessageCount)
+            throw new AutomaticAdmissionRejected("Explicit resume was superseded or the original is busy");
+        const branch = persistedBranch(session);
+        const failed = branch.findIndex(item => item.value.id === previous.failure.entryId);
+        if (failed < 0 || branch.slice(failed + 1).some(item => item.value.message?.role === "user") || unresolvedEffects(branch))
+            throw new AutomaticAdmissionRejected("Newer accepted input or unresolved effects require reconciliation before resume");
+        const parked = await this.control.setAllowedAtGeneration(ref, false, control.generation);
+        const next = { ...previous, parking: { generation: parked.generation, owned: true } };
+        session.sessionManager.appendCustomEntry(CUSTOM_TYPE, structuredClone(next));
+        persistedBranch(session);
+        this.records.set(session, next);
+        return structuredClone(next);
     }
     assignment(session, enroll, boundary) {
         const control = this.control.snapshot({ id: session.sessionId, cwd: session.sessionManager.getCwd() });

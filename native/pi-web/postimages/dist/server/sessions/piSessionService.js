@@ -1576,6 +1576,16 @@ export class PiSessionService {
             this.publishStatus(session);
         });
     }
+    async resumeFailure(ref, request) {
+        await this.assertWritable(ref, true);
+        const session = await this.getOrOpen(ref);
+        if (session.sessionId !== sessionIdFromLookup(ref) || !isRecord(request))
+            throw new AutomaticAdmissionRejected("Explicit resume requires the exact original session");
+        if ([...this.failureRecoveries.operations(session).values()].some(operation => operation.state !== "cancelled"))
+            throw new AutomaticAdmissionRejected("An existing recovery owns this original; reconcile it without a second fork");
+        this.assertRecoveryQuiescent(session);
+        return this.failureBoundaries.resume(session, request["expected"]);
+    }
     async recoveryReadiness(ref) {
         await this.assertWritable(ref, true);
         const session = await this.getOrOpen(ref);

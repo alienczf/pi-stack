@@ -228,7 +228,7 @@ class StreamTick:
             if not self.automatic_paused:
                 for sid in artifacts._read_tick_data(self.stream_dir).get("failures", {}):
                     episode = failure.load(self.stream_dir, sid)
-                    if episode is not None and episode.state == "parked" and episode.kind != "usage-limit" and episode.checkpoint is not None:
+                    if episode is not None and episode.state == "parked" and episode.kind != "usage-limit" and episode.checkpoint is not None and (episode.authority is not None or failure_recovery.load(self.stream_dir, sid) is not None):
                         try:
                             failure_recovery.advance_locked(self.stream_dir, sid, episode.id, self.at, index=self.index, project=self.project)
                         except (StreamsError, OSError) as exc:

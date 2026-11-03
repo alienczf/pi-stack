@@ -68,6 +68,28 @@ class EnginePolicyRecoveryTests(TickCase):
         boundary['parking']['generation'] = 'old-generation'
         self.assertIsNone(failure.enrolled_authority(self.stream, 'coi', str(self.cwd), path, 'registered-policy', boundary, self.original, 'newer-stop'))
 
+    def test_tick_rediscovers_historical_engine_authority_then_recovers_without_a_human_gate(self):
+        self.fixture()
+        data = self.state(self.stream)
+        data['failures']['coi']['authority'] = None
+        data['failures']['coi']['continuation'] = None
+        (self.stream / 'log/tick-state.json').write_text(json.dumps(data))
+        extra = self.listing.pop()
+        self.stub.requests.clear()
+        rediscovered = self.tick('2026-10-06T12:05:00Z')
+        self.assertEqual(rediscovered.returncode, 0, rediscovered.stderr)
+        saved = self.state(self.stream)['failures']['coi']
+        self.assertEqual(saved['authority']['kind'], 'engine-policy')
+        self.assertFalse(any(item[1].endswith('/fork') for item in self.stub.requests))
+        self.request['continuation'] = saved['continuation']
+        import hashlib
+        self.result['intentSha256'] = hashlib.sha256(json.dumps(self.request, sort_keys=True, ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()
+        self.listing.append(extra)
+        recovered = self.tick('2026-10-06T12:10:00Z')
+        self.assertEqual(recovered.returncode, 0, recovered.stderr)
+        self.assertEqual(self.state(self.stream)['failure_recoveries']['coi']['phase'], 'bound')
+        self.assertEqual((self.stream / 'failures/coi.lastgood').read_text(), 'e4\n')
+
     def test_ambiguous_saved_authority_refuses_before_any_effect(self):
         self.fixture(policy=True)
         path = self.stream / 'log/tick-state.json'

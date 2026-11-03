@@ -120,20 +120,50 @@ def _verify_fork(op: Recovery, original):
     return native
 
 
-def resume_parked_locked(stream: Path, at: str, *, index: Path, project) -> list[dict]:
+def resume_parked_locked(stream: Path, at: str, *, index: Path, project, operator_resume: bool = False) -> list[dict]:
     require_ratified(stream)
-    if drive.is_paused(stream):
+    if drive.is_paused(stream) and not operator_resume:
         return [{"stream": stream.name, "state": "stopped", "detail": "Explicit local off remains authoritative"}]
     results = []
-    for row in load_threads(stream / "threads.tsv"):
+    rows = sorted(load_threads(stream / "threads.tsv"), key=lambda row: row.role != "coordinator")
+    for row in rows:
         if row.status not in {Status.active, Status.waiting_quota, Status.parked}:
+            continue
+        operations = [load(stream, sid) for sid in artifacts._read_tick_data(stream).get("failure_recoveries", {})]
+        if any(op is not None and op.fork == row.session and op.phase != "complete" for op in operations):
             continue
         try:
             native = _native_session(row.session, Path(row.worktree))
             piweb.register_stream_failure(row.session, row.worktree, stream, native.status)
             episode = failure.observe(stream, row.session, row.worktree, native.info, native.status, at, row.model, row.thinking)
+            explicit = operator_resume and not drive.load(stream).enabled and row.role == "coordinator"
             if episode is None or episode.state != "parked":
+                if explicit:
+                    piweb.require_settings(native.status, row.model, row.thinking)
+                    drive.enable(stream, Coordinator(row, native))
                 continue
+            if explicit:
+                branch = _branch(native, row.session, row.worktree)
+                failed = next((i for i, (entry, _) in enumerate(branch) if entry["id"] == episode.failure_entry), None)
+                if failed is None or any(entry.get("message", {}).get("role") == "user" for entry, _ in branch[failed+1:]) or episode.uncertain_jobs:
+                    raise StreamsError("Explicit resume preserves newer input and unresolved external effects")
+                operation = load(stream, row.session)
+                if operation is None:
+                    token, allowed = piweb.automatic_admission(native.status, row.session, row.worktree, "recovery")
+                    if allowed:
+                        raise StreamsError("Explicit parked resume requires disabled original admission")
+                    if episode.kind != "usage-limit" and native.status.get("failureBoundary", {}).get("parking") != {"generation": token["generation"], "owned": True}:
+                        piweb.resume_failure(row.session, row.worktree, {**native.status["failureBoundary"], "generation": token["generation"]})
+                        native = _native_session(row.session, Path(row.worktree))
+                        episode.authority, episode.continuation = None, None
+                    episode.cancelled = False
+                    if episode.kind == "usage-limit":
+                        episode.pause_owned, episode.pause_generation = True, token["generation"]
+                    failure.save(stream, episode)
+                    episode = failure.observe(stream, row.session, row.worktree, native.info, native.status, at, row.model, row.thinking)
+                    if episode.kind != "usage-limit" and episode.authority is None:
+                        raise StreamsError("Explicit resume has no native good-prefix recovery ownership")
+                drive.request_resume(stream, row.session)
             if episode.kind == "usage-limit":
                 failure.step(stream, episode, native.status, at, native.info)
                 results.append({"session": row.session, "state": episode.state, "phase": episode.retry_state})
@@ -444,6 +474,7 @@ def _retire(stream: Path, op: Recovery, episode: failure.Episode) -> None:
     data["failure_recoveries"][op.session] = asdict(op)
     data["failures"][op.session] = episode.public()
     artifacts._save_tick_data(stream, data)
+    drive.confirm_resume(stream, op.session, op.fork, op.cwd, op.generation)
 
 
 def resolve_fork(stream: Path, op: Recovery) -> Coordinator:

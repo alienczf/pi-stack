@@ -18,6 +18,7 @@ class Drive:
     desired: dict[str, str] | None = None
     remote_state: str = "not-requested"
     remote_generation: str = ""
+    resume_original: str = ""
 
 
 def load(stream_dir: Path) -> Drive:
@@ -28,7 +29,7 @@ def load(stream_dir: Path) -> Drive:
         record = Drive(**value)
         if type(record.enabled) is not bool or not isinstance(record.run_id, str) or not isinstance(record.current_delivery, str) or type(record.sequence) is not int or record.sequence < 0 or record.enabled and not record.run_id:
             raise ValueError("invalid explicit switch or transport identity")
-        if record.remote_state not in ("not-requested", "on-unconfirmed", "on-confirmed", "off-unconfirmed", "off-confirmed") or not isinstance(record.remote_generation, str):
+        if record.remote_state not in ("not-requested", "on-unconfirmed", "on-confirmed", "off-unconfirmed", "off-confirmed") or not isinstance(record.remote_generation, str) or not isinstance(record.resume_original, str):
             raise ValueError("invalid remote drive confirmation")
         if record.desired is not None and (not isinstance(record.desired, dict) or set(record.desired) != {"goal", "body", "revision"} or not all(isinstance(item, str) for item in record.desired.values())):
             raise ValueError("invalid desired goal snapshot")
@@ -63,9 +64,26 @@ def enable(stream_dir: Path, resolved: Coordinator) -> dict:
     return save(stream_dir, record)
 
 
+def request_resume(stream_dir: Path, original: str) -> dict:
+    require_ratified(stream_dir)
+    record = Drive(enabled=True, run_id=uuid.uuid4().hex, remote_state="on-unconfirmed", resume_original=original)
+    return save(stream_dir, record)
+
+
+def confirm_resume(stream_dir: Path, original: str, sid: str, cwd: str, generation: str) -> None:
+    record = load(stream_dir)
+    if not record.enabled or record.resume_original != original:
+        return
+    token, allowed = piweb.automatic_admission(piweb.session_status(sid), sid, cwd, "wake")
+    if not allowed or token["generation"] != generation:
+        raise StreamsError("Newer receiving stop/input superseded drive resume confirmation")
+    record.remote_state, record.remote_generation, record.resume_original = "on-confirmed", generation, ""
+    save(stream_dir, record)
+
+
 def pause_local(stream_dir: Path) -> dict:
     record = load(stream_dir)
-    record.enabled, record.remote_state, record.remote_generation = False, "off-unconfirmed", ""
+    record.enabled, record.remote_state, record.remote_generation, record.resume_original = False, "off-unconfirmed", "", ""
     return save(stream_dir, record)
 
 
