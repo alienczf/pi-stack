@@ -46,6 +46,7 @@ class Operation:
     recovery_original: str = ""
     recovery_instructions: str = ""
     observation: dict | None = None
+    continuation: dict | None = None
 
 
 def load(stream_dir: Path, sid: str) -> Operation | None:
@@ -230,10 +231,26 @@ def close_events(stream_dir: Path, op: Operation) -> None:
     save(stream_dir, op)
 
 
-def prepare(index: Path, stream: str, stream_dir: Path, resolved: Coordinator, identity: str, token: dict, *, original: str = "", instructions: str = "") -> Operation:
+def continuation_text(op: Operation, stream_dir: Path) -> str:
+    context = op.continuation
+    if context is None:
+        return ""
+    role = context.get("role")
+    assignment = context.get("assignment")
+    if not isinstance(role, str) or re.fullmatch(r"[a-z][a-z0-9_-]*", role) is None or not isinstance(assignment, str) or not assignment:
+        raise StreamsError("Recovery has no exact bounded continuation assignment")
+    return (f"Recovery retains role {role} in owned worktree {op.cwd}. Current session is {op.session}. "
+            + ("Do not adopt the coordinator role or widen the assignment. " if role != "coordinator" else "")
+            + f"Original assignment evidence follows. Its old session and handover identity are historical. Use {stream_dir}/handover/{role}/{op.session}.md for this session's handover with first line session: {op.session}. "
+            "Reconcile omitted input and effects from the original evidence; never replay its last command.\n"
+            f"Original native input/effect evidence: {context.get('nativeFile', 'retained original evidence')}. Saved input {json.dumps(context.get('savedInput', {}), sort_keys=True)}. Existing original handovers {json.dumps(context.get('handovers', []), sort_keys=True)}.\n"
+            f"<original-assignment>\n{assignment}\n</original-assignment>\n")
+
+
+def prepare(index: Path, stream: str, stream_dir: Path, resolved: Coordinator, identity: str, token: dict, *, original: str = "", instructions: str = "", continuation: dict | None = None) -> Operation:
     previous = load(stream_dir, resolved.row.session)
     if previous is not None and (original or previous.phase not in {"complete", "superseded"}):
-        if previous.id != identity or previous.recovery_original != original or previous.automatic != token or previous.recovery_instructions != instructions:
+        if previous.id != identity or previous.recovery_original != original or previous.automatic != token or previous.recovery_instructions != instructions or previous.continuation != continuation:
             raise StreamsError("Another DCR operation owns the returned fork")
         return previous
     command = shlex.join([str(Path(__file__).resolve().parents[2] / "bin/pi-streams"), "dcr", "ready", stream, "--home", str(index), "--session", resolved.row.session, "--operation", identity])
@@ -244,7 +261,8 @@ def prepare(index: Path, stream: str, stream_dir: Path, resolved: Coordinator, i
         "Do not prune or rotate Log, abort active tools, author RESUME, or retry uncertain external jobs. "
         f"Then run {command}. Make no artifact writes afterward. Finish the turn with the exact acknowledgement returned by that command."
     )
-    op = Operation(identity, resolved.row.session, resolved.row.worktree, token, text, recovery_original=original, recovery_instructions=instructions)
+    op = Operation(identity, resolved.row.session, resolved.row.worktree, token, text, recovery_original=original, recovery_instructions=instructions, continuation=continuation)
+    op.sync_text = continuation_text(op, stream_dir) + op.sync_text
     save(stream_dir, op)
     return op
 
@@ -374,7 +392,7 @@ def step(index: Path, project: Project, stream: str, stream_dir: Path, resolved:
             require_ratified(stream_dir)
             op.compaction_entry, op.compaction_sha256 = proof["entryId"], proof["sha256"]
             op.resume_goal = artifacts.resolve_current_goal(state)
-            op.resume_text = ("Explicitly ratified exceptional instructions:\n" + op.recovery_instructions + "\n" if op.recovery_instructions else "") + resume_text(stream_dir, op.resume_goal)
+            op.resume_text = continuation_text(op, stream_dir) + ("Explicitly ratified exceptional instructions:\n" + op.recovery_instructions + "\n" if op.recovery_instructions else "") + resume_text(stream_dir, op.resume_goal)
             op.phase = "resume-sending"
             save(stream_dir, op)
             piweb.resume_maintenance(sid, op.id, op.compaction_entry, 0, {**op.automatic, "kind": "resume"}, f"{op.id}:resume", op.resume_text, poteto_goal=op.resume_goal, original=op.recovery_original)

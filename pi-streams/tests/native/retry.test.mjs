@@ -33,6 +33,12 @@ test('watched AgentSession retries twice at fixed five seconds and cold lifecycl
         assert.equal(f.boundaries.snapshot(f.session).state, 'watching');
         assert.equal(receipts(f).filter(e => e.state === 'resolved').length, 2);
         assertFailureLifecycleFile(f.manager.getSessionFile(), f.session.sessionId, f.dir);
+        const { SessionManager } = await native('node_modules/@earendil-works/pi-coding-agent/dist/core/session-manager.js');
+        const reopened = await fixture([], {}, { manager: SessionManager.open(f.manager.getSessionFile()), control: f.control, watch: false });
+        reopened.boundaries.attach(reopened.session);
+        await flush();
+        assert.equal(reopened.boundaries.snapshot(reopened.session).state, 'watching');
+        reopened.session.dispose();
         assert.equal(readFileSync(f.manager.getSessionFile(), 'utf8').includes('overloaded'), true);
         console.log(JSON.stringify({ scenario: 'retry', session: f.session.sessionId, file: f.manager.getSessionFile(), receipts: receipts(f) }));
     } finally { time.restore(); f.session.dispose(); }
@@ -92,6 +98,76 @@ test('lost live retry ownership and corrupt settlement refuse cold lifecycle', a
         settled.completion.sha256 = '0'.repeat(64);
         f.manager.appendCustomEntry('pi-web.stream-retry', settled);
         assert.throws(() => assertFailureLifecycleFile(f.manager.getSessionFile(), f.session.sessionId, f.dir), /settlement|completion/);
+    } finally { time.restore(); f.session.dispose(); }
+});
+
+test('cold reattachment durably marks an orphaned scheduled retry uncertain instead of recreating a timer', async () => {
+    const f = await fixture();
+    const failed = errorResponse('overloaded');
+    const entry = f.manager.appendMessage(failed);
+    await f.session._runtimeRetryPolicy.messageEnded(failed, entry);
+    assert.equal(receipts(f).at(-1).state, 'pending');
+    f.session.dispose();
+    const { SessionManager } = await native('node_modules/@earendil-works/pi-coding-agent/dist/core/session-manager.js');
+    const reopened = await fixture([], {}, { manager: SessionManager.open(f.manager.getSessionFile()), control: f.control, watch: false });
+    reopened.boundaries.attach(reopened.session);
+    await flush();
+    assert.equal(receipts(reopened).at(-1).state, 'uncertain');
+    assert.equal(reopened.boundaries.snapshot(reopened.session).state, 'uncertain');
+    assert.equal(reopened.calls.length, 0);
+    reopened.session.dispose();
+});
+
+test('configured retry count exhausts into one exact terminal boundary without increasing the count', async () => {
+    const f = await fixture(Array.from({ length: 4 }, () => errorResponse('503 overloaded')));
+    const time = clock();
+    try {
+        let scheduled = event(f.session, 'auto_retry_start');
+        const run = f.session.prompt('task');
+        await scheduled;
+        for (let attempt = 1; attempt <= 3; attempt++) {
+            await flush();
+            assert.deepEqual(time.delays(), [5000]);
+            if (attempt < 3) scheduled = event(f.session, 'auto_retry_start');
+            await time.advance(5000);
+            if (attempt < 3) await scheduled;
+        }
+        await run;
+        assert.equal(f.calls.length, 4);
+        assert.equal(receipts(f).at(-1).state, 'terminal');
+        assert.equal(f.boundaries.snapshot(f.session).state, 'parked');
+    } finally { time.restore(); f.session.dispose(); }
+});
+
+test('unresolved external jobs and unclassified shell submissions are not retried', async () => {
+    for (const details of [{ jobId: 'fixture-job', status: 'unknown' }, { exitCode: 0 }]) {
+        let submitted = 0;
+        const tool = { name: 'bash', label: 'Controlled submission', description: 'No real shell', parameters: { type: 'object', properties: { command: { type: 'string' } } }, execute: async () => ({ content: [{ type: 'text', text: 'Controlled job result ' + ++submitted }], details }) };
+        const call = { ...response('', 'toolUse'), content: [{ type: 'toolCall', id: 'submission', name: 'bash', arguments: { command: 'sbatch fixture-job' } }] };
+        const f = await fixture([call, errorResponse('503 overloaded')], { bash: tool });
+        await f.session.prompt('Inspect the controlled submission');
+        assert.equal(submitted, 1);
+        assert.equal(f.calls.length, 2);
+        assert.equal(receipts(f).length, 0);
+        assert.equal(f.boundaries.snapshot(f.session).state, 'parked');
+        f.session.dispose();
+    }
+});
+
+test('unwatched sessions retain their configured exponential retry delays', async () => {
+    const f = await fixture([errorResponse('overloaded'), errorResponse('overloaded'), response()], {}, { watch: false });
+    const time = clock();
+    try {
+        let scheduled = event(f.session, 'auto_retry_start');
+        const run = f.session.prompt('task');
+        await scheduled; await flush();
+        assert.deepEqual(time.delays(), [2000]);
+        scheduled = event(f.session, 'auto_retry_start');
+        await time.advance(2000); await scheduled; await flush();
+        assert.deepEqual(time.delays(), [4000]);
+        await time.advance(4000); await run;
+        assert.equal(f.calls.length, 3);
+        assert.equal(receipts(f).length, 0);
     } finally { time.restore(); f.session.dispose(); }
 });
 

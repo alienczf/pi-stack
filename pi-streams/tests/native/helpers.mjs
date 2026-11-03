@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -28,20 +28,20 @@ export function provider(result) {
     return stream;
 }
 
-export async function fixture(responses = [], tools = {}) {
-    const dir = mkdtempSync(join(process.env.TMPDIR, 'native-session-'));
-    const manager = SessionManager.create(dir, join(dir, 'sessions'));
+export async function fixture(responses = [], tools = {}, options = {}) {
+    const dir = options.manager?.getCwd() ?? mkdtempSync(join(process.env.TMPDIR, 'native-session-'));
+    const manager = options.manager ?? SessionManager.create(dir, join(dir, 'sessions'));
     const extensionRuntime = createExtensionRuntime();
     const extensions = { extensions: [], errors: [], runtime: extensionRuntime };
     const loader = { getExtensions: () => extensions, getPrompts: () => ({ prompts: [] }), getSkills: () => ({ skills: [] }), getAgentsFiles: () => ({ agentsFiles: [] }), getSystemPrompt: () => 'Controlled test. No network or shell.', getAppendSystemPrompt: () => [] };
     const calls = [];
-    const agent = new Agent({ initialState: { model, thinkingLevel: 'xhigh', tools: Object.values(tools), systemPrompt: 'Controlled test.' }, streamFn: (selected, context, options) => { calls.push({ model: structuredClone(selected), context: { systemPrompt: context.systemPrompt, messages: structuredClone(context.messages) }, options }); assert(responses.length, 'unexpected provider request'); return provider(responses.shift()); } });
-    const runtime = { hasConfiguredAuth: () => true, checkAuth: async () => ({ authenticated: true }), isUsingOAuth: () => false, getAuth: async () => ({ auth: {} }), getProviders: () => [], getAll: () => [model] };
+    const agent = new Agent({ initialState: { model, messages: manager.buildSessionContext().messages, thinkingLevel: 'xhigh', tools: Object.values(tools), systemPrompt: 'Controlled test.' }, streamFn: (selected, context, options) => { calls.push({ model: structuredClone(selected), context: { systemPrompt: context.systemPrompt, messages: structuredClone(context.messages) }, options }); assert(responses.length, 'unexpected provider request'); return provider(responses.shift()); } });
+    const runtime = { hasConfiguredAuth: () => true, checkAuth: async () => ({ authenticated: true }), isUsingOAuth: () => false, getAuth: async () => ({ auth: {} }), getProviders: () => [], getAll: () => [model], getModel: (provider, id) => provider === model.provider && id === model.id ? model : undefined, registerProvider: () => {}, unregisterProvider: () => {}, registerNativeProvider: () => {} };
     const session = new AgentSession({ agent, sessionManager: manager, settingsManager: SettingsManager.inMemory({ compaction: { enabled: false, keepRecentTokens: 100 }, retry: { enabled: true, maxRetries: 3, baseDelayMs: 2000 } }), resourceLoader: loader, cwd: dir, modelRuntime: runtime, baseToolsOverride: tools });
-    const control = new AutomaticAdmissionStore(join(dir, 'controls'));
+    const control = options.control ?? new AutomaticAdmissionStore(join(dir, 'controls'));
     await control.initialize({ id: session.sessionId, cwd: dir });
-    const boundaries = new SessionFailureBoundaries(control);
-    await boundaries.watch(session, { stream: 'fixture', root: dir });
+    const boundaries = options.boundaries ?? new SessionFailureBoundaries(control, undefined, options.policy);
+    if (options.watch !== false) await boundaries.watch(session, { stream: 'fixture', root: dir, ...(options.enroll ? { enroll: options.enroll } : {}) });
     return { dir, session, manager, calls, control, boundaries, loader, extensions };
 }
 

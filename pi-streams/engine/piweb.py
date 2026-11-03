@@ -154,7 +154,7 @@ def command_run(sid: str, text: str) -> dict:
 def maintenance_capabilities() -> bool:
     data = call(["runtime"])
     runtime = data.get("runtime")
-    return isinstance(runtime, dict) and runtime.get("component") == "sessiond" and isinstance(runtime.get("capabilities"), list) and all(capability in runtime["capabilities"] for capability in ("sessions.maintenanceCheckpoint", "prompt.potetoArguments", "sessions.streamsDcrEvents", "prompt.controlGoal", "sessions.conditionalAdmission", "prompt.recoveryControl", "sessions.failureBoundary", "sessions.failureFork", "sessions.failureMaintenance", "sessions.failureRetirement", "sessions.resumeObservation"))
+    return isinstance(runtime, dict) and runtime.get("component") == "sessiond" and isinstance(runtime.get("capabilities"), list) and all(capability in runtime["capabilities"] for capability in ("sessions.maintenanceCheckpoint", "prompt.potetoArguments", "sessions.streamsDcrEvents", "prompt.controlGoal", "sessions.conditionalAdmission", "prompt.recoveryControl", "sessions.failureBoundary", "sessions.failureFork", "sessions.failureMaintenance", "sessions.failureRetirement", "sessions.resumeObservation", "sessions.engineFailureRecovery", "sessions.extensionCallbackOwnership", "sessions.streamTransientRetry"))
 
 
 def require_maintenance(sid: str) -> dict[str, object]:
@@ -195,12 +195,17 @@ def _maintenance_result(data: dict, sid: str, identity: str, cwd: str) -> dict:
     return result
 
 
-def register_stream_failure(sid: str, cwd: str, stream_dir: Path, status: dict, *, starting: bool = False) -> None:
+def register_stream_failure(sid: str, cwd: str, stream_dir: Path, status: dict, *, starting: bool = False, role: str = "", assignment: str = "") -> None:
     if status.get("failureBoundarySupport") != "persisted-turn-v1":
         return
     result = status.get("failureBoundary")
     if result is None:
-        result = call(["failure-boundary", sid, "--cwd", cwd, "--stream", stream_dir.name, "--root", str(stream_dir.resolve())]).get("result")
+        args = ["failure-boundary", sid, "--cwd", cwd, "--stream", stream_dir.name, "--root", str(stream_dir.resolve())]
+        if starting and status.get("engineFailureRecoverySupport") == "enrolled-prefix-v1":
+            if not role or not assignment:
+                raise StreamsError("Fresh recovery enrollment requires the exact bounded role and opening assignment")
+            args += ["--enroll", json.dumps({"policyId": "enrolled-prefix-v1", "role": role, "assignment": assignment}, ensure_ascii=False)]
+        result = call(args).get("result")
     if not isinstance(result, dict) or type(result.get("version")) is not int or result["version"] != 1 or result.get("sessionId") != sid or result.get("cwd") != cwd or result.get("root") != str(stream_dir.resolve()) or result.get("stream") != stream_dir.name or result.get("state") not in ("watching", "parked", "uncertain"):
         raise StreamsError("native failure registration identity/state is unconfirmed")
     status["failureBoundary"] = result

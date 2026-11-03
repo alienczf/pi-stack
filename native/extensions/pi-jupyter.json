@@ -1,0 +1,39 @@
+{
+  "id": "harness-heal-v1",
+  "packages": {
+    "package.json": {
+      "name": "pi-jupyter",
+      "version": "0.1.0",
+      "sha256": "a6abb1d8e3fc3e64627a051cb8821119edbf35340f0c8299df124a551607add1"
+    }
+  },
+  "files": [
+    {
+      "path": "extensions/index.ts",
+      "before": "98fb96a675328949ed91d51ab06f92fac16c482b8608090874a2651b3abdbd02",
+      "after": "1e8aa58846e0db237ced3697664af1cdf52e38b6d24b862fe66dbfbc144bdfc9",
+      "edits": [
+        {
+          "old": "\tlet overlayHandle: OverlayHandle | undefined;\n\tlet closeOverlay: (() => void) | undefined;\n\tlet requestRender: (() => void) | undefined;\n\n\tasync function setNotebookPath(rawPath: string, ctx: ExtensionContext): Promise<void> {\n\t\tconst path = resolveNotebookPath(rawPath, ctx.cwd);\n",
+          "new": "\tlet overlayHandle: OverlayHandle | undefined;\n\tlet closeOverlay: (() => void) | undefined;\n\tlet requestRender: (() => void) | undefined;\n\tconst pendingLoads = new Set<Promise<void>>();\n\tconst watcherChanged = () => {\n\t\tconst revision = watcherRevision;\n\t\tconst load = loadNotebook(state);\n\t\tpendingLoads.add(load);\n\t\tvoid load.finally(() => { pendingLoads.delete(load); if (revision === watcherRevision) requestRender?.(); });\n\t};\n\tpi.registerCallbackOwnership?.(() => {\n\t\tconst owners = pendingLoads.size ? [\"preview-load\"] : currentWatcher ? [\"preview-watcher\"] : [];\n\t\treturn { kind: pendingLoads.size ? \"active\" : currentWatcher ? \"safe-to-drop\" : \"none\", revision: `${watcherRevision}:${pendingLoads.size}`, owners };\n\t}, async revision => {\n\t\tstopWatcher();\n\t\thidePanel();\n\t\tawait Promise.all([...pendingLoads]);\n\t\treturn { droppedRevision: revision };\n\t});\n\n\tasync function setNotebookPath(rawPath: string, ctx: ExtensionContext): Promise<void> {\n\t\tconst path = resolveNotebookPath(rawPath, ctx.cwd);\n"
+        },
+        {
+          "old": "\t\tstate.path = path;\n\t\tstate.scroll = 0;\n\t\tawait loadNotebook(state);\n\t\tstartWatcher(path, () => {\n\t\t\tvoid loadNotebook(state).finally(() => requestRender?.());\n\t\t});\n\t}\n\n\tasync function showPanel(ctx: ExtensionContext, rawPath?: string): Promise<void> {\n",
+          "new": "\t\tstate.path = path;\n\t\tstate.scroll = 0;\n\t\tawait loadNotebook(state);\n\t\tstartWatcher(path, watcherChanged);\n\t}\n\n\tasync function showPanel(ctx: ExtensionContext, rawPath?: string): Promise<void> {\n"
+        },
+        {
+          "old": "\t\tif (!candidate) return;\n\t\tstate.cwd = ctx.cwd;\n\t\tstate.path = resolveNotebookPath(candidate, ctx.cwd);\n\t\tstartWatcher(state.path, () => {\n\t\t\tvoid loadNotebook(state).finally(() => requestRender?.());\n\t\t});\n\t});\n\n\tpi.on(\"tool_result\", async (event, ctx) => {\n",
+          "new": "\t\tif (!candidate) return;\n\t\tstate.cwd = ctx.cwd;\n\t\tstate.path = resolveNotebookPath(candidate, ctx.cwd);\n\t\tstartWatcher(state.path, watcherChanged);\n\t});\n\n\tpi.on(\"tool_result\", async (event, ctx) => {\n"
+        },
+        {
+          "old": "\t});\n\n\tpi.on(\"session_shutdown\", async () => {\n\t\tcurrentWatcher?.close();\n\t\tcurrentWatcher = undefined;\n\t\thidePanel();\n\t});\n}\n",
+          "new": "\t});\n\n\tpi.on(\"session_shutdown\", async () => {\n\t\tstopWatcher();\n\t\thidePanel();\n\t});\n}\n"
+        },
+        {
+          "old": "}\n\nfunction startWatcher(path: string, onChange: () => void): void {\n\t// One watcher is enough: the preview tracks one current notebook.\n\t// Close first so changing notebooks does not leak file descriptors.\n\tcurrentWatcher?.close();\n\ttry {\n\t\tcurrentWatcher = watch(path, { persistent: false }, debounce(onChange, 150));\n\t} catch {\n\t\tcurrentWatcher = undefined;\n\t}\n}\n\nlet currentWatcher: FSWatcher | undefined;\n\nfunction debounce(fn: () => void, ms: number): () => void {\n\tlet timer: ReturnType<typeof setTimeout> | undefined;\n\treturn () => {\n\t\tif (timer) clearTimeout(timer);\n\t\ttimer = setTimeout(fn, ms);\n\t};\n}\n\nfunction resolveNotebookPath(rawPath: string, cwd: string): string {\n",
+          "new": "}\n\nfunction startWatcher(path: string, onChange: () => void): void {\n\tstopWatcher();\n\tconst revision = watcherRevision;\n\tlet timer: ReturnType<typeof setTimeout> | undefined;\n\tcancelWatcherDebounce = () => { if (timer) clearTimeout(timer); timer = undefined; };\n\ttry {\n\t\tcurrentWatcher = watch(path, { persistent: false }, () => {\n\t\t\tcancelWatcherDebounce?.();\n\t\t\ttimer = setTimeout(() => { timer = undefined; if (revision === watcherRevision) onChange(); }, 150);\n\t\t});\n\t} catch {\n\t\tcurrentWatcher = undefined;\n\t}\n}\n\nlet currentWatcher: FSWatcher | undefined;\nlet watcherRevision = 0;\nlet cancelWatcherDebounce: (() => void) | undefined;\nfunction stopWatcher(): void {\n\twatcherRevision++;\n\tcurrentWatcher?.close();\n\tcurrentWatcher = undefined;\n\tcancelWatcherDebounce?.();\n\tcancelWatcherDebounce = undefined;\n}\n\nfunction resolveNotebookPath(rawPath: string, cwd: string): string {\n"
+        }
+      ]
+    }
+  ]
+}

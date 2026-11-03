@@ -228,7 +228,7 @@ class StreamTick:
             if not self.automatic_paused:
                 for sid in artifacts._read_tick_data(self.stream_dir).get("failures", {}):
                     episode = failure.load(self.stream_dir, sid)
-                    if episode is not None and episode.state == "parked" and episode.kind != "usage-limit" and episode.ratification is not None:
+                    if episode is not None and episode.state == "parked" and episode.kind != "usage-limit" and (episode.ratification is not None or episode.authority is not None):
                         try:
                             failure_recovery.advance_locked(self.stream_dir, sid, episode.id, self.at, index=self.index, project=self.project)
                         except (StreamsError, OSError) as exc:
@@ -345,6 +345,9 @@ class StreamTick:
                 return True
         piweb.register_stream_failure(row.session, row.worktree, self.stream_dir, status)
         episode = failure.observe(self.stream_dir, row.session, row.worktree, native, status, self.at, row.model, row.thinking)
+        if status.get("streamRetrySupport") == "entry-bound-v1" and isinstance(status.get("streamRetry"), dict) and status["streamRetry"].get("state") == "pending":
+            self.typed_failures.add(row.session)
+            return True
         if episode is None:
             return False
         self.typed_failures.add(row.session)

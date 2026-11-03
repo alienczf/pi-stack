@@ -255,6 +255,7 @@ def main(argv: list[str]) -> int:
     boundary.add_argument("--cwd", required=True)
     boundary.add_argument("--stream", required=True)
     boundary.add_argument("--root", required=True)
+    boundary.add_argument("--enroll", help="JSON fresh-lane role/assignment for the configured engine policy")
     goal_control = sub.add_parser("control-goal")
     goal_control.add_argument("sid")
     goal_control.add_argument("delivery_id")
@@ -307,7 +308,7 @@ def main(argv: list[str]) -> int:
     if args.cmd in ("runtime", "capabilities"):
         code, data = req("GET", "/api/sessiond/runtime")
         ok = code == 200 and isinstance(data, dict) and data.get("component") == "sessiond" and isinstance(data.get("capabilities"), list) and all(isinstance(capability, str) for capability in data["capabilities"])
-        missing = [capability for capability in ("sessions.maintenanceCheckpoint", "prompt.potetoArguments", "sessions.streamsDcrEvents", "prompt.controlGoal", "sessions.conditionalAdmission", "prompt.recoveryControl", "sessions.failureBoundary", "sessions.failureFork", "sessions.failureMaintenance", "sessions.failureRetirement", "sessions.resumeObservation") if not ok or capability not in data["capabilities"]]
+        missing = [capability for capability in ("sessions.maintenanceCheckpoint", "prompt.potetoArguments", "sessions.streamsDcrEvents", "prompt.controlGoal", "sessions.conditionalAdmission", "prompt.recoveryControl", "sessions.failureBoundary", "sessions.failureFork", "sessions.failureMaintenance", "sessions.failureRetirement", "sessions.resumeObservation", "sessions.engineFailureRecovery", "sessions.extensionCallbackOwnership", "sessions.streamTransientRetry") if not ok or capability not in data["capabilities"]]
         if args.cmd == "capabilities":
             ok = ok and not missing
             return out({"ok": ok, "status": code, "runtime": data, "missing": missing}, ok)
@@ -325,7 +326,13 @@ def main(argv: list[str]) -> int:
         return out({"ok": ok, "status": code, "result": data}, ok)
     if args.cmd == "failure-boundary":
         sid = urllib.parse.quote(args.sid, safe="")
-        code, data = req("POST", f"/api/sessions/{sid}/failure-boundary", {"cwd": args.cwd, "stream": args.stream, "root": args.root})
+        body = {"cwd": args.cwd, "stream": args.stream, "root": args.root}
+        if args.enroll is not None:
+            try:
+                body["enroll"] = _json_object(args.enroll, "fresh engine-policy enrollment")
+            except UsageError as exc:
+                return out({"ok": False, "error": str(exc)}, False)
+        code, data = req("POST", f"/api/sessions/{sid}/failure-boundary", body)
         ok = code == 200 and isinstance(data, dict) and not data.get("error")
         return out({"ok": ok, "status": code, "result": data}, ok)
     if args.cmd == "control-goal":

@@ -137,9 +137,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("root", type=Path, help="canonical disposable or authorized pi-web package root")
     parser.add_argument("--check", action="store_true")
+    parser.add_argument("--extension", choices=("pi-subagents", "pi-web-access", "pi-prompt-template-model", "pi-cursor-sdk", "pi-jupyter"))
     args = parser.parse_args()
+    manifest = MANIFEST if args.extension is None else MANIFEST.parents[1] / "extensions" / (args.extension + ".json")
     try:
-        result = apply(args.root, json.loads(MANIFEST.read_text()), check=args.check)
+        result = apply(args.root, json.loads(manifest.read_text()), check=args.check)
     except (OSError, ValueError, KeyError) as exc:
         parser.exit(1, f"Native overlay refused. {exc}\n")
     print(f"pi-stack native overlay {result}. No daemon was started or restarted.")

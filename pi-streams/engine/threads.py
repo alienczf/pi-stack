@@ -335,7 +335,7 @@ def ensure_coordinator(project: Project, stream_dir: Path, *, opening_prompt: st
     sid, needs_opening = _resume_or_spawn(stream_dir, rows, stream_dir, "coordinator", [project.coordinator.model, project.coordinator.thinking, prompt], operation)
     if needs_opening:
         configured = piweb.configure_session(sid, project.coordinator.model, project.coordinator.thinking)
-        piweb.register_stream_failure(sid, str(stream_dir), stream_dir, configured, starting=True)
+        piweb.register_stream_failure(sid, str(stream_dir), stream_dir, configured, starting=True, role="coordinator", assignment=prompt)
         _send_start(stream_dir, sid, prompt)
     rows.append(_thread_row(sid, "coordinator", "", stream_dir, "", "", project.coordinator.model, project.coordinator.thinking))
     save_threads(path, rows)
@@ -655,22 +655,9 @@ def spawn_thread(
     sid, needs_brief = _resume_or_spawn(worktree, rows, stream_dir, role, [repo.name, branch_name, sha, model_name, thinking_level, note])
     if needs_brief:
         configured = piweb.configure_session(sid, model_name, thinking_level)
-        piweb.register_stream_failure(sid, str(worktree), stream_dir, configured, starting=True)
-        _send_start(
-            stream_dir,
-            sid,
-            render_brief(
-                session_id=sid,
-                stream=stream_id,
-                stream_dir=str(stream_dir),
-                role=role,
-                repo=repo.name,
-                worktree=str(worktree),
-                branch=branch_name,
-                base=sha,
-                note=note,
-            ),
-        )
+        brief = render_brief(session_id=sid, stream=stream_id, stream_dir=str(stream_dir), role=role, repo=repo.name, worktree=str(worktree), branch=branch_name, base=sha, note=note)
+        piweb.register_stream_failure(sid, str(worktree), stream_dir, configured, starting=True, role=role, assignment=brief)
+        _send_start(stream_dir, sid, brief)
     _append_thread(
         rows_path,
         _thread_row(sid, role, repo.name, worktree, branch_name, sha, model_name, thinking_level),

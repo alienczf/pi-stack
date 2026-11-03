@@ -1,0 +1,23 @@
+{
+  "id": "harness-heal-v1",
+  "packages": {
+    "package.json": {
+      "name": "pi-web-access",
+      "version": "0.26.0",
+      "sha256": "dd5cc463a9d17b4848702b721b7007e661a0ba974732505735ebd777a52f09b4"
+    }
+  },
+  "files": [
+    {
+      "path": "index.ts",
+      "before": "4621b0b05116ded4da0855bf484234abb8d0ce1c802fa225ccbc50458a367c93",
+      "after": "8c2daaf4b524332a612e842e18cd1528a05c8d26f51e341952979891ee8e0bac",
+      "edits": [
+        {
+          "old": "}\n\nexport default function (pi: ExtensionAPI) {\n\tconst initConfig = loadConfigForExtensionInit();\n\tinstallGlobalProxyFetch();\n\tconst toolNames = resolveToolNames(initConfig);\n",
+          "new": "}\n\nexport default function (pi: ExtensionAPI) {\n\tpi.registerCallbackOwnership?.(() => {\n\t\tconst owners = [...pendingFetches.keys(), ...pendingCurates.keys(), ...activeCurators.keys(), ...glimpseWins.keys()].sort();\n\t\treturn { kind: !sessionActive ? \"unknown\" : owners.length ? \"active\" : \"none\", revision: JSON.stringify(owners), owners };\n\t});\n\tconst initConfig = loadConfigForExtensionInit();\n\tinstallGlobalProxyFetch();\n\tconst toolNames = resolveToolNames(initConfig);\n"
+        }
+      ]
+    }
+  ]
+}

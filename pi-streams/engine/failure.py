@@ -95,6 +95,8 @@ class Episode:
     ratification: dict | None = None
     verification: dict | None = None
     recovery_id: str = ""
+    authority: dict | None = None
+    continuation: dict | None = None
     reset_at: str = ""
     reset_source: str = ""
     saved_entry: str = ""
@@ -138,6 +140,8 @@ def load(stream_dir: Path, sid: str) -> Episode | None:
         result = Episode(**value)
         if result.session != sid or result.kind not in KINDS or not result.id or not Path(result.cwd).is_absolute() or clock.parse(result.observed_at) is None or not isinstance(result.uncertain_jobs, list) or type(result.cancelled) is not bool or type(result.pause_owned) is not bool:
             raise ValueError("mismatched failure ownership or metadata")
+        if result.authority is not None and (not isinstance(result.authority, dict) or result.authority.get("kind") != "engine-policy" or result.authority.get("policyId") != "enrolled-prefix-v1" or not isinstance(result.authority.get("enrollmentId"), str) or not result.authority["enrollmentId"] or result.ratification is not None or not isinstance(result.continuation, dict)):
+            raise ValueError("invalid or ambiguous saved recovery authority")
         return result
     except (TypeError, ValueError) as exc:
         raise StreamsError(f"invalid failure episode: {exc}") from exc
@@ -165,7 +169,7 @@ def receipts(stream_dir: Path) -> list[dict]:
             operation = recovery(stream_dir, sid)
             if operation is not None:
                 pending = {"retiring": "Native retirement is unconfirmed; no deletion claim.", "retired": "Native retirement is verified; host cleanup is pending.", "clearing": "Exact registry/marker cleanup is pending."}
-                result[-1]["recovery"] = {"id": operation.id, "fork": operation.fork, "phase": operation.phase, "detail": operation.detail or pending.get(operation.phase, ""), "retainedSha256": (operation.retirement or {}).get("sourceSha256", "")}
+                result[-1]["recovery"] = {"id": operation.id, "fork": operation.fork, "phase": operation.phase, "detail": operation.detail or pending.get(operation.phase, ""), "retainedSha256": (operation.retirement or {}).get("sourceSha256", ""), "retainedEvidence": (operation.retirement or {}).get("cacheFile", "")}
     return result
 
 
@@ -205,6 +209,30 @@ def _publish_marker(stream_dir: Path, episode: Episode, checkpoint: dict | None)
         with sessionlog.regular_reader(path) as source:
             if source.read() != expected:
                 raise StreamsError("existing failure marker is not this exact owned checkpoint; preserved")
+
+
+def enrolled_authority(stream_dir: Path, sid: str, cwd: str, path: Path, leaf: object, boundary: dict | None, status: dict, generation: str) -> tuple[dict, dict] | None:
+    if status.get("engineFailureRecoverySupport") != "enrolled-prefix-v1" or boundary is None or boundary.get("state") != "parked":
+        return None
+    enrollment = boundary.get("enrollment")
+    parking = boundary.get("parking", {})
+    if not isinstance(enrollment, dict):
+        return None
+    if enrollment.get("policyId") != "enrolled-prefix-v1" or any(not isinstance(enrollment.get(key), str) or not enrollment[key] for key in ("id", "role", "assignment", "assignmentSha256", "generation")) or re.fullmatch(r"[a-z][a-z0-9_-]*", enrollment["role"]) is None or hashlib.sha256(enrollment["assignment"].encode()).hexdigest() != enrollment["assignmentSha256"] or parking != {"generation": generation, "owned": True}:
+        raise StreamsError("Engine recovery has no exact enrolled assignment or failure-owned parking")
+    branch = sessionlog.branch_records(path, sid, cwd, leaf)
+    registered = False
+    for entry, _raw in branch:
+        if entry.get("type") == "message":
+            break
+        data = entry.get("data", {})
+        if entry.get("customType") == "pi-web.stream-failure" and all(data.get(key) == boundary.get(key) for key in ("version", "sessionId", "cwd", "root", "stream", "enrollment")) and data.get("state") == "watching":
+            registered = True
+    if not registered or not any(entry.get("customType") == "pi-web.stream-failure" and entry.get("data") == boundary for entry, _raw in branch):
+        raise StreamsError("Engine recovery enrollment/parking is not on the exact native branch before its first input")
+    authority = {"kind": "engine-policy", "policyId": enrollment["policyId"], "enrollmentId": enrollment["id"]}
+    continuation = {"role": enrollment["role"], "assignment": enrollment["assignment"], "assignmentSha256": enrollment["assignmentSha256"], "stateSha256": hashlib.sha256((stream_dir / "STATE.md").read_bytes()).hexdigest()}
+    return authority, continuation
 
 
 def observe(stream_dir: Path, sid: str, cwd: str, native: dict, status: dict, at: str, model: str = "", thinking: str = "") -> Episode | None:
@@ -270,6 +298,21 @@ def observe(stream_dir: Path, sid: str, cwd: str, native: dict, status: dict, at
     else:
         episode.pause_owned = False
         episode.detail = "Already disabled or stopped; no automatic reset trial may rearm this epoch."
+        if previous is None and episode.kind != "usage-limit":
+            enrolled = enrolled_authority(stream_dir, sid, cwd, Path(path), leaf, boundary, status, token["generation"])
+            if enrolled is not None:
+                episode.authority, episode.continuation = enrolled
+                episode.continuation.update(nativeFile=path, savedInput={"entryId": episode.saved_entry, "sha256": episode.saved_sha256}, handovers=[])
+                handover = stream_dir / "handover" / episode.continuation["role"] / (sid + ".md")
+                if handover.exists():
+                    with sessionlog.regular_reader(handover) as source:
+                        raw_handover = source.read()
+                    if raw_handover.splitlines()[:1] != [("session: " + sid).encode()]:
+                        raise StreamsError("Existing original handover identity is invalid; preserve its evidence")
+                    episode.continuation["handovers"].append({"path": str(handover), "sha256": hashlib.sha256(raw_handover).hexdigest()})
+                episode.pause_owned, episode.pause_generation = True, token["generation"]
+                episode.recovery_id = uuid.uuid4().hex
+                episode.detail = "Exact enrolled nonusage recovery belongs to the engine; no notice verifier is claimed."
     save(stream_dir, episode)
     _publish_marker(stream_dir, episode, checkpoint)
     artifacts.append_log_locked(stream_dir, at, f"Failure {episode.id}", f"Observed {episode.label} for exact session {sid}. Code: {episode.code}. Native failure entry: {episode.failure_entry} SHA-256 {episode.failure_sha256}. Saved input: {episode.saved_entry or 'unknown'}. Reset: {episode.reset_at or 'unknown'}. Task effects remain parked; no environment, rule, skill, memory or provider remedy is authorized.", request_id=f"failure:{episode.id}:{episode.failure_entry}")
@@ -286,6 +329,9 @@ def ratify_locked(stream_dir: Path, sid: str, episode_id: str, notice_id: str, n
     rows = [row for row in load_threads(stream_dir / "threads.tsv") if row.session == sid]
     if episode is None or episode.id != episode_id or len(rows) != 1 or episode.state != "parked" or episode.kind == "usage-limit" or episode.checkpoint is None or not notice_id:
         raise StreamsError("Ratification requires the exact current parked nonusage episode and good checkpoint")
+    from engine.failure_recovery import load as load_recovery
+    if episode.authority is not None and load_recovery(stream_dir, sid) is not None:
+        raise StreamsError("An immutable engine-policy operation already owns this episode; notice authority cannot replace its intent")
     with sessionlog.regular_reader(stream_dir / "failures" / (sid + ".lastgood")) as marker:
         if marker.read() != (episode.checkpoint["entryId"] + "\n").encode():
             raise StreamsError("Failure marker no longer matches the exact parked checkpoint")
@@ -324,6 +370,7 @@ def ratify_locked(stream_dir: Path, sid: str, episode_id: str, notice_id: str, n
             raise StreamsError("Newer stop/input or branch superseded ratification before publication")
         artifacts.append_log_locked(stream_dir, at, "Ratified failure recovery", f"Authenticated notice {notice_id} ratifies only session {sid}, episode {episode.id}. Exceptional instructions remain in the verified native receipt; this acknowledgement admits no task effects by itself.", request_id=f"ratification:{sid}:{notice_id}")
         episode.ratification = receipt
+        episode.authority = None
         episode.recovery_id = episode.recovery_id or uuid.uuid4().hex
         episode.verification["state"] = "verified"
         save(stream_dir, episode)

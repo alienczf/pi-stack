@@ -8,6 +8,7 @@ import hashlib
 import json
 from pathlib import Path
 
+EXTENSIONS = {"pi-subagents": "0.58.0", "pi-web-access": "0.26.0", "pi-prompt-template-model": "0.12.2", "pi-cursor-sdk": "0.1.5", "pi-jupyter": "0.1.0"}
 PACKAGES = {"package.json": ("@jmfederico/pi-web", "1.202607.3"), **{f"node_modules/@earendil-works/{name}/package.json": (f"@earendil-works/{name}", "0.82.1") for name in ("pi-coding-agent", "pi-ai", "pi-agent-core")}}
 
 
@@ -50,5 +51,8 @@ if __name__ == "__main__":
     parser.add_argument("pristine", type=Path)
     parser.add_argument("edited", type=Path)
     parser.add_argument("paths", nargs="+")
+    parser.add_argument("--extension", choices=EXTENSIONS)
     args = parser.parse_args()
+    if args.extension:
+        PACKAGES = {"package.json": (args.extension, EXTENSIONS[args.extension])}
     print(json.dumps(build(args.pristine, args.edited, args.paths), indent=2, ensure_ascii=False))

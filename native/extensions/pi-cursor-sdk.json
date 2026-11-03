@@ -1,0 +1,34 @@
+{
+  "id": "harness-heal-v1",
+  "packages": {
+    "package.json": {
+      "name": "pi-cursor-sdk",
+      "version": "0.1.5",
+      "sha256": "f8ffee0d576a053d24303bb3c53a4fa0e41c45f192263c60f18b8bc53d9787cf"
+    }
+  },
+  "files": [
+    {
+      "path": "src/cursor-provider.ts",
+      "before": "87413ed9f32086361c388b32cc758d20453f7f704bc84529f0df87a11c572976",
+      "after": "440150103dae63957119a7545372a211615b97a2b268983692cd1eb0398e9e90",
+      "edits": [
+        {
+          "old": "\nlet cursorNativeReplayCounter = 0;\nconst pendingCursorNativeRuns = new Map<string, CursorNativeLiveRun>();\n\nfunction escapeRegExp(value: string): string {\n\treturn value.replace(/[.*+?^${}()|[\\]\\\\]/g, \"\\\\$&\");\n",
+          "new": "\nlet cursorNativeReplayCounter = 0;\nconst pendingCursorNativeRuns = new Map<string, CursorNativeLiveRun>();\nexport function cursorCallbackOwners(): string[] { return [...pendingCursorNativeRuns.keys()].sort(); }\n\nfunction escapeRegExp(value: string): string {\n\treturn value.replace(/[.*+?^${}()|[\\]\\\\]/g, \"\\\\$&\");\n"
+        }
+      ]
+    },
+    {
+      "path": "src/index.ts",
+      "before": "9fd983d8fa1c8c94103125de046ee6f98a15a9489072932ed412c2784c129c4f",
+      "after": "a12268771848899f961fc262a0cc5f5afbe3775ea6a12df3f1aabcd8898f66eb",
+      "edits": [
+        {
+          "old": "import { discoverModels, type CursorModelFallbackIssue } from \"./model-discovery.js\";\nimport { registerCursorFastControls } from \"./cursor-state.js\";\nimport { registerCursorNativeToolDisplay } from \"./cursor-native-tool-display.js\";\nimport { streamCursor } from \"./cursor-provider.js\";\n\nexport default async function (pi: ExtensionAPI) {\n\tregisterCursorFastControls(pi);\n\tregisterCursorNativeToolDisplay(pi);\n\tlet fallbackIssue: CursorModelFallbackIssue | undefined;\n",
+          "new": "import { discoverModels, type CursorModelFallbackIssue } from \"./model-discovery.js\";\nimport { registerCursorFastControls } from \"./cursor-state.js\";\nimport { registerCursorNativeToolDisplay } from \"./cursor-native-tool-display.js\";\nimport { streamCursor, cursorCallbackOwners } from \"./cursor-provider.js\";\n\nexport default async function (pi: ExtensionAPI) {\n\tpi.registerCallbackOwnership?.(() => {\n\t\tconst owners = cursorCallbackOwners();\n\t\treturn { kind: owners.length ? \"active\" : \"none\", revision: JSON.stringify(owners), owners };\n\t});\n\tregisterCursorFastControls(pi);\n\tregisterCursorNativeToolDisplay(pi);\n\tlet fallbackIssue: CursorModelFallbackIssue | undefined;\n"
+        }
+      ]
+    }
+  ]
+}
