@@ -13,7 +13,7 @@ class FailureRecoveryTests(TickCase):
     digest = markers.FailureMarkerTests.digest
     body = markers.FailureMarkerTests.body
 
-    def fixture(self, role="coordinator", model="gpt-6-astra", *, policy=False):
+    def fixture(self, role="coordinator", model="gpt-6-astra", *, policy=True):
         self.cwd = self.home / "etl" if role == "coordinator" else self.tmp / "worker-owned"
         self.cwd.mkdir(exist_ok=True, parents=True)
         self.stream = self.make_stream(self.home, "etl", row("coi", role, str(self.cwd)).replace("gpt-6-astra", model))
@@ -44,25 +44,11 @@ class FailureRecoveryTests(TickCase):
         self.assertEqual(self.tick("2026-10-06T12:00:00Z").returncode, 0)
         episode = self.state(self.stream)["failures"]["coi"]
         target = {"sessionId": "coi", "cwd": str(self.cwd), "root": str(self.stream), "stream": "etl", "episode": episode["id"], "checkpoint": {"entryId": "e4", "sha256": self.digest("coi", "e4")}, "failure": {"entryId": "e6", "sha256": self.digest("coi", "e6"), "kind": "codex-login"}}
-        data = {"version": 1, "id": "offline-notice", "noticeId": "offline-notice", "provenance": "labelled-offline-contract-not-authenticated-intake", "instructions": "", "target": target, "generation": "native-parked-coi"}
-        if not policy:
-            receipt = self.append("coi", "ratification", "e6", "pi-web.failure-ratification", data)
-            self.original["rotationSafety"]["entryId"] = "ratification"
-            self.routes.append(("POST", "/api/sessions/coi/failure-recovery/ratify", 200, {**data, **receipt}))
-            self.stub.set_routes(self.routes)
-            notice = self.tmp / "notice.json"
-            notice.write_text(json.dumps({"label": "offline verifier fixture, never real provenance"}))
-            result = self.run_streams("failure", "ratify", "etl", "--session", "coi", "--episode", episode["id"], "--notice-id", "offline-notice", "--notice-file", str(notice))
-            self.assertEqual(result.returncode, 0, result.stderr)
         self.episode = self.state(self.stream)["failures"]["coi"]
-        self.assertTrue(self.episode["recovery_id"], "A fresh enrolled episode must acquire engine-policy recovery without a notice verifier")
-        proof = {"authority": self.episode["authority"], "continuation": self.episode["continuation"]} if policy else {"ratification": {"entryId": receipt["entryId"], "sha256": receipt["sha256"]}}
+        self.assertTrue(self.episode["recovery_id"], "Standing charter recovery needs no notice verifier")
+        proof = {"authority": self.episode["authority"], "continuation": self.episode["continuation"]}
         self.request = {"cwd": str(self.cwd), "id": self.episode["recovery_id"], "episode": self.episode["id"], "expected": {**self.original["failureBoundary"], "generation": "native-parked-coi"}, **proof}
-        self.result = {"version": 1, "id": self.request["id"], "episode": self.episode["id"], "originalSessionId": "coi", "cwd": str(self.cwd), "root": str(self.stream), "stream": "etl", "checkpoint": target["checkpoint"], "failure": target["failure"], "intentSha256": hashlib.sha256(json.dumps(self.request, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest(), "noticeId": "offline-notice", "provenance": data["provenance"], "instructions": "", "generation": "frozen-original", "state": "forked", "forkSessionId": "returned-fork", "forkFile": self.log_path("returned-fork"), "forkGeneration": "held-generation"}
-        if policy:
-            self.result.pop("noticeId")
-            self.result.pop("provenance")
-            self.result["authority"] = self.episode["authority"]
+        self.result = {"version": 1, "id": self.request["id"], "episode": self.episode["id"], "originalSessionId": "coi", "cwd": str(self.cwd), "root": str(self.stream), "stream": "etl", "checkpoint": target["checkpoint"], "failure": target["failure"], "intentSha256": hashlib.sha256(json.dumps(self.request, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest(), "authority": self.episode["authority"], "instructions": "", "generation": "frozen-original", "state": "forked", "forkSessionId": "returned-fork", "forkFile": self.log_path("returned-fork"), "forkGeneration": "held-generation"}
         originals = Path(self.log_path("coi")).read_bytes().splitlines(keepends=True)
         header = {"type": "session", "version": 3, "id": "returned-fork", "cwd": str(self.cwd), "parentSession": self.log_path("coi")}
         prefix_end = next(index for index, raw in enumerate(originals) if json.loads(raw).get("id") == "e4") + 1
@@ -84,7 +70,7 @@ class FailureRecoveryTests(TickCase):
 
     def fork_response(self, body):
         self.assertEqual(body, self.request)
-        self.append("coi", "fork-result", "registered-policy" if self.policy else "ratification", "pi-web.failure-recovery", self.result)
+        self.append("coi", "fork-result", "registered-policy", "pi-web.failure-recovery", self.result)
         self.original["rotationSafety"]["entryId"] = "fork-result"
         self.stub.automatic_admissions["coi"]["generation"] = "frozen-original"
         return 200, self.result

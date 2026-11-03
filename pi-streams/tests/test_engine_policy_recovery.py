@@ -46,6 +46,26 @@ class EnginePolicyRecoveryTests(TickCase):
         self.assertEqual(sum(item[1].endswith('/fork') for item in self.stub.requests), 1)
         self.assertFalse(any(item[1].endswith('/prompt') or item[1].endswith('/ratify') for item in self.stub.requests))
 
+    def test_historical_parking_uses_registry_role_and_original_input_without_enrollment(self):
+        self.fixture(policy=True)
+        from engine import failure
+        from pathlib import Path
+        boundary = self.original['failureBoundary']
+        boundary.pop('enrollment')
+        path = Path(self.log_path('coi'))
+        entries = [json.loads(line) for line in path.read_text().splitlines()]
+        for entry in entries:
+            if entry.get('customType') == 'pi-web.stream-failure':
+                entry['data'].pop('enrollment', None)
+        path.write_text(''.join(json.dumps(entry) + '\n' for entry in entries))
+        authority, continuation = failure.enrolled_authority(self.stream, 'coi', str(self.cwd), path, 'registered-policy', boundary, self.original, 'native-parked-coi')
+        self.assertEqual(authority, {'kind': 'engine-policy', 'policyId': 'enrolled-prefix-v1', 'enrollmentId': 'coi'})
+        self.assertEqual(continuation['role'], 'coordinator')
+        opening = next(entry['message']['content'] for entry in entries if entry.get('message', {}).get('role') == 'user')
+        self.assertEqual(continuation['assignment'], json.dumps(opening, ensure_ascii=False))
+        boundary['parking']['generation'] = 'old-generation'
+        self.assertIsNone(failure.enrolled_authority(self.stream, 'coi', str(self.cwd), path, 'registered-policy', boundary, self.original, 'newer-stop'))
+
     def test_ambiguous_saved_authority_refuses_before_any_effect(self):
         self.fixture(policy=True)
         path = self.stream / 'log/tick-state.json'

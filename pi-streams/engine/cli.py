@@ -80,13 +80,6 @@ def _parser() -> argparse.ArgumentParser:
 
     failures = sub.add_parser("failure")
     failure_sub = failures.add_subparsers(dest="failure_cmd", required=True)
-    ratify = failure_sub.add_parser("ratify")
-    ratify.add_argument("stream")
-    ratify.add_argument("--home")
-    ratify.add_argument("--session", required=True)
-    ratify.add_argument("--episode", required=True)
-    ratify.add_argument("--notice-id", required=True)
-    ratify.add_argument("--notice-file", required=True)
     advance = failure_sub.add_parser("advance")
     advance.add_argument("stream")
     advance.add_argument("--home")
@@ -364,21 +357,12 @@ def cmd_drive(args: argparse.Namespace) -> int:
 
 
 def cmd_failure(args: argparse.Namespace) -> int:
-    notice = None
-    if args.failure_cmd == "ratify":
-        try:
-            notice = json.loads(_state_body(args.notice_file))
-        except ValueError as exc:
-            raise StreamsError("Authenticated notice input must be JSON, not a fixed/readiness string") from exc
     index = resolve_index(args.home)
     with index_lock(index):
         project = resolve_project(index)
         stream_dir = require_stream(index, project.info.name, args.stream)
     with stream_lock(stream_dir):
-        if args.failure_cmd == "ratify":
-            result = failure.ratify_locked(stream_dir, args.session, args.episode, args.notice_id, notice, clock.stamp(clock.now()))
-        else:
-            result = failure_recovery.advance_locked(stream_dir, args.session, args.episode, clock.stamp(clock.now()), index=index, project=project)
+        result = failure_recovery.advance_locked(stream_dir, args.session, args.episode, clock.stamp(clock.now()), index=index, project=project)
     print(json.dumps(result, sort_keys=True))
     return 0
 

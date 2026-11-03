@@ -20,10 +20,13 @@ class NativeModuleTests(unittest.TestCase):
         self.run_native("maintenance", 3)
 
     def test_actual_recovery_modules(self):
-        self.run_native("recovery", 3)
+        self.run_native("recovery", 4)
 
     def test_actual_callback_ownership_modules(self):
         self.run_native("callbacks", 4)
+
+    def test_actual_disabled_child_ownership(self):
+        self.run_native("callbacks-child", 1)
 
     def run_native(self, name, count):
         native = Path(os.environ["PI_STACK_NATIVE_TEST_ROOT"]).resolve()

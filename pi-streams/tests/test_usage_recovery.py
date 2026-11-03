@@ -80,13 +80,14 @@ class UsageRecoveryTests(TickCase):
         alerts=self.alerts().splitlines()
         self.assertEqual(sum(line.startswith('episode '+episode['id']+' recovery ') for line in alerts),1)
 
-    def test_missing_offhost_delivery_proof_keeps_usage_trial_disabled_even_after_reset(self):
+    def test_missing_offhost_delivery_proof_does_not_block_usage_trial_after_reset(self):
         self.assertEqual(self.tick("2026-10-06T12:00:00Z").returncode,0)
         self.assertEqual(self.episode()["notification"],None)
         result=self.tick("2026-10-06T13:00:00Z")
         self.assertEqual(result.returncode,0,result.stderr)
-        self.assertFalse(any(item[0]=="POST" and item[1].endswith("/control-goal") for item in self.stub.requests))
-        self.assertEqual(self.episode()["retry_id"],"")
+        self.assertEqual(sum(item[0]=="POST" and item[1].endswith("/control-goal") for item in self.stub.requests),1)
+        self.assertTrue(self.episode()["retry_id"])
+        self.assertIsNone(self.episode()["notification"], "a progress notice cannot become an invented DM receipt")
 
     def test_unconfirmed_local_off_blocks_reset_trial_even_if_remote_parked_epoch_is_unchanged(self):
         self.assertEqual(self.tick("2026-10-06T12:00:00Z").returncode,0)

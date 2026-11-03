@@ -213,14 +213,6 @@ def register_stream_failure(sid: str, cwd: str, stream_dir: Path, status: dict, 
         raise StreamsError("Native failure registration is parked or unconfirmed; no opening task was sent")
 
 
-def ratify_failure(sid: str, cwd: str, request: dict) -> dict:
-    data = call(["failure-ratify", sid, "--cwd", cwd], stdin=json.dumps(request, ensure_ascii=False))
-    result = data.get("result")
-    if not isinstance(result, dict) or type(result.get("version")) is not int or result["version"] != 1 or not isinstance(result.get("target"), dict) or result["target"].get("sessionId") != sid or result["target"].get("cwd") != cwd or not all(isinstance(result.get(key), str) for key in ("noticeId", "provenance", "instructions", "generation", "entryId", "sha256")):
-        raise StreamsError("Native authenticated ratification receipt is unconfirmed")
-    return result
-
-
 def fork_failure(sid: str, cwd: str, request: dict) -> dict:
     result = call(["failure-fork", sid, "--cwd", cwd], stdin=json.dumps(request, ensure_ascii=False)).get("result")
     if not isinstance(result, dict) or result.get("version") != 1 or result.get("originalSessionId") != sid or result.get("cwd") != cwd or result.get("id") != request.get("id"):

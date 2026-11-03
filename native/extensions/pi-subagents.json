@@ -9,6 +9,17 @@
   },
   "files": [
     {
+      "path": "index.ts",
+      "before": "a2f11dbe8e200bd8c590441316a9c6ab222318d2aa738670dedcf0e72592dde3",
+      "after": "3ca5ae0732d8363c9a89ca18c19f4837d6b67865b65f1a9cc58db320dd2fffad",
+      "edits": [
+        {
+          "old": "\t: (await import(\"./src/extension/index.ts\")).default;\n\nexport default function registerSubagentExtension(pi: ExtensionAPI): void {\n\tregisterParentExtension?.(pi);\n}\n",
+          "new": "\t: (await import(\"./src/extension/index.ts\")).default;\n\nexport default function registerSubagentExtension(pi: ExtensionAPI): void {\n\tif (registerParentExtension) registerParentExtension(pi);\n\telse pi.registerCallbackOwnership?.(() => ({ kind: \"none\", revision: \"child-disabled\", owners: [] }));\n}\n"
+        }
+      ]
+    },
+    {
       "path": "src/extension/index.ts",
       "before": "70f45cee1ff30c37a720f278f7439daa248427cf3010d85fe0eb8cdbf7312fba",
       "after": "477af5fc3b32610ff4e201bc58ff350936d9af8490580c98421c641871636686",

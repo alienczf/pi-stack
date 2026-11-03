@@ -47,10 +47,10 @@ class FailurePolicyTests(unittest.TestCase):
                 self.assertFalse(result.automatic_retry)
                 self.assertEqual(result.reset_at, "")
 
-    def test_reset_trial_requires_saved_step_notification_and_same_uncancelled_generation(self):
+    def test_reset_trial_requires_saved_step_and_same_uncancelled_generation_not_notification(self):
         episode = failure.Episode(id="episode-one", session="full-owned-sid", cwd="/private/owned", kind="usage-limit", code="usage_limit_reached", label="Codex usage limit", observed_at="2026-10-06T12:00:00Z", failure_entry="e3", failure_sha256="f" * 64, reset_at="2026-10-06T12:10:00Z", reset_source="provider-metadata", saved_entry="e2", saved_sha256="a" * 64, pause_generation="parked-generation", pause_owned=True)
         self.assertFalse(failure.retry_ready(episode, "2026-10-06T12:09:59Z", "parked-generation", False))
-        self.assertFalse(failure.retry_ready(episode, "2026-10-06T12:10:00Z", "parked-generation", False))
+        self.assertTrue(failure.retry_ready(episode, "2026-10-06T12:10:00Z", "parked-generation", False))
         episode.notification = {"state": "delivered", "deliveryId": "offhost-message", "route": "verified-zf-dm-v1"}
         self.assertTrue(failure.retry_ready(episode, "2026-10-06T12:10:00Z", "parked-generation", False))
         self.assertFalse(failure.retry_ready(episode, "2026-10-06T12:10:00Z", "newer-stop-generation", False))

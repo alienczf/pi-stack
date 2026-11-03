@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import test from 'node:test';
 import { existsSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -20,7 +21,7 @@ async function parked(role = 'coordinator', enrolled = true) {
     await f.session.prompt('The bounded continuation');
     const boundary = f.boundaries.snapshot(f.session);
     assert.equal(boundary.state, 'parked');
-    const authority = { kind: 'engine-policy', policyId: 'enrolled-prefix-v1', enrollmentId: boundary.enrollment?.id ?? 'forged' };
+    const authority = { kind: 'engine-policy', policyId: 'enrolled-prefix-v1', enrollmentId: boundary.enrollment?.id ?? f.session.sessionId };
     let forks = 0, fork;
     const recovery = new SessionFailureRecoveries(f.control, undefined, { policy: deps.engineRecoveryPolicy, boundary: session => f.boundaries.snapshot(session), quiescent: session => assert.equal(session.isStreaming || session.isCompacting || session.isBashRunning, false), fork: async (session, operation) => {
         forks++;
@@ -30,7 +31,9 @@ async function parked(role = 'coordinator', enrolled = true) {
         await f.boundaries.holdRecovery(fork.session, operation);
         return { session: fork.session, cancelled: false };
     }, resolveFork: async () => fork.session, maintenance: async () => ({}) });
-    const request = { id: 'owned-recovery', episode: 'exact-episode', authority, expected: { ...boundary, generation: f.control.snapshot({ id: f.session.sessionId, cwd: f.dir }).generation } };
+    const assignment = 'Implement only the bounded native regression in this owned worktree.';
+    const continuation = { role, assignment, assignmentSha256: createHash('sha256').update(assignment).digest('hex') };
+    const request = { id: 'owned-recovery', episode: 'exact-episode', authority, continuation, expected: { ...boundary, generation: f.control.snapshot({ id: f.session.sessionId, cwd: f.dir }).generation } };
     return { ...f, recovery, request, forks: () => forks, fork: () => fork };
 }
 
@@ -93,11 +96,13 @@ test('enrolled coordinator and worker fork the actual good prefix without verifi
     }
 });
 
-test('caller labels cannot enroll historical parking or overwrite a newer stop', async () => {
+test('historical failure-owned parking recovers without enrollment while a newer stop still wins', async () => {
     const historical = await parked('coordinator', false);
-    await assert.rejects(historical.recovery.fork(historical.session, historical.request), /enrolled/);
-    await assert.rejects(historical.boundaries.watch(historical.session, { stream: 'fixture', root: historical.dir, enroll: { policyId: 'enrolled-prefix-v1', role: 'coordinator', assignment: 'forged' } }), /Historical/);
-    assert.equal(historical.forks(), 0);
+    const result = await historical.recovery.fork(historical.session, historical.request);
+    assert.equal(result.state, 'forked');
+    assert.equal(historical.forks(), 1);
+    assert.equal(result.noticeId, undefined);
+    historical.fork().session.dispose();
     historical.session.dispose();
     const stopped = await parked();
     await stopped.control.setAllowed({ id: stopped.session.sessionId, cwd: stopped.dir }, false);
@@ -106,7 +111,25 @@ test('caller labels cannot enroll historical parking or overwrite a newer stop',
     stopped.session.dispose();
 });
 
-test('verified-notice callers still require their real configured verifier', async () => {
+test('actual service recovery adapter crosses the parked 409 boundary while ordinary writes remain denied', async () => {
+    const f = await parked();
+    const { PiSessionService } = await native('dist/server/sessions/piSessionService.js');
+    const service = {
+        failureBoundaries: f.boundaries, failureRecoveries: f.recovery,
+        getArchived: async () => undefined,
+        activeForLookup: () => ({ runtime: { session: f.session } }),
+        getOrOpen: async () => f.session,
+        assertWritable: PiSessionService.prototype.assertWritable,
+    };
+    const ref = { id: f.session.sessionId, cwd: f.dir };
+    await assert.rejects(service.assertWritable(ref), /parked/);
+    const result = await PiSessionService.prototype.forkFailureAtCheckpoint.call(service, ref, f.request);
+    assert.equal(result.state, 'forked');
+    assert.equal(f.forks(), 1);
+    f.fork().session.dispose(); f.session.dispose();
+});
+
+test('a caller cannot replace engine policy with invented notice authority', async () => {
     const f = await parked();
     const request = { ...f.request }; delete request.authority;
     request.ratification = { entryId: 'invented', sha256: '0'.repeat(64) };

@@ -140,16 +140,16 @@ def advance_locked(stream: Path, sid: str, episode_id: str, at: str, *, index: P
     episode = failure.load(stream, sid)
     rows = load_threads(stream / "threads.tsv")
     originals = [row for row in rows if row.session == sid]
-    if episode is None or episode.id != episode_id or episode.kind == "usage-limit" or episode.state != "parked" or (episode.ratification is None and episode.authority is None) or episode.checkpoint is None or len(originals) != 1 or not episode.recovery_id:
-        raise StreamsError("Recovery needs the exact ratified parked episode and registry original")
+    if episode is None or episode.id != episode_id or episode.kind == "usage-limit" or episode.state != "parked" or episode.checkpoint is None or len(originals) != 1 or not episode.recovery_id:
+        raise StreamsError("Recovery needs the exact parked episode, good checkpoint and registry original")
     row = originals[0]
     native = _native_session(sid, Path(episode.cwd))
     piweb.require_settings(native.status, episode.authorized_model, episode.authorized_thinking)
-    policy = episode.authority is not None
-    if native.status.get("failureForkSupport") != "ratified-prefix-v1" or (native.status.get("engineFailureRecoverySupport") != "enrolled-prefix-v1" if policy else native.status.get("failureRatificationConfigured") is not True):
-        raise StreamsError("Configured exact fork authority is unavailable; original remains parked")
     failure.observe(stream, sid, episode.cwd, native.info, native.status, at, row.model, row.thinking)
     episode = failure.load(stream, sid)
+    policy = episode.authority is not None
+    if native.status.get("failureForkSupport") != "ratified-prefix-v1" or (native.status.get("engineFailureRecoverySupport") != "enrolled-prefix-v1" if policy else episode.ratification is None):
+        raise StreamsError("Exact native recovery ownership is unavailable; original remains parked")
     if episode.uncertain_jobs or episode.cancelled:
         raise StreamsError("Uncertain jobs/cancellation still own the original; no replay or replacement")
     with sessionlog.regular_reader(stream / "failures" / (sid + ".lastgood")) as marker:

@@ -135,13 +135,13 @@ class FailureRetirementTests(TickCase):
         self.assertEqual((self.stream / "failures/coi.lastgood").read_bytes(), b"e4\n")
         self.assertEqual(self.deletions, 0)
 
-    def test_lost_ratification_proof_after_intent_does_not_retry_a_native_effect(self):
+    def test_lost_recovery_authority_after_intent_does_not_retry_a_native_effect(self):
         self.ready_to_retire()
         self.routes[-1] = ("POST", "/api/sessions/coi/failure-recovery/retire", 404, {"error": "Labelled unavailable receiving owner"})
         self.stub.set_routes(self.routes)
         self.assertNotEqual(self.advance().returncode, 0)
         data = self.state(self.stream)
-        data["failures"]["coi"]["ratification"] = None
+        data["failures"]["coi"]["authority"] = None
         (self.stream / "log/tick-state.json").write_text(json.dumps(data))
         self.stub.requests.clear()
         result = self.advance()
