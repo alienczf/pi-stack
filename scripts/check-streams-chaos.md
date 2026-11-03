@@ -10,14 +10,16 @@ python3 scripts/check-streams-chaos.py --source-tar "$FROZEN_NATIVE_TAR" --cases
 python3 scripts/check-streams-chaos.py --source-tar "$FROZEN_NATIVE_TAR" --cases all
 ```
 
-The baseline selects overload, terminated, usage reset, and compaction. `all` includes every implemented scenario, including scenarios that fail against `acfd37a`. Any `FAIL` or `NOT IMPLEMENTED` result exits nonzero. Nothing silently skips unfinished product behavior.
+The baseline selects overload, terminated, usage reset, and compaction. `all` selects 16 scenarios. The checked combined tree expects 15 `PASS` results and one `NOTIMPLEMENTED` result, so its honest exit code is 1. Any `FAIL` or `NOTIMPLEMENTED` result exits nonzero. Nothing silently skips unfinished product behavior.
+
+`policy-safe-analysis` proves one isolated generic metadata inference with a complete context capture. It does not receive or complete the permitted `SAFE_DOC_UNIT_6a` assignment. `policy-narrowing` exercises that same analysis boundary but reports the remaining useful-continuation requirement as structured `NOTIMPLEMENTED` evidence. The original rejected task stays blocked. The full-suite integration test passes only when all 16 expected dispositions and the nonzero chaos exit agree.
 
 Select individual cases or inspect the registry.
 
 ```sh
 python3 scripts/check-streams-chaos.py --list
 python3 scripts/check-streams-chaos.py --source-tar "$FROZEN_NATIVE_TAR" --cases login-refresh,model-error,parked-worker,rotation
-python3 scripts/check-streams-chaos.py --source-tar "$FROZEN_NATIVE_TAR" --cases policy-narrowing,blocked-loop,tick-noise,unratified-close,archived-worker,dead-worker
+python3 scripts/check-streams-chaos.py --source-tar "$FROZEN_NATIVE_TAR" --cases policy-safe-analysis,policy-narrowing,blocked-loop,tick-noise,unratified-close,archived-worker,dead-worker
 python3 scripts/check-streams-chaos.py --source-tar "$FROZEN_NATIVE_TAR" --cases small-recovery
 ```
 

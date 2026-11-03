@@ -22,7 +22,13 @@ LIVE_NATIVE = Path('/home/alphalab/.local/share/pi-node')
 LIVE_EXTENSIONS = Path('/home/alphalab/.pi/agent/npm')
 MODEL = 'openai-codex/gpt-6.1-sol'
 BASELINE = ('overload', 'terminated', 'usage-reset', 'compaction')
-CASES = (*BASELINE, 'login-refresh', 'model-error', 'parked-worker', 'rotation', 'policy-narrowing', 'blocked-loop', 'tick-noise', 'unratified-close', 'small-recovery', 'archived-worker', 'dead-worker')
+CASES = (*BASELINE, 'login-refresh', 'model-error', 'parked-worker', 'rotation', 'policy-safe-analysis', 'policy-narrowing', 'blocked-loop', 'tick-noise', 'unratified-close', 'small-recovery', 'archived-worker', 'dead-worker')
+
+
+class CaseNotImplemented(NotImplementedError):
+    def __init__(self, message, details):
+        super().__init__(message)
+        self.details = details
 
 
 def save(path, value):
@@ -436,7 +442,7 @@ def compaction(sandbox):
     return {'before': before, 'after': native['estimatedTokens'], 'measurement': 'native estimated context tokens, not billed provider tokens', 'observation': observation}
 
 
-def policy_narrowing(sandbox):
+def policy_safe_analysis(sandbox):
     name, stream, sid = sandbox.new()
     rejected = 'CHAOS_REJECTED_UNIT_7d9a. Restricted fixture assignment. Do not reproduce this unit.'
     sandbox.objective(name, rejected)
@@ -457,8 +463,7 @@ def policy_narrowing(sandbox):
     state = sandbox.state(stream)
     episode = state.get('failures', {}).get(sid, {})
     analysis = episode.get('analysis') or {}
-    if not analysis:
-        raise NotImplementedError('clean isolated metadata analysis is unavailable; the original policy blocker remains required')
+    check(analysis, 'clean isolated metadata analysis is unavailable; the original policy blocker remains required')
     check(analysis.get('state') == 'analyzed', f'clean metadata analysis did not complete: {analysis}')
     check(analysis.get('basis') == 'clean-policy-analysis-v1' and analysis.get('originalTaskBlocked') is True, 'analysis was mislabeled as ordinary recovery')
     check(episode['state'] == 'parked' and episode['authority'] is None, 'original rejected task was released')
@@ -467,7 +472,10 @@ def policy_narrowing(sandbox):
     recovery_calls = [c for c in evidence['calls'] if c['session'] == analysis['analysisSessionId']]
     check(len(recovery_calls) == 1 and not recovery_calls[0]['title'] and not recovery_calls[0]['summary'], 'not exactly one actual metadata inference')
     check(recovery_calls[0]['reasoning'] == 'xhigh' and recovery_calls[0]['tools'] == [], 'model settings or native tool view changed')
+    check(len(recovery_calls[0]['messages']) == 1 and recovery_calls[0]['messages'][0]['role'] == 'user' and recovery_calls[0]['systemPrompt'], 'not a fresh one-shot native context')
     check(rejected not in json.dumps(recovery_calls), 'complete metadata inference leaked a rejected canary')
+    check('SAFE_DOC_UNIT_6a' not in json.dumps(recovery_calls), 'metadata analysis received the alternative assignment')
+    check(str(stream) not in json.dumps(recovery_calls) and str(native['file']) not in json.dumps(recovery_calls), 'source links entered the private context')
     check(Path(native['file']).read_bytes() == original, 'source session was mutated')
     check(Path(analysis['audit']['retainedSource']).read_bytes() == original, 'exact original audit snapshot absent')
     check(hashlib.sha256(original).hexdigest() == analysis['audit']['sourceSha256'], 'source audit hash changed')
@@ -482,7 +490,20 @@ def policy_narrowing(sandbox):
     check('Separate policy metadata analysis' in path.read_text(), 'analysis audit was not recorded in the Log')
     save(sandbox.logs / 'clean-analysis-evidence.json', {'receipt': analysis, 'sourceSha256': hashlib.sha256(original).hexdigest(), 'sourceSession': original.decode(), 'privateSession': private_file, 'contexts': recovery_calls, 'compactionContexts': [], 'compactionPermitted': False})
     sandbox.drive_on(stream)
-    return {'analysis': analysis['analysisSessionId'], 'basis': analysis['basis'], 'state': analysis['state'], 'originalTaskBlocked': True, 'rejectedReplay': False, 'sourceBytesPreserved': True, 'noForkCompactionOrResumeClaim': True}
+    return {'original': sid, 'analysis': analysis['analysisSessionId'], 'basis': analysis['basis'], 'state': analysis['state'], 'providerContextCount': len(recovery_calls), 'originalTaskBlocked': True, 'rejectedReplay': False, 'sourceBytesPreserved': True, 'noForkCompactionOrResumeClaim': True}
+
+
+def policy_narrowing(sandbox):
+    analysis = policy_safe_analysis(sandbox)
+    raise CaseNotImplemented('Generic metadata analysis is not the permitted SAFE_DOC_UNIT_6a continuation. The original task remains blocked.', {
+        'original': analysis['original'], 'originalTaskBlocked': True,
+        'safeAnalysisCompleted': analysis['state'] == 'analyzed', 'analysis': analysis,
+        'usefulContinuationCompleted': False,
+        'remainingRequirement': {
+            'status': 'NOTIMPLEMENTED', 'authorizedAlternative': 'SAFE_DOC_UNIT_6a',
+            'requirement': 'Complete the permitted documentation-only continuation without replaying the rejected task.',
+        },
+    })
 
 
 def blocked_loop(sandbox):
@@ -563,6 +584,7 @@ RUNNERS = {
     'parked-worker': lambda s: fault_recovery(s, 'Terminal model error: unsupported fixture request', worker=True),
     'compaction': compaction,
     'rotation': lambda s: fault_recovery(s, 'Terminal model error: unsupported fixture request', rotate=True),
+    'policy-safe-analysis': policy_safe_analysis,
     'policy-narrowing': policy_narrowing,
     'blocked-loop': blocked_loop,
     'tick-noise': tick_noise,
@@ -636,8 +658,9 @@ def main():
                 sandbox.start()
                 result['details'] = RUNNERS[case](sandbox)
                 result['result'] = 'PASS'
-            except NotImplementedError as error:
-                result['result'], result['detail'] = 'NOT IMPLEMENTED', str(error)
+            except CaseNotImplemented as error:
+                result['result'], result['detail'] = 'NOTIMPLEMENTED', str(error)
+                result['details'] = error.details
             except Exception as error:
                 result['detail'] = str(error)
                 if sandbox.url and sandbox.proc.poll() is None:
@@ -647,7 +670,7 @@ def main():
                         result['snapshotError'] = str(snapshot_error)
             finally:
                 result['cleanup'] = sandbox.cleanup()
-                if result['result'] == 'PASS' and (result['cleanup'].get('error') or not all(item['closed'] for item in result['cleanup']['streams']) or any(item['state'] == 'archive-refused' for item in result['cleanup']['sessions'])):
+                if result['result'] in {'PASS', 'NOTIMPLEMENTED'} and (result['cleanup'].get('error') or not all(item['closed'] for item in result['cleanup']['streams']) or any(item['state'] == 'archive-refused' for item in result['cleanup']['sessions'])):
                     result['result'], result['detail'] = 'FAIL', 'supported close/archive cleanup incomplete; see cleanup.json'
                 results.append(result)
                 save(run / 'results.json', results)
