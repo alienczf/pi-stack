@@ -232,9 +232,9 @@ def validate_authority(sources: dict[str, dict], recovery: RecoveryInput) -> tup
             raise ValueError("legacy marker must come from current or ancestor Git STREAM")
         marker = span(marker_span)
         original = raw_source(sources[source])
-        if (len(marker.splitlines()) != 1 or (marker_span["start"] and original[marker_span["start"] - 1:marker_span["start"]] != b"\n")
+        if (marker_span["start"] != 0 or len(marker.splitlines()) != 1
                 or (marker_span["end"] < len(original) and not marker.endswith(b"\n"))):
-            raise ValueError("legacy marker must be an exact complete source line")
+            raise ValueError("legacy marker must be the exact complete first source line")
         if marker.decode("utf-8").rstrip("\r\n") not in literal_lines(original, marker_span["start"], marker_span["end"], standalone=True):
             raise ValueError("legacy marker is quoted or fenced, not an active source line")
         dated = artifacts.has_ratified_authority_line(marker.decode("utf-8"))

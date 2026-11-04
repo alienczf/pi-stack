@@ -29,7 +29,7 @@ Supplemental sources never enter the current-source retirement collection. Their
 
 ## Legacy authority
 
-`marker` is an exact complete line from current `STREAM.md` or a supplemental ancestor Git STREAM. `evidence` is a nonempty array of corroborating spans. Each span contains exactly these fields.
+`marker` is the exact complete first line of current `STREAM.md` or a supplemental ancestor Git STREAM. `evidence` is a nonempty array of corroborating spans. Each span contains exactly these fields.
 
 - `source` names a current or supplemental source.
 - `start` and `end` are integer, half-open UTF-8 byte offsets.
