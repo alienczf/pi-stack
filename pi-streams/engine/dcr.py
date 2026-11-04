@@ -228,12 +228,14 @@ def terminal_checkpoint(resolved: Coordinator, acknowledgement: str) -> tuple[st
 
 def completion_after(resolved: Coordinator, compaction: str) -> str | None:
     completed = None
-    for entry, _ in native_branch(resolved):
+    branch = native_branch(resolved)
+    retries = sessionlog.retry_dispositions(list(reversed(branch)), resolved.row.session, resolved.row.worktree)
+    for entry, _ in branch:
         if entry["id"] == compaction:
             return completed
         message = entry.get("message")
         if isinstance(message, dict) and message.get("role") == "assistant":
-            if message.get("stopReason") == "error":
+            if message.get("stopReason") == "error" and retries.get(entry["id"], {}).get("state") != "resolved":
                 raise StreamsError("Native RESUME contains an assistant error")
             if completed is None and message.get("stopReason") == "stop":
                 completed = entry["id"]
@@ -300,6 +302,18 @@ def step(index: Path, project: Project, stream: str, stream_dir: Path, resolved:
         save(stream_dir, op)
         return True
     token, allowed = piweb.automatic_admission(status, sid, resolved.row.worktree, "wake")
+    if op is not None and op.phase == "blocked" and op.detail == "Native RESUME contains an assistant error":
+        native = piweb.maintenance_status(op.cwd, sid, op.id, original=op.recovery_original)
+        resume = native.get("resume")
+        if (native.get("state") != "resumed" or native.get("generation") != op.automatic["generation"]
+            or native.get("entryId") != op.checkpoint_entry or native.get("compactionEntryId") != op.compaction_entry
+            or native.get("compactionSha256") != op.compaction_sha256 or native.get("inputs") or native.get("inputSequence")
+            or not isinstance(resume, dict) or resume.get("state") != "admitted"
+            or resume.get("deliveryId") != f"{op.id}:resume" or resume.get("text") != op.resume_text
+            or resume.get("potetoGoal") != op.resume_goal):
+            return True
+        op.phase, op.detail = "resuming", "Reconciled exact admitted RESUME; no redispatch."
+        save(stream_dir, op)
     if op is not None and op.phase == "blocked":
         legacy_gate = "below 150000 tokens" in op.detail and not op.resume_text and op.checkpoint_entry
         if not legacy_gate:

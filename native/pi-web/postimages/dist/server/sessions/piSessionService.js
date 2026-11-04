@@ -1994,7 +1994,7 @@ export class PiSessionService {
     }
     assertRecoveryContinuationCheckpoint(session, entryId) {
         this.assertQuiescentCheckpoint(session, entryId);
-        if (this.rotationSafety(session).callbackOwners.some(owner => owner.kind !== "none"))
+        if (this.rotationSafety(session).callbackOwners.some(owner => !["none", "safe-to-drop"].includes(owner.kind) || !Array.isArray(owner.owners) || owner.owners.length !== 0))
             throw new AutomaticAdmissionRejected("Pending callback ownership must settle before SYNC continuation");
         if (this.maintenance?.store.current({ id: session.sessionId, cwd: session.sessionManager.getCwd() }) !== undefined)
             throw new AutomaticAdmissionRejected("Existing compaction/input ownership must be reconciled before SYNC continuation");
