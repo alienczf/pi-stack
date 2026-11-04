@@ -259,6 +259,10 @@ def _heredoc_submission(body: str) -> bool:
     return False
 
 
+def _split_string_submission(value: str) -> bool:
+    return re.fullmatch(r"[-A-Za-z0-9_./=+,:@% ]*", value) is None or shell_submission(value)
+
+
 def shell_submission(command: object) -> bool:
     """Retain explicit detached launches, not uncertainty about foreground syntax."""
     if not isinstance(command, str):
@@ -366,7 +370,7 @@ def shell_submission(command: object) -> bool:
         if kind != "word" or not at_command:
             continue
         if operand:
-            if operand == "script" and shell_submission(value):
+            if operand == "script" and _split_string_submission(value):
                 return True
             operand = None
             continue
@@ -384,7 +388,7 @@ def shell_submission(command: object) -> bool:
                 attached = value[len(option) + (1 if option.startswith("--") else 0):] if len(value) > len(option) else None
                 if attached is None:
                     operand = "script" if script else "argument"
-                elif script and shell_submission(attached):
+                elif script and _split_string_submission(attached):
                     return True
                 continue
             if value not in flags:

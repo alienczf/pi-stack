@@ -82,6 +82,9 @@ function heredocSubmission(body) {
     }
     return false;
 }
+function splitStringSubmission(value) {
+    return !/^[-A-Za-z0-9_.\/=+,:@% ]*$/.test(value) || shellSubmission(value);
+}
 function shellSubmission(command) {
     if (typeof command !== "string") return true;
     const operators = ["&>>", "&>", "&&", "||", "|&", ">>", "<>", ">|", ">&", "<&", ">", "<", ";", "|", "&", "\n"];
@@ -169,7 +172,7 @@ function shellSubmission(command) {
         if (redirectOperand) { redirectOperand = false; continue; }
         if (kind !== "word" || !atCommand) continue;
         if (operand) {
-            if (operand === "script" && shellSubmission(word)) return true;
+            if (operand === "script" && splitStringSubmission(word)) return true;
             operand = undefined;
             continue;
         }
@@ -183,7 +186,7 @@ function shellSubmission(command) {
                 const script = invoker === "env" && ["-S", "--split-string"].includes(option);
                 const attached = word.length > option.length ? word.slice(option.length + (option.startsWith("--") ? 1 : 0)) : undefined;
                 if (attached === undefined) operand = script ? "script" : "argument";
-                else if (script && shellSubmission(attached)) return true;
+                else if (script && splitStringSubmission(attached)) return true;
                 continue;
             }
             if (!spec.flags.includes(word)) return true;
