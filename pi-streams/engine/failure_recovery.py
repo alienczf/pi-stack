@@ -9,7 +9,7 @@ from pathlib import Path
 
 from engine import StreamsError, artifacts, dcr, delivery, drive, failure, piweb, sessionlog
 from engine.project import _write
-from engine.threads import Coordinator, Status, _native_session, dump_threads, load_threads, require_ratified
+from engine.threads import Coordinator, Status, _native_session, designated_coordinator, dump_threads, load_threads, require_ratified
 
 
 @dataclass
@@ -46,7 +46,7 @@ def load(stream: Path, sid: str) -> Recovery | None:
         return None
     try:
         op = Recovery(**value)
-        if op.session != sid or not op.id or not Path(op.cwd).is_absolute() or op.phase not in {"fork-sending", "forked", "binding", "bound", "preparing", "dcr", "observed", "retiring", "retired", "clearing", "complete", "cancelled", "uncertain"} or not isinstance(op.request, dict):
+        if op.session != sid or not op.id or not Path(op.cwd).is_absolute() or op.phase not in {"fork-refused", "fork-sending", "forked", "binding", "bound", "preparing", "dcr", "observed", "retiring", "retired", "clearing", "complete", "cancelled", "uncertain"} or not isinstance(op.request, dict):
             raise ValueError("Recovery identity/phase changed")
         return op
     except (TypeError, ValueError) as exc:
@@ -76,10 +76,10 @@ def _result(stream: Path, op: Recovery, episode: failure.Episode, native) -> dic
         return None
     entry, raw = matches[-1]
     result = entry["data"]
-    notice = episode.ratification
-    expected = {"version": 1, "id": op.id, "episode": op.episode, "originalSessionId": op.session, "cwd": op.cwd, "root": str(stream.resolve()), "stream": stream.name, "checkpoint": op.request["expected"]["checkpoint"], "failure": op.request["expected"]["failure"], "intentSha256": _hash(op.request), "noticeId": notice["noticeId"], "provenance": notice["provenance"], "instructions": notice["instructions"]}
+    authorization = {"authority": op.request["authority"]}
+    expected = {"version": 1, "id": op.id, "episode": op.episode, "originalSessionId": op.session, "cwd": op.cwd, "root": str(stream.resolve()), "stream": stream.name, "checkpoint": op.request["expected"]["checkpoint"], "failure": op.request["expected"]["failure"], "intentSha256": _hash(op.request), **authorization}
     if any(result.get(key) != value for key, value in expected.items()) or result.get("state") not in {"fork-sending", "forked", "cancelled", "uncertain"} or not isinstance(result.get("generation"), str):
-        raise StreamsError("Native fork result changed exact request/notice/target evidence")
+        raise StreamsError("Native fork result changed exact request/target evidence")
     op.receipt = {"entryId": entry["id"], "sha256": hashlib.sha256(raw).hexdigest()}
     return result
 
@@ -120,15 +120,78 @@ def _verify_fork(op: Recovery, original):
     return native
 
 
+def resume_parked_locked(stream: Path, at: str, *, index: Path, project, operator_resume: bool = False) -> list[dict]:
+    require_ratified(stream)
+    if drive.is_paused(stream) and not operator_resume:
+        return [{"stream": stream.name, "state": "stopped", "detail": "Explicit local off remains authoritative"}]
+    results = []
+    rows = sorted(load_threads(stream / "threads.tsv"), key=lambda row: row.role != "coordinator")
+    for row in rows:
+        if row.status not in {Status.active, Status.waiting_quota, Status.parked}:
+            continue
+        operations = [load(stream, sid) for sid in artifacts._read_tick_data(stream).get("failure_recoveries", {})]
+        if any(op is not None and op.fork == row.session and op.phase != "complete" for op in operations):
+            continue
+        try:
+            if row.role == "coordinator" and load(stream, row.session) is None and designated_coordinator(load_threads(stream / "threads.tsv")) != row:
+                raise StreamsError("Explicit resume preserves the designated coordinator")
+            native = _native_session(row.session, Path(row.worktree))
+            piweb.register_stream_failure(row.session, row.worktree, stream, native.status)
+            episode = failure.observe(stream, row.session, row.worktree, native.info, native.status, at, row.model, row.thinking)
+            explicit = operator_resume
+            if episode is not None and episode.kind == "content-policy":
+                results.append({"session": row.session, "state": "policy-blocked", "detail": failure.POLICY_BLOCKER})
+                continue
+            if episode is None or episode.state != "parked":
+                if explicit and not drive.load(stream).enabled and row.role == "coordinator":
+                    piweb.require_settings(native.status, row.model, row.thinking)
+                    drive.enable(stream, Coordinator(row, native))
+                continue
+            if explicit:
+                branch = _branch(native, row.session, row.worktree)
+                failed = next((i for i, (entry, _) in enumerate(branch) if entry["id"] == episode.failure_entry), None)
+                if failed is None or any(entry.get("message", {}).get("role") == "user" for entry, _ in branch[failed+1:]) or episode.uncertain_jobs:
+                    raise StreamsError("Explicit resume preserves newer input and unresolved external effects")
+                operation = load(stream, row.session)
+                if operation is None:
+                    token, allowed = piweb.automatic_admission(native.status, row.session, row.worktree, "recovery")
+                    if allowed:
+                        raise StreamsError("Explicit parked resume requires disabled original admission")
+                    if episode.kind != "usage-limit" and native.status.get("failureBoundary", {}).get("parking") != {"generation": token["generation"], "owned": True}:
+                        piweb.resume_failure(row.session, row.worktree, {**native.status["failureBoundary"], "generation": token["generation"]})
+                        native = _native_session(row.session, Path(row.worktree))
+                        episode.authority, episode.continuation = None, None
+                    episode.cancelled = False
+                    if episode.kind == "usage-limit":
+                        episode.pause_owned, episode.pause_generation = True, token["generation"]
+                    failure.save(stream, episode)
+                    episode = failure.observe(stream, row.session, row.worktree, native.info, native.status, at, row.model, row.thinking)
+                    if episode.kind != "usage-limit" and episode.authority is None:
+                        raise StreamsError("Explicit resume has no native good-prefix recovery ownership")
+                if row.role == "coordinator" or not drive.load(stream).enabled:
+                    drive.request_resume(stream, row.session)
+            if episode.kind == "usage-limit":
+                failure.step(stream, episode, native.status, at, native.info)
+                results.append({"session": row.session, "state": episode.state, "phase": episode.retry_state})
+            else:
+                results.append(advance_locked(stream, row.session, episode.id, at, index=index, project=project))
+        except (StreamsError, OSError) as exc:
+            results.append({"session": row.session, "state": "pending", "detail": str(exc)})
+    return results
+
+
 def advance_locked(stream: Path, sid: str, episode_id: str, at: str, *, index: Path | None = None, project=None) -> dict:
     require_ratified(stream)
+    episode = failure.load(stream, sid)
+    if episode is not None and episode.kind == "content-policy":
+        raise StreamsError(failure.POLICY_BLOCKER)
     saved = load(stream, sid)
     if saved is not None and saved.phase in {"retiring", "retired", "clearing", "complete"}:
         episode = failure.load(stream, sid)
         if saved.episode != episode_id or episode is None or episode.id != episode_id or episode.recovery_id != saved.id:
             raise StreamsError("Retirement does not own this exact episode")
         if saved.phase != "complete":
-            if not isinstance(episode.checkpoint, dict) or not isinstance(episode.ratification, dict) or episode.state not in {"parked", "recovered"}:
+            if not isinstance(episode.checkpoint, dict) or not isinstance(episode.authority, dict) or episode.state not in {"parked", "recovered"}:
                 raise StreamsError("Retirement proof is unavailable; original and marker remain owned")
             _retire(stream, saved, episode)
         return asdict(saved)
@@ -137,15 +200,19 @@ def advance_locked(stream: Path, sid: str, episode_id: str, at: str, *, index: P
     episode = failure.load(stream, sid)
     rows = load_threads(stream / "threads.tsv")
     originals = [row for row in rows if row.session == sid]
-    if episode is None or episode.id != episode_id or episode.kind == "usage-limit" or episode.state != "parked" or episode.ratification is None or episode.checkpoint is None or len(originals) != 1 or not episode.recovery_id:
-        raise StreamsError("Recovery needs the exact ratified parked episode and registry original")
+    if episode is None or episode.id != episode_id or episode.kind == "usage-limit" or episode.state != "parked" or episode.checkpoint is None or len(originals) != 1:
+        raise StreamsError("Recovery needs the exact parked episode, good checkpoint and registry original")
     row = originals[0]
     native = _native_session(sid, Path(episode.cwd))
     piweb.require_settings(native.status, episode.authorized_model, episode.authorized_thinking)
-    if native.status.get("failureRatificationConfigured") is not True or native.status.get("failureForkSupport") != "ratified-prefix-v1":
-        raise StreamsError("Authenticated exact fork intake is unavailable; original remains parked")
     failure.observe(stream, sid, episode.cwd, native.info, native.status, at, row.model, row.thinking)
     episode = failure.load(stream, sid)
+    if episode.kind == "content-policy":
+        raise StreamsError(failure.POLICY_BLOCKER)
+    if not episode.recovery_id or episode.authority is None or native.status.get("failureForkSupport") != "engine-prefix-v1" or native.status.get("engineFailureRecoverySupport") != "enrolled-prefix-v1":
+        raise StreamsError("Exact native recovery ownership is unavailable; original remains parked")
+    if not piweb.recovery_readiness(sid, episode.cwd, native.status, episode.kind):
+        raise StreamsError("Native same-provider readiness is not yet restored; keep this owned recovery pending")
     if episode.uncertain_jobs or episode.cancelled:
         raise StreamsError("Uncertain jobs/cancellation still own the original; no replay or replacement")
     with sessionlog.regular_reader(stream / "failures" / (sid + ".lastgood")) as marker:
@@ -155,14 +222,14 @@ def advance_locked(stream: Path, sid: str, episode_id: str, at: str, *, index: P
     failure_at = next((i for i, (entry, _) in enumerate(entries) if entry["id"] == episode.failure_entry), None)
     if failure_at is None or any(entry.get("message", {}).get("role") == "user" for entry, _ in entries[failure_at+1:]):
         raise StreamsError("Later accepted input must be reconciled; preserve the original")
-    proof = episode.ratification
-    record = json.loads(sessionlog.read_record(Path(native.info["path"]), sid, proof["entryId"], proof["sha256"]).raw)
-    if record.get("customType") != "pi-web.failure-ratification" or any(record.get("data", {}).get(key) != proof[key] for key in ("version", "id", "noticeId", "provenance", "instructions", "generation", "target")) or not any(entry["id"] == proof["entryId"] for entry, _ in entries):
-        raise StreamsError("Ratification receipt is not on the current original branch")
+    enrolled = failure.enrolled_authority(stream, sid, episode.cwd, Path(native.info["path"]), native.status["rotationSafety"]["entryId"], native.status.get("failureBoundary"), native.status, episode.pause_generation)
+    expected_continuation = None if enrolled is None else failure.policy_continuation(stream, episode, row.role) if episode.kind == "content-policy" else enrolled[1]
+    if enrolled is None or enrolled[0] != episode.authority or enrolled[1]["role"] != row.role or not episode.pause_owned or episode.continuation is None or any(expected_continuation[key] != episode.continuation.get(key) for key in expected_continuation if key != "stateSha256"):
+        raise StreamsError("Saved engine recovery authority or bounded assignment changed")
     op = load(stream, sid)
     starting_phase = None if op is None else op.phase
     token, allowed = piweb.automatic_admission(native.status, sid, episode.cwd, "recovery")
-    expected_generation = proof["generation"] if op is None or op.result is None else op.result["generation"]
+    expected_generation = episode.pause_generation if op is None or op.result is None else op.result["generation"]
     if op is not None and op.result is None:
         result = _result(stream, op, episode, native)
         if result is not None:
@@ -171,14 +238,28 @@ def advance_locked(stream: Path, sid: str, episode_id: str, at: str, *, index: P
             expected_generation = result["generation"]
     if allowed or token["generation"] != expected_generation:
         raise StreamsError("Newer original stop/input superseded recovery")
-    if op is None:
+    if op is None or op.phase == "fork-refused":
         from engine.replacement import _idle
         _idle(Coordinator(row, native))
-        if row.status not in (Status.active, Status.waiting_quota):
+        if row.status not in (Status.active, Status.waiting_quota, Status.parked):
             raise StreamsError("Original registry is not available for scoped recovery")
-        op = Recovery(episode.recovery_id, sid, episode.id, episode.cwd, {"cwd": episode.cwd, "id": episode.recovery_id, "episode": episode.id, "expected": {**native.status["failureBoundary"], "generation": token["generation"]}, "ratification": {key: proof[key] for key in ("entryId", "sha256")}})
+        if row.role == "coordinator" and designated_coordinator(rows) != row:
+            raise StreamsError("Recovery preserves the designated coordinator; no second active coordinator")
+        authorization = {"authority": episode.authority, "continuation": episode.continuation}
+        request = {"cwd": episode.cwd, "id": episode.recovery_id, "episode": episode.id, "expected": {**native.status["failureBoundary"], "generation": token["generation"]}, **authorization}
+        if op is not None and op.request != request:
+            raise StreamsError("Refused recovery intent was superseded; preserve its exact journal")
+        op = op or Recovery(episode.recovery_id, sid, episode.id, episode.cwd, request)
+        op.phase = "fork-sending"
         save(stream, op)
-        response = piweb.fork_failure(sid, op.cwd, op.request)
+        try:
+            response = piweb.fork_failure(sid, op.cwd, op.request)
+        except piweb.RecoveryRefused as exc:
+            if exc.receipt != {"state": "refused-before-effect", "id": op.id, "intentSha256": _hash(op.request)}:
+                raise StreamsError("Recovery refusal changed exact admission identity") from exc
+            op.phase, op.detail = "fork-refused", str(exc)
+            save(stream, op)
+            raise
         native = _native_session(sid, Path(op.cwd))
         op.result = _result(stream, op, episode, native)
         if op.result != response:
@@ -207,6 +288,8 @@ def advance_locked(stream: Path, sid: str, episode_id: str, at: str, *, index: P
         if live or fresh["generation"] != op.result["generation"]:
             raise StreamsError("Newer stop/input superseded verified fork binding")
     if op.phase == "forked":
+        if row.role == "coordinator" and designated_coordinator(rows) != row:
+            raise StreamsError("Recovery binding preserves the designated coordinator")
         op.fork, op.fork_file = op.result["forkSessionId"], op.result["forkFile"]
         if any(item.session == op.fork for item in rows):
             raise StreamsError("Returned SID already has a registry owner")
@@ -244,6 +327,13 @@ def advance_locked(stream: Path, sid: str, episode_id: str, at: str, *, index: P
 def _unresolved(stream: Path, op: Recovery, episode: failure.Episode) -> None:
     if drive.is_paused(stream) or episode.cancelled or episode.uncertain_jobs:
         raise StreamsError("Newer local stop, cancellation or uncertain jobs preserve the failure marker")
+    for item in delivery.receipts(stream):
+        if item["session"] != op.session or item["state"] != "prepared" or item.get("origin") != "drive" or item.get("control", {}).get("state") != "prepared" or item.get("automatic", {}).get("cwd") != op.cwd or item["automatic"].get("sessionId") != op.session:
+            continue
+        unsent = delivery._get(stream, item["id"])
+        unsent.state, unsent.control.state = "blocked", "superseded"
+        unsent.detail = f"Prepared original drive intent was never admitted; superseded by verified recovery {op.id}. Exact original body is retained without transport."
+        delivery._save(stream, unsent)
     if any(item["session"] == op.session and item["state"] not in {"applied", "blocked"} for item in delivery.receipts(stream)):
         raise StreamsError("An unresolved original delivery still owns its evidence/input")
     rows = load_threads(stream / "threads.tsv")
@@ -296,7 +386,9 @@ def _retirement_cache(op: Recovery, episode: failure.Episode, receipt: dict) -> 
         raise StreamsError(f"Retained native source is malformed: {exc}") from exc
     if digest != op.source_sha256 or digest != receipt.get("sourceSha256") or header.get("type") != "session" or header.get("id") != op.session or header.get("cwd") != op.cwd:
         raise StreamsError("Retained original source hash or identity changed")
-    evidence = [(episode.failure_entry, episode.failure_sha256), (episode.checkpoint["entryId"], episode.checkpoint["sha256"]), (episode.ratification["entryId"], episode.ratification["sha256"])]
+    evidence = [(episode.failure_entry, episode.failure_sha256), (episode.checkpoint["entryId"], episode.checkpoint["sha256"])]
+    if episode.authority is not None and receipt["operation"].get("authority") != episode.authority:
+        raise StreamsError("Retained engine recovery authority changed")
     if op.receipt is not None:
         evidence.append((op.receipt["entryId"], op.receipt["sha256"]))
     if any(records.get(identity) != digest for identity, digest in evidence):
@@ -405,6 +497,7 @@ def _retire(stream: Path, op: Recovery, episode: failure.Episode) -> None:
     data["failure_recoveries"][op.session] = asdict(op)
     data["failures"][op.session] = episode.public()
     artifacts._save_tick_data(stream, data)
+    drive.confirm_resume(stream, op.session, op.fork, op.cwd, op.generation)
 
 
 def resolve_fork(stream: Path, op: Recovery) -> Coordinator:
@@ -452,7 +545,10 @@ def _advance_dcr(stream: Path, op: Recovery, episode: failure.Episode, row, orig
         save(stream, op)
     if op.generation != token["generation"]:
         raise StreamsError("Saved recovery DCR generation changed")
-    current = dcr.prepare(index, stream.name, stream, fork, op.id, token, original=op.session, instructions=op.result["instructions"])
+    continuation = episode.continuation
+    if continuation is None and row.role != "coordinator":
+        continuation = {"role": row.role, "assignment": f"Retain this worker's bounded role. The exact saved input is {episode.saved_entry} SHA-256 {episode.saved_sha256} in original {op.session}. Read that evidence and existing handovers before task effects. If assignment scope cannot be established, park for coordinator reassignment."}
+    current = dcr.prepare(index, stream.name, stream, fork, op.id, token, original=op.session, continuation=continuation)
     if op.phase == "dcr":
         dcr.step(index, project, stream.name, stream, fork)
         current = dcr.load(stream, op.fork)

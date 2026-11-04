@@ -66,7 +66,7 @@ class DcrTests(TickCase):
             "entryId": "e2", "generation": operation["automatic"]["generation"],
             "markerEntryId": "native-marker", "instructions": operation["compact_instructions"],
             "state": state, "inputSequence": 0, "inputs": [], "compactionEntryId": None,
-            "compactionSha256": None, "resume": None,
+            "compactionSha256": None, "resume": None, "targetTokens": 150000, "tokensAfter": 5000,
         }
 
     def resumed_text(self, goal: str) -> str:
@@ -77,11 +77,35 @@ class DcrTests(TickCase):
             "Resolve the current objective in STATE Goals, falling back to its North Star.\n"
             "Open history/, context/ and its README index, checks/, or handover/ only on demand.\n"
             "Historical entries do not override current Goals or Rules.\n"
-            "Do not self-remedy environment/auth/resource failures or write new rules, skills,\n"
-            "or memory because of them. Park and append a Log entry via the engine;\n"
-            "the human repairs them.\n"
+            "Runtime failures use engine-owned recovery under the standing charter. Preserve stops,\n"
+            "newer input, unknown effects and bounded role. Never read tokens, repair credentials,\n"
+            "switch provider/model or replay rejected content. Record failures through the Log.\n"
             f"/poteto-mode {goal}"
         )
+
+    def test_legacy_saved_operation_keeps_ownership_without_retired_recovery_text(self) -> None:
+        operation = self.start()
+        data = self.state(self.stream)
+        data["dcr_operations"]["coord"]["recovery_instructions"] = "Retired recovery text must never become continuation input."
+        (self.stream / "log/tick-state.json").write_text(json.dumps(data))
+        self.routes(operation=operation)
+        observed = self.run_streams("status", "etl", "--json")
+        self.assertEqual(observed.returncode, 0, observed.stderr)
+        summary = json.loads(observed.stdout)["streams"][0]["maintenance"]
+        self.assertEqual(summary, [{"id": operation["id"], "session": "coord", "phase": "sync-admitted", "detail": "", "compactionEntry": ""}])
+        restored = dcr.load(self.stream, "coord")
+        self.assertEqual(restored.automatic, operation["automatic"])
+        self.assertEqual(restored.sync_text, operation["sync_text"])
+        dcr.save(self.stream, restored)
+        self.assertEqual(self.operation(), operation)
+
+    def test_unknown_saved_operation_fields_still_refuse(self) -> None:
+        self.start()
+        data = self.state(self.stream)
+        data["dcr_operations"]["coord"]["unrecognized_operation_field"] = True
+        (self.stream / "log/tick-state.json").write_text(json.dumps(data))
+        with self.assertRaisesRegex(StreamsError, "invalid saved DCR operation"):
+            dcr.load(self.stream, "coord")
 
     def test_exact_150k_trigger_coalesces_while_busy_and_never_replaces_sid(self) -> None:
         self.routes(tokens=149999)
@@ -148,6 +172,20 @@ class DcrTests(TickCase):
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertEqual(self.operation()["phase"], "complete")
         self.assertEqual([item[1] for item in self.stub.requests if item[0] == "POST"], ["/api/sessions/coord/maintenance/events/close"])
+
+    def test_compaction_receipt_without_below_target_context_never_sends_resume(self):
+        operation = self.ready(self.start())
+        native = self.backend(operation)
+        self.routes(streaming=False, leaf='e2', operation=operation, native=native)
+        self.assertEqual(self.tick('2026-10-06T12:05:00Z').returncode, 0)
+        self.write_log('coord', str(self.stream), reply('Earlier work'), reply(f"DCR SYNC ready: {operation['id']} {operation['ready_revision']}"), {'type': 'compaction', 'summary': 'Controlled engine contract receipt', 'firstKeptEntryId': 'e1', 'tokensBefore': 200000})
+        raw = Path(self.log_path('coord')).read_bytes().splitlines(keepends=True)[-1]
+        native.update(state='complete', compactionEntryId='e3', compactionSha256=hashlib.sha256(raw).hexdigest(), tokensAfter=150000)
+        self.routes(tokens=150000, streaming=False, leaf='e3', operation=operation, native=native)
+        self.assertEqual(self.tick('2026-10-06T12:06:00Z').returncode, 0)
+        self.assertEqual(self.operation()['phase'], 'blocked')
+        self.assertIn('below 150000', self.operation()['detail'])
+        self.assertFalse(any(item[1].endswith('/resume') for item in self.stub.requests))
 
     def checkpoint_fixture(self, acknowledgement: str, *, descendants: int = 1):
         assistant = {"type": "message", "id": "32fffa62", "parentId": None, "message": reply(acknowledgement)}

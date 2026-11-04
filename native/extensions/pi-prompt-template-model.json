@@ -1,0 +1,23 @@
+{
+  "id": "harness-heal-v1",
+  "packages": {
+    "package.json": {
+      "name": "pi-prompt-template-model",
+      "version": "0.12.2",
+      "sha256": "f020802c8319172c84124282d632257eb9deb78a54253c973873c79bf5752c6c"
+    }
+  },
+  "files": [
+    {
+      "path": "index.ts",
+      "before": "5c71f01db714330767b44ec8114e6f95d76a351dd66d9a0048f518a0cad42bd2",
+      "after": "823aa17a883b402672ec9c3cf3a2d333978e2aed558de42e5d25361b94d89fae",
+      "edits": [
+        {
+          "old": "\t\t\tstoredCommandCtx = ctx;\n\t\t},\n\t\texecuteCommand: executeToolCommand,\n\t});\n\n\tfunction getCurrentModel(ctx: Pick<ExtensionContext, \"model\">): Model<any> | undefined {\n",
+          "new": "\t\t\tstoredCommandCtx = ctx;\n\t\t},\n\t\texecuteCommand: executeToolCommand,\n\t});\n\n\tpi.registerCallbackOwnership?.(() => {\n\t\tconst facts = { chainActive, loop: loopState !== null, promptActive, restoreModel: previousModel !== undefined, restoreThinking: previousThinking !== undefined, pendingSkill: pendingSkillMessage !== undefined, compaction: compactionWait !== null || compactionReleaseTimer !== undefined || compactionFallbackTimer !== undefined, command: toolManager.hasQueuedCommand() };\n\t\tconst owners = Object.entries(facts).filter(([, active]) => active).map(([owner]) => owner);\n\t\treturn { kind: owners.length ? \"active\" : \"none\", revision: JSON.stringify(facts), owners };\n\t});\n\n\tfunction getCurrentModel(ctx: Pick<ExtensionContext, \"model\">): Model<any> | undefined {\n"
+        }
+      ]
+    }
+  ]
+}

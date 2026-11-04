@@ -491,11 +491,42 @@ resolve_node_tool() {
 	return 1
 }
 
-ensure_pi_web() {
-	if resolve_node_tool pi-web >/dev/null; then
+apply_native_overlay() {
+	if [[ "${PI_STACK_SKIP_NATIVE_OVERLAY:-}" == 1 ]]; then
+		printf 'Native overlay explicitly skipped. Native healing is not installed by this run.\n'
 		return 0
 	fi
-	printf 'npm install -g @jmfederico/pi-web --allow-scripts=node-pty\n'
+	if [[ "${PI_STACK_SKIP_PACKAGES:-}" == 1 && -z "${PI_STACK_NATIVE_ROOT:-}" ]]; then
+		printf 'Native overlay skipped with package effects. Set PI_STACK_NATIVE_ROOT for a disposable target.\n'
+		return 0
+	fi
+	local root="${PI_STACK_NATIVE_ROOT:-}"
+	if [[ -z "$root" ]]; then
+		local executable
+		executable="$(resolve_node_tool pi-web)"
+		root="$(dirname "$(dirname "$(readlink -f "$executable")")")"
+	fi
+	local extensions_root="${PI_STACK_NATIVE_EXTENSIONS_ROOT:-$agent/npm/node_modules}"
+	local names=() name
+	for name in pi-subagents pi-web-access pi-prompt-template-model pi-cursor-sdk pi-jupyter; do
+		if [[ -d "$extensions_root/$name" ]]; then names+=("$name"); fi
+	done
+	python3 "$here/scripts/apply-native-overlay.py" "$root" --check
+	for name in "${names[@]}"; do
+		python3 "$here/scripts/apply-native-overlay.py" "$extensions_root/$name" --extension "$name" --check
+	done
+	python3 "$here/scripts/apply-native-overlay.py" "$root"
+	for name in "${names[@]}"; do
+		python3 "$here/scripts/apply-native-overlay.py" "$extensions_root/$name" --extension "$name"
+	done
+}
+
+ensure_pi_web() {
+	if resolve_node_tool pi-web >/dev/null; then
+		apply_native_overlay
+		return 0
+	fi
+	printf 'npm install -g @jmfederico/pi-web@1.202607.3 --allow-scripts=node-pty\n'
 	printf 'pi-web install\n'
 	if [[ "${PI_STACK_SKIP_PACKAGES:-}" == 1 ]]; then
 		return 0
@@ -508,12 +539,13 @@ ensure_pi_web() {
 	# npm and pi-web start with #!/usr/bin/env node, and node sits beside npm.
 	local node_path
 	node_path="$(dirname "$npm"):$PATH"
-	PATH="$node_path" "$npm" install -g @jmfederico/pi-web --allow-scripts=node-pty
+	PATH="$node_path" "$npm" install -g @jmfederico/pi-web@1.202607.3 --allow-scripts=node-pty
 	local pi_web
 	if ! pi_web="$(resolve_node_tool pi-web)"; then
-		printf 'npm install -g @jmfederico/pi-web did not put pi-web on PATH\n' >&2
+		printf 'npm install -g @jmfederico/pi-web@1.202607.3 did not put pi-web on PATH\n' >&2
 		return 1
 	fi
+	apply_native_overlay
 	PATH="$node_path" "$pi_web" install
 }
 

@@ -29,8 +29,17 @@ class FailurePolicyTests(unittest.TestCase):
         unknown = failure.classify("openai-codex", "You have hit your ChatGPT usage limit.", "2026-10-06T12:00:00Z")
         self.assertEqual(unknown.reset_at, "")
 
+    def test_transient_patterns_are_distinct_from_terminal_model_errors(self):
+        for message in ("overloaded", "server busy", "ECONNRESET", "rate_limit", "too many requests", "429", "500", "502", "503", "504", "524", "service unavailable", "server error", "internal error", "provider returned error", "network error", "connection error", "connection refused", "connection lost", "other side closed", "fetch failed", "getaddrinfo", "ENOTFOUND", "EAI_AGAIN", "upstream connect", "reset before headers", "terminated"):
+            with self.subTest(message=message):
+                result = failure.classify("openai-codex", message, "2026-10-06T12:00:00Z")
+                self.assertEqual(result.kind, "transient")
+                self.assertFalse(result.automatic_retry, "only native AgentSession owns inference retry")
+        for message in ("insufficient_quota 429", "quota exceeded 503", "usage-limit 429", "usage limit 503", "usage_limit 429"):
+            self.assertEqual(failure.classify("openai-codex", message, "2026-10-06T12:00:00Z").kind, "usage-limit", message)
+
     def test_other_four_failure_classes_never_gain_an_automatic_readiness_retry(self):
-        cases = [("openai-codex", "Expired Codex login: session expired", False, "codex-login"), ("tool", "Tool login expired: unauthorized token", True, "tool-login"), ("engine", "ENOSPC: no space left on device", False, "resource"), ("openai-codex", "Other model 503 unavailable", False, "model-error")]
+        cases = [("openai-codex", "Expired Codex login: session expired", False, "codex-login"), ("tool", "Tool login expired: unauthorized token", True, "tool-login"), ("engine", "ENOSPC: no space left on device", False, "resource"), ("openai-codex", "Unclassified provider rejection", False, "model-error")]
         for provider, message, tool, expected in cases:
             with self.subTest(kind=expected):
                 result = failure.classify(provider, message, "2026-10-06T12:00:00Z", tool_error=tool)
@@ -38,11 +47,11 @@ class FailurePolicyTests(unittest.TestCase):
                 self.assertFalse(result.automatic_retry)
                 self.assertEqual(result.reset_at, "")
 
-    def test_reset_trial_requires_saved_step_notification_and_same_uncancelled_generation(self):
+    def test_reset_trial_requires_saved_step_and_same_uncancelled_generation_not_notification(self):
         episode = failure.Episode(id="episode-one", session="full-owned-sid", cwd="/private/owned", kind="usage-limit", code="usage_limit_reached", label="Codex usage limit", observed_at="2026-10-06T12:00:00Z", failure_entry="e3", failure_sha256="f" * 64, reset_at="2026-10-06T12:10:00Z", reset_source="provider-metadata", saved_entry="e2", saved_sha256="a" * 64, pause_generation="parked-generation", pause_owned=True)
         self.assertFalse(failure.retry_ready(episode, "2026-10-06T12:09:59Z", "parked-generation", False))
-        self.assertFalse(failure.retry_ready(episode, "2026-10-06T12:10:00Z", "parked-generation", False))
-        episode.notification = {"state": "delivered", "deliveryId": "offhost-message", "route": "verified-zf-dm-v1"}
+        self.assertTrue(failure.retry_ready(episode, "2026-10-06T12:10:00Z", "parked-generation", False))
+        episode.notification = {"state": "failed"}
         self.assertTrue(failure.retry_ready(episode, "2026-10-06T12:10:00Z", "parked-generation", False))
         self.assertFalse(failure.retry_ready(episode, "2026-10-06T12:10:00Z", "newer-stop-generation", False))
         episode.retry_reset = episode.reset_at
@@ -51,7 +60,7 @@ class FailurePolicyTests(unittest.TestCase):
         self.assertFalse(failure.retry_ready(episode, "2026-10-06T13:00:00Z", "parked-generation", False))
 
     def test_uncertain_job_or_cancelled_work_stays_parked_after_reset_and_readiness(self):
-        episode = failure.Episode(id="episode-jobs", session="full-owned-sid", cwd="/private/owned", kind="usage-limit", code="usage_limit_reached", label="Codex usage limit", observed_at="2026-10-06T12:00:00Z", failure_entry="e3", failure_sha256="f" * 64, reset_at="2026-10-06T12:10:00Z", reset_source="provider-metadata", saved_entry="e2", saved_sha256="a" * 64, pause_generation="parked-generation", pause_owned=True, notification={"state": "delivered", "deliveryId": "offhost-message", "route": "verified-zf-dm-v1"}, uncertain_jobs=[{"id": "submitted-job-42", "state": "unknown"}])
+        episode = failure.Episode(id="episode-jobs", session="full-owned-sid", cwd="/private/owned", kind="usage-limit", code="usage_limit_reached", label="Codex usage limit", observed_at="2026-10-06T12:00:00Z", failure_entry="e3", failure_sha256="f" * 64, reset_at="2026-10-06T12:10:00Z", reset_source="provider-metadata", saved_entry="e2", saved_sha256="a" * 64, pause_generation="parked-generation", pause_owned=True, uncertain_jobs=[{"id": "submitted-job-42", "state": "unknown"}])
         self.assertFalse(failure.retry_ready(episode, "2026-10-07T12:00:00Z", "parked-generation", False))
         episode.uncertain_jobs = []
         episode.cancelled = True

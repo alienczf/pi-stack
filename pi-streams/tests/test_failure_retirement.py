@@ -5,10 +5,14 @@ import copy
 import hashlib
 import json
 import os
+import sys
 from pathlib import Path
 
 import test_failure_dcr as cases
 from tick_support import TickCase, info, reply, row, status
+from support import ROOT
+
+sys.path.insert(0, str(ROOT / 'pi-streams'))
 
 
 class FailureRetirementTests(TickCase):
@@ -25,8 +29,8 @@ class FailureRetirementTests(TickCase):
     compacted = cases.FailureDcrTests.compacted
     observed = cases.FailureDcrTests.observed
 
-    def ready_to_retire(self, role="coordinator"):
-        self.start(role)
+    def ready_to_retire(self, role="coordinator", *, resume_from_off=False):
+        self.start(role, resume_from_off=resume_from_off)
         self.compacted()
         self.observed()
         self.assertEqual(self.advance().returncode, 0)
@@ -98,6 +102,47 @@ class FailureRetirementTests(TickCase):
         goals = [item for item in self.stub.requests if item[0] == "POST" and item[1].endswith("/control-goal")]
         self.assertEqual([item[1] for item in goals], ["/api/sessions/returned-fork/control-goal"])
 
+    def test_unsent_original_drive_intent_is_superseded_without_transport_before_retirement(self):
+        self.ready_to_retire()
+        from engine import delivery
+        token = {'sessionId': 'coi', 'cwd': str(self.cwd), 'generation': 'old-owned-generation', 'kind': 'wake'}
+        delivery.prepare_control_locked(self.stream, 'unsent-original', 'coi', 'Retain the authorized current goal', 'goal-revision', 'standing-drive', 1, token)
+        result = self.advance()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        retained = delivery._get(self.stream, 'unsent-original')
+        self.assertEqual((retained.state, retained.control.state), ('blocked', 'superseded'))
+        self.assertIn('never admitted', retained.detail)
+        self.assertEqual(self.state(self.stream)['failure_recoveries']['coi']['phase'], 'complete')
+        self.assertFalse(any(item[1] == '/api/sessions/coi/control-goal' for item in self.stub.requests))
+
+    def test_sending_original_drive_intent_still_blocks_retirement_as_uncertain_effect(self):
+        self.ready_to_retire()
+        from engine import delivery
+        token = {'sessionId': 'coi', 'cwd': str(self.cwd), 'generation': 'old-owned-generation', 'kind': 'wake'}
+        delivery.prepare_control_locked(self.stream, 'unknown-original', 'coi', 'Preserve unknown effect', 'goal-revision', 'standing-drive', 1, token)
+        record = delivery._get(self.stream, 'unknown-original')
+        record.state, record.control.state = 'sending', 'sending'
+        delivery._save(self.stream, record)
+        result = self.advance()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('unresolved original delivery', result.stderr)
+        self.assertEqual((delivery._get(self.stream, record.id).state, self.deletions), ('sending', 0))
+        self.assertTrue((self.stream / 'failures/coi.lastgood').exists())
+
+    def test_explicit_resume_from_drive_off_confirms_only_the_released_successor(self):
+        self.ready_to_retire(resume_from_off=True)
+        self.assertTrue(self.state(self.stream)['drive']['enabled'])
+        self.assertEqual(self.state(self.stream)['drive']['remote_state'], 'on-unconfirmed')
+        result = self.advance()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        drive = self.state(self.stream)['drive']
+        self.assertTrue(drive['enabled'])
+        self.assertEqual(drive['remote_state'], 'on-confirmed')
+        self.assertEqual(drive['remote_generation'], 'maintenance-generation')
+        self.assertEqual(drive['resume_original'], '')
+        self.assertEqual(self.state(self.stream)['failure_recoveries']['coi']['phase'], 'complete')
+        self.assertFalse(any(item[1] == '/api/sessions/coi/automatic-admission' and item[3].get('allowed') is True for item in self.stub.requests))
+
     def test_worker_retirement_never_changes_the_owned_worktree(self):
         self.ready_to_retire("research")
         before = (self.cwd / ".stream").read_bytes()
@@ -135,13 +180,13 @@ class FailureRetirementTests(TickCase):
         self.assertEqual((self.stream / "failures/coi.lastgood").read_bytes(), b"e4\n")
         self.assertEqual(self.deletions, 0)
 
-    def test_lost_ratification_proof_after_intent_does_not_retry_a_native_effect(self):
+    def test_lost_recovery_authority_after_intent_does_not_retry_a_native_effect(self):
         self.ready_to_retire()
         self.routes[-1] = ("POST", "/api/sessions/coi/failure-recovery/retire", 404, {"error": "Labelled unavailable receiving owner"})
         self.stub.set_routes(self.routes)
         self.assertNotEqual(self.advance().returncode, 0)
         data = self.state(self.stream)
-        data["failures"]["coi"]["ratification"] = None
+        data["failures"]["coi"]["authority"] = None
         (self.stream / "log/tick-state.json").write_text(json.dumps(data))
         self.stub.requests.clear()
         result = self.advance()

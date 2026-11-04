@@ -53,6 +53,26 @@ class DriveTests(TickCase):
         self.assertEqual(self.drive()["desired"]["goal"], self.goal)
         self.assertEqual((self.stream / "STATE.md").read_bytes(), before)
 
+    def test_finite_acceptance_retains_drive_and_delivers_next_authorized_objective(self):
+        self.enable()
+        run_id = self.drive()["run_id"]
+        first = self.tick("2026-10-06T12:00:00Z")
+        self.assertEqual(first.returncode, 0, first.stderr)
+        for goal in self.stub.control_goals.values():
+            goal["state"] = "ended"
+        self.write_log("coord", str(self.stream), reply("Finite acceptance verified. Standing goal remains unfinished."))
+        objective = self.tmp / "next-authorized-objective.txt"
+        objective.write_text("Verify the next already authorized unit.")
+        changed = self.run_streams("state", "objective", "etl", "--body-file", str(objective))
+        self.assertEqual(changed.returncode, 0, changed.stderr)
+        result = self.tick("2026-10-06T12:05:00Z")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.drive()["enabled"], self.drive()["run_id"]), (True, run_id))
+        self.assertEqual(self.goal_posts()[0][3]["text"], "/poteto-mode Verify the next already authorized unit.")
+        source = (self.stream / "STATE.md").read_text()
+        self.assertIn("### North Star\n<the single human-authorized outcome>", source)
+        self.assertNotIn("completed: true", source)
+
     def test_drive_off_disables_receiving_generation_without_completing_north_star(self):
         self.enable()
         before = (self.stream / "STATE.md").read_bytes()

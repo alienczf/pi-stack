@@ -153,22 +153,170 @@ def verify_good_checkpoint(path: Path, sid: str, cwd: str, leaf: object, checkpo
     raise StreamsError("good-turn checkpoint is absent or is not before the native failure")
 
 
-def failure_observation(path: Path, sid: str, cwd: str, leaf: object, failure_entry: str | None = None) -> dict | None:
+def retry_dispositions(branch: list[tuple[dict, bytes]], sid: str, cwd: str, native_retry: dict | None = None) -> dict[str, dict]:
+    anchor = next((entry.get("data", {}) for entry, _ in reversed(branch) if entry.get("customType") == "pi-web.stream-failure" and isinstance(entry.get("data"), dict) and entry["data"].get("sessionId") == sid), {})
+    parents = {}
+    for entry, _ in branch:
+        if entry.get("customType") != "pi-web.stream-failure":
+            continue
+        data = entry.get("data", {})
+        if not isinstance(data, dict):
+            raise StreamsError("Retry lineage metadata is malformed")
+        recovery = data.get("recovery", {})
+        if not isinstance(recovery, dict):
+            raise StreamsError("Retry lineage ownership is malformed")
+        if data.get("version") != 1 or data.get("cwd") != cwd or any(data.get(key) != anchor.get(key) for key in ("root", "stream")) or data.get("state") not in {"recovering", "watching"} or not isinstance(recovery.get("originalSessionId"), str) or not isinstance(recovery.get("id"), str):
+            continue
+        if data.get("sessionId") in parents and parents[data["sessionId"]] != recovery["originalSessionId"]:
+            raise StreamsError("Retry lineage changed its original session binding")
+        parents[data.get("sessionId")] = recovery["originalSessionId"]
+    lineage = {sid}
+    current = sid
+    while current in parents:
+        current = parents[current]
+        if current in lineage:
+            raise StreamsError("Retry lineage is cyclic")
+        lineage.add(current)
+    positions = {entry["id"]: (index, entry, raw) for index, (entry, raw) in enumerate(branch)}
+    result = {}
+    for index, (entry, _) in enumerate(branch):
+        if entry.get("customType") != "pi-web.stream-retry" or not isinstance(entry.get("data"), dict) or entry["data"].get("sessionId") not in lineage:
+            continue
+        data = entry["data"]
+        failed = data.get("failure", {})
+        identity = data.get("identity", {})
+        source = positions.get(failed.get("entryId"))
+        if source is None or source[0] >= index or data.get("version") != 1 or data.get("cwd") != cwd or hashlib.sha256(source[2]).hexdigest() != failed.get("sha256") or source[1].get("message", {}).get("stopReason") != "error" or any(not isinstance(identity.get(key), str) or not identity[key] for key in ("provider", "model", "thinking", "generation")) or any(identity[key] != source[1]["message"].get(key) for key in ("provider", "model")) or type(data.get("attempt")) is not int or data["attempt"] < 1 or data.get("delayMs") != 5000 or data.get("state") not in {"pending", "resolved", "terminal", "cancelled", "uncertain", "superseded"}:
+            raise StreamsError("Native retry disposition changed exact entry/hash or identity")
+        prior = result.get(failed["entryId"])
+        if prior is not None and (prior["identity"] != identity or prior["attempt"] != data["attempt"] or prior["state"] != "pending" and not (prior["state"] == "cancelled" and prior.get("reason") == "new-input" and data["state"] == "superseded") and prior != data):
+            raise StreamsError("Native retry disposition changed immutable settlement")
+        if data["state"] == "superseded":
+            target = positions.get(data.get("input", {}).get("entryId"))
+            if target is None or not source[0] < target[0] < index or hashlib.sha256(target[2]).hexdigest() != data["input"].get("sha256") or target[1].get("message", {}).get("role") != "user":
+                raise StreamsError("Superseded native retry has no exact newer admitted input")
+        if data["state"] == "resolved":
+            completion = data.get("completion", {})
+            target = positions.get(completion.get("entryId"))
+            if target is None or not source[0] < target[0] < index or hashlib.sha256(target[2]).hexdigest() != completion.get("sha256") or target[1].get("message", {}).get("role") != "assistant" or target[1]["message"].get("stopReason") == "aborted" or any(target[1]["message"].get(key) != identity[key] for key in ("provider", "model")) or any(value.get("message", {}).get("role") == "user" or value.get("type") in {"model_change", "thinking_level_change"} for value, _ in branch[source[0]+1:target[0]]):
+                raise StreamsError("Native retry has no exact ordered same-identity completion")
+        result[failed["entryId"]] = data
+    for data in result.values():
+        if data["state"] in {"cancelled", "uncertain"} or data["state"] == "pending" and data != native_retry:
+            raise StreamsError("Native retry ownership is cancelled, uncertain or unavailable; no replay")
+    return result
+
+
+def shell_submission(command: object) -> bool:
+    """Find lexical submission evidence, not proof that a script is read-only."""
+    if not isinstance(command, str):
+        return True
+    operators = ("&>>", "&>", "&&", "||", "|&", ">>", "<>", ">|", ">&", "<&", ">", "<", ";", "|", "&", "\n")
+    redirects = {"&>>", "&>", ">>", "<>", ">|", ">&", "<&", ">", "<"}
+    opaque_words = {"sbatch", "qsub", "nohup", "eval", "source", ".", "sh", "bash", "dash", "ksh", "zsh", "fish"}
+    tokens: list[tuple[str, str]] = []
+    word: str | None = None
+    index = 0
+    while index < len(command):
+        char = command[index]
+        if char == "\\":
+            index += 1
+            if index == len(command):
+                return True
+            if command[index] != "\n":
+                word = (word or "") + command[index]
+            index += 1
+            continue
+        if char in ("'", '"'):
+            quote = char
+            word = word or ""
+            index += 1
+            while index < len(command) and command[index] != quote:
+                char = command[index]
+                if quote == '"' and char in "$`":
+                    return True
+                if quote == '"' and char == "\\" and index + 1 < len(command) and command[index + 1] in '$`"\\\n':
+                    index += 1
+                    char = command[index]
+                    if char == "\n":
+                        index += 1
+                        continue
+                word += char
+                index += 1
+            if index == len(command):
+                return True
+            index += 1
+            continue
+        if char == "#" and word is None:
+            while index < len(command) and command[index] != "\n":
+                index += 1
+            continue
+        if char in "$`(){}\x00" or command.startswith(("<<", ";;", ";&"), index):
+            return True
+        operator = next((value for value in operators if command.startswith(value, index)), None)
+        if char in " \t" or operator is not None:
+            if word is not None:
+                tokens.append(("word", word))
+                word = None
+            if operator is not None:
+                tokens.append(("redirect" if operator in redirects else "operator", operator))
+                index += len(operator)
+            else:
+                index += 1
+            continue
+        word = (word or "") + char
+        index += 1
+    if word is not None:
+        tokens.append(("word", word))
+    target = False
+    for kind, text in tokens:
+        if target:
+            if kind != "word":
+                return True
+            target = False
+        elif kind == "redirect":
+            target = True
+        elif kind == "operator" and text == "&" or kind == "word" and text.rsplit("/", 1)[-1] in opaque_words:
+            return True
+    return target or not tokens or tokens[-1] in [("operator", value) for value in ("&&", "||", "|", "|&")]
+
+
+def failure_observation(path: Path, sid: str, cwd: str, leaf: object, failure_entry: str | None = None, *, native_retry: dict | None = None) -> dict | None:
     branch = branch_records(path, sid, cwd, leaf)
+    retries = retry_dispositions(branch, sid, cwd, native_retry)
     failed = None
     saved = ("", "")
     uncertain: dict[str, dict[str, str]] = {}
+    pending: set[str] = set()
     for entry, raw in branch:
+        if retries.get(entry["id"], {}).get("state") in {"resolved", "pending", "superseded"}:
+            continue
         message = entry.get("message")
         if not isinstance(message, dict):
             continue
         if message.get("role") == "user":
             saved = entry["id"], hashlib.sha256(raw).hexdigest()
+        if message.get("role") == "assistant" and message.get("stopReason") != "error":
+            content = message.get("content", [])
+            for part in content if isinstance(content, list) else []:
+                if not isinstance(part, dict) or part.get("type") != "toolCall":
+                    continue
+                identity = part.get("id")
+                if not isinstance(identity, str) or not identity or identity in pending:
+                    raise StreamsError("External-effect tool-call ownership is ambiguous")
+                pending.add(identity)
+                arguments = part.get("arguments", {})
+                command = arguments.get("command") if isinstance(arguments, dict) else None
+                if part.get("name") == "bash" and shell_submission(command):
+                    key = "unclassified-shell-submission:" + identity
+                    uncertain[key] = {"id": key, "state": "unknown"}
         if message.get("role") == "toolResult":
+            pending.discard(message.get("toolCallId"))
             details = message.get("details")
             if isinstance(details, dict):
                 job = details.get("jobId", details.get("job_id", details.get("externalJobId")))
                 if isinstance(job, str) and job:
+                    uncertain.pop("unclassified-shell-submission:" + str(message.get("toolCallId")), None)
                     status = str(details.get("status", "unknown"))
                     if status in ("completed", "succeeded", "failed", "cancelled"):
                         uncertain.pop(job, None)
@@ -186,8 +334,57 @@ def failure_observation(path: Path, sid: str, cwd: str, leaf: object, failure_en
                 continue
         failed = {"entryId": entry["id"], "sha256": hashlib.sha256(raw).hexdigest(), "provider": "tool" if is_tool else str(message.get("provider", "unknown")), "message": body if isinstance(body, str) else "", "toolError": is_tool, "savedEntryId": saved[0], "savedSha256": saved[1], "uncertainJobs": []}
     if failed is not None:
+        for identity in sorted(pending):
+            key = "unmatched-tool-call:" + identity
+            uncertain[key] = {"id": key, "state": "unknown"}
         failed["uncertainJobs"] = list(uncertain.values())
     return failed
+
+
+def control_checkpoint(path: Path, sid: str, cwd: str, leaf: object) -> dict:
+    branch = branch_records(path, sid, cwd, leaf)
+    entry, raw = branch[-1]
+    proof = read_record(path, sid, entry['id'], hashlib.sha256(raw).hexdigest())
+    with regular_reader(path) as handle:
+        lines = sum(1 for _ in handle)
+    return {'path': str(path), 'entryId': proof.entry_id, 'sha256': proof.sha256, 'lines': lines}
+
+
+def control_outcome(path: Path, sid: str, cwd: str, leaf: object, checkpoint: dict, goal: str) -> tuple[EvidenceRecord, dict] | None:
+    if checkpoint.get('path') != str(path) or type(checkpoint.get('lines')) is not int:
+        return None
+    branch = branch_records(path, sid, cwd, leaf)
+    positions = {entry['id']: index for index, (entry, _) in enumerate(branch)}
+    start = positions.get(checkpoint.get('entryId'))
+    if start is None:
+        return None
+    read_record(path, sid, checkpoint['entryId'], checkpoint['sha256'])
+    tail = branch[start + 1:]
+    users = [(entry, raw) for entry, raw in tail if entry.get('message', {}).get('role') == 'user']
+    if len(users) != 1:
+        return None
+    user, raw = users[0]
+    message = user['message']
+    content = message.get('content', [])
+    text = content if isinstance(content, str) else '\n'.join(part.get('text', '') for part in content if isinstance(part, dict) and part.get('type') == 'text')
+    if not text.startswith('<skill name="poteto-mode"') or not text.endswith('</skill>\n\n' + goal):
+        return None
+    owned = read_record(path, sid, user['id'], hashlib.sha256(raw).hexdigest())
+    if owned.line_number <= checkpoint['lines']:
+        return None
+    result = None
+    for entry, raw in branch[positions[user['id']] + 1:]:
+        message = entry.get('message', {})
+        if message.get('role') == 'assistant':
+            if message.get('stopReason') in {'error', 'aborted', 'length'}:
+                return None
+            if message.get('stopReason') == 'stop':
+                if result is not None:
+                    return None
+                result = read_record(path, sid, entry['id'], hashlib.sha256(raw).hexdigest())
+    if result is None or result.line_number <= owned.line_number:
+        return None
+    return result, {'userEntryId': owned.entry_id, 'userSha256': owned.sha256, 'assistantEntryId': result.entry_id, 'assistantSha256': result.sha256}
 
 
 def successful_control_completion(path: Path, sid: str, cwd: str, leaf: object, prefix: str, goal: str) -> bool:
@@ -248,17 +445,17 @@ def resume_observation(path: Path, sid: str, cwd: str, leaf: object, identity: s
     return {**observation, "userSha256": hashlib.sha256(owned_raw).hexdigest()}
 
 
-def last_assistant(path: Path) -> dict[str, object] | None:
+def last_assistant(path: Path, *, evidence: bool = False) -> dict[str, object] | None:
     try:
         with regular_reader(path) as handle:
-            return _scan_back(handle)
+            return _scan_back(handle, evidence=evidence)
     except FileNotFoundError:
         return None
     except OSError as exc:
         raise StreamsError(f"could not read {path}: {exc}") from exc
 
 
-def _scan_back(handle: BinaryIO) -> dict[str, object] | None:
+def _scan_back(handle: BinaryIO, *, evidence: bool = False) -> dict[str, object] | None:
     end = handle.seek(0, os.SEEK_END)
     pieces: list[bytes] = []
     while end > 0:
@@ -270,17 +467,17 @@ def _scan_back(handle: BinaryIO) -> dict[str, object] | None:
         cut = data.rfind(b"\n", 0, stop)
         while cut >= 0:
             pieces.append(data[cut + 1 : stop])
-            message = _assistant(b"".join(reversed(pieces)))
+            message = _assistant(b"".join(reversed(pieces)), evidence=evidence)
             if message is not None:
                 return message
             pieces = []
             stop = cut
             cut = data.rfind(b"\n", 0, stop)
         pieces.append(data[:stop])
-    return _assistant(b"".join(reversed(pieces)))
+    return _assistant(b"".join(reversed(pieces)), evidence=evidence)
 
 
-def _assistant(line: bytes) -> dict[str, object] | None:
+def _assistant(line: bytes, *, evidence: bool = False) -> dict[str, object] | None:
     # A line pi is still appending does not parse yet; the one before it counts.
     try:
         entry = json.loads(line)
@@ -290,5 +487,7 @@ def _assistant(line: bytes) -> dict[str, object] | None:
         return None
     message = entry.get("message")
     if isinstance(message, dict) and message.get("role") == "assistant":
+        if evidence:
+            return {"entryId": entry.get("id", ""), "sha256": hashlib.sha256(line).hexdigest(), "message": message}
         return message
     return None

@@ -17,16 +17,20 @@ class FailureDcrTests(TickCase):
     fork_response = recovery_cases.FailureRecoveryTests.fork_response
     advance = recovery_cases.FailureRecoveryTests.advance
 
-    def start(self, role="coordinator"):
+    def start(self, role="coordinator", *, resume_from_off=False):
         self.fixture(role, model="gpt-6.1-sol" if role != "coordinator" else "gpt-6-astra")
-        bound = self.advance()
+        if resume_from_off:
+            data = self.state(self.stream)
+            data['drive'] = {'enabled': False}
+            (self.stream / 'log/tick-state.json').write_text(json.dumps(data))
+        bound = self.run_streams('resume', 'etl', '--all-parked') if resume_from_off else self.advance()
         self.assertEqual(bound.returncode, 0, bound.stderr)
         self.native = None
         self.routes.append(("POST", "/api/sessions/coi/failure-recovery/maintenance", 200, self.maintenance))
         self.stub.set_routes(self.routes)
         sent = self.advance()
         self.assertEqual(sent.returncode, 0, sent.stderr)
-        self.assertIn("dcr_operations", self.state(self.stream), "Explicit ratified recovery must force DCR even below 150k")
+        self.assertIn("dcr_operations", self.state(self.stream), "Engine-owned recovery must force DCR even below 150k")
         self.op = self.state(self.stream)["dcr_operations"]["returned-fork"]
         self.assertEqual(self.op["phase"], "sync-admitted")
         return self.op
@@ -76,7 +80,7 @@ class FailureDcrTests(TickCase):
         with open(self.log_path("returned-fork"), "ab") as target:
             target.write(raw)
         self.fork_status["rotationSafety"]["entryId"] = "native-compaction"
-        self.native.update(state="complete", compactionEntryId="native-compaction", compactionSha256=hashlib.sha256(raw).hexdigest())
+        self.native.update(state="complete", compactionEntryId="native-compaction", compactionSha256=hashlib.sha256(raw).hexdigest(), targetTokens=150000, tokensAfter=5000)
         advanced = self.advance()
         self.assertEqual(advanced.returncode, 0, advanced.stderr)
         self.assertEqual(self.state(self.stream)["dcr_operations"]["returned-fork"]["phase"], "resuming")

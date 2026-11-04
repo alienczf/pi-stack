@@ -178,12 +178,19 @@ def designated_coordinator(rows: list[Thread]) -> Thread | None:
     active = [row for row in rows if row.role == "coordinator" and row.status is Status.active]
     if len(active) > 1:
         raise StreamsError("multiple active coordinator designations; explicit reconciliation required")
-    return active[0] if active else None
+    if active:
+        return active[0]
+    parked = [row for row in rows if row.role == "coordinator" and row.status in {Status.parked, Status.waiting_quota}]
+    if len(parked) > 1:
+        raise StreamsError("multiple parked coordinator designations; explicit reconciliation required")
+    return parked[0] if parked else None
 
 
 def _native_session(session_id: str, cwd: Path, listing: list[dict[str, object]] | None = None) -> NativeSession:
     items = piweb.list_sessions(str(cwd)) if listing is None else listing
     matches = [item for item in items if item.get("id") == session_id]
+    if not matches:
+        raise piweb.TerminalSession(session_id, "missing", f"session {session_id} has no unique exact native identity for cwd {cwd}")
     if len(matches) != 1:
         raise StreamsError(f"session {session_id} has no unique exact native identity for cwd {cwd}")
     info = matches[0]
@@ -191,13 +198,13 @@ def _native_session(session_id: str, cwd: Path, listing: list[dict[str, object]]
     if not isinstance(native_cwd, str) or Path(native_cwd).resolve() != cwd.resolve():
         raise StreamsError(f"session {session_id} native cwd does not match {cwd}")
     if info.get("archived") is True:
-        raise StreamsError(f"session {session_id} is archived; refusing to reopen it through status")
+        raise piweb.TerminalSession(session_id, "archived", f"session {session_id} is archived; refusing to reopen it through status")
     status = piweb.session_status(session_id)
     piweb.require_identity(status, session_id)
     return NativeSession(info, status)
 
 
-def resolve_coordinator(stream_dir: Path, rows: list[Thread] | None = None) -> Coordinator | None:
+def resolve_coordinator(stream_dir: Path, rows: list[Thread] | None = None, *, listings: dict | None = None) -> Coordinator | None:
     assert_artifacts_ready(stream_dir)
     rows = load_threads(stream_dir / "threads.tsv") if rows is None else rows
     row = designated_coordinator(rows)
@@ -206,6 +213,8 @@ def resolve_coordinator(stream_dir: Path, rows: list[Thread] | None = None) -> C
     if Path(row.worktree).resolve() != stream_dir.resolve():
         raise StreamsError(f"coordinator {row.session} registry cwd does not match {stream_dir}")
     listing = piweb.list_sessions(str(stream_dir))
+    if listings is not None:
+        listings[str(stream_dir)] = {item['id']: item for item in listing if isinstance(item.get('id'), str)}
     retired = {item.session for item in rows if item.role == "coordinator" and item.status is Status.archived}
     for item in listing:
         if item.get("id") in retired and item.get("archived") is not True:
@@ -335,7 +344,7 @@ def ensure_coordinator(project: Project, stream_dir: Path, *, opening_prompt: st
     sid, needs_opening = _resume_or_spawn(stream_dir, rows, stream_dir, "coordinator", [project.coordinator.model, project.coordinator.thinking, prompt], operation)
     if needs_opening:
         configured = piweb.configure_session(sid, project.coordinator.model, project.coordinator.thinking)
-        piweb.register_stream_failure(sid, str(stream_dir), stream_dir, configured, starting=True)
+        piweb.register_stream_failure(sid, str(stream_dir), stream_dir, configured, starting=True, role="coordinator", assignment=prompt)
         _send_start(stream_dir, sid, prompt)
     rows.append(_thread_row(sid, "coordinator", "", stream_dir, "", "", project.coordinator.model, project.coordinator.thinking))
     save_threads(path, rows)
@@ -383,8 +392,10 @@ def _one_stream(stream_id: str, stream_dir: Path) -> dict[str, object]:
         ratified = is_ratified((stream_dir / "STREAM.md").read_text(encoding="utf-8"))
     rows = load_threads(stream_dir / "threads.tsv")
     counts = {name: 0 for name in ("active", "waiting_quota", "done", "archived")}
-    coordinator = resolve_coordinator(stream_dir, rows)
-    if coordinator is None:
+    from engine import terminal_sessions
+    terminal = {row.session for row in rows if terminal_sessions.load(stream_dir, row.session, row.worktree) is not None}
+    coordinator = resolve_coordinator(stream_dir, [row for row in rows if row.session not in terminal])
+    if coordinator is None and not any(row.role == "coordinator" and (row.status in {Status.done, Status.archived} or row.session in terminal) for row in rows):
         raise StreamsError(f"stream {stream_id} has no designated active coordinator")
     threads: list[Thread] = []
     for row in rows:
@@ -392,14 +403,14 @@ def _one_stream(stream_id: str, stream_dir: Path) -> dict[str, object]:
             continue
         counts[row.status.value] = counts.get(row.status.value, 0) + 1
         threads.append(row)
-    session = coordinator.native.status
-    coord_state = _coordinator_state(coordinator.row.session, session)
-    coord_cost = _as_cost(session["cost"])
+    session = coordinator.native.status if coordinator is not None else {}
+    coord_state = _coordinator_state(coordinator.row.session, session) if coordinator is not None else None
+    coord_cost = _as_cost(session.get("cost")) if coordinator is not None else 0
     # pi-web opens a runtime to answer status for an idle session, so finished
     # threads are counted but not queried.
     thread_cost: int | float = 0
     for row in threads:
-        if row.status not in (Status.active, Status.waiting_quota):
+        if row.status not in (Status.active, Status.waiting_quota) or row.session in terminal:
             continue
         session = piweb.session_status(row.session)
         thread_cost += _as_cost(session.get("cost"))
@@ -425,9 +436,6 @@ def _one_stream(stream_id: str, stream_dir: Path) -> dict[str, object]:
     parked = failure_receipts(stream_dir)
     if parked:
         result["failures"] = parked
-    if "drive" in artifacts._read_tick_data(stream_dir):
-        from engine.drive import public as drive_status
-        result["drive"] = drive_status(stream_dir)
     if canonical:
         result["path"] = str(stream_dir)
         result["threadSessions"] = [
@@ -439,7 +447,36 @@ def _one_stream(stream_id: str, stream_dir: Path) -> dict[str, object]:
 
 def status_report(index: Path, stream_id: str | None) -> dict[str, object]:
     rows = stream_rows(index, stream_id)
-    return {"streams": [_one_stream(row.id, Path(row.path)) for row in rows]}
+    from engine.drive import public as drive_status
+
+    streams = []
+    for row in rows:
+        stream_dir = Path(row.path)
+        try:
+            result = _one_stream(row.id, stream_dir)
+        except Exception as exc:
+            result = {
+                "id": row.id,
+                "path": str(stream_dir),
+                "error": {"type": type(exc).__name__, "message": str(exc)},
+                "ratified": None,
+                "coordinator": None,
+                "threads": None,
+                "coordinatorCostShare": None,
+            }
+        try:
+            if not stream_dir.is_dir():
+                raise StreamsError(f"stream directory is unavailable: {stream_dir}")
+            result["drive"] = {**drive_status(stream_dir), "known": True}
+        except Exception as exc:
+            result["drive"] = {
+                "known": False,
+                "enabled": None,
+                "remote_state": "unknown",
+                "error": {"type": type(exc).__name__, "message": str(exc)},
+            }
+        streams.append(result)
+    return {"streams": streams}
 
 
 def format_status(report: dict[str, object]) -> str:
@@ -450,32 +487,38 @@ def format_status(report: dict[str, object]) -> str:
     for stream in streams:
         if not isinstance(stream, dict):
             continue
-        counts = stream["threads"]
-        if not isinstance(counts, dict):
-            continue
-        counted = ",".join(f"{name}={counts[name]}" for name in ("active", "waiting_quota", "done", "archived"))
-        share = stream["coordinatorCostShare"]
-        share_text = "-" if share is None else str(share)
-        ratified = "yes" if stream["ratified"] else "no"
-        coord = stream["coordinator"]
-        if not isinstance(coord, dict):
-            lines.append(f"{stream['id']}\tratified={ratified}\t-\tthreads={counted}\tshare={share_text}")
-            continue
-        usage = coord["contextUsage"]
-        tokens = usage.get("tokens") if isinstance(usage, dict) else None
-        if tokens is None:
-            tokens = "-"
-        streaming = "yes" if coord["isStreaming"] else "no"
-        lines.append(
-            f"{stream['id']}\tratified={ratified}\t{coord['session']}\tstreaming={streaming}\t"
-            f"tokens={tokens}\tmodel={coord['model']}\tthinking={coord['thinkingLevel']}\t"
-            f"cost={coord['cost']}\tthreads={counted}\tshare={share_text}"
-        )
+        if "error" in stream:
+            error = stream["error"]
+            lines.append(f"{stream['id']}\terror={error['type']}\tmessage={json.dumps(error['message'], ensure_ascii=False)}\tratified=unknown")
+        else:
+            counts = stream["threads"]
+            counted = ",".join(f"{name}={counts[name]}" for name in ("active", "waiting_quota", "done", "archived"))
+            share = stream["coordinatorCostShare"]
+            share_text = "-" if share is None else str(share)
+            ratified = "yes" if stream["ratified"] else "no"
+            coord = stream["coordinator"]
+            if not isinstance(coord, dict):
+                lines.append(f"{stream['id']}\tratified={ratified}\t-\tthreads={counted}\tshare={share_text}")
+            else:
+                usage = coord["contextUsage"]
+                tokens = usage.get("tokens") if isinstance(usage, dict) else None
+                if tokens is None:
+                    tokens = "-"
+                streaming = "yes" if coord["isStreaming"] else "no"
+                lines.append(
+                    f"{stream['id']}\tratified={ratified}\t{coord['session']}\tstreaming={streaming}\t"
+                    f"tokens={tokens}\tmodel={coord['model']}\tthinking={coord['thinkingLevel']}\t"
+                    f"cost={coord['cost']}\tthreads={counted}\tshare={share_text}"
+                )
         for episode in stream.get("failures", []):
             lines.append(f"{stream['id']}\tfailure={episode['kind']}\tstate={episode['state']}\tsession={episode['session']}\treset={episode['resetAt'] or 'unknown'}\tretry={episode['retryState'] or '-'}")
         if isinstance(stream.get("drive"), dict):
             driving = stream["drive"]
-            lines.append(f"{stream['id']}\tdrive={'on' if driving['enabled'] else 'off'}\tdelivery={driving['current_delivery'] or '-'}")
+            enabled = ("on" if driving["enabled"] else "off") if driving["known"] else "unknown"
+            lines.append(f"{stream['id']}\tdrive={enabled}\tdelivery={driving.get('current_delivery') or '-'}\tremote={driving['remote_state']}")
+            if "error" in driving:
+                error = driving["error"]
+                lines.append(f"{stream['id']}\tdrive-error={error['type']}\tmessage={json.dumps(error['message'], ensure_ascii=False)}")
         for maintenance in stream.get("maintenance", []):
             lines.append(f"{stream['id']}\tdcr={maintenance['phase']}\tsession={maintenance['session']}\toperation={maintenance['id']}\t{maintenance['detail']}")
     return "\n".join(lines) + "\n"
@@ -655,22 +698,9 @@ def spawn_thread(
     sid, needs_brief = _resume_or_spawn(worktree, rows, stream_dir, role, [repo.name, branch_name, sha, model_name, thinking_level, note])
     if needs_brief:
         configured = piweb.configure_session(sid, model_name, thinking_level)
-        piweb.register_stream_failure(sid, str(worktree), stream_dir, configured, starting=True)
-        _send_start(
-            stream_dir,
-            sid,
-            render_brief(
-                session_id=sid,
-                stream=stream_id,
-                stream_dir=str(stream_dir),
-                role=role,
-                repo=repo.name,
-                worktree=str(worktree),
-                branch=branch_name,
-                base=sha,
-                note=note,
-            ),
-        )
+        brief = render_brief(session_id=sid, stream=stream_id, stream_dir=str(stream_dir), role=role, repo=repo.name, worktree=str(worktree), branch=branch_name, base=sha, note=note)
+        piweb.register_stream_failure(sid, str(worktree), stream_dir, configured, starting=True, role=role, assignment=brief)
+        _send_start(stream_dir, sid, brief)
     _append_thread(
         rows_path,
         _thread_row(sid, role, repo.name, worktree, branch_name, sha, model_name, thinking_level),
@@ -729,8 +759,15 @@ def close_stream(index: Path, project: Project, stream_id: str) -> CloseResult:
         # A busy close may already have archived this worker without committing its evidence.
         handovers.append(relative)
     report: list[str] = []
+    from engine import terminal_sessions
     for row in open_threads:
-        piweb.archive(row.session)
+        prior = terminal_sessions.load(stream_dir, row.session, row.worktree)
+        if prior is not None and prior["state"] == "missing":
+            report.append(f"missing {row.session} {row.role}; registry and handover evidence retained, no archive claimed")
+            continue
+        outcome = terminal_sessions.archive(stream_dir, row.session, row.worktree, explicit=True)
+        if outcome != "archived":
+            raise StreamsError(f"Session {row.session} is {outcome}; no archive or handover is invented")
         transition(row, Status.archived)
         save_threads(path, rows)
         report.append(f"archived {row.session} {row.role}")

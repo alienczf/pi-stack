@@ -6,7 +6,7 @@ from pathlib import Path
 
 from support import EngineCase, ROOT, snapshot
 
-CAPABILITIES = ["sessions.maintenanceCheckpoint", "prompt.potetoArguments", "sessions.streamsDcrEvents", "prompt.controlGoal", "sessions.conditionalAdmission", "prompt.recoveryControl", "sessions.failureBoundary", "sessions.failureFork", "sessions.failureMaintenance", "sessions.failureRetirement", "sessions.resumeObservation"]
+CAPABILITIES = ["sessions.maintenanceCheckpoint", "prompt.potetoArguments", "sessions.streamsDcrEvents", "prompt.controlGoal", "sessions.conditionalAdmission", "prompt.recoveryControl", "sessions.failureBoundary", "sessions.failureFork", "sessions.failureMaintenance", "sessions.failureRetirement", "sessions.resumeObservation", "sessions.engineFailureRecovery", "sessions.extensionCallbackOwnership", "sessions.streamTransientRetry"]
 
 
 class FailureAlignmentTests(EngineCase):
@@ -38,9 +38,9 @@ class FailureAlignmentTests(EngineCase):
         generated = self.run_streams("new", "etl")
         self.assertEqual(generated.returncode, 0, generated.stderr)
         instructions = (stream / "AGENTS.md").read_text()
-        self.assertIn("Only usage-limit failures", instructions)
-        self.assertIn("authenticated ZF notice", instructions)
-        self.assertIn("single original", instructions)
+        self.assertIn("Usage and quota wait", instructions)
+        self.assertIn("No live checkpoint acknowledgement or further human approval", instructions)
+        self.assertIn("singular original", instructions)
         self.assertIn("independent authorized lanes", instructions)
         self.assertIn("not authentication proof", instructions)
         self.assertFalse((stream / "TODO.md").exists())

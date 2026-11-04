@@ -150,11 +150,13 @@ class FailureTests(TickCase):
         rows = self.rows(self.etl)
         pending = self.state(self.etl)["pending"]
         proc = self.tick("2026-10-06T12:05:00Z")
-        self.assertEqual(proc.returncode, 1, proc.stdout)
-        self.assertIn("session coord-1 is archived", proc.stderr)
-        self.assertEqual(self.stub.requests, [got_list(str(self.etl))])
-        self.assertEqual(self.rows(self.etl), rows)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(self.stub.requests, [got_list(str(self.etl)), got_status("t-1"), got_list("/wt/datapull")])
+        self.assertEqual(self.rows(self.etl), rows.replace("\txhigh\tactive\t", "\txhigh\tarchived\t", 1))
         self.assertEqual(self.state(self.etl)["pending"], pending)
+        again = self.tick("2026-10-06T12:10:00Z")
+        self.assertEqual(again.returncode, 0, again.stderr)
+        self.assertFalse(any(request[1] == "/api/sessions/coord-1/status" for request in self.stub.requests))
 
     def test_a_state_file_that_does_not_parse_is_left_alone(self) -> None:
         config = self.etl / "stream.toml"

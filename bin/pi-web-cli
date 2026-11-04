@@ -245,8 +245,13 @@ def main(argv: list[str]) -> int:
     control = sub.add_parser("automatic-admission")
     control.add_argument("sid")
     control.add_argument("mode", choices=("on", "off"))
-    control.add_argument("--expected-generation", help="compare the exact saved receiving epoch atomically; never renew it")
-    for name in ("failure-ratify", "failure-fork", "failure-maintenance", "failure-retire"):
+    condition = control.add_mutually_exclusive_group()
+    condition.add_argument("--expected-generation", help="compare the exact saved receiving epoch atomically; never renew it")
+    condition.add_argument("--initialize-if-absent", action="store_true", help="create the first durable epoch only if no receiving record exists; preserve any existing epoch")
+    readiness = sub.add_parser("failure-readiness")
+    readiness.add_argument("sid")
+    readiness.add_argument("--cwd", required=True)
+    for name in ("failure-fork", "failure-maintenance", "failure-retire", "failure-resume", "failure-analysis"):
         recovery = sub.add_parser(name)
         recovery.add_argument("sid")
         recovery.add_argument("--cwd", required=True)
@@ -255,6 +260,7 @@ def main(argv: list[str]) -> int:
     boundary.add_argument("--cwd", required=True)
     boundary.add_argument("--stream", required=True)
     boundary.add_argument("--root", required=True)
+    boundary.add_argument("--enroll", help="JSON exact-lane role/assignment for the configured engine policy")
     goal_control = sub.add_parser("control-goal")
     goal_control.add_argument("sid")
     goal_control.add_argument("delivery_id")
@@ -307,25 +313,36 @@ def main(argv: list[str]) -> int:
     if args.cmd in ("runtime", "capabilities"):
         code, data = req("GET", "/api/sessiond/runtime")
         ok = code == 200 and isinstance(data, dict) and data.get("component") == "sessiond" and isinstance(data.get("capabilities"), list) and all(isinstance(capability, str) for capability in data["capabilities"])
-        missing = [capability for capability in ("sessions.maintenanceCheckpoint", "prompt.potetoArguments", "sessions.streamsDcrEvents", "prompt.controlGoal", "sessions.conditionalAdmission", "prompt.recoveryControl", "sessions.failureBoundary", "sessions.failureFork", "sessions.failureMaintenance", "sessions.failureRetirement", "sessions.resumeObservation") if not ok or capability not in data["capabilities"]]
+        missing = [capability for capability in ("sessions.maintenanceCheckpoint", "prompt.potetoArguments", "sessions.streamsDcrEvents", "prompt.controlGoal", "sessions.conditionalAdmission", "prompt.recoveryControl", "sessions.failureBoundary", "sessions.failureFork", "sessions.failureMaintenance", "sessions.failureRetirement", "sessions.resumeObservation", "sessions.engineFailureRecovery", "sessions.extensionCallbackOwnership", "sessions.streamTransientRetry") if not ok or capability not in data["capabilities"]]
         if args.cmd == "capabilities":
             ok = ok and not missing
             return out({"ok": ok, "status": code, "runtime": data, "missing": missing}, ok)
         return out({"ok": ok, "status": code, "runtime": data}, ok)
-    if args.cmd in ("failure-ratify", "failure-fork", "failure-maintenance", "failure-retire"):
+    if args.cmd == "failure-readiness":
+        sid = urllib.parse.quote(args.sid, safe="")
+        code, data = req("GET", f"/api/sessions/{sid}/failure-recovery/readiness?" + urllib.parse.urlencode({"cwd": args.cwd}))
+        ok = code == 200 and isinstance(data, dict) and not data.get("error")
+        return out({"ok": ok, "status": code, "result": data}, ok)
+    if args.cmd in ("failure-fork", "failure-maintenance", "failure-retire", "failure-resume", "failure-analysis"):
         try:
-            body = _json_object(_text_input(None), "authenticated ratification envelope")
+            body = _json_object(_text_input(None), "engine recovery request")
         except (UsageError, UnicodeError) as exc:
             return out({"ok": False, "error": str(exc)}, False)
         body["cwd"] = args.cwd
         sid = urllib.parse.quote(args.sid, safe="")
-        action = {"failure-ratify": "ratify", "failure-fork": "fork", "failure-maintenance": "maintenance", "failure-retire": "retire"}[args.cmd]
+        action = {"failure-fork": "fork", "failure-maintenance": "maintenance", "failure-retire": "retire", "failure-resume": "resume", "failure-analysis": "analysis"}[args.cmd]
         code, data = req("POST", f"/api/sessions/{sid}/failure-recovery/{action}", body)
         ok = code == 200 and isinstance(data, dict) and not data.get("error")
         return out({"ok": ok, "status": code, "result": data}, ok)
     if args.cmd == "failure-boundary":
         sid = urllib.parse.quote(args.sid, safe="")
-        code, data = req("POST", f"/api/sessions/{sid}/failure-boundary", {"cwd": args.cwd, "stream": args.stream, "root": args.root})
+        body = {"cwd": args.cwd, "stream": args.stream, "root": args.root}
+        if args.enroll is not None:
+            try:
+                body["enroll"] = _json_object(args.enroll, "fresh engine-policy enrollment")
+            except UsageError as exc:
+                return out({"ok": False, "error": str(exc)}, False)
+        code, data = req("POST", f"/api/sessions/{sid}/failure-boundary", body)
         ok = code == 200 and isinstance(data, dict) and not data.get("error")
         return out({"ok": ok, "status": code, "result": data}, ok)
     if args.cmd == "control-goal":
@@ -364,10 +381,15 @@ def main(argv: list[str]) -> int:
     if args.cmd == "commands":
         return cmd_commands(args.sid)
     if args.cmd == "automatic-admission":
+        if args.initialize_if_absent and args.mode != "on":
+            return out({"ok": False, "error": "initial admission requires on"}, False)
         body = {"allowed": args.mode == "on"}
+        if args.initialize_if_absent:
+            body["initializeIfAbsent"] = True
         if args.expected_generation is not None:
             body["expectedGeneration"] = args.expected_generation
-        code, data = req("POST", f"/api/sessions/{args.sid}/automatic-admission", body)
+        suffix = "/initialize" if args.initialize_if_absent else ""
+        code, data = req("POST", f"/api/sessions/{args.sid}/automatic-admission{suffix}", body)
         ok = code == 200 and isinstance(data, dict) and not data.get("error")
         return out({"ok": ok, "status": code, "result": data}, ok)
     method, suffix, _positionals, build = VERBS[args.cmd]

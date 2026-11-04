@@ -5,7 +5,7 @@ import json
 import sys
 from pathlib import Path
 
-from engine import StreamsError, artifacts, clock, dcr, delivery, drive, failure, failure_recovery, migration, replacement
+from engine import StreamsError, artifacts, clock, dcr, delivery, drive, failure, failure_recovery, migration, relay, replacement, state_repair
 from engine.doctor import run_doctor
 from engine.project import (
     STATE_SCHEMA,
@@ -80,18 +80,16 @@ def _parser() -> argparse.ArgumentParser:
 
     failures = sub.add_parser("failure")
     failure_sub = failures.add_subparsers(dest="failure_cmd", required=True)
-    ratify = failure_sub.add_parser("ratify")
-    ratify.add_argument("stream")
-    ratify.add_argument("--home")
-    ratify.add_argument("--session", required=True)
-    ratify.add_argument("--episode", required=True)
-    ratify.add_argument("--notice-id", required=True)
-    ratify.add_argument("--notice-file", required=True)
     advance = failure_sub.add_parser("advance")
     advance.add_argument("stream")
     advance.add_argument("--home")
     advance.add_argument("--session", required=True)
     advance.add_argument("--episode", required=True)
+
+    resume = sub.add_parser("resume")
+    resume.add_argument("stream", nargs="?")
+    resume.add_argument("--all-parked", action="store_true", required=True)
+    resume.add_argument("--home")
 
     maintenance = sub.add_parser("dcr")
     maintenance_sub = maintenance.add_subparsers(dest="dcr_cmd", required=True)
@@ -116,7 +114,15 @@ def _parser() -> argparse.ArgumentParser:
     migration_mode.add_argument("--plan", action="store_true", help="show a source-backed migration plan without changing artifacts")
     migration_mode.add_argument("--apply", metavar="PLAN_FILE", help="apply the exact reviewed source-backed plan")
     migration_mode.add_argument("--resume", action="store_true", help="resume only the already recorded migration")
+    migration_mode.add_argument("--repair-plan", action="store_true", help="plan an explicitly classified prefix repair of canonical STATE")
+    migration_mode.add_argument("--repair-apply", metavar="PLAN_FILE", help="apply the exact source-backed canonical prefix repair")
+    migration_mode.add_argument("--repair-resume", action="store_true", help="resume only the recorded canonical prefix repair")
+    prefix = migrate.add_mutually_exclusive_group()
+    prefix.add_argument("--prefix-history-bytes", type=int, help="explicit byte count classified as historical prefix before canonical Goals")
+    prefix.add_argument("--prefix-rules-bytes", type=int, help="explicit byte count retained as active Rules from the prefix before canonical Goals")
     migrate.add_argument("--mapping", help="explicit JSON byte-span authority/history map")
+    migrate.add_argument("--history-mode", choices=("git", "snapshot"), default="git", help="snapshot retains exact source bytes with migration-start timestamps and avoids a Git history walk")
+    migrate.add_argument("--relay-source", help="exact dated standing-grant source JSON for the migration plan; not transport authentication")
 
     upgrade = sub.add_parser("upgrade")
     upgrade.add_argument("stream_id", metavar="id", nargs="?")
@@ -163,14 +169,16 @@ def _parser() -> argparse.ArgumentParser:
         operation = state_sub.add_parser(name)
         operation.add_argument("stream")
         operation.add_argument("--home")
-        operation.add_argument("--body-file", required=True, help="UTF-8 input file, or - for stdin")
+        operation.add_argument("--body-file", required=name != "ruling", help="UTF-8 input file, or - for stdin")
         if name != "objective":
             operation.add_argument("--subject", required=True)
             operation.add_argument("--at", help="arrival time with ISO timezone; defaults to now")
         if name == "append":
             operation.add_argument("--request-id", required=True)
         if name == "ruling":
-            operation.add_argument("--notice-id", required=True, help="human ruling provenance, not an authentication receipt")
+            provenance = operation.add_mutually_exclusive_group(required=True)
+            provenance.add_argument("--notice-id", help="sourced ruling provenance, not an authentication receipt")
+            provenance.add_argument("--relay-source", help="exact dated relay JSON; records provenance, not transport authentication")
             operation.add_argument("--supersedes-file", help="exact retired Rules text; no automatic classification")
     return parser
 
@@ -195,16 +203,30 @@ def _open_stream(index: Path, project_name: str, stream_id: str) -> Path:
 
 
 def cmd_migrate(args: argparse.Namespace) -> int:
-    if args.mapping and not args.plan:
-        raise StreamsError("--mapping is only for --plan; application requires the exact reviewed plan file")
+    if (args.mapping or args.relay_source or args.history_mode != "git") and not args.plan:
+        raise StreamsError("--mapping and --relay-source are only for --plan; application requires the exact reviewed plan file")
     mapping = json.loads(migration.regular_bytes(Path(args.mapping))) if args.mapping else None
-    document = json.loads(migration.regular_bytes(Path(args.apply))) if args.apply else None
+    if (args.prefix_history_bytes is not None or args.prefix_rules_bytes is not None) and not args.repair_plan:
+        raise StreamsError("--prefix-history-bytes and --prefix-rules-bytes are only for --repair-plan")
+    document_file = args.apply or args.repair_apply
+    document = json.loads(migration.regular_bytes(Path(document_file))) if document_file else None
+    source = relay.source_provenance(migration.regular_bytes(Path(args.relay_source)), args.stream) if args.relay_source else None
     index = resolve_index(args.home)
     with index_lock(index):
         project = resolve_project(index)
         stream = require_stream(index, project.info.name, args.stream, allow_migration=True)
         with stream_lock(stream):
-            result = migration.plan_migration(stream, mapping).public() if args.plan else migration.apply_migration_locked(stream, document)
+            if args.repair_plan:
+                if args.prefix_rules_bytes is not None:
+                    result = state_repair.plan(stream, args.prefix_rules_bytes, target='rules')
+                elif args.prefix_history_bytes is not None:
+                    result = state_repair.plan(stream, args.prefix_history_bytes, target='history')
+                else:
+                    raise StreamsError("Prefix repair requires explicit --prefix-history-bytes or --prefix-rules-bytes classification")
+            elif args.repair_apply or args.repair_resume:
+                result = state_repair.apply_locked(stream, document)
+            else:
+                result = migration.plan_migration(stream, mapping, relay_source=source, history_mode=args.history_mode).public() if args.plan else migration.apply_migration_locked(stream, document)
     print(json.dumps(result, sort_keys=True))
     return 0
 
@@ -291,7 +313,12 @@ def _state_body(path: str) -> str:
 
 
 def cmd_state(args: argparse.Namespace) -> int:
-    body = _state_body(args.body_file)
+    relay_raw = migration.regular_bytes(Path(args.relay_source)) if getattr(args, "relay_source", None) else None
+    if relay_raw is not None and args.body_file:
+        raise StreamsError("--relay-source supplies its exact body; do not duplicate it with --body-file")
+    if relay_raw is None and not args.body_file:
+        raise StreamsError("--body-file is required without --relay-source")
+    body = _state_body(args.body_file) if relay_raw is None else ""
     retired = _state_body(args.supersedes_file) if getattr(args, "supersedes_file", None) else None
     index = resolve_index(args.home)
     with index_lock(index):
@@ -307,6 +334,9 @@ def cmd_state(args: argparse.Namespace) -> int:
                 if args.state_cmd == "append":
                     occurrence = artifacts.append_log(stream_dir, at, args.subject, body, request_id=args.request_id)
                     request = args.request_id
+                elif relay_raw is not None:
+                    occurrence = relay.record_sourced_ruling(stream_dir, at, args.subject, relay_raw, supersedes=retired)
+                    request = "ruling:relay-source:" + relay.source_provenance(relay_raw, stream_dir.name)["messageId"]
                 else:
                     occurrence = artifacts.record_ruling(stream_dir, at, args.subject, body,
                                                          notice_id=args.notice_id, supersedes=retired)
@@ -357,29 +387,34 @@ def cmd_drive(args: argparse.Namespace) -> int:
                 if resolved is None:
                     raise StreamsError("drive control requires the designated exact native coordinator")
                 from engine import piweb
-                piweb.require_settings(resolved.native.status, project.coordinator.model, project.coordinator.thinking)
+                piweb.require_settings(resolved.native.status, resolved.row.model, resolved.row.thinking)
                 result = drive.enable(stream_dir, resolved)
     print(json.dumps(result, sort_keys=True))
     return 0
 
 
 def cmd_failure(args: argparse.Namespace) -> int:
-    notice = None
-    if args.failure_cmd == "ratify":
-        try:
-            notice = json.loads(_state_body(args.notice_file))
-        except ValueError as exc:
-            raise StreamsError("Authenticated notice input must be JSON, not a fixed/readiness string") from exc
     index = resolve_index(args.home)
     with index_lock(index):
         project = resolve_project(index)
         stream_dir = require_stream(index, project.info.name, args.stream)
     with stream_lock(stream_dir):
-        if args.failure_cmd == "ratify":
-            result = failure.ratify_locked(stream_dir, args.session, args.episode, args.notice_id, notice, clock.stamp(clock.now()))
-        else:
-            result = failure_recovery.advance_locked(stream_dir, args.session, args.episode, clock.stamp(clock.now()), index=index, project=project)
+        result = failure_recovery.advance_locked(stream_dir, args.session, args.episode, clock.stamp(clock.now()), index=index, project=project)
     print(json.dumps(result, sort_keys=True))
+    return 0
+
+
+def cmd_resume(args: argparse.Namespace) -> int:
+    index = resolve_index(args.home)
+    with index_lock(index):
+        project = resolve_project(index)
+        selected = [row for row in stream_rows(index, args.stream) if row.project == project.info.name]
+    results = []
+    for row in selected:
+        stream = Path(row.path)
+        with stream_lock(stream):
+            results.extend(failure_recovery.resume_parked_locked(stream, clock.stamp(clock.now()), index=index, project=project, operator_resume=True))
+    print(json.dumps(results, sort_keys=True))
     return 0
 
 
@@ -486,6 +521,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_state(args)
         if args.cmd == "failure":
             return cmd_failure(args)
+        if args.cmd == "resume":
+            return cmd_resume(args)
         if args.cmd == "dcr":
             return cmd_dcr(args)
         if args.cmd == "drive":

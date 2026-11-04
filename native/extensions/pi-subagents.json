@@ -1,0 +1,86 @@
+{
+  "id": "harness-heal-v1",
+  "packages": {
+    "package.json": {
+      "name": "pi-subagents",
+      "version": "0.58.0",
+      "sha256": "79b1e1c0cd0b4df4a1e48df6a9a9358ca05f0c420a63e6111321dfb6fedbc4ea"
+    }
+  },
+  "files": [
+    {
+      "path": "index.ts",
+      "before": "a2f11dbe8e200bd8c590441316a9c6ab222318d2aa738670dedcf0e72592dde3",
+      "after": "3ca5ae0732d8363c9a89ca18c19f4837d6b67865b65f1a9cc58db320dd2fffad",
+      "edits": [
+        {
+          "old": "\t: (await import(\"./src/extension/index.ts\")).default;\n\nexport default function registerSubagentExtension(pi: ExtensionAPI): void {\n\tregisterParentExtension?.(pi);\n}\n",
+          "new": "\t: (await import(\"./src/extension/index.ts\")).default;\n\nexport default function registerSubagentExtension(pi: ExtensionAPI): void {\n\tif (registerParentExtension) registerParentExtension(pi);\n\telse pi.registerCallbackOwnership?.(() => ({ kind: \"none\", revision: \"child-disabled\", owners: [] }));\n}\n"
+        }
+      ]
+    },
+    {
+      "path": "src/extension/index.ts",
+      "before": "70f45cee1ff30c37a720f278f7439daa248427cf3010d85fe0eb8cdbf7312fba",
+      "after": "477af5fc3b32610ff4e201bc58ff350936d9af8490580c98421c641871636686",
+      "edits": [
+        {
+          "old": "\nexport default function registerSubagentExtension(pi: ExtensionAPI): void {\n\tif (process.env[SUBAGENT_CHILD_ENV] === \"1\") {\n\t\treturn;\n\t}\n\tconst runtimeRegistry = getRuntimeRegistry();\n",
+          "new": "\nexport default function registerSubagentExtension(pi: ExtensionAPI): void {\n\tif (process.env[SUBAGENT_CHILD_ENV] === \"1\") {\n\t\tpi.registerCallbackOwnership?.(() => ({ kind: \"none\", revision: \"child-disabled\", owners: [] }));\n\t\treturn;\n\t}\n\tconst runtimeRegistry = getRuntimeRegistry();\n"
+        },
+        {
+          "old": "\t\t\treturn executorScheduled(randomUUID(), params, signal, ctx);\n\t\t},\n\t\tresolveCapabilityCeiling: (sessionId) => resolveCurrentSubagentCapabilityCeiling(sessionId),\n\t});\n\tlet refreshResultDelivery = () => {};\n\tconst hasResultDeliveryDemand = () => {\n",
+          "new": "\t\t\treturn executorScheduled(randomUUID(), params, signal, ctx);\n\t\t},\n\t\tresolveCapabilityCeiling: (sessionId) => resolveCurrentSubagentCapabilityCeiling(sessionId),\n\t});\n\tpi.registerCallbackOwnership?.(() => {\n\t\tconst watchdog = mainWatchdog.getSnapshot();\n\t\tconst owners = [\n\t\t\t...[...state.asyncJobs.values()].filter(job => job.status === \"queued\" || job.status === \"running\").map(job => `async:${job.id}`),\n\t\t\t...state.foregroundControls.keys(),\n\t\t\t...(state.workflowControllers?.keys() ?? []),\n\t\t\t...(state.waitSubscriptions?.keys() ?? []),\n\t\t\t...completionNotifier.pendingOwners(),\n\t\t\t...scheduledRunManager.callbackOwners(),\n\t\t\t...(state.subagentInProgress ? [\"subagent-in-progress\"] : []),\n\t\t\t...resultWatcher.callbackState().owners,\n\t\t\t...(watchdog.activeReviewId || watchdog.autoFollowQueued || watchdog.enabled && watchdog.bufferedDeltas > 0 ? [\"watchdog\"] : []),\n\t\t].sort();\n\t\tconst watcher = resultWatcher.callbackState();\n\t\treturn { kind: state.currentSessionId === null ? \"unknown\" : owners.length ? \"active\" : watcher.resources ? \"safe-to-drop\" : \"none\", revision: JSON.stringify({ owners, watcher: watcher.revision }), owners };\n\t}, async revision => {\n\t\tresultWatcher.stopResultWatcher();\n\t\treturn { droppedRevision: revision };\n\t});\n\tlet refreshResultDelivery = () => {};\n\tconst hasResultDeliveryDemand = () => {\n"
+        }
+      ]
+    },
+    {
+      "path": "src/runs/background/notify.ts",
+      "before": "a113647993946a950cb4c30f22a6c4fcaf9986846b16288765abc0488bab14e9",
+      "after": "4445c6069959244f91083b10d18e5d4ef6fabfd117f6d2643e2774441092db41",
+      "edits": [
+        {
+          "old": "}\n\nexport interface CompletionNotifier {\n\tdeliver(result: CompletionNotification): Promise<boolean>;\n\tdispose(): void;\n}\n",
+          "new": "}\n\nexport interface CompletionNotifier {\n\tpendingOwners(): string[];\n\tdeliver(result: CompletionNotification): Promise<boolean>;\n\tdispose(): void;\n}\n"
+        },
+        {
+          "old": "\t});\n\n\treturn {\n\t\tdeliver,\n\t\tdispose() {\n\t\t\tif (disposed) return;\n",
+          "new": "\t});\n\n\treturn {\n\t\tpendingOwners: () => [...pending.keys()].sort(),\n\t\tdeliver,\n\t\tdispose() {\n\t\t\tif (disposed) return;\n"
+        }
+      ]
+    },
+    {
+      "path": "src/runs/background/result-watcher.ts",
+      "before": "a9149e48ff972bcf8e70cbbdb9aede702890c6e5e657259e51345124ed964e77",
+      "after": "fb63fdd2b3ff4e8634cd03f60365c395f848e79c835ddee9822bdc9392504e67",
+      "contentFile": "extensions/postimages/pi-subagents/src/runs/background/result-watcher.ts"
+    },
+    {
+      "path": "src/runs/background/scheduled-runs.ts",
+      "before": "731ad500d01b17bda5a04fc240a1cc8e70b8b142219bd38e8044d9ef001415fb",
+      "after": "7a827fd6dff3e6dd7457dfef2266141f088ef64f3006d9d5f7aaa5b071627ef0",
+      "edits": [
+        {
+          "old": "\t\t}\n\t}\n\n\tobservedCompletionRunIds(): Set<string> {\n\t\treturn new Set(this.observedAsyncIds);\n\t}\n",
+          "new": "\t\t}\n\t}\n\n\tcallbackOwners(): string[] {\n\t\treturn [...this.timers.keys(), ...this.observedAsyncIds].sort();\n\t}\n\n\tobservedCompletionRunIds(): Set<string> {\n\t\treturn new Set(this.observedAsyncIds);\n\t}\n"
+        }
+      ]
+    }
+  ],
+  "inputs": [
+    {
+      "index.ts": "a2f11dbe8e200bd8c590441316a9c6ab222318d2aa738670dedcf0e72592dde3",
+      "src/extension/index.ts": "477af5fc3b32610ff4e201bc58ff350936d9af8490580c98421c641871636686",
+      "src/runs/background/notify.ts": "4445c6069959244f91083b10d18e5d4ef6fabfd117f6d2643e2774441092db41",
+      "src/runs/background/result-watcher.ts": "bd84be3e560194b3bb9138cbe10b247f92e297923d043416e310713710dd4c63",
+      "src/runs/background/scheduled-runs.ts": "7a827fd6dff3e6dd7457dfef2266141f088ef64f3006d9d5f7aaa5b071627ef0"
+    },
+    {
+      "index.ts": "3ca5ae0732d8363c9a89ca18c19f4837d6b67865b65f1a9cc58db320dd2fffad",
+      "src/extension/index.ts": "477af5fc3b32610ff4e201bc58ff350936d9af8490580c98421c641871636686",
+      "src/runs/background/notify.ts": "4445c6069959244f91083b10d18e5d4ef6fabfd117f6d2643e2774441092db41",
+      "src/runs/background/result-watcher.ts": "bd84be3e560194b3bb9138cbe10b247f92e297923d043416e310713710dd4c63",
+      "src/runs/background/scheduled-runs.ts": "7a827fd6dff3e6dd7457dfef2266141f088ef64f3006d9d5f7aaa5b071627ef0"
+    }
+  ]
+}

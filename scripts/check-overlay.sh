@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 export PI_STACK_SKIP_SYSTEMD=1
+if [[ -z "${PI_STACK_NATIVE_ROOT:-}" ]]; then
+	export PI_STACK_SKIP_NATIVE_OVERLAY=1
+fi
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
@@ -616,7 +619,7 @@ initial_pstack_head="$(git -C "$fake" rev-parse HEAD)"
 
 seed="$tmp/seed"
 mkdir -p "$seed"
-cp -a "$root/install.sh" "$root/overlay" "$root/prompts" "$root/bin" "$root/skills" "$root/systemd" "$root/.gitignore" "$seed/"
+cp -a "$root/install.sh" "$root/overlay" "$root/prompts" "$root/bin" "$root/skills" "$root/systemd" "$root/native" "$root/scripts" "$root/.gitignore" "$seed/"
 git init -q "$seed"
 git -C "$seed" add .
 git -C "$seed" -c user.email=t@t -c user.name=t commit -qm seed
@@ -1014,7 +1017,7 @@ cat >"$fake_npm/npm" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "$*" >>"$NPM_LOG"
-if [[ "$*" == "install -g @jmfederico/pi-web --allow-scripts=node-pty" ]]; then
+if [[ "$*" == "install -g @jmfederico/pi-web@1.202607.3 --allow-scripts=node-pty" ]]; then
 	mkdir -p "${HOME}/.local/bin"
 	cat >"${HOME}/.local/bin/pi-web" <<'PIWEB'
 #!/bin/sh
@@ -1065,7 +1068,7 @@ if ! noweb_out="$(
 	printf '%s\n' "$noweb_out" >&2
 	fail "install without pi-web failed while packages were skipped"
 fi
-printf '%s\n' "$noweb_out" | grep -F -x -q 'npm install -g @jmfederico/pi-web --allow-scripts=node-pty' || fail "install did not say how to install pi-web"
+printf '%s\n' "$noweb_out" | grep -F -x -q 'npm install -g @jmfederico/pi-web@1.202607.3 --allow-scripts=node-pty' || fail "install did not say how to install pi-web"
 printf '%s\n' "$noweb_out" | grep -F -x -q 'pi-web install' || fail "install did not say how to start pi-web"
 test ! -s "$noweb_log" || fail "skipped package install still ran npm"
 test ! -e "$noweb_home/.local/bin/pi-web" || fail "skipped package install wrote pi-web"
@@ -1090,10 +1093,14 @@ if ! npm_out="$(
 	printf '%s\n' "$npm_out" >&2
 	fail "install did not install a missing pi-web"
 fi
-printf '%s\n' "$npm_out" | grep -F -x -q 'npm install -g @jmfederico/pi-web --allow-scripts=node-pty' || fail "install did not print the pi-web install command"
-[[ "$(cat "$npm_log")" == "install -g @jmfederico/pi-web --allow-scripts=node-pty" ]] || fail "npm was not run as pi-web's README says"
+printf '%s\n' "$npm_out" | grep -F -x -q 'npm install -g @jmfederico/pi-web@1.202607.3 --allow-scripts=node-pty' || fail "install did not print the pi-web install command"
+[[ "$(cat "$npm_log")" == "install -g @jmfederico/pi-web@1.202607.3 --allow-scripts=node-pty" ]] || fail "npm did not install the guarded pi-web version"
 test -x "$npm_home/.local/bin/pi-web" || fail "npm install did not put pi-web on the home bin path"
 [[ "$(cat "$pi_web_log")" == "install" ]] || fail "install did not run pi-web install"
+if [[ -n "${PI_STACK_NATIVE_ROOT:-}" && "${PI_STACK_SKIP_NATIVE_OVERLAY:-}" != 1 ]]; then
+	printf '%s\n' "$npm_out" | grep -F -q 'pi-stack native overlay already-applied.' || fail "fresh package path did not execute the guarded native installer hook"
+	printf 'native installer fresh-path check passed\n'
+fi
 if ! npm_again="$(
 	PATH="$fake_npm:$fake_bin:$no_systemctl:/usr/bin:/bin" \
 		HOME="$npm_home" \
@@ -1108,8 +1115,12 @@ if ! npm_again="$(
 	printf '%s\n' "$npm_again" >&2
 	fail "second install with pi-web present failed"
 fi
-[[ "$(cat "$npm_log")" == "install -g @jmfederico/pi-web --allow-scripts=node-pty" ]] || fail "second install ran npm again"
+[[ "$(cat "$npm_log")" == "install -g @jmfederico/pi-web@1.202607.3 --allow-scripts=node-pty" ]] || fail "second install ran npm again"
 [[ "$(cat "$pi_web_log")" == "install" ]] || fail "second install ran pi-web install again"
+if [[ -n "${PI_STACK_NATIVE_ROOT:-}" && "${PI_STACK_SKIP_NATIVE_OVERLAY:-}" != 1 ]]; then
+	printf '%s\n' "$npm_again" | grep -F -q 'pi-stack native overlay already-applied.' || fail "existing package path did not execute the guarded native installer hook"
+	printf 'native installer existing-path check passed\n'
+fi
 if printf '%s\n' "$npm_again" | grep -F -q 'npm install -g @jmfederico/pi-web'; then
 	fail "second install printed the pi-web install command after pi-web was present"
 fi
@@ -1182,7 +1193,7 @@ if ! pinode_out="$(
 	printf '%s\n' "$pinode_out" >&2
 	fail "install did not install pi-web with the npm under pi-node"
 fi
-[[ "$(cat "$pinode_npm_log")" == "install -g @jmfederico/pi-web --allow-scripts=node-pty" ]] || fail "install did not run the npm under pi-node"
+[[ "$(cat "$pinode_npm_log")" == "install -g @jmfederico/pi-web@1.202607.3 --allow-scripts=node-pty" ]] || fail "install did not run the npm under pi-node"
 [[ "$(cat "$pinode_web_log")" == "install" ]] || fail "install did not run pi-web install with its node on PATH"
 
 nonpm_home="$tmp/home-no-npm"
@@ -1199,6 +1210,28 @@ if nonpm_out="$(
 	fail "install without npm exited 0"
 fi
 printf '%s\n' "$nonpm_out" | grep -F -x -q 'npm is not on PATH or under ~/.local/share/pi-node. Install Node.js, then run the two commands above.' || fail "install without npm did not say how to get it"
+
+cat >"$tmp/with-capabilities.py" <<'PY'
+import os
+from pathlib import Path
+import subprocess
+import sys
+import urllib.parse
+
+sys.path.insert(0, str(Path(sys.argv[1]) / "pi-streams/tests"))
+from stub_piweb import StubPiWeb
+from test_failure_alignment import CAPABILITIES
+
+stub = StubPiWeb()
+stub.start()
+stub.set_routes([("GET", "/api/sessiond/runtime", 200, {"component": "sessiond", "capabilities": CAPABILITIES})])
+try:
+    env = {**os.environ, "PI_WEB_URL": stub.url, "no_proxy": urllib.parse.urlsplit(stub.url).netloc}
+    result = subprocess.run(sys.argv[2:], env=env)
+finally:
+    stub.stop()
+raise SystemExit(result.returncode)
+PY
 
 fake_systemctl="$tmp/fake-systemctl"
 mkdir -p "$fake_systemctl"
@@ -1219,7 +1252,7 @@ if ! systemd_out="$(
 		PSTACK="$stub" \
 		PI_STACK_SKIP_PACKAGES=1 \
 		SYSTEMCTL_LOG="$systemctl_log" \
-		bash "$root/install.sh" 2>&1
+		python3 "$tmp/with-capabilities.py" "$root" bash "$root/install.sh" 2>&1
 )"; then
 	printf '%s\n' "$systemd_out" >&2
 	fail "install with systemctl failed"

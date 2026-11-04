@@ -9,9 +9,9 @@ from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 
-from engine import StreamsError, artifacts, delivery, piweb
+from engine import StreamsError, artifacts, clock, delivery, failure, failure_recovery, piweb, sessionlog
 from engine.project import Project, _write, commit_repo, git, require_stream
-from engine.threads import KICKOFF, Status, _canonical_stream, _has_ratified_authority, _save_start, _start_record, _validated_handover, dump_threads, ensure_coordinator, load_threads, resolve_coordinator, save_threads, transition
+from engine.threads import KICKOFF, Status, _canonical_stream, _has_ratified_authority, _save_start, _start_record, _validated_handover, dump_threads, ensure_coordinator, load_threads, resolve_coordinator, save_threads, transition, require_ratified
 
 
 @contextmanager
@@ -96,7 +96,7 @@ def _validate_checkpoint_inputs(stream: Path, checkpoint: dict, project: Project
         raise StreamsError("checkpoint stream tree changed beyond the recorded registry transition")
 
 
-def prepare_checkpoint_locked(stream: Path, session: str) -> dict:
+def prepare_checkpoint_locked(stream: Path, session: str, *, source: dict | None = None) -> dict:
     if not _canonical_stream(stream):
         raise StreamsError("canonical STATE and explicit legacy migration are required before a coordinator checkpoint")
     resolved = resolve_coordinator(stream)
@@ -116,6 +116,7 @@ def prepare_checkpoint_locked(stream: Path, session: str) -> dict:
         "handover": handover, "handover_sha256": delivery._evidence(stream, handover)["sha256"],
         "references": references, "generation": control["generation"],
         "commit": git(stream, "rev-parse", "HEAD").strip(),
+        **({"source": source} if source is not None else {}),
     }
     _save(stream, "coordinator_checkpoint", checkpoint)
     return {"checkpoint": checkpoint["id"], "session": session, "acknowledge": f"Rotation checkpoint ready: {checkpoint['id']}"}
@@ -182,8 +183,32 @@ def _pickup(stream: Path) -> str:
     )
 
 
+def _healthy_source(resolved) -> dict:
+    _idle(resolved)
+    sid, cwd, status = resolved.row.session, resolved.row.worktree, resolved.native.status
+    _token, allowed = piweb.automatic_admission(status, sid, cwd, "wake")
+    if not allowed:
+        raise StreamsError("Newer stop or disabled admission preserves this coordinator")
+    path = Path(resolved.native.info["path"])
+    leaf = status["rotationSafety"]["entryId"]
+    branch = sessionlog.branch_records(path, sid, cwd, leaf)
+    if sessionlog.failure_observation(path, sid, cwd, leaf) is not None:
+        raise StreamsError("Failed coordinator must use owned last-good recovery")
+    terminal = next(((entry, raw) for entry, raw in reversed(branch) if entry.get("type") == "message"), None)
+    if terminal is None:
+        raise StreamsError("No complete native good checkpoint is available for rotation")
+    entry, raw = terminal
+    proof = {"entryId": entry["id"], "sha256": hashlib.sha256(raw).hexdigest()}
+    sessionlog.verify_good_checkpoint(path, sid, cwd, leaf, proof, "")
+    at = next(index for index, (item, _) in enumerate(branch) if item["id"] == entry["id"])
+    if any(item.get("customType") != "pi-web.stream-failure" or item.get("data") != status.get("failureBoundary") or item["data"].get("state") != "watching" for item, _ in branch[at+1:]):
+        raise StreamsError("Newer native input superseded the rotation good checkpoint")
+    return {"entryId": leaf, "sha256": hashlib.sha256(branch[-1][1]).hexdigest(), "checkpoint": proof}
+
+
 def rotate_locked(index: Path, project: Project, stream_id: str) -> str:
     stream = require_stream(index, project.info.name, stream_id)
+    require_ratified(stream)
     data = artifacts._read_tick_data(stream)
     checkpoint = data.get("coordinator_checkpoint")
     operation = data.get("coordinator_rotation")
@@ -191,7 +216,24 @@ def rotate_locked(index: Path, project: Project, stream_id: str) -> str:
     if not any(row.role == "coordinator" for row in rows):
         raise StreamsError(f"stream {stream_id} has no coordinator; run pi-streams new {stream_id}")
     if not isinstance(checkpoint, dict):
-        raise StreamsError("current coordinator checkpoint is required before explicit rotation")
+        for row in rows:
+            if row.role != "coordinator":
+                continue
+            episode = failure.load(stream, row.session)
+            operation = failure_recovery.load(stream, row.session)
+            if episode is not None and episode.state == "parked" and (operation is None or operation.phase != "complete"):
+                result = failure_recovery.advance_locked(stream, episode.session, episode.id, clock.stamp(clock.now()), index=index, project=project)
+                if not result.get("fork"):
+                    raise StreamsError("Last-good rotation has no verified returned fork yet")
+                return result["fork"]
+        operation = data.get("coordinator_rotation")
+        resolved = resolve_coordinator(stream, rows)
+        if resolved is None:
+            raise StreamsError("No designated coordinator or saved rotation owns this stream")
+        source = _healthy_source(resolved)
+        prepare_checkpoint_locked(stream, resolved.row.session, source=source)
+        data = artifacts._read_tick_data(stream)
+        checkpoint = data["coordinator_checkpoint"]
     if isinstance(operation, dict) and operation.get("checkpoint") == checkpoint.get("id") and operation.get("phase") == "complete":
         resolved = resolve_coordinator(stream, rows)
         if resolved is None or resolved.row.session != operation.get("target"):
@@ -208,13 +250,21 @@ def rotate_locked(index: Path, project: Project, stream_id: str) -> str:
         if resolved is None:
             raise StreamsError("no designated coordinator for a new explicit replacement")
         _idle(resolved)
+        piweb.require_settings(resolved.native.status, resolved.row.model, resolved.row.thinking)
         if checkpoint.get("session") != resolved.row.session or checkpoint.get("cwd") != str(stream):
             raise StreamsError("checkpoint does not belong to the designated coordinator")
         _validate_checkpoint_inputs(stream, checkpoint, project)
         native_path = resolved.native.info.get("path")
         if not isinstance(native_path, str) or not Path(native_path).is_absolute():
             raise StreamsError("checkpoint native evidence path is unavailable")
-        ack = _native_ack(Path(native_path), resolved.row.session, checkpoint["id"])
+        source = checkpoint.get("source")
+        if source is None:
+            ack = _native_ack(Path(native_path), resolved.row.session, checkpoint["id"])
+        else:
+            if _healthy_source(resolved) != source:
+                raise StreamsError("Rotation good checkpoint was superseded")
+            raw = sessionlog.read_record(Path(native_path), resolved.row.session, source["entryId"], source["sha256"]).raw
+            ack = {"entry": source["entryId"], "sha256": source["sha256"], "raw": raw}
         if resolved.native.status["rotationSafety"].get("entryId") != ack["entry"]:
             raise StreamsError("checkpoint is not the current logical native entry")
         control, _allowed = piweb.automatic_admission(resolved.native.status, resolved.row.session, str(stream), "wake")
@@ -230,10 +280,14 @@ def rotate_locked(index: Path, project: Project, stream_id: str) -> str:
         _write(cache, ack["raw"].decode("utf-8"))
         if cache.read_bytes() != ack["raw"]:
             raise StreamsError("checkpoint evidence cache did not retain exact native bytes")
-        operation = {"checkpoint": checkpoint["id"], "source": resolved.row.session, "owner": f"rotation:{checkpoint['id']}", "phase": "archiving", "state": checkpoint["state"], "prompt": _pickup(stream), "entry": ack["entry"], "sha256": ack["sha256"], "generation": control["generation"]}
+        operation = {"checkpoint": checkpoint["id"], "source": resolved.row.session, "owner": f"rotation:{checkpoint['id']}", "phase": "archiving", "state": checkpoint["state"], "prompt": _pickup(stream) + f"\nRead the retained coordinator handover {stream / checkpoint['handover']} before task effects.", "entry": ack["entry"], "sha256": ack["sha256"], "generation": control["generation"], "model": resolved.row.model, "thinking": resolved.row.thinking}
         _save(stream, "coordinator_rotation", operation)
     if not isinstance(operation, dict):
         raise StreamsError("rotation operation is malformed")
+    source = next((row for row in rows if row.session == operation.get("source") and row.role == "coordinator"), None)
+    if source is None or operation.get("model", source.model) != source.model or operation.get("thinking", source.thinking) != source.thinking:
+        raise StreamsError("Rotation source model/thinking changed beyond its frozen registry intent")
+    project = replace(project, coordinator=replace(project.coordinator, model=source.model, thinking=source.thinking))
     if operation.get("state") != _digest(stream / "STATE.md"):
         raise StreamsError("checkpoint STATE changed during replacement; explicit reconciliation required")
     if operation.get("phase") == "archiving":

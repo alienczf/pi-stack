@@ -69,7 +69,7 @@ class GeneratedStateContractTests(EngineCase):
         self.assertIn("pi-streams state append", role)
         self.assertIn("pi-streams state objective", role)
         self.assertIn("never prune or rotate", role)
-        for stale in ("Read STREAM.md", "Read context/README.md every turn", "continue on the default", "matching checks/ script passes", "Rewrite STATE.md before ending"):
+        for stale in ("Read STREAM.md", "Read context/README.md every turn", "continue on the default", "matching checks/ script passes", "Rewrite STATE.md before ending", "Only ZF or a human-specified explicit cap ends driving", "Never mark North Star completed"):
             self.assertNotIn(stale, role)
 
     def test_worker_brief_uses_state_and_disables_overlay_planning(self) -> None:
@@ -137,8 +137,11 @@ class GeneratedStateContractTests(EngineCase):
         source = (self.stream / "STATE.md").read_bytes()
         self.stub.requests.clear()
         result = self.run_streams("status", "contract", "--json", "--home", str(self.index))
-        self.assertEqual(result.returncode, 1)
-        self.assertIn("artifact operation pending", result.stderr)
+        self.assertEqual((result.returncode, result.stderr), (0, ""))
+        view, = json.loads(result.stdout)["streams"]
+        self.assertIn("artifact operation pending", view["error"]["message"])
+        self.assertIsNone(view["ratified"])
+        self.assertEqual(view["drive"]["known"], True)
         self.assertEqual(path.read_bytes(), before)
         self.assertEqual((self.stream / "STATE.md").read_bytes(), source)
         self.assertEqual(self.stub.requests, [])

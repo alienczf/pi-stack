@@ -35,6 +35,22 @@ class PromptRejected(StreamsError):
     pass
 
 
+class TerminalSession(StreamsError):
+    def __init__(self, sid: str, state: str, detail: str):
+        super().__init__(detail)
+        self.sid, self.state = sid, state
+
+
+class ArchiveRejected(StreamsError):
+    pass
+
+
+class RecoveryRefused(StreamsError):
+    def __init__(self, detail: str, receipt: dict):
+        super().__init__(detail)
+        self.receipt = receipt
+
+
 def call(args: list[str], stdin: str | None = None) -> dict[str, object]:
     proc = _run(args, stdin)
     try:
@@ -46,7 +62,17 @@ def call(args: list[str], stdin: str | None = None) -> dict[str, object]:
         raise StreamsError(f"pi-web-cli {' '.join(args)} returned {type(data).__name__}")
     if proc.returncode != 0 or data.get("ok") is False:
         detail = proc.stderr.strip() or proc.stdout.strip()
-        error = PromptRejected if args[0] in ("prompt", "compact", "maintenance-resume", "control-goal") and data.get("status") in (400, 404, 409, 422) else StreamsError
+        status = data.get("status")
+        if args[0] in {"status", "archive"} and status in {404, 410}:
+            raise TerminalSession(args[1], "missing", detail)
+        if args[0] == "status" and status == 409 and "archived" in detail.casefold():
+            raise TerminalSession(args[1], "archived", detail)
+        if args[0] == "archive" and status in {400, 409, 422}:
+            raise ArchiveRejected(detail)
+        receipt = data.get("result", {}).get("admission") if isinstance(data.get("result"), dict) else None
+        if args[0] == "failure-fork" and data.get("status") == 409 and isinstance(receipt, dict) and receipt.get("state") == "refused-before-effect":
+            raise RecoveryRefused(detail, receipt)
+        error = PromptRejected if args[0] in ("prompt", "compact", "maintenance-resume", "control-goal", "failure-maintenance") and data.get("status") in (400, 404, 409, 422) else StreamsError
         raise error(f"pi-web-cli {' '.join(args)} failed: {detail}")
     return data
 
@@ -119,8 +145,12 @@ def automatic_admission(session: dict[str, object], sid: str, cwd: str, kind: st
     return {"sessionId": sid, "cwd": native_cwd, "generation": generation, "kind": kind}, raw["allowed"]
 
 
-def set_automatic_admission(sid: str, allowed: bool, *, expected_generation: str | None = None) -> dict[str, object]:
+def set_automatic_admission(sid: str, allowed: bool, *, expected_generation: str | None = None, initialize_if_absent: bool = False) -> dict[str, object]:
+    if initialize_if_absent and (not allowed or expected_generation is not None):
+        raise StreamsError("initial automatic admission requires on without an expected generation")
     flags = [] if expected_generation is None else ["--expected-generation", expected_generation]
+    if initialize_if_absent:
+        flags = ["--initialize-if-absent"]
     data = call(["automatic-admission", sid, "on" if allowed else "off", *flags])
     result = data.get("result")
     if not isinstance(result, dict) or result.get("sessionId") != sid or result.get("durable") is not True or result.get("allowed") is not allowed or not isinstance(result.get("generation"), str) or not result["generation"]:
@@ -154,7 +184,7 @@ def command_run(sid: str, text: str) -> dict:
 def maintenance_capabilities() -> bool:
     data = call(["runtime"])
     runtime = data.get("runtime")
-    return isinstance(runtime, dict) and runtime.get("component") == "sessiond" and isinstance(runtime.get("capabilities"), list) and all(capability in runtime["capabilities"] for capability in ("sessions.maintenanceCheckpoint", "prompt.potetoArguments", "sessions.streamsDcrEvents", "prompt.controlGoal", "sessions.conditionalAdmission", "prompt.recoveryControl", "sessions.failureBoundary", "sessions.failureFork", "sessions.failureMaintenance", "sessions.failureRetirement", "sessions.resumeObservation"))
+    return isinstance(runtime, dict) and runtime.get("component") == "sessiond" and isinstance(runtime.get("capabilities"), list) and all(capability in runtime["capabilities"] for capability in ("sessions.maintenanceCheckpoint", "prompt.potetoArguments", "sessions.streamsDcrEvents", "prompt.controlGoal", "sessions.conditionalAdmission", "prompt.recoveryControl", "sessions.failureBoundary", "sessions.failureFork", "sessions.failureMaintenance", "sessions.failureRetirement", "sessions.resumeObservation", "sessions.engineFailureRecovery", "sessions.extensionCallbackOwnership", "sessions.streamTransientRetry"))
 
 
 def require_maintenance(sid: str) -> dict[str, object]:
@@ -195,12 +225,17 @@ def _maintenance_result(data: dict, sid: str, identity: str, cwd: str) -> dict:
     return result
 
 
-def register_stream_failure(sid: str, cwd: str, stream_dir: Path, status: dict, *, starting: bool = False) -> None:
+def register_stream_failure(sid: str, cwd: str, stream_dir: Path, status: dict, *, starting: bool = False, role: str = "", assignment: str = "") -> None:
     if status.get("failureBoundarySupport") != "persisted-turn-v1":
         return
     result = status.get("failureBoundary")
     if result is None:
-        result = call(["failure-boundary", sid, "--cwd", cwd, "--stream", stream_dir.name, "--root", str(stream_dir.resolve())]).get("result")
+        args = ["failure-boundary", sid, "--cwd", cwd, "--stream", stream_dir.name, "--root", str(stream_dir.resolve())]
+        if starting and status.get("engineFailureRecoverySupport") == "enrolled-prefix-v1":
+            if not role or not assignment:
+                raise StreamsError("Fresh recovery enrollment requires the exact bounded role and opening assignment")
+            args += ["--enroll", json.dumps({"policyId": "enrolled-prefix-v1", "role": role, "assignment": assignment}, ensure_ascii=False)]
+        result = call(args).get("result")
     if not isinstance(result, dict) or type(result.get("version")) is not int or result["version"] != 1 or result.get("sessionId") != sid or result.get("cwd") != cwd or result.get("root") != str(stream_dir.resolve()) or result.get("stream") != stream_dir.name or result.get("state") not in ("watching", "parked", "uncertain"):
         raise StreamsError("native failure registration identity/state is unconfirmed")
     status["failureBoundary"] = result
@@ -208,11 +243,32 @@ def register_stream_failure(sid: str, cwd: str, stream_dir: Path, status: dict, 
         raise StreamsError("Native failure registration is parked or unconfirmed; no opening task was sent")
 
 
-def ratify_failure(sid: str, cwd: str, request: dict) -> dict:
-    data = call(["failure-ratify", sid, "--cwd", cwd], stdin=json.dumps(request, ensure_ascii=False))
-    result = data.get("result")
-    if not isinstance(result, dict) or type(result.get("version")) is not int or result["version"] != 1 or not isinstance(result.get("target"), dict) or result["target"].get("sessionId") != sid or result["target"].get("cwd") != cwd or not all(isinstance(result.get(key), str) for key in ("noticeId", "provenance", "instructions", "generation", "entryId", "sha256")):
-        raise StreamsError("Native authenticated ratification receipt is unconfirmed")
+def resume_failure(sid: str, cwd: str, expected: dict) -> dict:
+    result = call(["failure-resume", sid, "--cwd", cwd], stdin=json.dumps({"expected": expected}, ensure_ascii=False)).get("result")
+    if not isinstance(result, dict) or result.get("sessionId") != sid or result.get("cwd") != cwd or result.get("state") != "parked" or result.get("checkpoint") != expected.get("checkpoint") or result.get("failure") != expected.get("failure") or result.get("parking", {}).get("owned") is not True:
+        raise StreamsError("Explicit parked resume has no exact receiving-owned failure boundary")
+    return result
+
+
+def recovery_readiness(sid: str, cwd: str, status: dict, kind: str) -> bool:
+    if status.get("recoveryReadinessSupport") != "same-provider-v1":
+        return True
+    result = call(["failure-readiness", sid, "--cwd", cwd]).get("result")
+    model = status.get("model", {})
+    if not isinstance(result, dict) or result.get("sessionId") != sid or result.get("cwd") != cwd or result.get("provider") != model.get("provider") or result.get("model") != model.get("id"):
+        raise StreamsError("Readiness changed exact session or provider/model")
+    return result.get("resourceReady") is True and (kind not in {"codex-login", "usage-limit"} or result.get("authenticated") is True)
+
+
+def analyze_policy(sid: str, cwd: str, request: dict, model: str, thinking: str) -> dict:
+    result = call(["failure-analysis", sid, "--cwd", cwd], stdin=json.dumps(request, ensure_ascii=False)).get("result")
+    provider, model_id = split_model(model)
+    if (not isinstance(result, dict) or result.get("version") != 1 or result.get("basis") != "clean-policy-analysis-v1"
+        or result.get("id") != request["id"] or result.get("originalSessionId") != sid or result.get("cwd") != cwd
+        or result.get("failure") != request["expected"]["failure"] or result.get("blockedGoalSha256") != request["blockedGoalSha256"]
+        or result.get("originalTaskBlocked") is not True or result.get("provider") != provider or result.get("model") != model_id or result.get("thinking") != thinking
+        or result.get("state") not in {"analyzed", "blocked", "rejected", "superseded", "uncertain"} or not isinstance(result.get("audit"), dict)):
+        raise StreamsError("Clean metadata analysis returned an unconfirmed basis, source, model or blocker")
     return result
 
 

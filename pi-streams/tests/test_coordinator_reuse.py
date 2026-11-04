@@ -120,7 +120,7 @@ class CoordinatorReuseTests(TickCase):
     def test_missing_or_stale_checkpoint_refuses_before_retirement(self):
         result = self.run_streams("rotate", "etl")
         self.assertEqual(result.returncode, 1, result.stdout)
-        self.assertIn("checkpoint", result.stderr)
+        self.assertRegex(result.stderr, "checkpoint|native branch")
         self.assertEqual([request for request in self.stub.requests if request[0] == "POST"], [])
         self.checkpoint()
         state = self.stream / "STATE.md"
@@ -129,6 +129,54 @@ class CoordinatorReuseTests(TickCase):
         self.assertEqual(result.returncode, 1, result.stdout)
         self.assertIn("checkpoint", result.stderr)
         self.assertEqual([request for request in self.stub.requests if request[0] == "POST"], [])
+
+    def test_handover_and_native_good_prefix_rotate_without_live_acknowledgement(self):
+        report = self.stream / 'handover/coordinator/current.md'
+        report.parent.mkdir(parents=True)
+        report.write_text('session: current\nRetain the unfinished owned worker and current goal.\n')
+        self.write_log('current', str(self.stream), {'role': 'assistant', 'content': [{'type': 'text', 'text': 'A normal successful turn, not a rotation acknowledgement.'}], 'stopReason': 'stop'})
+        path = Path(self.log_path('current'))
+        entries = [json.loads(line) for line in path.read_text().splitlines()]
+        entries[-1]['id'] = 'checkpoint-ack'
+        path.write_text(''.join(json.dumps(entry) + '\n' for entry in entries))
+        self.assertFalse((self.stream / 'log/tick-state.json').exists())
+        self.stub.requests.clear()
+        result = self.run_streams('rotate', 'etl')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(result.stdout.endswith('successor\n'))
+        self.assertTrue(self.state(self.stream)['coordinator_checkpoint']['source'])
+        prompts = [item[3]['text'] for item in self.stub.requests if item[1].endswith('/prompt')]
+        self.assertIn(str(report), prompts[-1])
+        self.assertFalse(any(item[1].endswith('/abort') for item in self.stub.requests))
+
+    def test_checkpoint_free_rotation_keeps_source_model_instead_of_project_default(self):
+        table = self.stream / 'threads.tsv'
+        table.write_text(table.read_text().replace('openai-codex/gpt-6-astra', 'openai-codex/gpt-6.1-sol', 1))
+        report = self.stream / 'handover/coordinator/current.md'
+        report.parent.mkdir(parents=True)
+        report.write_text('session: current\nContinue only the current authorized goal.\n')
+        self.write_log('current', str(self.stream), {'role': 'assistant', 'content': [{'type': 'text', 'text': 'A normal successful turn.'}], 'stopReason': 'stop'})
+        path = Path(self.log_path('current'))
+        entries = [json.loads(line) for line in path.read_text().splitlines()]
+        entries[-1]['id'] = 'checkpoint-ack'
+        path.write_text(''.join(json.dumps(entry) + '\n' for entry in entries))
+        successor_status = None
+        for method, route, _, body in self.stub.routes:
+            if method == 'GET' and route == '/api/sessions/current/status':
+                body['model']['id'] = 'gpt-6.1-sol'
+            if method == 'GET' and route == '/api/sessions/successor/status':
+                successor_status = body
+        def configure(body):
+            successor_status['model'] = {'provider': body['provider'], 'id': body['modelId']}
+            return 200, {'ok': True}
+        self.stub.set_routes([('POST', '/api/sessions/successor/model', 200, configure), *self.stub.routes])
+        result = self.run_streams('rotate', 'etl')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        configured = [item[3] for item in self.stub.requests if item[1] == '/api/sessions/successor/model']
+        self.assertEqual(configured, [{'provider': 'openai-codex', 'modelId': 'gpt-6.1-sol'}])
+        successor = next(line for line in self.rows(self.stream).splitlines() if line.startswith('successor\t'))
+        self.assertIn('openai-codex/gpt-6.1-sol\txhigh\tactive', successor)
+        self.assertFalse(any(item[1] == '/api/sessions/current/model' for item in self.stub.requests))
 
     def test_prearchive_retry_refuses_changed_handover_instead_of_guessing_through_checkpoint(self):
         self.checkpoint()
@@ -161,7 +209,7 @@ class CoordinatorReuseTests(TickCase):
         self.assertIn("regular", result.stderr)
         self.assertEqual([request for request in self.stub.requests if request[0] == "POST"], [])
 
-    def test_archive_then_failed_spawn_recovers_only_on_explicit_retry(self):
+    def test_archive_then_failed_spawn_recovers_on_tick_without_another_request(self):
         self.checkpoint()
         self.stub.set_routes([("POST", "/api/sessions", 500, {"error": "labelled private spawn rejection"}), *self.stub.routes])
         failed = self.run_streams("rotate", "etl")
@@ -172,11 +220,8 @@ class CoordinatorReuseTests(TickCase):
         self.stub.requests.clear()
         self.routes()
         tick = self.tick("2026-10-06T12:05:00Z")
-        self.assertEqual([request for request in self.stub.requests if request[0] == "POST"], [])
-        self.stub.requests.clear()
-        result = self.run_streams("rotate", "etl")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertTrue(result.stdout.endswith("successor\n"))
+        self.assertEqual(tick.returncode, 0, tick.stderr)
+        self.assertEqual([path for method, path, _, _ in self.stub.requests if method == "POST"].count("/api/sessions"), 1)
         self.assertEqual([path for method, path, _, _ in self.stub.requests if method == "POST"].count("/api/sessions/current/archive"), 0)
         self.assertEqual(self.state(self.stream)["coordinator_rotation"]["phase"], "complete")
 

@@ -18,6 +18,7 @@ class Drive:
     desired: dict[str, str] | None = None
     remote_state: str = "not-requested"
     remote_generation: str = ""
+    resume_original: str = ""
 
 
 def load(stream_dir: Path) -> Drive:
@@ -28,7 +29,7 @@ def load(stream_dir: Path) -> Drive:
         record = Drive(**value)
         if type(record.enabled) is not bool or not isinstance(record.run_id, str) or not isinstance(record.current_delivery, str) or type(record.sequence) is not int or record.sequence < 0 or record.enabled and not record.run_id:
             raise ValueError("invalid explicit switch or transport identity")
-        if record.remote_state not in ("not-requested", "on-unconfirmed", "on-confirmed", "off-unconfirmed", "off-confirmed") or not isinstance(record.remote_generation, str):
+        if record.remote_state not in ("not-requested", "on-unconfirmed", "on-confirmed", "off-unconfirmed", "off-confirmed") or not isinstance(record.remote_generation, str) or not isinstance(record.resume_original, str):
             raise ValueError("invalid remote drive confirmation")
         if record.desired is not None and (not isinstance(record.desired, dict) or set(record.desired) != {"goal", "body", "revision"} or not all(isinstance(item, str) for item in record.desired.values())):
             raise ValueError("invalid desired goal snapshot")
@@ -55,17 +56,43 @@ def is_paused(stream_dir: Path) -> bool:
 def enable(stream_dir: Path, resolved: Coordinator) -> dict:
     artifacts._read_stream_state_locked(stream_dir)
     require_ratified(stream_dir)
+    raw = resolved.native.status.get("automaticAdmission")
+    initial = (
+        isinstance(raw, dict) and raw.get("generation") == "unarmed"
+        and raw.get("durable") is False and raw.get("allowed") is False
+        and raw.get("sessionId") == resolved.row.session
+        and raw.get("cwd") == str(Path(resolved.row.worktree).resolve())
+    )
+    generation = None if initial else piweb.automatic_admission(resolved.native.status, resolved.row.session, resolved.row.worktree, "wake")[0]["generation"]
     piweb.require_control_goal(resolved.row.session)
     record = Drive(run_id=uuid.uuid4().hex, remote_state="on-unconfirmed")
     save(stream_dir, record)
-    remote = piweb.set_automatic_admission(resolved.row.session, True)
+    remote = piweb.set_automatic_admission(resolved.row.session, True, expected_generation=generation, initialize_if_absent=initial)
+    piweb.automatic_admission({"automaticAdmission": remote}, resolved.row.session, resolved.row.worktree, "wake")
     record.enabled, record.remote_state, record.remote_generation = True, "on-confirmed", str(remote["generation"])
     return save(stream_dir, record)
 
 
+def request_resume(stream_dir: Path, original: str) -> dict:
+    require_ratified(stream_dir)
+    record = Drive(enabled=True, run_id=uuid.uuid4().hex, remote_state="on-unconfirmed", resume_original=original)
+    return save(stream_dir, record)
+
+
+def confirm_resume(stream_dir: Path, original: str, sid: str, cwd: str, generation: str) -> None:
+    record = load(stream_dir)
+    if not record.enabled or record.resume_original != original:
+        return
+    token, allowed = piweb.automatic_admission(piweb.session_status(sid), sid, cwd, "wake")
+    if not allowed or token["generation"] != generation:
+        raise StreamsError("Newer receiving stop/input superseded drive resume confirmation")
+    record.remote_state, record.remote_generation, record.resume_original = "on-confirmed", generation, ""
+    save(stream_dir, record)
+
+
 def pause_local(stream_dir: Path) -> dict:
     record = load(stream_dir)
-    record.enabled, record.remote_state, record.remote_generation = False, "off-unconfirmed", ""
+    record.enabled, record.remote_state, record.remote_generation, record.resume_original = False, "off-unconfirmed", "", ""
     return save(stream_dir, record)
 
 
@@ -93,6 +120,9 @@ def step(stream_dir: Path, resolved: Coordinator | None, stalled: bool, *, maint
     state = artifacts._read_stream_state_locked(stream_dir)
     require_ratified(stream_dir)
     goal = artifacts.resolve_current_goal(state)
+    from engine.failure import policy_blocks_goal
+    if policy_blocks_goal(stream_dir, goal):
+        return True
     revision = hashlib.sha256(goal.encode("utf-8")).hexdigest()
     record.desired = {"goal": goal, "body": "/poteto-mode " + goal, "revision": revision}
     save(stream_dir, record)
@@ -134,6 +164,12 @@ def step(stream_dir: Path, resolved: Coordinator | None, stalled: bool, *, maint
             return True
         if not allowed:
             return True
+    from engine import blocked_goals
+    native_file = resolved.native.info.get("path")
+    if isinstance(native_file, str) and previous is not None and previous.control.revision == revision and previous.control.state == "ended":
+        blocked_goals.observe(stream_dir, goal, resolved.row.session, native_file, dispatch=previous.id, leaf=resolved.native.status.get('rotationSafety', {}).get('entryId'))
+    if not blocked_goals.permit(stream_dir, goal):
+        return True
     record.sequence += 1
     identity = delivery.new_identity()
     delivery.prepare_control_locked(stream_dir, identity, resolved.row.session, goal, revision, record.run_id, record.sequence, token)

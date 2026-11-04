@@ -142,6 +142,8 @@ def has_ratified_authority_line(line: str) -> bool:
     reference, provenance = match.groups()
     if reference.casefold() == "zf":
         return re.fullmatch(r"notice[ \t]+\S.*", provenance, re.IGNORECASE) is not None
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}\.", reference):
+        reference = reference[:-1]
     if re.fullmatch(r"\d{4}-\d{2}-\d{2}(?:T\S+)?", reference) is None:
         return False
     try:

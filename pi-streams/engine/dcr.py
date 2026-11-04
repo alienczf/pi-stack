@@ -44,8 +44,8 @@ class Operation:
     completed_leaf: str = ""
     detail: str = ""
     recovery_original: str = ""
-    recovery_instructions: str = ""
     observation: dict | None = None
+    continuation: dict | None = None
 
 
 def load(stream_dir: Path, sid: str) -> Operation | None:
@@ -56,7 +56,7 @@ def load(stream_dir: Path, sid: str) -> Operation | None:
     if value is None:
         return None
     try:
-        op = Operation(**value)
+        op = Operation(**{key: item for key, item in value.items() if key != "recovery_instructions"})
         if op.session != sid or op.phase not in PHASES or not op.id or not Path(op.cwd).is_absolute() or op.automatic.get("sessionId") != sid or op.automatic.get("cwd") != op.cwd or op.automatic.get("kind") != "wake":
             raise ValueError("mismatched DCR owner or phase")
         return op
@@ -92,9 +92,9 @@ def resume_text(stream_dir: Path, goal: str) -> str:
         "Resolve the current objective in STATE Goals, falling back to its North Star.\n"
         "Open history/, context/ and its README index, checks/, or handover/ only on demand.\n"
         "Historical entries do not override current Goals or Rules.\n"
-        "Do not self-remedy environment/auth/resource failures or write new rules, skills,\n"
-        "or memory because of them. Park and append a Log entry via the engine;\n"
-        "the human repairs them.\n"
+        "Runtime failures use engine-owned recovery under the standing charter. Preserve stops,\n"
+        "newer input, unknown effects and bounded role. Never read tokens, repair credentials,\n"
+        "switch provider/model or replay rejected content. Record failures through the Log.\n"
         f"/poteto-mode {goal}"
     )
 
@@ -230,10 +230,30 @@ def close_events(stream_dir: Path, op: Operation) -> None:
     save(stream_dir, op)
 
 
-def prepare(index: Path, stream: str, stream_dir: Path, resolved: Coordinator, identity: str, token: dict, *, original: str = "", instructions: str = "") -> Operation:
+def continuation_text(op: Operation, stream_dir: Path) -> str:
+    context = op.continuation
+    if context is None:
+        return ""
+    if context.get("mode") == "permitted-analysis-v1":
+        raise StreamsError("Content-policy blocker. A clean model context and resource view is not proven")
+    role = context.get("role")
+    assignment = context.get("assignment")
+    if not isinstance(role, str) or re.fullmatch(r"[a-z][a-z0-9_-]*", role) is None or not isinstance(assignment, str) or not assignment:
+        raise StreamsError("Recovery has no exact bounded continuation assignment")
+    return (f"Recovery retains role {role} in owned worktree {op.cwd}. Current session is {op.session}. "
+            + ("Do not adopt the coordinator role or widen the assignment. " if role != "coordinator" else "")
+            + f"Original assignment evidence follows. Its old session and handover identity are historical. Use {stream_dir}/handover/{role}/{op.session}.md for this session's handover with first line session: {op.session}. "
+            "Reconcile omitted input and effects from the original evidence; never replay its last command.\n"
+            f"Original native input/effect evidence: {context.get('nativeFile', 'retained original evidence')}. Saved input {json.dumps(context.get('savedInput', {}), sort_keys=True)}. Existing original handovers {json.dumps(context.get('handovers', []), sort_keys=True)}.\n"
+            f"<original-assignment>\n{assignment}\n</original-assignment>\n")
+
+
+def prepare(index: Path, stream: str, stream_dir: Path, resolved: Coordinator, identity: str, token: dict, *, original: str = "", continuation: dict | None = None) -> Operation:
+    if (continuation or {}).get("mode") == "permitted-analysis-v1":
+        raise StreamsError("Content-policy blocker. A clean model context and resource view is not proven; do not prepare recovery SYNC")
     previous = load(stream_dir, resolved.row.session)
     if previous is not None and (original or previous.phase not in {"complete", "superseded"}):
-        if previous.id != identity or previous.recovery_original != original or previous.automatic != token or previous.recovery_instructions != instructions:
+        if previous.id != identity or previous.recovery_original != original or previous.automatic != token or previous.continuation != continuation:
             raise StreamsError("Another DCR operation owns the returned fork")
         return previous
     command = shlex.join([str(Path(__file__).resolve().parents[2] / "bin/pi-streams"), "dcr", "ready", stream, "--home", str(index), "--session", resolved.row.session, "--operation", identity])
@@ -244,7 +264,8 @@ def prepare(index: Path, stream: str, stream_dir: Path, resolved: Coordinator, i
         "Do not prune or rotate Log, abort active tools, author RESUME, or retry uncertain external jobs. "
         f"Then run {command}. Make no artifact writes afterward. Finish the turn with the exact acknowledgement returned by that command."
     )
-    op = Operation(identity, resolved.row.session, resolved.row.worktree, token, text, recovery_original=original, recovery_instructions=instructions)
+    op = Operation(identity, resolved.row.session, resolved.row.worktree, token, text, recovery_original=original, continuation=continuation)
+    op.sync_text = continuation_text(op, stream_dir) + op.sync_text
     save(stream_dir, op)
     return op
 
@@ -258,6 +279,10 @@ def step(index: Path, project: Project, stream: str, stream_dir: Path, resolved:
         return True
     sid, status = resolved.row.session, resolved.native.status
     op = load(stream_dir, sid)
+    if op is not None and (op.continuation or {}).get("mode") == "permitted-analysis-v1":
+        op.phase, op.detail = "blocked", "Content-policy blocker. Persisted restricted DCR has no proven clean context/resource view. No inference, compaction, or RESUME is admitted."
+        save(stream_dir, op)
+        return True
     token, allowed = piweb.automatic_admission(status, sid, resolved.row.worktree, "wake")
     if op is not None and op.phase == "blocked":
         return True
@@ -290,7 +315,7 @@ def step(index: Path, project: Project, stream: str, stream_dir: Path, resolved:
         identity = uuid.uuid4().hex
         op = prepare(index, stream, stream_dir, resolved, identity, token)
     try:
-        piweb.require_settings(status, resolved.row.model if op.recovery_original else project.coordinator.model, resolved.row.thinking if op.recovery_original else project.coordinator.thinking)
+        piweb.require_settings(status, resolved.row.model, resolved.row.thinking)
         if status.get("maintenanceSupport") != "checkpoint-input-v1" or status.get("potetoInvocationSupport") != "exact-goal-v1" or status.get("dcrEventSupport") != "phase-v1":
             op.phase, op.detail = "blocked", "Native checkpoint, exact mode and idle-event capabilities are required."
             save(stream_dir, op)
@@ -369,12 +394,15 @@ def step(index: Path, project: Project, stream: str, stream_dir: Path, resolved:
             proof = piweb.compaction_result(op.cwd, sid, op.id, original=op.recovery_original)
             if proof is None:
                 return True
+            tokens_after = native.get("tokensAfter")
+            if native.get("targetTokens") != THRESHOLD or type(tokens_after) is not int or tokens_after >= THRESHOLD or tokens_after < 0:
+                raise StreamsError("Native compaction has no verified rebuilt context below 150000 tokens")
             artifacts._rotate_log_locked(stream_dir)
             state = artifacts._read_stream_state_locked(stream_dir)
             require_ratified(stream_dir)
             op.compaction_entry, op.compaction_sha256 = proof["entryId"], proof["sha256"]
             op.resume_goal = artifacts.resolve_current_goal(state)
-            op.resume_text = ("Explicitly ratified exceptional instructions:\n" + op.recovery_instructions + "\n" if op.recovery_instructions else "") + resume_text(stream_dir, op.resume_goal)
+            op.resume_text = continuation_text(op, stream_dir) + resume_text(stream_dir, op.resume_goal)
             op.phase = "resume-sending"
             save(stream_dir, op)
             piweb.resume_maintenance(sid, op.id, op.compaction_entry, 0, {**op.automatic, "kind": "resume"}, f"{op.id}:resume", op.resume_text, poteto_goal=op.resume_goal, original=op.recovery_original)
