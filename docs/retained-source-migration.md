@@ -1,51 +1,33 @@
-# Retained-source migration input
+# Documentary source-preserving repair
 
-`pi-streams migrate STREAM --plan --mapping MAP.json --recovery-sources SOURCES.json` accepts exact retained contracts and legacy ratification witnesses. This input is provenance, not transport authentication, infrastructure-maintenance authorization, or renewed business authority. It cannot be combined with `--relay-source` or supplied during application or resumption.
+`pi-streams migrate STREAM --plan --mapping MAP.json --recovery-sources SOURCES.json` can restore an immutable original contract and retain legacy source bytes without deciding ratification from prose. Application uses the exact reviewed plan through the existing protected migration journal.
 
-## Version 1 object
+## Version 2 input
 
-The input has exactly three fields.
+The input contains exactly `version: 2` and `supplemental_sources`. No authority witness, instruction date, principal, trust label or approval field is accepted. The rejected version1 narrative-authority input is not supported.
 
-- `version` is the integer `1`.
-- `supplemental_sources` maps source names to the descriptors below. An empty object is valid for witnesses from current sources alone.
-- `legacy_authority` contains exactly `marker`, `evidence`, and `instruction_date`.
+A Git source name matches `git:[a-z][a-z0-9-]{0,63}`. Its descriptor has `source_kind: git-blob`, a full ancestor commit OID, `path: STREAM.md`, the exact regular blob OID, its SHA256, and its exact UTF8 `bytes_base64`. Git timestamps never become instruction dates.
 
-The engine binds this object, current source bytes, configuration, root, Git HEAD, and mappings in plan identity. Restoration and fresh application revalidate the bound inputs. Existing migration plans without this object remain supported.
+A retained file name matches `retained:[a-z][a-z0-9-]{0,63}`. Its descriptor has `source_kind: retained-file`, an owned regular relative Markdown path under `context/`, its SHA256, and exact UTF8 `bytes_base64`. Every directory component and file is ownership-checked. Symlinks, special files, traversal, binary content and changed source are refused.
 
-## Supplemental descriptors
+These sources are documentary. Their Markdown, quotation containers, example labels and natural-language approval claims are never parsed as execution authority. Supplemental originals remain untouched and outside the current-source retirement set.
 
-A Git source name matches `git:[a-z][a-z0-9-]{0,63}`. Its descriptor contains exactly these fields.
+## Authority preservation
 
-- `source_kind` is `git-blob`.
-- `commit` is a full lowercase Git commit OID. It must be an ancestor of the selected root's HEAD.
-- `path` is `STREAM.md`.
-- `blob_oid` is the full lowercase OID of that regular Git blob.
-- `sha256` is the lowercase SHA-256 of its exact bytes.
-- `bytes_base64` contains those exact UTF-8 bytes in base64. Binary data is refused.
+This path accepts only legacy schema0 streams. It reads their current authoritative STREAM first line, never a ratification claim inside legacy STATE or supplemental material. Only a record already accepted by the ordinary current-source authority guard is copied unchanged. Existing canonical-schema repair keeps its separate unchanged-authority path. An existing negative remains negative. An unvalidated bare affirmative, missing marker or narrative does not become a positive record; the canonical marker remains `ratified: no`.
 
-A retained file name matches `retained:[a-z][a-z0-9-]{0,63}`. Its descriptor contains exactly `source_kind`, `path`, `sha256`, and `bytes_base64`. `source_kind` is `retained-file`. The path is a relative Markdown file under `context/`. Directory components use letters, digits, underscores, or hyphens. The filename also permits periods. Every component must be owned by the current user. Symlinks, nonregular files, traversal, and paths outside that directory are refused.
+This is not a historical denial or a request for human ratification. Exact old affirmative statements and any real dates remain documentary source. The structural repair cannot manufacture current execution authority, widen the Charter or renew historical launch, DRIVE, publication, cloud or cleanup grants. Existing authenticated execution authority, where present, remains subject to its normal guard.
 
-Supplemental sources never enter the current-source retirement collection. Their references remain untouched and outside the scoped commit. The migration retains exact supplemental snapshots and a hash-bound witness bundle under `history/`. Repeated application refuses missing or changed supplemental retention.
+## Exact plan and repair record
 
-## Legacy authority
+The generated plan contains an engine-derived `repair_policy`. It binds the selected root, exact current authority before/after hashes, current and original-contract hashes, mapping hash, plan ID and canonical target hash. The policy is fixed to authority preservation; no caller trust label can change it.
 
-`marker` is the exact complete first line of current `STREAM.md` or a supplemental ancestor Git STREAM. `evidence` is a nonempty array of corroborating spans. Each span contains exactly these fields.
+Restoration recomputes the policy and the whole canonical target. Fresh application revalidates current source and immutable supplemental bytes before writing the protected migration journal. The scoped migration commit retains a hash-bound documentary repair record under `history/recovery-*.json`. That record is provenance, not a credential or an alternative runtime ratification predicate.
 
-- `source` names a current or supplemental source.
-- `start` and `end` are integer, half-open UTF-8 byte offsets.
-- `sha256` hashes the selected bytes.
-- `text` is their exact decoded text.
+## Mapping and retained scope
 
-STATE cannot supply ratification or corroboration. An ancestor cannot override a current negative or unratified marker or explicit ratification revocation. A current summary with no marker can recover only an exact dated ancestor STREAM authority line. The selected marker must be an existing dated authority line or a bare `ratified: yes` or `ratified: true`. A bare affirmative additionally requires a complete affirmative ratification statement. Every witness uses complete source lines. Ratification statements must occupy their complete original standalone paragraph; a caller cannot crop away an adjacent qualifier. Lazy blockquote continuations and example/question containers are excluded along with ordinary quotes and fences. Questions, negation and explicit revocation are refused rather than promoted by a matching prefix.
+Every byte of current STREAM, DECISIONS when present, STATE and supplemental sources requires explicit classification. Documentary repair mappings cannot target `ratified`. Historical marker lines may be retained as quoted documentary Charter text or history instead. Supplemental sources can supply only documentary North Star, Charter and history. Current STATE can supply only current objective, Rules and history.
 
-The instruction date is derived only from a recognized ratification-event statement or authority marker. `instruction_date`, when supplied, must agree with that derived date. Conflicting dates refuse the plan. An unrelated benchmark, backup or Git timestamp never supplies an instruction date. Unknown remains `null`. Sender, message identity, and relay-envelope fields are not accepted.
+Original broad contracts remain visible and distinct from finite current objectives. Selected current objectives, STOP/PARK, freeze, owner and job facts remain byte-exact in their proper canonical fields. Every original source occurrence is also retained exactly in ordered history, including duplicate entries. Existing active facts must not be dropped merely to obtain a ready plan.
 
-The canonical marker uses `retained-source-v1`, the witness bundle's SHA-256, and the derived date or `unknown`. Runtime admission also requires the completed engine migration journal to bind the same source bundle and recovery input. Its recorded migration commit must be an ancestor of HEAD and contain the exact witness and canonical authority line. A self-consistent caller-created history bundle without that durable migration binding is not authority. Existing dated authority behavior is unchanged.
-
-## Projection and application boundaries
-
-Mappings cover every byte of current STREAM, DECISIONS when present, STATE, and all supplemental sources. STATE permits only `current_objective`, `rules`, and `history`. Supplemental sources permit only `ratified`, `north_star`, `charter`, and `history`. The mapped authority must equal the bound marker span.
-
-North Star and Charter fragments render as retained quotations when this input is present. Supplemental contracts are documentary source. Current contract fragments explicitly preserve standing constraints under current Rules. Their original broad contract text remains visible. Historical launch, DRIVE, publication, cloud, and cleanup grants are not renewed. Current completion, STOP, freeze, owner, and job facts require explicit current-objective or Rules mappings and remain visible.
-
-Planning and application do not enable drive, infer completion, contact native sessions, or spawn work. A ready plan still requires independent review of its classifications. Parent-owned application uses the exact reviewed plan and the existing migration journal. Canonical prefix repair version 1 and version 2 are unchanged.
+Planning and application do not enable drive, prompt native sessions, infer completion or resume a stopped campaign. A ready plan means a complete structural repair proposal, not ratification or business acceptance. Back up each actual source first, review the real canonical output, apply the exact plan, and reconcile interrupted application through the existing journal. Existing ordinary migration plans and canonical-prefix repairs remain supported.

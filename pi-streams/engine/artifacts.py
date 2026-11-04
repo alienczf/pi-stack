@@ -133,10 +133,7 @@ def parse_state(source: bytes, *, log_size: int | None = None) -> StreamState:
     )
 
 
-def has_ratified_authority_line(line: str, stream_dir: Path | None = None) -> bool:
-    if line.startswith("ratified: retained-source-v1"):
-        from engine import retained_sources
-        return stream_dir is not None and retained_sources.has_authority(stream_dir, line)
+def has_ratified_authority_line(line: str) -> bool:
     if len(line.splitlines()) != 1:
         return False
     match = re.fullmatch(r"ratified:[ \t]+(\S+)[ \t]+(.+)", line.rstrip("\r\n"))

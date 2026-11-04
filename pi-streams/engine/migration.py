@@ -77,6 +77,9 @@ class MigrationPlan:
             result.pop("history_mode")
         if self.recovery_sources is None:
             result.pop("recovery_sources")
+        else:
+            raw = base64.b64decode(self.state) if self.state is not None else None
+            result["repair_policy"] = retained_sources.repair_policy(Path(self.root), self.sources, self.recovery_sources, self.id, self.mapping, raw)
         return result
 
 
@@ -154,8 +157,10 @@ def _mapping(sources: dict[str, dict], mapping: list[dict] | None, *, recovery: 
         name, start, end, target = (item[key] for key in ("source", "start", "end", "target"))
         if not isinstance(name, str) or not isinstance(target, str) or name not in sources or target not in (STATE_TARGETS if name == "STATE.md" else TARGETS):
             raise StreamsError("migration mapping has an unsupported source or target")
-        if name not in SOURCES and target not in {"ratified", "north_star", "charter", "history"}:
-            raise StreamsError("supplemental sources are documentary only, never current Rules or objectives")
+        if recovery and target == "ratified":
+            raise StreamsError("documentary repair mappings cannot supply execution authority")
+        if name not in SOURCES and target not in {"north_star", "charter", "history"}:
+            raise StreamsError("supplemental sources are documentary only, never authority, current Rules or objectives")
         raw = base64.b64decode(sources[name]["bytes"])
         if type(start) is not int or type(end) is not int or not 0 <= start < end <= len(raw):
             raise StreamsError("migration mapping has an invalid source byte span")
@@ -202,20 +207,21 @@ def _state(sources: dict[str, dict], mapping: tuple[dict, ...], identity: str, a
 
     authority = [row for row in mapping if row["target"] == "ratified"]
     stars, objectives = fragments("north_star"), fragments("current_objective")
-    if len(authority) != 1 or (recovery_sources is None and authority[0]["source"] != "STREAM.md") or len(stars) != 1 or len(objectives) > 1:
-        raise StreamsError("migration requires one source-backed STREAM authority, one North Star and at most one current objective")
-    original = base64.b64decode(sources[authority[0]["source"]]["bytes"])
-    marker = fragments("ratified")[0]
-    if ((authority[0]["start"] and original[authority[0]["start"]-1:authority[0]["start"]] != b"\n")
-            or (authority[0]["end"] < len(original) and not marker.endswith(b"\n"))
-            or len(marker.splitlines()) != 1):
-        raise StreamsError("migration authority must be an exact complete source line")
+    if len(stars) != 1 or len(objectives) > 1:
+        raise StreamsError("migration requires one North Star and at most one current objective")
     if recovery_sources is not None:
-        witness_span, _, _ = retained_sources.validate_authority(sources, recovery_sources)
-        if {key: witness_span[key] for key in ("source", "start", "end")} != {key: authority[0][key] for key in ("source", "start", "end")}:
-            raise StreamsError("legacy authority marker does not match the mapped authority")
-        current = {name: record for name, record in sources.items() if name in SOURCES}
-        marker = retained_sources.witness(root, current, recovery_sources)[2].encode()
+        if authority:
+            raise StreamsError("documentary repair cannot derive authority from mapped text")
+        marker = base64.b64decode(retained_sources.current_authority(sources)["after"])
+    else:
+        if len(authority) != 1 or authority[0]["source"] != "STREAM.md":
+            raise StreamsError("migration requires one source-backed STREAM authority")
+        original = base64.b64decode(sources["STREAM.md"]["bytes"])
+        marker = fragments("ratified")[0]
+        if ((authority[0]["start"] and original[authority[0]["start"]-1:authority[0]["start"]] != b"\n")
+                or (authority[0]["end"] < len(original) and not marker.endswith(b"\n"))
+                or len(marker.splitlines()) != 1):
+            raise StreamsError("migration authority must be an exact complete source line")
     if relay_source is not None and marker.strip().lower() in {b"ratified: yes", b"ratified: true"}:
         if not relay_source["instructionDate"]:
             raise StreamsError("A bare legacy affirmative requires its dated standing-grant source provenance")
@@ -292,7 +298,6 @@ def plan_migration(stream: Path, mapping: list[dict] | None = None, *, started_a
     rows, unresolved = _mapping(combined, mapping, recovery=recovery_sources is not None)
     seed = {"root": str(root), "started_at": at, "sources": sources, "config": config, "mapping": rows}
     if recovery_sources is not None:
-        retained_sources.validate_authority(combined, recovery_sources)
         seed["recovery_sources"] = recovery_sources
     if relay_source is not None:
         relay.validate_provenance(relay_source, root.name)
@@ -339,7 +344,6 @@ def _restore_plan(root: Path, document: dict) -> MigrationPlan:
         if recovery_sources is not None:
             if relay_source is not None:
                 raise ValueError("recovery sources cannot be combined with relay provenance")
-            retained_sources.validate_authority(combined, recovery_sources)
             seed["recovery_sources"] = recovery_sources
         if relay_source is not None:
             relay.validate_provenance(relay_source, root.name)
@@ -428,7 +432,7 @@ def _seed_book(plan: MigrationPlan) -> dict:
 
 def _provenance_files(plan: MigrationPlan) -> dict[str, bytes]:
     if plan.recovery_sources is not None:
-        path, raw, _ = retained_sources.witness(Path(plan.root), plan.sources, plan.recovery_sources)
+        path, raw = retained_sources.repair_record(Path(plan.root), plan.sources, plan.recovery_sources, plan.id, plan.mapping, artifacts._decode_bytes(plan.state))
         return {path: raw}
     if plan.relay_source is None:
         return {}
