@@ -41,3 +41,11 @@ This operation refuses malformed UTF-8, empty active Rules, other suffix corrupt
 5. Verify drive through supported status and actual completed work. A finite objective, restart, blocker or recovery is not North Star acceptance. Keep drive on until verified North Star acceptance, a genuine later stop, or an explicit authorized cap.
 
 The rejected task retains its durable policy blocker. Supported native sessions can perform one separate `clean-policy-analysis-v1` metadata analysis in a private session with no tools or project resources. This operation does not inherit a prefix or replay the rejected task. It preserves source bytes and audit links outside model input. A successful analysis is not task recovery or acceptance. A rejected or uncertain analysis remains blocked without iterative retries. Other independently authorized lanes may continue.
+
+## Read-only status and stopped streams
+
+Explicit local drive-off prevents native coordinator/worker observation and automatic tick rotation, dispatch, commits or pushes. Status reports the known local drive and registration with `nativeObservation=not-queried-explicit-drive-off`; it does not invent native health or clear pending effects.
+
+A retained retired coordinator may still block dispatch because its native session cannot safely retire. Status can observe the exact currently registered coordinator independently, while returning the unchanged safety obstruction in `dispatchBlockers`. This is observation only, not dispatch readiness. Runtime selection, recovery and retirement still use the strict resolver. Never archive or clear a genuinely unknown old effect merely to make status look healthy.
+
+Recovery retirement distinguishes terminal automatic control ownership from business application receipts. Exact ended controls do not need a fabricated `applied` acknowledgement. A stale historical sending cache can lose current ownership only through the exact newer receiver's ended receipt, a different receiving epoch, and an idle original under its unchanged owned recovery stop. The engine retains that proof, the unchanged delivery and application outcome, and the exact original source in the native retirement cache. Sending/uncertain transport, current input ownership, stops, callbacks and genuine unresolved effects remain fences; nothing is resent.
