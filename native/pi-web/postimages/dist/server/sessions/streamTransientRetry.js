@@ -145,7 +145,7 @@ export function effectWindow(branch, boundary) {
     const retries = retryDispositions(branch, boundary.sessionId, boundary.cwd);
     const prefix = branch.slice(0, at + 1);
     const terminal = prefix.at(-1)?.value.message;
-    if (at < 0 || receipt <= at || hash(branch[at].raw) !== checkpoint.sha256 || !["assistant", "toolResult"].includes(terminal?.role) || terminal.role === "assistant" && terminal.stopReason !== "stop" || terminal.isError || prefix.some(item => ["error", "aborted", "length"].includes(item.value.message?.stopReason) && !["resolved", "superseded"].includes(retries.get(item.value.id)?.state)) || unresolvedEffects(prefix))
+    if (at < 0 || receipt <= at || hash(branch[at].raw) !== checkpoint.sha256 || !["assistant", "toolResult"].includes(terminal?.role) || terminal.role === "assistant" && terminal.stopReason !== "stop" || terminal.isError || prefix.some(item => ["error", "aborted", "length"].includes(item.value.message?.stopReason) && !["resolved", "superseded"].includes(retries.get(item.value.id)?.state)))
         throw new AutomaticAdmissionRejected("Effects checkpoint is not the verified successful native boundary/entry/hash/branch");
     if (boundary.failure) {
         const failed = branch.findIndex(item => item.value.id === boundary.failure.entryId);

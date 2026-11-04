@@ -274,7 +274,7 @@ def observe(stream_dir: Path, sid: str, cwd: str, native: dict, status: dict, at
             if not isinstance(boundary["checkpoint"], dict):
                 raise StreamsError("native checkpoint is malformed")
             checkpoint = sessionlog.verify_good_checkpoint(Path(path), sid, cwd, leaf, boundary["checkpoint"], failed["entryId"])
-    if checkpoint is not None and not observation["uncertainJobs"]:
+    if checkpoint is not None:
         observation = sessionlog.failure_observation(Path(path), sid, cwd, leaf, failed["entryId"], native_retry=status.get("streamRetry") if status.get("streamRetrySupport") == "entry-bound-v1" else None, checkpoint=checkpoint)
     jobs = observation["uncertainJobs"]
     replay = artifacts._read_tick_data(stream_dir).get("sessions", {}).get(sid, {}).get("replay", [])
