@@ -1012,6 +1012,7 @@ export interface SessionStatus {
         lostEntryId: string;
         previousEntryId: string | null;
         recoveredEntryId: string | null;
+        recoveredPreviousParentId?: string;
         fragmentCodeUnits: number;
         fragmentUtf8Sha256: string;
         reparented: string[];
