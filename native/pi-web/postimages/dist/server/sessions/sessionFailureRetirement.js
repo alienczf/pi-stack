@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync } from "node:fs";
 import { AutomaticAdmissionRejected } from "./automaticAdmissionStore.js";
 import { persistedFailureBranch } from "./sessionFailureBoundary.js";
@@ -161,12 +161,7 @@ export class SessionFailureRetirements {
             this.guard(retirement, fork, maintenance);
             save();
         }
-        if (retirement.state === "deleted" && this.hooks.boundary(fork)?.state === "watching" && this.permitsRelease(fork, id, ref.id)) {
-            retirement.release = this.hooks.release(fork, retirement.operation);
-            retirement.state = "released";
-            save();
-            return response();
-        }
+        let completionGuard;
         this.guard(retirement, fork, maintenance);
         if (retirement.state === "prepared") {
             const original = await this.hooks.resolve(ref);
@@ -175,32 +170,30 @@ export class SessionFailureRetirements {
                 throw new AutomaticAdmissionRejected("Original evidence changed before archive");
             retirement.state = "archive-sending";
             save();
-            const current = retirement;
-            await this.hooks.archive(original, id, () => { this.guard(current, fork, maintenance); });
         }
-        if (retirement.state === "archive-sending") {
-            const archived = await this.hooks.archived(ref);
-            if (archived?.sessionId !== ref.id || archived.cwd !== ref.cwd || archived.originalPath !== retirement.originalFile || archived.archivePath === undefined || archived.recoveryOperationId !== id || hash(retirementSource(archived.archivePath, ref.id, ref.cwd)) !== retirement.sourceSha256)
-                throw new AutomaticAdmissionRejected("Owned archive result is uncertain; preserve originals and never blindly repeat archive");
-            retirement.archive = { sessionId: ref.id, cwd: ref.cwd, originalPath: retirement.originalFile, archivePath: archived.archivePath, archivedAt: archived.archivedAt };
-            retirement.state = "archived";
-            save();
-        }
-        if (retirement.state === "archived") {
-            this.guard(retirement, fork, maintenance);
-            const archive = retirement.archive;
-            if (archive === undefined)
-                throw new Error("Missing exact archive receipt");
-            retirement.state = "delete-sending";
-            save();
+        if (retirement.state === "archive-sending" || retirement.state === "archived" || retirement.state === "deleted" && retirement.deleted?.protocol === "intent-quarantine-v1") {
             const current = retirement;
-            await this.hooks.delete(archive, id, () => { this.guard(current, fork, maintenance); if (hash(retirementSource(archive.archivePath, ref.id, ref.cwd)) !== current.sourceSha256)
-                throw new AutomaticAdmissionRejected("Archived evidence changed before deletion"); });
-            retirement.deleted = { sessionId: ref.id, archivePath: archive.archivePath, sourceSha256: retirement.sourceSha256 };
+            const guard = () => { this.guard(current, fork, this.store.get(forkRef, id) ?? maintenance); };
+            const attemptId = randomUUID();
+            const result = await this.hooks.complete(current, fork, guard, state => {
+                guard();
+                const prior = current.completionDispatch;
+                const attempts = prior?.attempts ?? [];
+                current.completionDispatch = { version: 1, kind: "artifact-completion", anyStoreDispatched: prior?.anyStoreDispatched === true || state === "store-dispatched", attempts: [...attempts.filter(attempt => attempt.id !== attemptId), { id: attemptId, state }] };
+                save();
+            });
+            completionGuard = result.verify;
+            completionGuard();
+            const archived = result.archive, deleted = result.deleted;
+            if (archived?.sessionId !== ref.id || archived.cwd !== ref.cwd || archived.originalPath !== current.originalFile || archived.recoveryOperationId !== id || deleted?.protocol !== "intent-quarantine-v1" || deleted.completionId !== archived.recoveryCompletionId || deleted.sessionId !== ref.id || deleted.archivePath !== archived.archivePath || deleted.sourceSha256 !== current.sourceSha256)
+                throw new AutomaticAdmissionRejected("Positive same-intent archive and deletion receipts are required");
+            retirement.archive = { sessionId: ref.id, cwd: ref.cwd, originalPath: current.originalFile, archivePath: archived.archivePath, archivedAt: archived.archivedAt };
+            retirement.deleted = deleted;
             retirement.state = "deleted";
             save();
         }
         if (retirement.state === "deleted") {
+            completionGuard?.();
             this.guard(retirement, fork, maintenance);
             retirement.release = this.hooks.release(fork, retirement.operation);
             retirement.state = "released";
@@ -209,12 +202,16 @@ export class SessionFailureRetirements {
         return response();
     }
     guard(retirement, fork, maintenance) {
+        if (retirement.cacheFile !== this.store.location({ id: retirement.forkSessionId, cwd: retirement.cwd }) || hash(Buffer.from(retirement.sourceBase64, "base64")) !== retirement.sourceSha256 || maintenance.retirement !== undefined && ["sourceBase64", "sourceSha256", "originalFile", "originalLeaf", "cacheFile"].some(key => maintenance.retirement[key] !== retirement[key]))
+            throw new AutomaticAdmissionRejected("Protected retirement cache or original binding changed");
         if (!this.hooks.authorized(retirement.operation))
             throw new AutomaticAdmissionRejected("The saved recovery authority is unavailable");
         this.controls.assertSettled({ id: retirement.originalSessionId, cwd: retirement.cwd });
         this.controls.assertSettled({ id: retirement.forkSessionId, cwd: retirement.cwd });
-        const original = this.controls.snapshot({ id: retirement.originalSessionId, cwd: retirement.cwd });
-        const current = this.controls.snapshot({ id: retirement.forkSessionId, cwd: retirement.cwd });
+        if (typeof this.controls.recoverySnapshot !== "function")
+            throw new AutomaticAdmissionRejected("Fresh durable recovery epoch reads are unavailable");
+        const original = this.controls.recoverySnapshot({ id: retirement.originalSessionId, cwd: retirement.cwd });
+        const current = this.controls.recoverySnapshot({ id: retirement.forkSessionId, cwd: retirement.cwd });
         if (!original.durable || original.allowed || original.generation !== retirement.operation.generation || !current.durable || !current.allowed || current.generation !== retirement.operation.maintenance?.generation)
             throw new AutomaticAdmissionRejected("Newer original/fork stop, input or unconfirmed epoch superseded retirement");
         this.hooks.quiescent(fork, retirement.operation);

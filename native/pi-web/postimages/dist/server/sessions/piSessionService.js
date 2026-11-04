@@ -41,7 +41,7 @@ import { StreamsDcrEvents } from "./streamsDcrEvents.js";
 import { SessionControlGoalController } from "./sessionControlGoal.js";
 import { assertFailureLifecycleFile, assertGoalNotBlocked, persistedFailureBranch, SessionFailureBoundaries } from "./sessionFailureBoundary.js";
 import { SessionFailureRecoveries } from "./sessionFailureRecovery.js";
-import { SessionFailureRetirements } from "./sessionFailureRetirement.js";
+import { retirementSource, SessionFailureRetirements } from "./sessionFailureRetirement.js";
 import { CleanPolicyAnalyses } from "./cleanPolicyAnalysis.js";
 const noopLogger = { info() { } };
 const DEFAULT_UNREAD_PUBLICATION_RETRY_MS = 1_000;
@@ -385,7 +385,7 @@ export class PiSessionService {
         this.modelRuntime = deps.modelRuntime;
         this.automaticAdmissionStore = deps.automaticAdmissionStore;
         this.failureBoundaries = new SessionFailureBoundaries(deps.automaticAdmissionStore, (session, id, original) => this.failureRetirements?.permitsRelease(session, id, original) === true, deps.engineRecoveryPolicy);
-        this.failureRetirements = deps.maintenanceDirectory === undefined || deps.automaticAdmissionStore === undefined || this.archiveStore.deleteRecoveryOriginal === undefined ? undefined : new SessionFailureRetirements(new SessionMaintenanceStore(deps.maintenanceDirectory), deps.automaticAdmissionStore, {
+        this.failureRetirements = deps.maintenanceDirectory === undefined || deps.automaticAdmissionStore === undefined || this.archiveStore.completeRecoveryOriginal === undefined ? undefined : new SessionFailureRetirements(new SessionMaintenanceStore(deps.maintenanceDirectory), deps.automaticAdmissionStore, {
             configured: () => this.failureRecoveries.policyConfigured(),
             authorized: operation => this.failureRecoveries.authorized(operation),
             boundary: session => this.failureBoundaries.snapshot(session),
@@ -393,9 +393,7 @@ export class PiSessionService {
             operation: (session, id) => this.failureRecoveries.operation(session, id),
             quiescent: (session, operation) => { this.assertRecoveryQuiescent(session, operation); },
             archived: ref => this.getArchived(ref),
-            archive: (session, id, guard) => this.archiveFailureOriginal(session, id, guard),
-            delete: async (record, id, guard) => { if (this.archiveStore.deleteRecoveryOriginal === undefined)
-                throw new AutomaticAdmissionRejected("Scoped archive deletion is unavailable"); await this.archiveStore.deleteRecoveryOriginal(record, id, guard); await this.forgetUnreadSessions([record]); },
+            complete: (intent, fork, guard, dispatch) => this.completeFailureOriginal(intent, fork, guard, dispatch),
             release: (session, operation) => this.failureBoundaries.releaseRecovery(session, operation),
         });
         this.cleanPolicyAnalyses = deps.maintenanceDirectory === undefined || deps.automaticAdmissionStore === undefined || deps.engineRecoveryPolicy !== "enrolled-prefix-v1" ? undefined : new CleanPolicyAnalyses(join(deps.maintenanceDirectory, "clean-policy-analysis"), deps.automaticAdmissionStore, {
@@ -1634,18 +1632,76 @@ export class PiSessionService {
             throw new AutomaticAdmissionRejected("Exact original/fork retirement capability is unavailable");
         return this.failureRetirements.retire({ id: ref.id, cwd: canonicalizeStoredCwd(ref.cwd) }, request);
     }
-    async archiveFailureOriginal(session, id, guard) {
-        return this.runTreeExclusiveOperation([{ sessionId: session.sessionId, session }], "Recovery original must remain quiescent", async () => {
-            await prepareCallbackDrops(this.activeRuntimeForSession(session)?.services?.resourceLoader.getExtensions());
-            this.assertRecoveryQuiescent(session);
-            const input = await this.archiveInputForSession(session);
-            guard();
-            this.assertReplacementCheckpoint(session, session.sessionManager.getLeafId() ?? "");
-            await this.closeActive(session.sessionId, { kind: "clear", reason: "archive" });
-            guard();
-            const record = await this.archiveStore.archive({ ...input, recoveryOperationId: id });
-            await this.forgetUnreadSessions([record]);
-            return record;
+    async completeFailureOriginal(intent, fork, guard, dispatch) {
+        const ref = { id: intent.originalSessionId, cwd: intent.cwd };
+        const original = this.activeForLookup(ref)?.runtime.session;
+        const originalExtensions = original === undefined ? undefined : this.activeRuntimeForSession(original)?.services?.resourceLoader.getExtensions();
+        const forkExtensions = this.activeRuntimeForSession(fork)?.services?.resourceLoader.getExtensions();
+        this.recoveryCompletionTeardowns ??= new Set();
+        return this.runTreeExclusiveOperation([{ sessionId: ref.id, session: original }, { sessionId: fork.sessionId, session: fork }], "Recovery completion requires both identities to be idle", async () => {
+            const result = await this.archiveStore.completeRecoveryOriginal(intent, {
+                prepare: async evidence => {
+                    let callbacksSettled = false;
+                    const validate = () => {
+                        guard();
+                        const file = evidence();
+                        const raw = retirementSource(file, ref.id, ref.cwd);
+                        if (createHash("sha256").update(raw).digest("hex") !== intent.sourceSha256)
+                            throw new AutomaticAdmissionRejected("Original stable source changed during completion");
+                        const entries = new TextDecoder("utf-8", { fatal: true }).decode(raw).split("\n").filter(line => line.trim() !== "").slice(1).map(line => JSON.parse(line));
+                        const originalEvidence = { sessionId: ref.id, sessionManager: { getSessionFile: () => file, getCwd: () => ref.cwd, getLeafId: () => intent.originalLeaf, getBranch: () => [] } };
+                        const branch = persistedFailureBranch(originalEvidence);
+                        const checkpoint = branch.findIndex(item => item.value.id === intent.operation.checkpoint.entryId);
+                        const failed = branch.findIndex(item => item.value.id === intent.operation.failure.entryId);
+                        if (checkpoint < 0 || failed <= checkpoint || createHash("sha256").update(branch[checkpoint].raw).digest("hex") !== intent.operation.checkpoint.sha256 || createHash("sha256").update(branch[failed].raw).digest("hex") !== intent.operation.failure.sha256 || branch.slice(failed + 1).some(item => item.value.message?.role === "user"))
+                            throw new AutomaticAdmissionRejected("Original good prefix, failure or input changed during completion");
+                        if (this.recoveryCompletionTeardowns.has(ref.id) || this.startupSessionForLookup(ref) !== undefined || this.pendingSessionOpenPromises(ref.id).length > 0)
+                            throw new AutomaticAdmissionRejected("Original runtime teardown/startup ownership is unresolved");
+                        const active = this.activeForLookup(ref)?.runtime.session;
+                        if (active !== undefined) {
+                            if (active !== original || active.model?.provider !== intent.model.provider || active.model?.id !== intent.model.id || active.thinkingLevel !== intent.model.thinking || active.sessionManager.getSessionFile() !== intent.originalFile || active.sessionManager.getLeafId() !== intent.originalLeaf)
+                                throw new AutomaticAdmissionRejected("Original live runtime/model ownership changed");
+                            this.assertRecoveryQuiescent(active);
+                        }
+                        const maintenance = this.maintenance?.store.current(ref);
+                        if (maintenance !== undefined && (!["complete", "resumed", "superseded"].includes(maintenance.state) || maintenance.inputs.some(input => !["admitted", "cancelled"].includes(input.state)) || ["sending", "uncertain"].includes(maintenance.resume?.state)))
+                            throw new AutomaticAdmissionRejected("Original maintenance or input ownership is unresolved");
+                        const boundary = [...branch].reverse().find(item => item.value.customType === "pi-web.stream-failure" && item.value.data?.sessionId === ref.id && item.value.data?.cwd === ref.cwd)?.value.data;
+                        if (boundary?.checkpoint?.entryId !== intent.operation.checkpoint.entryId || boundary?.failure?.entryId !== intent.operation.failure.entryId)
+                            throw new AutomaticAdmissionRejected("Original effects checkpoint ownership changed");
+                        if (unresolvedEffects(branch, boundary) || (this.subsessionChildren.get(ref.id)?.size ?? 0) > 0 || entries.some(entry => parsePersistedParentSubsessionLink(entry)?.spawnedBySessionId === ref.id) || this.pendingAskStore.pendingAsk(ref.id) !== undefined || this.pendingExtensionDialogStore.pendingDialogs(ref.id).length > 0)
+                            throw new AutomaticAdmissionRejected("Original effects, native children or input still own completion");
+                        for (const loaded of [forkExtensions, ...(originalExtensions === undefined ? [] : [originalExtensions])]) {
+                            const inventory = callbackInventory(loaded);
+                            if (!inventory.known || callbacksSettled && inventory.owners.some(owner => owner.kind !== "none"))
+                                throw new AutomaticAdmissionRejected("Current callback ownership is not settled for completion");
+                        }
+                    };
+                    validate();
+                    dispatch("preparing");
+                    try {
+                        await prepareCallbackDrops(forkExtensions, validate);
+                        if (original !== undefined) await prepareCallbackDrops(originalExtensions, validate);
+                        callbacksSettled = true;
+                        validate();
+                        if (original !== undefined) {
+                            this.recoveryCompletionTeardowns.add(ref.id);
+                            await this.closeActive(ref.id, { kind: "clear", reason: "archive" });
+                            this.recoveryCompletionTeardowns.delete(ref.id);
+                        }
+                        validate();
+                    } catch (error) {
+                        try { validate(); dispatch("pre-effect-refused"); } catch {}
+                        throw error;
+                    }
+                    return validate;
+                },
+                dispatched: () => dispatch("store-dispatched"),
+            });
+            result.verify();
+            await this.forgetUnreadSessions([result.archive]);
+            result.verify();
+            return result;
         });
     }
     async failureMaintenance(ref, request) {
@@ -2708,6 +2764,8 @@ export class PiSessionService {
         if (active !== undefined)
             return active;
         const archived = await this.getArchived(ref);
+        if (archived?.recoveryCompletionId !== undefined)
+            throw new AutomaticAdmissionRejected("Recovery-owned archive or deletion tombstone cannot open a runnable native session");
         if (archived?.archivePath !== undefined) {
             const { archivePath } = archived;
             return this.openExistingSession(archived.sessionId, archived.cwd, () => this.sessionManager.open(archivePath), { notifications: "disabled" });
