@@ -436,9 +436,6 @@ def _one_stream(stream_id: str, stream_dir: Path) -> dict[str, object]:
     parked = failure_receipts(stream_dir)
     if parked:
         result["failures"] = parked
-    if "drive" in artifacts._read_tick_data(stream_dir):
-        from engine.drive import public as drive_status
-        result["drive"] = drive_status(stream_dir)
     if canonical:
         result["path"] = str(stream_dir)
         result["threadSessions"] = [
@@ -450,7 +447,36 @@ def _one_stream(stream_id: str, stream_dir: Path) -> dict[str, object]:
 
 def status_report(index: Path, stream_id: str | None) -> dict[str, object]:
     rows = stream_rows(index, stream_id)
-    return {"streams": [_one_stream(row.id, Path(row.path)) for row in rows]}
+    from engine.drive import public as drive_status
+
+    streams = []
+    for row in rows:
+        stream_dir = Path(row.path)
+        try:
+            result = _one_stream(row.id, stream_dir)
+        except Exception as exc:
+            result = {
+                "id": row.id,
+                "path": str(stream_dir),
+                "error": {"type": type(exc).__name__, "message": str(exc)},
+                "ratified": None,
+                "coordinator": None,
+                "threads": None,
+                "coordinatorCostShare": None,
+            }
+        try:
+            if not stream_dir.is_dir():
+                raise StreamsError(f"stream directory is unavailable: {stream_dir}")
+            result["drive"] = {**drive_status(stream_dir), "known": True}
+        except Exception as exc:
+            result["drive"] = {
+                "known": False,
+                "enabled": None,
+                "remote_state": "unknown",
+                "error": {"type": type(exc).__name__, "message": str(exc)},
+            }
+        streams.append(result)
+    return {"streams": streams}
 
 
 def format_status(report: dict[str, object]) -> str:
@@ -461,32 +487,38 @@ def format_status(report: dict[str, object]) -> str:
     for stream in streams:
         if not isinstance(stream, dict):
             continue
-        counts = stream["threads"]
-        if not isinstance(counts, dict):
-            continue
-        counted = ",".join(f"{name}={counts[name]}" for name in ("active", "waiting_quota", "done", "archived"))
-        share = stream["coordinatorCostShare"]
-        share_text = "-" if share is None else str(share)
-        ratified = "yes" if stream["ratified"] else "no"
-        coord = stream["coordinator"]
-        if not isinstance(coord, dict):
-            lines.append(f"{stream['id']}\tratified={ratified}\t-\tthreads={counted}\tshare={share_text}")
-            continue
-        usage = coord["contextUsage"]
-        tokens = usage.get("tokens") if isinstance(usage, dict) else None
-        if tokens is None:
-            tokens = "-"
-        streaming = "yes" if coord["isStreaming"] else "no"
-        lines.append(
-            f"{stream['id']}\tratified={ratified}\t{coord['session']}\tstreaming={streaming}\t"
-            f"tokens={tokens}\tmodel={coord['model']}\tthinking={coord['thinkingLevel']}\t"
-            f"cost={coord['cost']}\tthreads={counted}\tshare={share_text}"
-        )
+        if "error" in stream:
+            error = stream["error"]
+            lines.append(f"{stream['id']}\terror={error['type']}\tmessage={json.dumps(error['message'], ensure_ascii=False)}\tratified=unknown")
+        else:
+            counts = stream["threads"]
+            counted = ",".join(f"{name}={counts[name]}" for name in ("active", "waiting_quota", "done", "archived"))
+            share = stream["coordinatorCostShare"]
+            share_text = "-" if share is None else str(share)
+            ratified = "yes" if stream["ratified"] else "no"
+            coord = stream["coordinator"]
+            if not isinstance(coord, dict):
+                lines.append(f"{stream['id']}\tratified={ratified}\t-\tthreads={counted}\tshare={share_text}")
+            else:
+                usage = coord["contextUsage"]
+                tokens = usage.get("tokens") if isinstance(usage, dict) else None
+                if tokens is None:
+                    tokens = "-"
+                streaming = "yes" if coord["isStreaming"] else "no"
+                lines.append(
+                    f"{stream['id']}\tratified={ratified}\t{coord['session']}\tstreaming={streaming}\t"
+                    f"tokens={tokens}\tmodel={coord['model']}\tthinking={coord['thinkingLevel']}\t"
+                    f"cost={coord['cost']}\tthreads={counted}\tshare={share_text}"
+                )
         for episode in stream.get("failures", []):
             lines.append(f"{stream['id']}\tfailure={episode['kind']}\tstate={episode['state']}\tsession={episode['session']}\treset={episode['resetAt'] or 'unknown'}\tretry={episode['retryState'] or '-'}")
         if isinstance(stream.get("drive"), dict):
             driving = stream["drive"]
-            lines.append(f"{stream['id']}\tdrive={'on' if driving['enabled'] else 'off'}\tdelivery={driving['current_delivery'] or '-'}")
+            enabled = ("on" if driving["enabled"] else "off") if driving["known"] else "unknown"
+            lines.append(f"{stream['id']}\tdrive={enabled}\tdelivery={driving.get('current_delivery') or '-'}\tremote={driving['remote_state']}")
+            if "error" in driving:
+                error = driving["error"]
+                lines.append(f"{stream['id']}\tdrive-error={error['type']}\tmessage={json.dumps(error['message'], ensure_ascii=False)}")
         for maintenance in stream.get("maintenance", []):
             lines.append(f"{stream['id']}\tdcr={maintenance['phase']}\tsession={maintenance['session']}\toperation={maintenance['id']}\t{maintenance['detail']}")
     return "\n".join(lines) + "\n"

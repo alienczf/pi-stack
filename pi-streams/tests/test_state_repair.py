@@ -162,8 +162,8 @@ class ActiveStateRepairTests(EngineCase):
     def test_cli_status_red_then_plan_apply_repeat_green_retains_active_stop_and_exact_authority(self):
         self.assertEqual(len(ACTIVE_STOP), 96)
         before = self.run_streams('status', self.stream.name, '--json')
-        self.assertEqual(before.returncode, 1)
-        self.assertIn('STATE has content before Goals', before.stderr)
+        self.assertEqual((before.returncode, before.stderr), (0, ''), before.stdout)
+        self.assertEqual(json.loads(before.stdout)['streams'][0]['error'], {'type': 'StreamsError', 'message': 'STATE has content before Goals'})
         plan, path = self.plan()
         self.assertEqual(plan['version'], 2)
         self.assertEqual(plan['prefixDisposition'], {'bytes': 96, 'target': 'rules'})
@@ -185,7 +185,7 @@ class ActiveStateRepairTests(EngineCase):
         report = json.loads(status.stdout)['streams'][0]
         self.assertTrue(report['ratified'])
         self.assertIsNone(report['coordinator'])
-        self.assertNotIn('drive', report)
+        self.assertEqual(report['drive'], {'known': True, 'enabled': False, 'run_id': '', 'sequence': 0, 'current_delivery': '', 'desired': None, 'remote_state': 'not-requested', 'remote_generation': '', 'resume_original': ''})
         self.assertEqual({name: (self.stream / name).read_bytes() for name in frozen}, frozen)
         self.assertEqual(self.stub.requests, [])
 

@@ -40,19 +40,24 @@ class CoordinatorIdentityTests(EngineCase):
     def no_mutations(self):
         self.assertEqual([item for item in self.stub.requests if item[0] not in ('GET', 'HEAD')], [])
 
+    def status_diagnostic(self):
+        result = self.run_streams('status', 'etl', '--json')
+        self.assertEqual((result.returncode, result.stderr), (0, ''), result.stdout)
+        entry, = json.loads(result.stdout)['streams']
+        self.assertEqual(entry['id'], 'etl')
+        self.assertIsNone(entry['ratified'])
+        self.assertIsNone(entry['coordinator'])
+        return entry['error']['message']
+
     def test_status_reports_a_missing_designation_instead_of_a_healthy_empty_coordinator(self):
         self.table.write_text(HEADER)
         self.routes([self.info('unregistered')])
-        result = self.run_streams('status', 'etl', '--json')
-        self.assertEqual(result.returncode, 1, result.stdout)
-        self.assertIn('no designated active coordinator', result.stderr)
+        self.assertIn('no designated active coordinator', self.status_diagnostic())
         self.no_mutations()
 
     def test_status_refuses_a_missing_designated_native_session(self):
         self.routes([])
-        result = self.run_streams('status', 'etl', '--json')
-        self.assertEqual(result.returncode, 1, result.stdout)
-        self.assertIn('current', result.stderr)
+        self.assertIn('current', self.status_diagnostic())
         self.assertNotIn('/api/sessions/current/status', [item[1] for item in self.stub.requests])
         self.no_mutations()
 
@@ -68,49 +73,38 @@ class CoordinatorIdentityTests(EngineCase):
     def test_duplicate_active_designations_refuse_before_native_calls(self):
         self.table.write_text(HEADER + self.row('current') + self.row('other'))
         self.routes([self.info(), self.info('other')])
-        result = self.run_streams('status', 'etl', '--json')
-        self.assertEqual(result.returncode, 1, result.stdout)
-        self.assertIn('coordinator', result.stderr)
+        self.assertIn('coordinator', self.status_diagnostic())
         self.assertEqual(self.stub.requests, [])
 
     def test_duplicate_session_ids_are_not_a_valid_registry(self):
         self.table.write_text(HEADER + self.row('current') + self.row('current', role='worker'))
         self.routes([self.info()])
-        result = self.run_streams('status', 'etl', '--json')
-        self.assertEqual(result.returncode, 1, result.stdout)
-        self.assertIn('duplicate', result.stderr.lower())
+        self.assertIn('duplicate', self.status_diagnostic().lower())
         self.no_mutations()
 
     def test_archived_designation_is_checked_before_status_can_reopen_it(self):
         self.routes([self.info(archived=True)])
-        result = self.run_streams('status', 'etl', '--json')
-        self.assertEqual(result.returncode, 1, result.stdout)
-        self.assertIn('archived', result.stderr.lower())
+        self.assertIn('archived', self.status_diagnostic().lower())
         self.assertNotIn('/api/sessions/current/status', [item[1] for item in self.stub.requests])
         self.no_mutations()
 
     def test_prefix_or_wrong_cwd_is_not_the_designated_identity(self):
-        for infos in ([self.info('current-longer')], [self.info(cwd=self.fx.alpha)]):
+        for infos, message in (([self.info('current-longer')], 'unregistered'), ([self.info(cwd=self.fx.alpha)], 'cwd')):
             with self.subTest(infos=infos):
                 self.stub.requests.clear()
                 self.routes(infos)
-                result = self.run_streams('status', 'etl', '--json')
-                self.assertEqual(result.returncode, 1, result.stdout)
+                self.assertIn(message, self.status_diagnostic())
                 self.assertNotIn('/api/sessions/current/status', [item[1] for item in self.stub.requests])
                 self.no_mutations()
 
     def test_runtime_status_must_repeat_the_exact_designated_id(self):
         self.routes([self.info()], live('some-other-session'))
-        result = self.run_streams('status', 'etl', '--json')
-        self.assertEqual(result.returncode, 1, result.stdout)
-        self.assertIn('identity', result.stderr.lower())
+        self.assertIn('identity', self.status_diagnostic().lower())
         self.no_mutations()
 
     def test_unregistered_same_directory_candidate_is_a_mismatch(self):
         self.routes([self.info(), self.info('unregistered')])
-        result = self.run_streams('status', 'etl', '--json')
-        self.assertEqual(result.returncode, 1, result.stdout)
-        self.assertIn('unregistered', result.stderr.lower())
+        self.assertIn('unregistered', self.status_diagnostic().lower())
         self.no_mutations()
 
     def test_new_never_implicitly_adopts_an_empty_or_nonempty_conversation(self):
@@ -261,9 +255,7 @@ class CoordinatorIdentityTests(EngineCase):
     def test_archived_registry_row_cannot_hide_a_still_live_predecessor(self):
         self.table.write_text(HEADER + self.row('old', state='archived') + self.row('current'))
         self.routes([self.info('old'), self.info()])
-        result = self.run_streams('status', 'etl', '--json')
-        self.assertEqual(result.returncode, 1, result.stdout)
-        self.assertIn('old', result.stderr)
+        self.assertIn('old', self.status_diagnostic())
         self.no_mutations()
 
     def test_archived_predecessor_and_designated_live_successor_resolve_one_id(self):
