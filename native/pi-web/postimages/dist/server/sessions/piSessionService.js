@@ -391,7 +391,7 @@ export class PiSessionService {
             boundary: session => this.failureBoundaries.snapshot(session),
             resolve: ref => this.getOrOpen(ref),
             operation: (session, id) => this.failureRecoveries.operation(session, id),
-            quiescent: session => { this.assertRecoveryQuiescent(session); },
+            quiescent: (session, operation) => { this.assertRecoveryQuiescent(session, operation); },
             archived: ref => this.getArchived(ref),
             archive: (session, id, guard) => this.archiveFailureOriginal(session, id, guard),
             delete: async (record, id, guard) => { if (this.archiveStore.deleteRecoveryOriginal === undefined)
@@ -1715,8 +1715,21 @@ export class PiSessionService {
             }
         });
     }
-    assertRecoveryQuiescent(session) {
-        this.assertReplacementCheckpoint(session, session.sessionManager.getLeafId() ?? "");
+    assertRecoveryQuiescent(session, recovery) {
+        if (recovery === undefined) {
+            this.assertReplacementCheckpoint(session, session.sessionManager.getLeafId() ?? "");
+        }
+        else {
+            const boundary = this.failureBoundaries.snapshot(session);
+            const branch = persistedFailureBranch(session);
+            const at = branch.findIndex(item => item.value.id === recovery.checkpoint?.entryId);
+            const held = branch.findIndex(item => item.value.customType === "pi-web.stream-failure" && item.value.data?.sessionId === session.sessionId && item.value.data?.recovery?.id === recovery.id && item.value.data?.recovery?.originalSessionId === recovery.originalSessionId && item.value.data?.state === "recovering");
+            if (session.sessionId !== recovery.forkSessionId || session.sessionManager.getCwd() !== recovery.cwd || boundary?.recovery?.id !== recovery.id || boundary.recovery.originalSessionId !== recovery.originalSessionId || boundary.root !== recovery.root || boundary.stream !== recovery.stream || !["recovering", "watching"].includes(boundary.state) || at < 0 || held <= at || createHash("sha256").update(branch[at].raw).digest("hex") !== recovery.checkpoint.sha256)
+                throw new AutomaticAdmissionRejected("Recovery retirement has no exact copied good-prefix checkpoint");
+            this.assertQuiescentCheckpoint(session, session.sessionManager.getLeafId() ?? "");
+            if (unresolvedEffects(branch.slice(at + 1)))
+                throw new AutomaticAdmissionRejected("Recovery fork retains post-checkpoint external effects; no replay or retirement");
+        }
         const saved = this.maintenance?.store.current({ id: session.sessionId, cwd: session.sessionManager.getCwd() });
         if (saved !== undefined) {
             const operation = this.maintenance.status(session, saved.id);

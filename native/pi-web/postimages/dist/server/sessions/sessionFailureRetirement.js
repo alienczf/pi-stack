@@ -125,13 +125,16 @@ export class SessionFailureRetirements {
             const original = await this.hooks.resolve(ref);
             if (original.sessionId !== ref.id || original.sessionManager.getCwd() !== ref.cwd)
                 throw new AutomaticAdmissionRejected("Retirement requires the full exact original SID/cwd");
-            this.hooks.quiescent(original);
-            this.hooks.quiescent(fork);
             const operation = this.hooks.operation(original, id);
             if (operation?.state !== "forked" || !this.hooks.authorized(operation) || operation.forkSessionId !== forkSessionId || operation.cwd !== ref.cwd || operation.maintenance?.generation !== maintenance.generation)
                 throw new AutomaticAdmissionRejected("Exact recorded recovery fork/epoch is required");
+            this.hooks.quiescent(original);
+            this.hooks.quiescent(fork, operation);
             const branch = persistedFailureBranch(original);
+            const checkpoint = branch.findIndex(item => item.value["id"] === operation.checkpoint.entryId);
             const failed = branch.findIndex(item => item.value["id"] === operation.failure.entryId);
+            if (checkpoint < 0 || failed <= checkpoint || hash(branch[checkpoint].raw) !== operation.checkpoint.sha256 || hash(branch[failed].raw) !== operation.failure.sha256)
+                throw new AutomaticAdmissionRejected("Retirement changed its exact good-prefix/failure evidence");
             const jobs = new Set();
             for (const { value } of branch) {
                 const message = value["message"];
@@ -214,7 +217,7 @@ export class SessionFailureRetirements {
         const current = this.controls.snapshot({ id: retirement.forkSessionId, cwd: retirement.cwd });
         if (!original.durable || original.allowed || original.generation !== retirement.operation.generation || !current.durable || !current.allowed || current.generation !== retirement.operation.maintenance?.generation)
             throw new AutomaticAdmissionRejected("Newer original/fork stop, input or unconfirmed epoch superseded retirement");
-        this.hooks.quiescent(fork);
+        this.hooks.quiescent(fork, retirement.operation);
         const boundary = this.hooks.boundary(fork);
         if (boundary?.recovery?.id !== retirement.id || boundary.recovery.originalSessionId !== retirement.originalSessionId || boundary.state !== "recovering" && !(boundary.state === "watching" && retirement.deleted !== undefined))
             throw new AutomaticAdmissionRejected("Exact fork recovery hold is unknown or failed");
