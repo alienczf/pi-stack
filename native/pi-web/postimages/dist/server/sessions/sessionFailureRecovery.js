@@ -13,19 +13,26 @@ function canonical(value) {
 }
 function hash(value) { return createHash("sha256").update(JSON.stringify(canonical(value))).digest("hex"); }
 function evidence(value) { return object(value) && typeof value["entryId"] === "string" && value["entryId"] !== "" && typeof value["sha256"] === "string" && /^[a-f0-9]{64}$/.test(value["sha256"]); }
+function identity(value) { return object(value) && ["provider", "model", "thinking"].every(key => typeof value[key] === "string" && value[key] !== ""); }
+function entryEvidence(item) { return { entryId: item.value.id, sha256: createHash("sha256").update(item.raw).digest("hex") }; }
+function continuationBinding(value) { return { operationId: value.operationId, originalSessionId: value.originalSessionId, sessionId: value.sessionId, input: value.input, checkpoint: value.checkpoint, identity: value.identity, originalGeneration: value.originalGeneration, generation: value.generation }; }
+function validContinuation(value) {
+    return object(value) && ["operationId", "originalSessionId", "sessionId", "originalGeneration", "generation"].every(key => typeof value[key] === "string" && value[key] !== "") && evidence(value.input) && evidence(value.checkpoint) && identity(value.identity) && value.id === hash(continuationBinding(value)) && ["sending", "ended", "uncertain"].includes(value.state);
+}
 function validMaintenance(value) {
     if (value === undefined)
         return true;
     if (!object(value) || typeof value["id"] !== "string" || typeof value["expectedGeneration"] !== "string" || !["preparing", "ready", "uncertain"].includes(String(value["phase"])) || value["generation"] !== undefined && typeof value["generation"] !== "string" || value["phase"] === "ready" && (typeof value["generation"] !== "string" || value["generation"] === ""))
         return false;
     const sync = value["sync"];
-    return sync === undefined || object(sync) && typeof sync["text"] === "string" && typeof sync["deliveryId"] === "string" && ["sending", "ended", "uncertain"].includes(String(sync["state"]));
+    return sync === undefined || object(sync) && typeof sync["text"] === "string" && typeof sync["deliveryId"] === "string" && ["sending", "ended", "uncertain"].includes(String(sync["state"])) && (sync.continuations === undefined || Array.isArray(sync.continuations) && sync.continuations.every(validContinuation) && new Set(sync.continuations.map(item => item.id)).size === sync.continuations.length);
 }
 function validOperation(value, session) {
     return object(value) && value["version"] === 1 && value["originalSessionId"] === session.sessionId && value["cwd"] === session.sessionManager.getCwd()
         && ["id", "episode", "root", "stream", "intentSha256", "generation"].every(key => typeof value[key] === "string")
         && value["authority"]?.kind === "engine-policy" && value["authority"].policyId === "enrolled-prefix-v1" && typeof value["authority"].enrollmentId === "string"
         && evidence(value["checkpoint"]) && evidence(value["failure"]) && validMaintenance(value["maintenance"])
+        && (value.maintenance?.sync?.continuations?.every(item => item.operationId === value.id && item.originalSessionId === value.originalSessionId && item.sessionId === value.forkSessionId && item.originalGeneration === value.generation && item.generation === value.maintenance.generation) ?? true)
         && ["fork-sending", "forked", "cancelled", "uncertain"].includes(String(value["state"]))
         && (value["forkSessionId"] === undefined || typeof value["forkSessionId"] === "string")
         && (value["forkFile"] === undefined || typeof value["forkFile"] === "string")
@@ -73,6 +80,29 @@ export class SessionFailureRecoveries {
         change(operation);
         this.save(session, operation);
         return operation;
+    }
+    continuationCheckpoint(fork, operation, expected, model) {
+        const sync = operation.maintenance?.sync;
+        if (!evidence(expected) || !identity(model) || sync?.state !== "ended" || sync.deliveryId !== operation.id + ":sync" || fork.model?.provider !== model.provider || fork.model?.id !== model.model || fork.thinkingLevel !== model.thinking)
+            throw new AutomaticAdmissionRejected("Continuation needs the exact ended SYNC and unchanged authorized model/thinking");
+        const branch = persistedFailureBranch(fork);
+        const held = branch.findIndex(({ value }) => value.customType === "pi-web.stream-failure" && value.data?.sessionId === fork.sessionId && value.data?.state === "recovering" && value.data?.recovery?.id === operation.id && value.data?.recovery?.originalSessionId === operation.originalSessionId);
+        const last = branch.at(-1);
+        if (held < 0 || !last || hash(entryEvidence(last)) !== hash(expected) || last.value.message?.role !== "assistant" || last.value.message.stopReason !== "aborted" || fork.messages.at(-1)?.role !== "assistant" || fork.messages.at(-1)?.stopReason !== "aborted" || !["user", "toolResult"].includes(fork.messages.at(-2)?.role))
+            throw new AutomaticAdmissionRejected("Continuation checkpoint is not the exact persisted aborted held-fork leaf");
+        const users = branch.slice(held + 1).filter(({ value }) => value.message?.role === "user");
+        const input = users[0];
+        const content = input?.value.message.content;
+        const text = typeof content === "string" ? content : Array.isArray(content) && content.length === 1 && content[0]?.type === "text" ? content[0].text : undefined;
+        if (users.length !== 1 || text !== sync.text)
+            throw new AutomaticAdmissionRejected("Accepted SYNC input is ambiguous, changed or superseded by newer input");
+        const at = branch.indexOf(input);
+        const tail = branch.slice(at + 1);
+        const thinking = branch.slice(0, at).filter(({ value }) => value.type === "thinking_level_change").at(-1)?.value.thinkingLevel;
+        if (thinking !== model.thinking || tail.some(({ value }) => ["model_change", "thinking_level_change", "custom_message", "compaction", "branch_summary"].includes(value.type) || value.message && !["assistant", "toolResult"].includes(value.message.role) || value.message?.role === "assistant" && (value.message.provider !== model.provider || value.message.model !== model.model)) || unresolvedEffects(branch.slice(at)))
+            throw new AutomaticAdmissionRejected("Interrupted SYNC retains changed identity, newer context or unresolved tool/job effects");
+        const binding = { operationId: operation.id, originalSessionId: operation.originalSessionId, sessionId: fork.sessionId, input: entryEvidence(input), checkpoint: entryEvidence(last), identity: structuredClone(model), originalGeneration: operation.generation, generation: operation.maintenance.generation };
+        return { id: hash(binding), ...binding, state: "sending" };
     }
     async maintenance(original, request) {
         if (!object(request) || typeof request["id"] !== "string" || typeof request["action"] !== "string" || this.control === undefined)
@@ -128,6 +158,43 @@ export class SessionFailureRecoveries {
             if (maintenance.sync?.state === "sending" && !this.syncing.has(key))
                 operation = this.update(original, id, current => { if (current.maintenance?.sync !== undefined)
                     current.maintenance.sync.state = "uncertain"; });
+            if (maintenance.sync?.continuations?.some(item => item.state === "sending" && !this.syncing.has(key + ":" + item.id)))
+                operation = this.update(original, id, current => { for (const item of current.maintenance.sync.continuations)
+                    if (item.state === "sending" && !this.syncing.has(key + ":" + item.id)) item.state = "uncertain"; });
+            return { operation, automaticAdmission };
+        }
+        if (request["action"] === "continue-sync") {
+            if (!evidence(request.expected) || !identity(request.identity))
+                throw new AutomaticAdmissionRejected("Continuation requires exact aborted entry/hash and model/thinking");
+            operation = this.operations(original).get(id);
+            if (operation?.state !== "forked" || !this.authorized(operation) || operation.maintenance?.phase !== "ready" || operation.maintenance.generation !== automaticAdmission.generation)
+                throw new AutomaticAdmissionRejected("Recovery owner changed before continuation admission");
+            const sync = operation.maintenance.sync;
+            if (sync?.state !== "ended")
+                return { operation, automaticAdmission };
+            const prior = sync.continuations?.find(item => item.checkpoint.entryId === request.expected.entryId);
+            if (prior !== undefined) {
+                if (hash(prior.checkpoint) !== hash(request.expected) || hash(prior.identity) !== hash(request.identity))
+                    throw new AutomaticAdmissionRejected("Continuation identity changed its immutable checkpoint or model");
+                if (prior.state === "sending" && !this.syncing.has(key + ":" + prior.id))
+                    operation = this.update(original, id, current => { current.maintenance.sync.continuations.find(item => item.id === prior.id).state = "uncertain"; });
+                return { operation, automaticAdmission };
+            }
+            if (sync.continuations?.some(item => item.state !== "ended") || this.syncing.has(key))
+                return { operation, automaticAdmission };
+            const failed = persistedFailureBranch(original).find(item => item.value.id === operation.failure.entryId);
+            if (!failed || entryEvidence(failed).sha256 !== operation.failure.sha256 || failed.value.message?.provider !== request.identity.provider || failed.value.message?.model !== request.identity.model || original.model?.provider !== request.identity.provider || original.model?.id !== request.identity.model || original.thinkingLevel !== request.identity.thinking)
+                throw new AutomaticAdmissionRejected("Continuation changed the original authorized failure identity");
+            const receipt = this.continuationCheckpoint(fork, operation, request.expected, request.identity);
+            this.hooks.continuationCheckpoint(fork, receipt.checkpoint.entryId);
+            operation = this.update(original, id, current => { (current.maintenance.sync.continuations ??= []).push(receipt); });
+            const continuationKey = key + ":" + receipt.id;
+            this.syncing.add(continuationKey);
+            void this.hooks.maintenance(fork, operation, request).then(() => {
+                this.update(original, id, current => { current.maintenance.sync.continuations.find(item => item.id === receipt.id).state = "ended"; });
+            }, (error) => {
+                this.update(original, id, current => { current.maintenance.sync.continuations.find(item => item.id === receipt.id).state = "uncertain"; current.detail = error instanceof Error ? error.message : "Recovery SYNC continuation is uncertain"; });
+            }).catch(() => undefined).finally(() => { this.syncing.delete(continuationKey); });
             return { operation, automaticAdmission };
         }
         if (request["action"] === "sync") {
@@ -155,7 +222,9 @@ export class SessionFailureRecoveries {
         }
         const metadataOnly = request["action"] === "watch" || request["action"] === "close";
         const liveSync = maintenance.sync?.state === "sending" && this.syncing.has(key);
-        if (maintenance.sync?.state !== "ended" && !(metadataOnly && liveSync))
+        const continuation = maintenance.sync?.continuations?.find(item => item.state !== "ended");
+        const liveContinuation = continuation?.state === "sending" && this.syncing.has(key + ":" + continuation.id);
+        if (maintenance.sync?.state !== "ended" && !(metadataOnly && liveSync) || continuation !== undefined && !(metadataOnly && liveContinuation))
             throw new AutomaticAdmissionRejected("A completed owned recovery SYNC is required before maintenance effects");
         const result = await this.hooks.maintenance(fork, operation, request);
         return { operation: this.operations(original).get(id) ?? operation, automaticAdmission: this.control.snapshot(ref), ...result };

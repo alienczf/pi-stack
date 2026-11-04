@@ -133,12 +133,13 @@ def step(stream_dir: Path, resolved: Coordinator | None, stalled: bool, *, maint
         previous = delivery._get(stream_dir, record.current_delivery)
         if previous.control is None:
             raise StreamsError("drive delivery points to a non-control instruction")
-        if previous.session == resolved.row.session and previous.state not in ("prepared", "blocked") and previous.control.state != "superseded":
+        if previous.session == resolved.row.session and previous.control.state != "superseded" and (previous.state not in ("prepared", "blocked") or previous.control.state in ("sending", "uncertain")):
             try:
                 delivery.observe_control_locked(stream_dir, previous.id)
                 previous = delivery._get(stream_dir, previous.id)
             except StreamsError as exc:
-                previous.state, previous.detail = "uncertain", str(exc)
+                if previous.state != "blocked":
+                    previous.state, previous.detail = "uncertain", str(exc)
                 previous.control.state = "uncertain"
                 delivery._save(stream_dir, previous)
                 return True
@@ -153,7 +154,7 @@ def step(stream_dir: Path, resolved: Coordinator | None, stalled: bool, *, maint
             if not maintenance:
                 delivery.send_locked(stream_dir, previous.id)
             return True
-        if previous.state == "blocked" and same:
+        if previous.state == "blocked" and same and previous.control.state != "ended":
             if allowed and not maintenance and previous.control.state == "prepared":
                 previous.state, previous.detail = "prepared", ""
                 delivery._save(stream_dir, previous)

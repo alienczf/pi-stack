@@ -312,7 +312,7 @@ export class SessionFailureBoundaries {
         if (record?.state === "recovering" && scope !== undefined && record.recovery?.id === scope.id && scope.count > 0) {
             const fork = this.control?.snapshot({ id: session.sessionId, cwd: session.sessionManager.getCwd() });
             const original = this.control?.snapshot({ id: scope.originalSessionId, cwd: session.sessionManager.getCwd() });
-            if (fork?.durable === true && fork.allowed && fork.generation === scope.generation && original?.durable === true && !original.allowed && original.generation === scope.originalGeneration)
+            if (fork?.durable === true && fork.allowed && fork.generation === scope.generation && original?.durable === true && !original.allowed && original.generation === scope.originalGeneration && session.model?.provider === scope.identity.provider && session.model?.id === scope.identity.model && session.thinkingLevel === scope.identity.thinking)
                 return;
             throw new AutomaticAdmissionRejected("Recovery inference was superseded by newer stop/input or unconfirmed control");
         }
@@ -338,7 +338,7 @@ export class SessionFailureBoundaries {
             throw new AutomaticAdmissionRejected("Another recovery owns runtime admission");
         if (operation.maintenance?.generation === undefined)
             throw new AutomaticAdmissionRejected("Recovery maintenance generation is unavailable");
-        const scope = prior ?? { id, count: 0, generation: operation.maintenance.generation, originalSessionId: operation.originalSessionId, originalGeneration: operation.generation };
+        const scope = prior ?? { id, count: 0, generation: operation.maintenance.generation, originalSessionId: operation.originalSessionId, originalGeneration: operation.generation, identity: { provider: session.model?.provider, model: session.model?.id, thinking: session.thinkingLevel } };
         scope.count++;
         this.recoveryScopes.set(session, scope);
         try {

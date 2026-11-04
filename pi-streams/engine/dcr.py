@@ -373,6 +373,25 @@ def step(index: Path, project: Project, stream: str, stream_dir: Path, resolved:
             return True
         if op.phase in {"sync-sending", "sync-admitted"}:
             if not op.ready_revision:
+                if op.recovery_original and status.get("failureSyncContinuationSupport") == "entry-bound-v1" and not any(status.get(key) for key in ("isStreaming", "isCompacting", "isBashRunning", "pendingMessageCount", "pendingAsk", "pendingExtensionDialogs")):
+                    branch = native_branch(resolved)
+                    entry, raw = branch[0]
+                    if entry.get("message", {}).get("role") == "assistant" and entry["message"].get("stopReason") == "aborted":
+                        expected = {"entryId": entry["id"], "sha256": hashlib.sha256(raw).hexdigest()}
+                        model = status.get("model", {})
+                        identity = {"provider": model.get("provider"), "model": model.get("id"), "thinking": resolved.row.thinking}
+                        try:
+                            receipt = piweb.failure_maintenance(op.recovery_original, op.cwd, {"id": op.id, "action": "continue-sync", "expected": expected, "identity": identity})
+                            sync = receipt["operation"].get("maintenance", {}).get("sync", {})
+                            if sync.get("text") != op.sync_text or sync.get("deliveryId") != f"{op.id}:sync":
+                                raise StreamsError("Recovery continuation changed the accepted SYNC intent")
+                            for continued in sync.get("continuations", []):
+                                if continued.get("checkpoint") == expected and (continued.get("operationId") != op.id or continued.get("originalSessionId") != op.recovery_original or continued.get("sessionId") != sid or continued.get("identity") != identity or continued.get("generation") != op.automatic["generation"] or continued.get("originalGeneration") != receipt["operation"].get("generation") or continued.get("state") not in {"sending", "ended", "uncertain"}):
+                                    raise StreamsError("Recovery continuation changed its frozen checkpoint/identity/generations")
+                            op.detail = "Recovery SYNC continuation is uncertain; no redispatch" if any(item.get("state") == "uncertain" for item in sync.get("continuations", [])) else ""
+                        except (StreamsError, OSError) as exc:
+                            op.detail = str(exc)
+                        save(stream_dir, op)
                 return True
             checkpoint = terminal_checkpoint(resolved, f"DCR SYNC ready: {op.id} {op.ready_revision}")
             if checkpoint is None:

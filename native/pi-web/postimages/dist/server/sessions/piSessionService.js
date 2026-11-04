@@ -407,6 +407,7 @@ export class PiSessionService {
             policy: deps.engineRecoveryPolicy,
             boundary: session => this.failureBoundaries.snapshot(session),
             quiescent: session => { this.assertRecoveryQuiescent(session); },
+            continuationCheckpoint: (session, entryId) => this.assertRecoveryContinuationCheckpoint(session, entryId),
             fork: (session, operation) => this.forkFailureRuntime(session, operation),
             resolveFork: operation => this.getOrOpen({ id: operation.forkSessionId ?? "", cwd: operation.cwd }),
             maintenance: (session, operation, request) => this.runFailureMaintenance(session, operation, request),
@@ -1660,6 +1661,15 @@ export class PiSessionService {
                 await this.runSessionEntryMutation(session, "admit recovery SYNC", () => session.prompt(String(request["text"]), { expandPromptTemplates: false }));
                 return {};
             }
+            if (request["action"] === "continue-sync") {
+                const receipt = this.failureRecoveries.continuationCheckpoint(session, operation, request["expected"], request["identity"]);
+                const saved = operation.maintenance?.sync?.continuations?.find(item => item.id === receipt.id);
+                if (saved?.state !== "sending")
+                    throw new AutomaticAdmissionRejected("Recovery continuation has no durable dispatch intent");
+                this.assertRecoveryContinuationCheckpoint(session, receipt.checkpoint.entryId);
+                await this.runSessionEntryMutation(session, "continue interrupted recovery SYNC", () => session.continueFromAborted(receipt.identity));
+                return {};
+            }
             if (request["action"] === "watch" || request["action"] === "close") {
                 if (this.streamsDcrEvents === undefined)
                     throw new AutomaticAdmissionRejected("Native DCR event bridge is unavailable");
@@ -1978,12 +1988,22 @@ export class PiSessionService {
         return { callbackOwners: ownership.owners, callbackRevision: JSON.stringify(ownership.owners), entryId: session.sessionManager.getLeafId(), callbacksKnown: entries !== undefined && unproven.size === 0, callbackInventory: "native-and-extension-v1", nativeChildCallbacks: [...children], unprovenCallbacks: [...unproven] };
     }
     assertReplacementCheckpoint(session, entryId) {
+        this.assertQuiescentCheckpoint(session, entryId);
+        if (unresolvedEffects(persistedFailureBranch(session), this.failureBoundaries.snapshot(session)))
+            throw new AutomaticAdmissionRejected("Replacement retains unresolved external effects; no replay or retirement");
+    }
+    assertRecoveryContinuationCheckpoint(session, entryId) {
+        this.assertQuiescentCheckpoint(session, entryId);
+        if (this.rotationSafety(session).callbackOwners.some(owner => owner.kind !== "none"))
+            throw new AutomaticAdmissionRejected("Pending callback ownership must settle before SYNC continuation");
+        if (this.maintenance?.store.current({ id: session.sessionId, cwd: session.sessionManager.getCwd() }) !== undefined)
+            throw new AutomaticAdmissionRejected("Existing compaction/input ownership must be reconciled before SYNC continuation");
+    }
+    assertQuiescentCheckpoint(session, entryId) {
         const safety = this.rotationSafety(session);
         if (!this.isCurrentActiveSession(session) || this.isSessionEntryMutationActive(session) || sessionHasActiveWork(session, this.compactionQueuedMessages(session.sessionId).length)) {
             throw new AutomaticAdmissionRejected("Stop current session activity before replacement");
         }
-        if (unresolvedEffects(persistedFailureBranch(session), this.failureBoundaries.snapshot(session)))
-            throw new AutomaticAdmissionRejected("Replacement retains unresolved external effects; no replay or retirement");
         if (safety.entryId !== entryId || !safety.callbacksKnown || safety.nativeChildCallbacks.length > 0 || this.pendingAskStore.pendingAsk(session.sessionId) !== undefined || this.pendingExtensionDialogStore.pendingDialogs(session.sessionId).length > 0) {
             throw new AutomaticAdmissionRejected("Replacement checkpoint is stale or has unresolved native input/callback ownership");
         }
@@ -3542,7 +3562,7 @@ export class PiSessionService {
             sessionId: session.sessionId,
             ...(this.cleanPolicyAnalyses === undefined ? {} : { cleanPolicyAnalysisSupport: "clean-policy-analysis-v1" }),
             ...(this.failureBoundaries.supported(session) ? { recoveryReadinessSupport: "same-provider-v1", streamRetrySupport: "entry-bound-v1", streamRetry: this.failureBoundaries.retrySnapshot(session), ...(this.failureRecoveries.policyConfigured() ? { engineFailureRecoverySupport: "enrolled-prefix-v1" } : {}) } : {}),
-            ...(this.failureBoundaries.supported(session) ? { ...(this.failureRetirements === undefined ? {} : { failureRetirementSupport: "singular-original-v1" }), ...(this.maintenance === undefined ? {} : { failureMaintenanceSupport: "operation-scoped-v1" }), failureForkSupport: "engine-prefix-v1", failureBoundarySupport: "persisted-turn-v1", ...(failureBoundary === undefined ? {} : { failureBoundary }) } : {}),
+            ...(this.failureBoundaries.supported(session) ? { ...(this.failureRetirements === undefined ? {} : { failureRetirementSupport: "singular-original-v1" }), ...(this.maintenance === undefined ? {} : { failureMaintenanceSupport: "operation-scoped-v1", ...(typeof session.continueFromAborted === "function" ? { failureSyncContinuationSupport: "entry-bound-v1" } : {}) }), failureForkSupport: "engine-prefix-v1", failureBoundarySupport: "persisted-turn-v1", ...(failureBoundary === undefined ? {} : { failureBoundary }) } : {}),
             ...(this.automaticAdmissionStore === undefined ? {} : { conditionalAdmissionSupport: "generation-cas-v1", automaticAdmission: this.automaticAdmissionStore.snapshot({ id: session.sessionId, cwd: session.sessionManager.getCwd() }), rotationSafety: this.rotationSafety(session) }),
             ...(this.maintenance === undefined || session.sessionManager.appendCustomEntry === undefined ? {} : { maintenanceTargetSupport: "same-model-capacity-v1", maintenanceSupport: "checkpoint-input-v1" }),
             ...(this.maintenance === undefined || session.agent.subscribe === undefined ? {} : { resumeObservationSupport: "completed-assistant-v1" }),
