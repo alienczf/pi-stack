@@ -146,22 +146,40 @@ def validate_sources(root: Path, recovery: RecoveryInput, *, fresh: bool) -> dic
         raise StreamsError(f"invalid recovery sources: {exc}") from exc
 
 
-def literal_lines(raw: bytes, start: int, end: int) -> list[str]:
+def literal_lines(raw: bytes, start: int, end: int, *, standalone: bool = False) -> list[str]:
     if start and raw[start - 1:start] != b"\n" or end < len(raw) and raw[end - 1:end] != b"\n":
         raise ValueError("legacy witness must retain complete source lines")
     result = []
     offset = 0
     fence = b""
-    for line in raw.splitlines(keepends=True):
+    quoted = False
+    headings: list[tuple[int, str]] = []
+    lines = raw.splitlines(keepends=True)
+    for index, line in enumerate(lines):
         text = line.rstrip(b"\r\n")
         delimiter = re.fullmatch(rb" {0,3}(`{3,}|~{3,})(.*)", text)
+        heading = re.fullmatch(rb" {0,3}(#{1,6})[ \t]+(.*)", text)
+        if not fence:
+            if not text.strip():
+                quoted = False
+            elif text.lstrip().startswith(b">"):
+                quoted = True
+            elif heading or delimiter:
+                quoted = False
+                if heading:
+                    level = len(heading[1])
+                    headings = [item for item in headings if item[0] < level]
+                    headings.append((level, heading[2].decode("utf-8")))
         if fence:
             if delimiter and delimiter[1][:1] == fence[:1] and len(delimiter[1]) >= len(fence) and not delimiter[2].strip():
                 fence = b""
         elif delimiter:
             fence = delimiter[1]
-        elif start <= offset and offset + len(line) <= end and not text.lstrip().startswith(b">"):
-            result.append(text.decode("utf-8"))
+        elif start <= offset and offset + len(line) <= end and not quoted:
+            isolated = (index == 0 or not lines[index - 1].strip()) and (index + 1 == len(lines) or not lines[index + 1].strip())
+            labelled = any(re.search(r"\b(?:example|counterexample|hypothetical|question|untrusted)\b", name, re.IGNORECASE) for _, name in headings)
+            if not standalone or isolated and not labelled:
+                result.append(text.decode("utf-8"))
         offset += len(line)
     return result
 
@@ -204,7 +222,7 @@ def validate_authority(sources: dict[str, dict], recovery: RecoveryInput) -> tup
             if part.decode("utf-8") != item["text"] or sha(part) != item["sha256"]:
                 raise ValueError("legacy witness span or hash changed")
             literal_lines(raw, start, end)
-            context = part.decode("utf-8")
+            context = raw.decode("utf-8")
             if REVOKED.search(context):
                 raise ValueError("retained source contradicts or revokes ratification")
             return part
@@ -217,7 +235,7 @@ def validate_authority(sources: dict[str, dict], recovery: RecoveryInput) -> tup
         if (len(marker.splitlines()) != 1 or (marker_span["start"] and original[marker_span["start"] - 1:marker_span["start"]] != b"\n")
                 or (marker_span["end"] < len(original) and not marker.endswith(b"\n"))):
             raise ValueError("legacy marker must be an exact complete source line")
-        if marker.decode("utf-8").rstrip("\r\n") not in literal_lines(original, marker_span["start"], marker_span["end"]):
+        if marker.decode("utf-8").rstrip("\r\n") not in literal_lines(original, marker_span["start"], marker_span["end"], standalone=True):
             raise ValueError("legacy marker is quoted or fenced, not an active source line")
         dated = artifacts.has_ratified_authority_line(marker.decode("utf-8"))
         if not dated and marker.strip().lower() not in {b"ratified: yes", b"ratified: true"}:
@@ -230,7 +248,7 @@ def validate_authority(sources: dict[str, dict], recovery: RecoveryInput) -> tup
         for item in authority["evidence"]:
             span(item)
             raw = raw_source(sources[item["source"]])
-            proofs.extend(date for line in literal_lines(raw, item["start"], item["end"]) for date in ratification_dates(line))
+            proofs.extend(date for line in literal_lines(raw, item["start"], item["end"], standalone=True) for date in ratification_dates(line))
         if not dated and not proofs:
             raise ValueError("bare legacy authority requires a complete affirmative, unquoted ratification statement")
         dates = {date for date in proofs if date is not None}
