@@ -91,14 +91,19 @@ def compaction_record(evidence: EvidenceRecord) -> dict:
 def branch_records(path: Path, sid: str, cwd: str, leaf: object) -> list[tuple[dict, bytes]]:
     entries: dict[str, tuple[dict, bytes]] = {}
     with regular_reader(path) as handle:
-        header = json.loads(handle.readline())
+        try:
+            header = json.loads(handle.readline())
+        except ValueError as exc:
+            raise StreamsError("failure evidence has a malformed native header; backed-up repair is required") from exc
         if not isinstance(header, dict) or header.get("type") != "session" or header.get("id") != sid or not isinstance(header.get("cwd"), str) or Path(header["cwd"]).resolve() != Path(cwd).resolve():
             raise StreamsError("failure evidence does not match the exact native session/cwd")
         for raw in handle:
+            if not raw.strip():
+                continue
             try:
                 value = json.loads(raw)
-            except ValueError:
-                continue
+            except ValueError as exc:
+                raise StreamsError("failure evidence contains torn or malformed JSONL; preserve the source and perform backed-up repair before recovery") from exc
             if isinstance(value, dict) and isinstance(value.get("id"), str):
                 if value["id"] in entries:
                     raise StreamsError("failure evidence contains ambiguous native entry IDs")
@@ -207,14 +212,67 @@ def retry_dispositions(branch: list[tuple[dict, bytes]], sid: str, cwd: str, nat
     return result
 
 
+def _expansion_end(source: str, start: int, backtick: bool = False) -> int:
+    quote, depth, at = None, 1, start
+    while at < len(source):
+        char = source[at]
+        if char == "\\":
+            at += 2
+            continue
+        if backtick and char == "`":
+            return at
+        if quote == "'":
+            if char == "'":
+                quote = None
+            at += 1
+            continue
+        if source.startswith("$(", at) or char == "`":
+            at = _expansion_end(source, at + (1 if char == "`" else 2), char == "`")
+            if at < 0:
+                return -1
+        elif char == '"' or char == "'" and quote is None:
+            quote = None if quote == char else char
+        elif quote is None and not backtick:
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+                if depth == 0:
+                    return at
+        at += 1
+    return -1
+
+
+def _heredoc_submission(body: str) -> bool:
+    at = 0
+    while at < len(body):
+        if body[at] == "\\" and at + 1 < len(body) and body[at + 1] in "$`\\\n":
+            at += 2
+            continue
+        if body[at] == "`" or body.startswith("$(", at):
+            start = at + (1 if body[at] == "`" else 2)
+            end = _expansion_end(body, start, body[at] == "`")
+            if end < 0 or shell_submission(body[start:end]):
+                return True
+            at = end
+        at += 1
+    return False
+
+
 def shell_submission(command: object) -> bool:
     """Retain explicit detached launches, not uncertainty about foreground syntax."""
     if not isinstance(command, str):
         return True
+    heredoc_effects = False
     def heredoc(match):
+        nonlocal heredoc_effects
+        if not match[1] and _heredoc_submission(match[4]):
+            heredoc_effects = True
         prefix = command[:match.start()]
         return match[3] + "\n" + (match[4] + "\n" if re.search(r"(?:^|[;|\s])(?:bash|sh|dash|ksh|zsh)\s", prefix) else "")
     command = re.sub(r"<<-?\s*(['\"]?)(\w+)\1([^\n]*)\n([\s\S]*?)\n\t*\2(?=\n|$)", heredoc, command)
+    if heredoc_effects:
+        return True
     operators = ("&>>", "&>", "&&", "||", "|&", ">>", "<>", ">|", ">&", "<&", ">", "<", ";", "|", "&", "\n")
     redirects = {"&>>", "&>", ">>", "<>", ">|", ">&", "<&", ">", "<"}
     opaque_words = {"sbatch", "qsub", "nohup", "setsid", "disown"}
@@ -238,12 +296,12 @@ def shell_submission(command: object) -> bool:
             while index < len(command) and command[index] != quote:
                 char = command[index]
                 if quote == '"' and command.startswith("$(", index):
-                    end = command.find(")", index + 2)
-                    if end >= 0 and shell_submission(command[index + 2:end]):
+                    end = _expansion_end(command, index + 2)
+                    if end < 0 or shell_submission(command[index + 2:end]):
                         return True
                 if quote == '"' and char == "`":
-                    end = command.find("`", index + 1)
-                    if end >= 0 and shell_submission(command[index + 1:end]):
+                    end = _expansion_end(command, index + 1, True)
+                    if end < 0 or shell_submission(command[index + 1:end]):
                         return True
                 if quote == '"' and char == "\\" and index + 1 < len(command) and command[index + 1] in '$`"\\\n':
                     index += 1
@@ -283,20 +341,63 @@ def shell_submission(command: object) -> bool:
         index += 1
     if word is not None:
         tokens.append(("word", word))
-    at_command = True
+    invokers = {
+        "env": ({"-u", "--unset", "-C", "--chdir", "-a", "--argv0", "-S", "--split-string"}, {"-i", "--ignore-environment", "-0", "--null", "-v", "--debug"}),
+        "sudo": ({"-u", "--user", "-g", "--group", "-h", "--host", "-p", "--prompt", "-C", "--close-from", "-R", "--chroot", "-D", "--chdir", "-T", "--command-timeout", "-r", "--role", "-t", "--type", "-U", "--other-user"}, {"-n", "--non-interactive", "-E", "--preserve-env", "-H", "--set-home", "-k", "-K", "-S", "--stdin"}),
+        "exec": ({"-a"}, {"-c", "-l"}),
+        "command": (set(), {"-p", "-v", "-V"}),
+        "builtin": (set(), set()),
+        "time": ({"-f", "--format", "-o", "--output"}, {"-p", "--portability", "-v", "--verbose", "-a", "--append", "-q", "--quiet"}),
+    }
+    at_command, invoker, operand, redirect_operand, inspect = True, None, None, False, False
     for index, (kind, value) in enumerate(tokens):
         if kind == "operator":
             if value == "&":
                 return True
             if value in {";", "|", "|&", "&&", "||", "\n", "(", "{", "`"}:
-                at_command = True
+                at_command, invoker, operand, redirect_operand, inspect = True, None, None, False, False
+            continue
+        if kind == "redirect":
+            redirect_operand = True
+            continue
+        if redirect_operand:
+            redirect_operand = False
             continue
         if kind != "word" or not at_command:
             continue
+        if operand:
+            if operand == "script" and shell_submission(value):
+                return True
+            operand = None
+            continue
         name = value.rsplit("/", 1)[-1]
-        if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", value) or value.startswith("-") or name in {"env", "command", "exec", "sudo", "time", "builtin"}:
+        if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", value):
+            continue
+        if invoker and value.startswith("-"):
+            if value == "--":
+                invoker = None
+                continue
+            args, flags = invokers[invoker]
+            option = next((flag for flag in args if value == flag or flag.startswith("--") and value.startswith(flag + "=") or re.fullmatch(r"-[^-]", flag) and value.startswith(flag) and len(value) > 2), None)
+            if option is not None:
+                script = invoker == "env" and option in {"-S", "--split-string"}
+                attached = value[len(option) + (1 if option.startswith("--") else 0):] if len(value) > len(option) else None
+                if attached is None:
+                    operand = "script" if script else "argument"
+                elif script and shell_submission(attached):
+                    return True
+                continue
+            if value not in flags:
+                return True
+            if invoker == "command" and value in {"-v", "-V"}:
+                inspect = True
+            continue
+        if name in invokers:
+            invoker = name
             continue
         at_command = False
+        if inspect:
+            continue
         if name in opaque_words:
             return True
         end = next((at for at in range(index + 1, len(tokens)) if tokens[at][0] == "operator"), len(tokens))

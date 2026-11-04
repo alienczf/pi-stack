@@ -63,7 +63,8 @@ def call(args: list[str], stdin: str | None = None) -> dict[str, object]:
     if proc.returncode != 0 or data.get("ok") is False:
         detail = proc.stderr.strip() or proc.stdout.strip()
         status = data.get("status")
-        if args[0] in {"status", "archive"} and status in {404, 410}:
+        load_error = re.search(r"JSON|torn session|malformed session|session.*corruption", detail, re.I)
+        if args[0] in {"status", "archive"} and status in {404, 410} and not load_error:
             raise TerminalSession(args[1], "missing", detail)
         if args[0] == "status" and status == 409 and "archived" in detail.casefold():
             raise TerminalSession(args[1], "archived", detail)

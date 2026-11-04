@@ -26,6 +26,12 @@ Completed compaction accepts only validated transparent failure-checkpoint and w
 
 Blocked-goal suppression uses distinct prompt outcomes rather than lifetime send counts. Transcript and delivery receipts share one prompt identity. A completed assistant report of permitted progress or an applied receipt with artifact evidence resets the repetition window. This is repetition control, not independent proof that the product goal is complete. Legacy ambiguous counters remain retained as audit evidence and do not enforce permanent suppression.
 
+## Torn session records
+
+The bundled SDK loader skips one recognized torn version3 SDK message at EOF or retains its complete concatenated suffix. The ordered message prefix identifies the lost entry and its known intact parent. A complete suffix can retain its existing valid parent or name the lost entry. Only references to the lost entry are reparented in memory to its known intact parent. All intact record content remains. A complete concatenated prefix, malformed header, second corrupt line, ambiguous suffix, duplicate ID, or incomplete or cyclic ancestry refuses loading. Other torn record formats require explicit repair rather than guessed lineage.
+
+Loading does not write a repair or prove that the missing fragment had no effects. Native status exposes `sessionFileDiagnostics` with the physical line, entry identities, reparented IDs and a hash of the decoded UTF-8 fragment. Native prompt admission and recovery remain held until backed-up repair removes that uncertainty. Native checkpoint and maintenance readers do not use salvaged content as evidence. Python branch recovery also refuses malformed records. Forking and rewriting a loaded torn source refuse before changing or copying its evidence. The separate global coding agent remains outside this overlay.
+
 ## Delivery behavior
 
 The installer applies the overlay to existing and newly installed package paths. It checks every selected package before the first patch write. It does not upgrade an incompatible existing package or restart a running daemon. Unsupported versions, changed bytes, escaping symlinks, and unowned mixed trees refuse application.

@@ -1006,6 +1006,16 @@ export interface RotationSafety {
 }
 export interface SessionStatus {
     sessionId: string;
+    sessionFileDiagnostics?: {
+        kind: "torn-message";
+        line: number;
+        lostEntryId: string;
+        previousEntryId: string | null;
+        recoveredEntryId: string | null;
+        fragmentCodeUnits: number;
+        fragmentUtf8Sha256: string;
+        reparented: string[];
+    }[];
     automaticAdmission?: AutomaticAdmissionState;
     rotationSafety?: RotationSafety;
     maintenanceSupport?: "checkpoint-input-v1";

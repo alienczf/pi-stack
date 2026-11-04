@@ -52,12 +52,47 @@ export function retryDispositions(branch, sid, cwd) {
     return result;
 }
 
+function expansionEnd(source, start, backtick = false) {
+    let quote, depth = 1;
+    for (let at = start; at < source.length; at++) {
+        const char = source[at];
+        if (char === "\\") { at++; continue; }
+        if (backtick && char === "`") return at;
+        if (quote === "'") { if (char === "'") quote = undefined; continue; }
+        if (char === "$" && source[at + 1] === "(" || char === "`") {
+            at = expansionEnd(source, at + (char === "`" ? 1 : 2), char === "`");
+            if (at < 0) return -1;
+            continue;
+        }
+        if (char === '"' || char === "'" && quote === undefined) { quote = quote === char ? undefined : char; continue; }
+        if (quote !== undefined || backtick) continue;
+        if (char === "(") depth++;
+        if (char === ")" && --depth === 0) return at;
+    }
+    return -1;
+}
+function heredocSubmission(body) {
+    for (let at = 0; at < body.length; at++) {
+        if (body[at] === "\\" && "$`\\\n".includes(body[at + 1])) { at++; continue; }
+        if (body[at] !== "`" && !(body[at] === "$" && body[at + 1] === "(")) continue;
+        const start = at + (body[at] === "`" ? 1 : 2);
+        const end = expansionEnd(body, start, body[at] === "`");
+        if (end < 0 || shellSubmission(body.slice(start, end))) return true;
+        at = end;
+    }
+    return false;
+}
 function shellSubmission(command) {
     if (typeof command !== "string") return true;
     const operators = ["&>>", "&>", "&&", "||", "|&", ">>", "<>", ">|", ">&", "<&", ">", "<", ";", "|", "&", "\n"];
     const redirects = new Set(["&>>", "&>", ">>", "<>", ">|", ">&", "<&", ">", "<"]);
     const opaqueWords = new Set(["sbatch", "qsub", "nohup", "setsid", "disown"]);
-    command = command.replace(/<<-?\s*(['"]?)(\w+)\1([^\n]*)\n([\s\S]*?)\n\t*\2(?=\n|$)/g, (all, quote, end, tail, body) => tail + "\n" + (/(?:^|[;|\s])(?:bash|sh|dash|ksh|zsh)\s/.test(command.slice(0, command.indexOf(all))) ? body + "\n" : ""));
+    let heredocEffects = false;
+    command = command.replace(/<<-?\s*(['"]?)(\w+)\1([^\n]*)\n([\s\S]*?)\n\t*\2(?=\n|$)/g, (all, quote, end, tail, body, offset) => {
+        if (!quote && heredocSubmission(body)) heredocEffects = true;
+        return tail + "\n" + (/(?:^|[;|\s])(?:bash|sh|dash|ksh|zsh)\s/.test(command.slice(0, offset)) ? body + "\n" : "");
+    });
+    if (heredocEffects) return true;
     const tokens = [];
     let word, index = 0;
     while (index < command.length) {
@@ -75,12 +110,12 @@ function shellSubmission(command) {
             while (index < command.length && command[index] !== quote) {
                 char = command[index];
                 if (quote === '"' && char === "$" && command[index + 1] === "(") {
-                    const end = command.indexOf(")", index + 2);
-                    if (end >= 0 && shellSubmission(command.slice(index + 2, end))) return true;
+                    const end = expansionEnd(command, index + 2);
+                    if (end < 0 || shellSubmission(command.slice(index + 2, end))) return true;
                 }
                 if (quote === '"' && char === "`") {
-                    const end = command.indexOf("`", index + 1);
-                    if (end >= 0 && shellSubmission(command.slice(index + 1, end))) return true;
+                    const end = expansionEnd(command, index + 1, true);
+                    if (end < 0 || shellSubmission(command.slice(index + 1, end))) return true;
                 }
                 if (quote === '"' && char === "\\" && index + 1 < command.length && '$`"\\\n'.includes(command[index + 1])) {
                     char = command[++index];
@@ -114,18 +149,50 @@ function shellSubmission(command) {
         index++;
     }
     if (word !== undefined) tokens.push(["word", word]);
-    let atCommand = true;
+    const invokers = {
+        env: { args: ["-u", "--unset", "-C", "--chdir", "-a", "--argv0", "-S", "--split-string"], flags: ["-i", "--ignore-environment", "-0", "--null", "-v", "--debug"] },
+        sudo: { args: ["-u", "--user", "-g", "--group", "-h", "--host", "-p", "--prompt", "-C", "--close-from", "-R", "--chroot", "-D", "--chdir", "-T", "--command-timeout", "-r", "--role", "-t", "--type", "-U", "--other-user"], flags: ["-n", "--non-interactive", "-E", "--preserve-env", "-H", "--set-home", "-k", "-K", "-S", "--stdin"] },
+        exec: { args: ["-a"], flags: ["-c", "-l"] },
+        command: { args: [], flags: ["-p", "-v", "-V"] },
+        builtin: { args: [], flags: [] },
+        time: { args: ["-f", "--format", "-o", "--output"], flags: ["-p", "--portability", "-v", "--verbose", "-a", "--append", "-q", "--quiet"] },
+    };
+    let atCommand = true, invoker, operand, redirectOperand = false, inspect = false;
     for (let index = 0; index < tokens.length; index++) {
         const [kind, word] = tokens[index];
         if (kind === "operator") {
             if (word === "&") return true;
-            if ([";", "|", "|&", "&&", "||", "\n", "(", "{", "`"].includes(word)) atCommand = true;
+            if ([";", "|", "|&", "&&", "||", "\n", "(", "{", "`"].includes(word)) { atCommand = true; invoker = operand = undefined; inspect = redirectOperand = false; }
             continue;
         }
+        if (kind === "redirect") { redirectOperand = true; continue; }
+        if (redirectOperand) { redirectOperand = false; continue; }
         if (kind !== "word" || !atCommand) continue;
+        if (operand) {
+            if (operand === "script" && shellSubmission(word)) return true;
+            operand = undefined;
+            continue;
+        }
         const text = word.split("/").at(-1);
-        if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(word) || word.startsWith("-") || ["env", "command", "exec", "sudo", "time", "builtin"].includes(text)) continue;
+        if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(word)) continue;
+        if (invoker && word.startsWith("-")) {
+            if (word === "--") { invoker = undefined; continue; }
+            const spec = invokers[invoker];
+            const option = spec.args.find(value => word === value || value.startsWith("--") && word.startsWith(value + "=") || /^-[^-]$/.test(value) && word.startsWith(value) && word.length > 2);
+            if (option) {
+                const script = invoker === "env" && ["-S", "--split-string"].includes(option);
+                const attached = word.length > option.length ? word.slice(option.length + (option.startsWith("--") ? 1 : 0)) : undefined;
+                if (attached === undefined) operand = script ? "script" : "argument";
+                else if (script && shellSubmission(attached)) return true;
+                continue;
+            }
+            if (!spec.flags.includes(word)) return true;
+            if (invoker === "command" && ["-v", "-V"].includes(word)) inspect = true;
+            continue;
+        }
+        if (Object.hasOwn(invokers, text)) { invoker = text; continue; }
         atCommand = false;
+        if (inspect) continue;
         if (opaqueWords.has(text)) return true;
         const end = tokens.findIndex(([kind], at) => at > index && kind === "operator");
         const rest = tokens.slice(index + 1, end < 0 ? undefined : end);

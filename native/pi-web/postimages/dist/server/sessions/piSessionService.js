@@ -1343,6 +1343,8 @@ export class PiSessionService {
         return this.statusFromSession(session);
     }
     reconcileQueuedMaintenance(session) {
+        if (session.sessionManager.getSessionFileDiagnostics?.().length)
+            return;
         const boundary = this.failureBoundaries.snapshot(session);
         if (boundary === undefined || boundary.state === "watching")
             this.maintenance?.activateQueued(session);
@@ -3573,6 +3575,7 @@ export class PiSessionService {
         const failureBoundary = this.failureBoundaries.snapshot(session);
         return {
             sessionId: session.sessionId,
+            sessionFileDiagnostics: session.sessionManager.getSessionFileDiagnostics?.() ?? [],
             ...(this.cleanPolicyAnalyses === undefined ? {} : { cleanPolicyAnalysisSupport: "clean-policy-analysis-v1" }),
             ...(this.failureBoundaries.supported(session) ? { recoveryReadinessSupport: "same-provider-v1", streamRetrySupport: "entry-bound-v1", streamRetry: this.failureBoundaries.retrySnapshot(session), ...(this.failureRecoveries.policyConfigured() ? { engineFailureRecoverySupport: "enrolled-prefix-v1" } : {}) } : {}),
             ...(this.failureBoundaries.supported(session) ? { ...(this.failureRetirements === undefined ? {} : { failureRetirementSupport: "singular-original-v1" }), ...(this.maintenance === undefined ? {} : { failureMaintenanceSupport: "operation-scoped-v1", ...(typeof session.continueFromAborted === "function" ? { failureSyncContinuationSupport: "entry-bound-v1" } : {}) }), failureForkSupport: "engine-prefix-v1", failureBoundarySupport: "persisted-turn-v1", ...(failureBoundary === undefined ? {} : { failureBoundary }) } : {}),
