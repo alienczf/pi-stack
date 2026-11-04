@@ -393,9 +393,11 @@ def _one_stream(stream_id: str, stream_dir: Path) -> dict[str, object]:
     rows = load_threads(stream_dir / "threads.tsv")
     counts = {name: 0 for name in ("active", "waiting_quota", "done", "archived")}
     from engine import terminal_sessions
+    from engine.drive import is_paused
+    paused = is_paused(stream_dir)
     terminal = {row.session for row in rows if terminal_sessions.load(stream_dir, row.session, row.worktree) is not None}
-    coordinator = resolve_coordinator(stream_dir, [row for row in rows if row.session not in terminal])
-    if coordinator is None and not any(row.role == "coordinator" and (row.status in {Status.done, Status.archived} or row.session in terminal) for row in rows):
+    coordinator = None if paused else resolve_coordinator(stream_dir, [row for row in rows if row.session not in terminal])
+    if not paused and coordinator is None and not any(row.role == "coordinator" and (row.status in {Status.done, Status.archived} or row.session in terminal) for row in rows):
         raise StreamsError(f"stream {stream_id} has no designated active coordinator")
     threads: list[Thread] = []
     for row in rows:
@@ -410,7 +412,7 @@ def _one_stream(stream_id: str, stream_dir: Path) -> dict[str, object]:
     # threads are counted but not queried.
     thread_cost: int | float = 0
     for row in threads:
-        if row.status not in (Status.active, Status.waiting_quota) or row.session in terminal:
+        if paused or row.status not in (Status.active, Status.waiting_quota) or row.session in terminal:
             continue
         session = piweb.session_status(row.session)
         thread_cost += _as_cost(session.get("cost"))
@@ -422,6 +424,9 @@ def _one_stream(stream_id: str, stream_dir: Path) -> dict[str, object]:
         "threads": counts,
         "coordinatorCostShare": share,
     }
+    if paused:
+        result["nativeObservation"] = "not-queried-explicit-drive-off"
+        result["coordinatorRegistration"] = [{"session": row.session, "worktree": row.worktree, "status": row.status.value} for row in rows if row.role == "coordinator"]
     from engine.delivery import receipts
 
     deliveries = receipts(stream_dir)
@@ -498,7 +503,8 @@ def format_status(report: dict[str, object]) -> str:
             ratified = "yes" if stream["ratified"] else "no"
             coord = stream["coordinator"]
             if not isinstance(coord, dict):
-                lines.append(f"{stream['id']}\tratified={ratified}\t-\tthreads={counted}\tshare={share_text}")
+                observation = f"\tnative={stream['nativeObservation']}" if "nativeObservation" in stream else ""
+                lines.append(f"{stream['id']}\tratified={ratified}\t-\tthreads={counted}\tshare={share_text}{observation}")
             else:
                 usage = coord["contextUsage"]
                 tokens = usage.get("tokens") if isinstance(usage, dict) else None
