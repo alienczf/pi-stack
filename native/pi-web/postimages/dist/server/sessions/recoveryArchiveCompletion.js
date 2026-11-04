@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import { closeSync, constants, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { createServer } from "node:net";
+import { closeSync, constants, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { AutomaticAdmissionRejected } from "./automaticAdmissionStore.js";
 import { retirementSource } from "./sessionFailureRetirement.js";
@@ -10,6 +11,21 @@ const reject = message => { throw new AutomaticAdmissionRejected(message); };
 const missing = error => error?.code === "ENOENT";
 const phases = ["claimed", "staged", "artifact", "published", "original-retired", "quarantined", "deleted"];
 let localOwner;
+const writerLeases = new Map();
+export async function acquireWriterLease(scope) {
+    if (process.platform !== "linux") reject("Recovery completion requires Linux scoped writer exclusion");
+    scope = resolve(scope);
+    if (!writerLeases.has(scope)) {
+        const server = createServer(socket => socket.destroy());
+        const ready = new Promise((accept, fail) => {
+            server.on("error", () => fail(new AutomaticAdmissionRejected("Another recovery writer owns this archive registry")));
+            server.listen({ path: `\0pi-recovery-${process.getuid()}-${digest(scope)}` }, () => { server.unref(); accept(server); });
+        });
+        writerLeases.set(scope, { server, ready });
+    }
+    const lease = writerLeases.get(scope);
+    try { await lease.ready; } catch (error) { writerLeases.delete(scope); if (lease.server.listening) lease.server.close(); throw error; }
+}
 function regular(file) {
     const fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     try {
@@ -61,7 +77,9 @@ function processIdentity(pid) {
         return raw.slice(raw.lastIndexOf(")") + 2).split(" ")[19];
     } catch (error) { if (!missing(error)) throw error; return undefined; }
 }
-function writerFence(previous) {
+function writerFence(previous, scope) {
+    if (!writerLeases.get(resolve(scope))?.server.listening)
+        reject("Recovery completion has no registry-scoped native writer lease");
     if (process.platform !== "linux") reject("Recovery completion requires the Linux native writer fence");
     const boot = readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
     const start = processIdentity(process.pid);
@@ -69,19 +87,6 @@ function writerFence(previous) {
     localOwner ??= { boot, pid: process.pid, start, token: randomUUID() };
     if (previous && previous.token !== localOwner.token && previous.boot === boot && processIdentity(previous.pid) === previous.start)
         reject("A live recovery journal owner must be fenced before takeover");
-    const executable = statSync("/proc/self/exe");
-    for (const pid of readdirSync("/proc").filter(name => /^\d+$/.test(name) && Number(name) !== process.pid)) {
-        try {
-            const peer = statSync(`/proc/${pid}/exe`);
-            if (peer.dev === executable.dev && peer.ino === executable.ino)
-                reject("Another pinned native Node process must exit before recovery completion");
-        } catch (error) {
-            if (missing(error)) continue;
-            let uid;
-            try { uid = statSync(`/proc/${pid}`).uid; } catch (gone) { if (missing(gone)) continue; throw gone; }
-            if (uid === process.getuid() || error instanceof AutomaticAdmissionRejected) throw error;
-        }
-    }
     return localOwner;
 }
 function binding(intent) {
@@ -133,10 +138,11 @@ export async function completeRecoveryArchive(store, intent, hooks) {
         if (digest(Buffer.from(intent.sourceBase64, "base64")) !== intent.sourceSha256)
             reject("Protected retirement cache changed");
         const location = recoveryCompletionLocation(store, intent);
+        await acquireWriterLease(store.filePath);
         let journal = readJournal(location, intent);
-        const owner = writerFence(journal?.owner);
+        const owner = writerFence(journal?.owner, store.filePath);
         const evidence = () => {
-            writerFence(journal?.owner);
+            writerFence(journal?.owner, store.filePath);
             const current = readJournal(location, intent);
             if (journal === undefined ? current !== undefined : JSON.stringify(current) !== JSON.stringify(journal))
                 reject("Recovery completion ownership changed before preparation");
@@ -146,7 +152,7 @@ export async function completeRecoveryArchive(store, intent, hooks) {
         const guard = () => {
             for (const file of [location.file, location.artifact, intent.originalFile, ...(journal === undefined ? [] : [journal.archivePath, journal.archiveQuarantine])]) safeParent(file);
             engineGuard(evidence());
-            writerFence(journal?.owner);
+            writerFence(journal?.owner, store.filePath);
             if (journal?.artifactReceipt !== undefined) {
                 if (exists(journal.archivePath)) source(journal.archivePath, intent, journal.artifactReceipt);
                 else if (journal.deletedReceipt !== undefined) source(journal.archiveQuarantine, intent, journal.deletedReceipt);

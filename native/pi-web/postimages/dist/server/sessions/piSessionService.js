@@ -1634,14 +1634,26 @@ export class PiSessionService {
     }
     async completeFailureOriginal(intent, fork, guard, dispatch) {
         const ref = { id: intent.originalSessionId, cwd: intent.cwd };
-        const original = this.activeForLookup(ref)?.runtime.session;
+        await this.archiveStore.acquireRecoveryWriter();
+        guard();
+        let original = this.activeForLookup(ref)?.runtime.session;
+        if (original === undefined && await this.getArchived(ref) === undefined) {
+            let present;
+            try { present = retirementSource(intent.originalFile, ref.id, ref.cwd); }
+            catch (error) { if (error?.code !== "ENOENT") throw error; }
+            if (present !== undefined) {
+                if (createHash("sha256").update(present).digest("hex") !== intent.sourceSha256)
+                    throw new AutomaticAdmissionRejected("Original source changed before callback reconciliation");
+                original = await this.getOrOpen(ref);
+            }
+        }
         const originalExtensions = original === undefined ? undefined : this.activeRuntimeForSession(original)?.services?.resourceLoader.getExtensions();
         const forkExtensions = this.activeRuntimeForSession(fork)?.services?.resourceLoader.getExtensions();
         this.recoveryCompletionTeardowns ??= new Set();
         return this.runTreeExclusiveOperation([{ sessionId: ref.id, session: original }, { sessionId: fork.sessionId, session: fork }], "Recovery completion requires both identities to be idle", async () => {
             const result = await this.archiveStore.completeRecoveryOriginal(intent, {
                 prepare: async evidence => {
-                    let callbacksSettled = false;
+                    let callbacksSettled = false, originalClosed = original === undefined;
                     const validate = () => {
                         guard();
                         const file = evidence();
@@ -1659,7 +1671,7 @@ export class PiSessionService {
                             throw new AutomaticAdmissionRejected("Original runtime teardown/startup ownership is unresolved");
                         const active = this.activeForLookup(ref)?.runtime.session;
                         if (active !== undefined) {
-                            if (active !== original || active.model?.provider !== intent.model.provider || active.model?.id !== intent.model.id || active.thinkingLevel !== intent.model.thinking || active.sessionManager.getSessionFile() !== intent.originalFile || active.sessionManager.getLeafId() !== intent.originalLeaf)
+                            if (originalClosed || active !== original || active.model?.provider !== intent.model.provider || active.model?.id !== intent.model.id || active.thinkingLevel !== intent.model.thinking || active.sessionManager.getSessionFile() !== intent.originalFile || active.sessionManager.getLeafId() !== intent.originalLeaf)
                                 throw new AutomaticAdmissionRejected("Original live runtime/model ownership changed");
                             this.assertRecoveryQuiescent(active);
                         }
@@ -1671,7 +1683,7 @@ export class PiSessionService {
                             throw new AutomaticAdmissionRejected("Original effects checkpoint ownership changed");
                         if (unresolvedEffects(branch, boundary) || (this.subsessionChildren.get(ref.id)?.size ?? 0) > 0 || entries.some(entry => parsePersistedParentSubsessionLink(entry)?.spawnedBySessionId === ref.id) || this.pendingAskStore.pendingAsk(ref.id) !== undefined || this.pendingExtensionDialogStore.pendingDialogs(ref.id).length > 0)
                             throw new AutomaticAdmissionRejected("Original effects, native children or input still own completion");
-                        for (const loaded of [forkExtensions, ...(originalExtensions === undefined ? [] : [originalExtensions])]) {
+                        for (const loaded of [forkExtensions, ...(!originalClosed && originalExtensions !== undefined ? [originalExtensions] : [])]) {
                             const inventory = callbackInventory(loaded);
                             if (!inventory.known || callbacksSettled && inventory.owners.some(owner => owner.kind !== "none"))
                                 throw new AutomaticAdmissionRejected("Current callback ownership is not settled for completion");
@@ -1688,6 +1700,8 @@ export class PiSessionService {
                             this.recoveryCompletionTeardowns.add(ref.id);
                             await this.closeActive(ref.id, { kind: "clear", reason: "archive" });
                             this.recoveryCompletionTeardowns.delete(ref.id);
+                            originalClosed = true;
+                            dispatch("teardown-complete");
                         }
                         validate();
                     } catch (error) {

@@ -4,7 +4,7 @@ import { access, copyFile, mkdir, readFile, rename, unlink, writeFile } from "no
 import { basename, dirname, join, resolve } from "node:path";
 import { piWebDataDir } from "../../config.js";
 import { canonicalizeStoredCwd } from "../workingDirectory.js";
-import { completeRecoveryArchive } from "./recoveryArchiveCompletion.js";
+import { acquireWriterLease, completeRecoveryArchive } from "./recoveryArchiveCompletion.js";
 const archiveQueues = new Map();
 export function defaultSessionArchiveFilePath(env = process.env, cwd = process.cwd()) {
     return join(piWebDataDir(env, cwd), "archived-sessions.json");
@@ -14,6 +14,9 @@ export class SessionArchiveStore {
         this.filePath = filePath;
         this.archiveDir = archiveDir;
         this.operationQueue = Promise.resolve();
+    }
+    acquireRecoveryWriter() {
+        return acquireWriterLease(this.filePath);
     }
     completeRecoveryOriginal(intent, hooks) {
         return completeRecoveryArchive(this, intent, hooks);
@@ -138,6 +141,7 @@ export class SessionArchiveStore {
         archiveQueues.set(key, queued);
         await previous.catch(() => undefined);
         try {
+            await this.acquireRecoveryWriter();
             return await operation();
         }
         finally {
