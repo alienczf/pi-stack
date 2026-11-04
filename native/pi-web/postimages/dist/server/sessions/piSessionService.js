@@ -1,5 +1,5 @@
 import { statSync, statfsSync } from "node:fs";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { readFile, writeFile } from "node:fs/promises";
 import { createAgentSessionFromServices, createAgentSessionRuntime, createAgentSessionServices, createEditToolDefinition, defineTool, readStoredCredential, SessionManager, } from "@earendil-works/pi-coding-agent";
