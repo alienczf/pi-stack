@@ -435,7 +435,7 @@ def step(stream_dir: Path, episode: Episode, status: dict, at: str, native_info:
                 confirm_resume(stream_dir, episode.session, episode.session, episode.cwd, episode.retry_generation)
         return True
     token, allowed = piweb.automatic_admission(status, episode.session, episode.cwd, "recovery")
-    if not retry_ready(episode, at, token["generation"], allowed) or status.get("pendingAsk") or status.get("pendingExtensionDialogs") or status.get("pendingMessageCount", 0):
+    if not retry_ready(episode, at, token["generation"], allowed) or status.get("pendingAsk") or status.get("pendingDialogs") or status.get("pendingMessageCount", 0):
         return True
     if not episode.authorized_model or not episode.authorized_thinking:
         episode.detail = "Saved authorized model/thinking is unknown; no automatic trial is admitted."

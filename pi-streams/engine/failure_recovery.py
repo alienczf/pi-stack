@@ -349,7 +349,7 @@ def _past_control_owner(stream: Path, op: Recovery, episode: failure.Episode, it
     token, allowed = piweb.automatic_admission(status, op.session, op.cwd, "recovery")
     piweb.require_settings(status, episode.authorized_model, episode.authorized_thinking)
     if (allowed or token["generation"] != generation or automatic.get("generation") == generation
-            or any(status.get(key) for key in ("isStreaming", "isCompacting", "isBashRunning", "pendingMessageCount", "pendingAsk", "pendingExtensionDialogs"))
+            or any(status.get(key) for key in ("isStreaming", "isCompacting", "isBashRunning", "pendingMessageCount", "pendingAsk", "pendingDialogs"))
             or not safety.get("callbacksKnown") or safety.get("nativeChildCallbacks") or safety.get("unprovenCallbacks")
             or any(owner.get("kind") not in {"none", "safe-to-drop"} or owner.get("owners") for owner in safety.get("callbackOwners", []))):
         return False

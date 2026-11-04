@@ -190,7 +190,7 @@ def native_branch(resolved: Coordinator) -> list[tuple[dict, bytes]]:
 
 def terminal_checkpoint(resolved: Coordinator, acknowledgement: str) -> tuple[str, str] | None:
     status = resolved.native.status
-    if any(status.get(key) is True for key in ("isStreaming", "isCompacting", "isBashRunning")) or status.get("pendingMessageCount", 0) or status.get("pendingAsk") or status.get("pendingExtensionDialogs"):
+    if any(status.get(key) is True for key in ("isStreaming", "isCompacting", "isBashRunning")) or status.get("pendingMessageCount", 0) or status.get("pendingAsk") or status.get("pendingDialogs"):
         return None
     branch = native_branch(resolved)
     suffix = []
@@ -357,7 +357,7 @@ def step(index: Path, project: Project, stream: str, stream_dir: Path, resolved:
         trigger = max(THRESHOLD, op.rebuilt_tokens + max(20000, op.rebuilt_tokens // 10)) if op is not None and op.rebuilt_tokens else THRESHOLD
         if not allowed or type(tokens) is not int or tokens < trigger:
             return False
-        if status.get("isCompacting") is True or status.get("isBashRunning") is True or status.get("pendingAsk") or status.get("pendingExtensionDialogs"):
+        if status.get("isCompacting") is True or status.get("isBashRunning") is True or status.get("pendingAsk") or status.get("pendingDialogs"):
             return True
         if op is not None and op.completed_leaf == leaf:
             return False
@@ -371,7 +371,7 @@ def step(index: Path, project: Project, stream: str, stream_dir: Path, resolved:
             save(stream_dir, op)
             return True
         if op.phase == "sync-prepared":
-            if status.get("isCompacting") is True or status.get("isBashRunning") is True or status.get("pendingAsk") or status.get("pendingExtensionDialogs"):
+            if status.get("isCompacting") is True or status.get("isBashRunning") is True or status.get("pendingAsk") or status.get("pendingDialogs"):
                 return True
             op.phase = "sync-sending"
             save(stream_dir, op)
@@ -387,7 +387,7 @@ def step(index: Path, project: Project, stream: str, stream_dir: Path, resolved:
             return True
         if op.phase in {"sync-sending", "sync-admitted"}:
             if not op.ready_revision:
-                if op.recovery_original and status.get("failureSyncContinuationSupport") == "entry-bound-v1" and not any(status.get(key) for key in ("isStreaming", "isCompacting", "isBashRunning", "pendingMessageCount", "pendingAsk", "pendingExtensionDialogs")):
+                if op.recovery_original and status.get("failureSyncContinuationSupport") == "entry-bound-v1" and not any(status.get(key) for key in ("isStreaming", "isCompacting", "isBashRunning", "pendingMessageCount", "pendingAsk", "pendingDialogs")):
                     branch = native_branch(resolved)
                     entry, raw = branch[0]
                     if entry.get("message", {}).get("role") == "assistant" and entry["message"].get("stopReason") == "aborted":

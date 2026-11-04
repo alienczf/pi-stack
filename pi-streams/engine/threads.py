@@ -411,7 +411,8 @@ def _one_stream(stream_id: str, stream_dir: Path) -> dict[str, object]:
         if row is None or Path(row.worktree).resolve() != stream_dir.resolve():
             raise
         coordinator = Coordinator(row, _native_session(row.session, stream_dir))
-        if designated_coordinator(load_threads(stream_dir / "threads.tsv")) != row:
+        fresh = [item for item in load_threads(stream_dir / "threads.tsv") if terminal_sessions.load(stream_dir, item.session, item.worktree) is None]
+        if designated_coordinator(fresh) != row:
             raise StreamsError("coordinator designation changed during read-only observation")
         blocker = {"kind": "retired-native-residue", "session": exc.session, "message": str(exc)}
     if not paused and coordinator is None and not any(row.role == "coordinator" and (row.status in {Status.done, Status.archived} or row.session in terminal) for row in rows):

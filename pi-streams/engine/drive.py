@@ -108,7 +108,7 @@ def confirm_pause(stream_dir: Path, resolved: Coordinator) -> dict:
 def is_stalled(status: dict[str, object]) -> bool:
     activity = status.get("activity")
     indicated = isinstance(activity, dict) and activity.get("phase") in ("waiting", "error", "idle")
-    return bool(status.get("pendingAsk") or status.get("pendingExtensionDialogs")) or indicated or not any(status.get(key) is True for key in ("isStreaming", "isCompacting", "isBashRunning"))
+    return bool(status.get("pendingAsk") or status.get("pendingDialogs")) or indicated or not any(status.get(key) is True for key in ("isStreaming", "isCompacting", "isBashRunning"))
 
 
 def step(stream_dir: Path, resolved: Coordinator | None, stalled: bool, *, maintenance: bool = False) -> bool:
