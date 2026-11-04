@@ -56,13 +56,14 @@ function shellSubmission(command) {
     if (typeof command !== "string") return true;
     const operators = ["&>>", "&>", "&&", "||", "|&", ">>", "<>", ">|", ">&", "<&", ">", "<", ";", "|", "&", "\n"];
     const redirects = new Set(["&>>", "&>", ">>", "<>", ">|", ">&", "<&", ">", "<"]);
-    const opaqueWords = new Set(["sbatch", "qsub", "nohup", "eval", "source", ".", "sh", "bash", "dash", "ksh", "zsh", "fish"]);
+    const opaqueWords = new Set(["sbatch", "qsub", "nohup", "setsid", "disown"]);
+    command = command.replace(/<<-?\s*(['"]?)(\w+)\1([^\n]*)\n([\s\S]*?)\n\t*\2(?=\n|$)/g, (all, quote, end, tail, body) => tail + "\n" + (/(?:^|[;|\s])(?:bash|sh|dash|ksh|zsh)\s/.test(command.slice(0, command.indexOf(all))) ? body + "\n" : ""));
     const tokens = [];
     let word, index = 0;
     while (index < command.length) {
         let char = command[index];
         if (char === "\\") {
-            if (++index === command.length) return true;
+            if (++index === command.length) break;
             if (command[index] !== "\n") word = (word ?? "") + command[index];
             index++;
             continue;
@@ -73,7 +74,14 @@ function shellSubmission(command) {
             index++;
             while (index < command.length && command[index] !== quote) {
                 char = command[index];
-                if (quote === '"' && "$`".includes(char)) return true;
+                if (quote === '"' && char === "$" && command[index + 1] === "(") {
+                    const end = command.indexOf(")", index + 2);
+                    if (end >= 0 && shellSubmission(command.slice(index + 2, end))) return true;
+                }
+                if (quote === '"' && char === "`") {
+                    const end = command.indexOf("`", index + 1);
+                    if (end >= 0 && shellSubmission(command.slice(index + 1, end))) return true;
+                }
                 if (quote === '"' && char === "\\" && index + 1 < command.length && '$`"\\\n'.includes(command[index + 1])) {
                     char = command[++index];
                     if (char === "\n") { index++; continue; }
@@ -81,7 +89,7 @@ function shellSubmission(command) {
                 word += char;
                 index++;
             }
-            if (index === command.length) return true;
+            if (index === command.length) break;
             index++;
             continue;
         }
@@ -89,7 +97,12 @@ function shellSubmission(command) {
             while (index < command.length && command[index] !== "\n") index++;
             continue;
         }
-        if ("$`(){}\0".includes(char) || ["<<", ";;", ";&"].some(value => command.startsWith(value, index))) return true;
+        if ("(){}[]`".includes(char)) {
+            if (word !== undefined) { tokens.push(["word", word]); word = undefined; }
+            tokens.push(["operator", char]);
+            index++;
+            continue;
+        }
         const operator = operators.find(value => command.startsWith(value, index));
         if (" \t".includes(char) || operator !== undefined) {
             if (word !== undefined) { tokens.push(["word", word]); word = undefined; }
@@ -101,18 +114,49 @@ function shellSubmission(command) {
         index++;
     }
     if (word !== undefined) tokens.push(["word", word]);
-    let target = false;
-    for (const [kind, text] of tokens) {
-        if (target) {
-            if (kind !== "word") return true;
-            target = false;
-        } else if (kind === "redirect") target = true;
-        else if (kind === "operator" && text === "&" || kind === "word" && opaqueWords.has(text.split("/").at(-1))) return true;
+    let atCommand = true;
+    for (let index = 0; index < tokens.length; index++) {
+        const [kind, word] = tokens[index];
+        if (kind === "operator") {
+            if (word === "&") return true;
+            if ([";", "|", "|&", "&&", "||", "\n", "(", "{", "`"].includes(word)) atCommand = true;
+            continue;
+        }
+        if (kind !== "word" || !atCommand) continue;
+        const text = word.split("/").at(-1);
+        if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(word) || word.startsWith("-") || ["env", "command", "exec", "sudo", "time", "builtin"].includes(text)) continue;
+        atCommand = false;
+        if (opaqueWords.has(text)) return true;
+        const end = tokens.findIndex(([kind], at) => at > index && kind === "operator");
+        const rest = tokens.slice(index + 1, end < 0 ? undefined : end);
+        if (["eval", "bash", "sh", "dash", "ksh", "zsh"].includes(text))
+            for (const [kind, script] of rest) if (kind === "word" && /[\s;&]/.test(script) && shellSubmission(script)) return true;
+        if (text === "tmux" && rest.some(([, value]) => /^(?:-.*d.*|detach|detach-client)$/.test(value))) return true;
+        if (text === "screen" && rest.some(([, value]) => /^-.*[dD].*$/.test(value))) return true;
     }
-    return target || !tokens.length || tokens.at(-1)[0] === "operator" && ["&&", "||", "|", "|&"].includes(tokens.at(-1)[1]);
+    return false;
 }
 
-export function unresolvedEffects(branch) {
+export function effectWindow(branch, boundary) {
+    if (!boundary?.checkpoint) return branch;
+    const checkpoint = boundary.checkpoint;
+    const at = branch.findIndex(item => item.value.id === checkpoint.entryId);
+    const receipt = branch.findIndex(item => item.value.customType === "pi-web.stream-failure" && equal(item.value.data, boundary));
+    const retries = retryDispositions(branch, boundary.sessionId, boundary.cwd);
+    const prefix = branch.slice(0, at + 1);
+    const terminal = prefix.at(-1)?.value.message;
+    if (at < 0 || receipt <= at || hash(branch[at].raw) !== checkpoint.sha256 || !["assistant", "toolResult"].includes(terminal?.role) || terminal.role === "assistant" && terminal.stopReason !== "stop" || terminal.isError || prefix.some(item => ["error", "aborted", "length"].includes(item.value.message?.stopReason) && !["resolved", "superseded"].includes(retries.get(item.value.id)?.state)) || unresolvedEffects(prefix))
+        throw new AutomaticAdmissionRejected("Effects checkpoint is not the verified successful native boundary/entry/hash/branch");
+    if (boundary.failure) {
+        const failed = branch.findIndex(item => item.value.id === boundary.failure.entryId);
+        if (failed <= at || hash(branch[failed].raw) !== boundary.failure.sha256)
+            throw new AutomaticAdmissionRejected("Effects checkpoint changed its exact failure binding");
+    }
+    return branch.slice(at + 1);
+}
+
+export function unresolvedEffects(branch, boundary) {
+    branch = effectWindow(branch, boundary);
     const calls = new Set(), jobs = new Set();
     for (const { value } of branch) {
         const message = value.message;
@@ -137,12 +181,13 @@ export function unresolvedEffects(branch) {
 }
 
 export class StreamTransientRetry {
-    constructor(session, control, branch, watching, cancelled) {
+    constructor(session, control, branch, watching, cancelled, boundary = () => undefined) {
         this.session = session;
         this.control = control;
         this.branch = branch;
         this.watching = watching;
         this.cancelled = cancelled;
+        this.boundary = boundary;
         this.active = undefined;
     }
     get delayMs() { return this.watching() ? 5000 : undefined; }
@@ -156,7 +201,7 @@ export class StreamTransientRetry {
         if (usage(message) || /usage.?limit/i.test(message.errorMessage ?? "") || !isRetryableAssistantError(message) || isContextOverflow(message, this.session.model?.contextWindow ?? 0)) return false;
         try {
             this.identity();
-            return !this.session.pendingMessageCount && !unresolvedEffects(this.branch(this.session));
+            return !this.session.pendingMessageCount && !unresolvedEffects(this.branch(this.session), this.boundary());
         } catch { return false; }
     }
     save(data) {
@@ -210,7 +255,7 @@ export class StreamTransientRetry {
     }
     assertAttempt() {
         const settings = this.session.settingsManager.getRetrySettings();
-        if (!this.active || !settings.enabled || this.active.attempt > settings.maxRetries || !equal(this.identity(), this.active.identity) || this.session.pendingMessageCount || unresolvedEffects(this.branch(this.session)))
+        if (!this.active || !settings.enabled || this.active.attempt > settings.maxRetries || !equal(this.identity(), this.active.identity) || this.session.pendingMessageCount || unresolvedEffects(this.branch(this.session), this.boundary()))
             throw new AutomaticAdmissionRejected("Retry superseded by stop, input, settings or unresolved effects");
     }
     async beforeAttempt() {

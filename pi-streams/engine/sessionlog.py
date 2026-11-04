@@ -208,12 +208,16 @@ def retry_dispositions(branch: list[tuple[dict, bytes]], sid: str, cwd: str, nat
 
 
 def shell_submission(command: object) -> bool:
-    """Find lexical submission evidence, not proof that a script is read-only."""
+    """Retain explicit detached launches, not uncertainty about foreground syntax."""
     if not isinstance(command, str):
         return True
+    def heredoc(match):
+        prefix = command[:match.start()]
+        return match[3] + "\n" + (match[4] + "\n" if re.search(r"(?:^|[;|\s])(?:bash|sh|dash|ksh|zsh)\s", prefix) else "")
+    command = re.sub(r"<<-?\s*(['\"]?)(\w+)\1([^\n]*)\n([\s\S]*?)\n\t*\2(?=\n|$)", heredoc, command)
     operators = ("&>>", "&>", "&&", "||", "|&", ">>", "<>", ">|", ">&", "<&", ">", "<", ";", "|", "&", "\n")
     redirects = {"&>>", "&>", ">>", "<>", ">|", ">&", "<&", ">", "<"}
-    opaque_words = {"sbatch", "qsub", "nohup", "eval", "source", ".", "sh", "bash", "dash", "ksh", "zsh", "fish"}
+    opaque_words = {"sbatch", "qsub", "nohup", "setsid", "disown"}
     tokens: list[tuple[str, str]] = []
     word: str | None = None
     index = 0
@@ -222,7 +226,7 @@ def shell_submission(command: object) -> bool:
         if char == "\\":
             index += 1
             if index == len(command):
-                return True
+                break
             if command[index] != "\n":
                 word = (word or "") + command[index]
             index += 1
@@ -233,8 +237,14 @@ def shell_submission(command: object) -> bool:
             index += 1
             while index < len(command) and command[index] != quote:
                 char = command[index]
-                if quote == '"' and char in "$`":
-                    return True
+                if quote == '"' and command.startswith("$(", index):
+                    end = command.find(")", index + 2)
+                    if end >= 0 and shell_submission(command[index + 2:end]):
+                        return True
+                if quote == '"' and char == "`":
+                    end = command.find("`", index + 1)
+                    if end >= 0 and shell_submission(command[index + 1:end]):
+                        return True
                 if quote == '"' and char == "\\" and index + 1 < len(command) and command[index + 1] in '$`"\\\n':
                     index += 1
                     char = command[index]
@@ -244,15 +254,20 @@ def shell_submission(command: object) -> bool:
                 word += char
                 index += 1
             if index == len(command):
-                return True
+                break
             index += 1
             continue
         if char == "#" and word is None:
             while index < len(command) and command[index] != "\n":
                 index += 1
             continue
-        if char in "$`(){}\x00" or command.startswith(("<<", ";;", ";&"), index):
-            return True
+        if char in "(){}[]`":
+            if word is not None:
+                tokens.append(("word", word))
+                word = None
+            tokens.append(("operator", char))
+            index += 1
+            continue
         operator = next((value for value in operators if command.startswith(value, index)), None)
         if char in " \t" or operator is not None:
             if word is not None:
@@ -268,27 +283,45 @@ def shell_submission(command: object) -> bool:
         index += 1
     if word is not None:
         tokens.append(("word", word))
-    target = False
-    for kind, text in tokens:
-        if target:
-            if kind != "word":
+    at_command = True
+    for index, (kind, value) in enumerate(tokens):
+        if kind == "operator":
+            if value == "&":
                 return True
-            target = False
-        elif kind == "redirect":
-            target = True
-        elif kind == "operator" and text == "&" or kind == "word" and text.rsplit("/", 1)[-1] in opaque_words:
+            if value in {";", "|", "|&", "&&", "||", "\n", "(", "{", "`"}:
+                at_command = True
+            continue
+        if kind != "word" or not at_command:
+            continue
+        name = value.rsplit("/", 1)[-1]
+        if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", value) or value.startswith("-") or name in {"env", "command", "exec", "sudo", "time", "builtin"}:
+            continue
+        at_command = False
+        if name in opaque_words:
             return True
-    return target or not tokens or tokens[-1] in [("operator", value) for value in ("&&", "||", "|", "|&")]
+        end = next((at for at in range(index + 1, len(tokens)) if tokens[at][0] == "operator"), len(tokens))
+        rest = tokens[index + 1:end]
+        if name in {"eval", "bash", "sh", "dash", "ksh", "zsh"} and any(kind == "word" and re.search(r"[\s;&]", script) and shell_submission(script) for kind, script in rest):
+            return True
+        if name == "tmux" and any(re.fullmatch(r"-.*d.*|detach|detach-client", text) for _, text in rest):
+            return True
+        if name == "screen" and any(re.fullmatch(r"-.*[dD].*", text) for _, text in rest):
+            return True
+    return False
 
 
-def failure_observation(path: Path, sid: str, cwd: str, leaf: object, failure_entry: str | None = None, *, native_retry: dict | None = None) -> dict | None:
+def failure_observation(path: Path, sid: str, cwd: str, leaf: object, failure_entry: str | None = None, *, native_retry: dict | None = None, checkpoint: dict | None = None) -> dict | None:
     branch = branch_records(path, sid, cwd, leaf)
     retries = retry_dispositions(branch, sid, cwd, native_retry)
     failed = None
     saved = ("", "")
     uncertain: dict[str, dict[str, str]] = {}
     pending: set[str] = set()
-    for entry, raw in branch:
+    checkpoint_at = -1
+    if checkpoint is not None:
+        verify_good_checkpoint(path, sid, cwd, leaf, checkpoint, failure_entry)
+        checkpoint_at = next(index for index, (entry, _) in enumerate(branch) if entry["id"] == checkpoint["entryId"])
+    for index, (entry, raw) in enumerate(branch):
         if retries.get(entry["id"], {}).get("state") in {"resolved", "pending", "superseded"}:
             continue
         message = entry.get("message")
@@ -296,6 +329,8 @@ def failure_observation(path: Path, sid: str, cwd: str, leaf: object, failure_en
             continue
         if message.get("role") == "user":
             saved = entry["id"], hashlib.sha256(raw).hexdigest()
+        if index <= checkpoint_at:
+            continue
         if message.get("role") == "assistant" and message.get("stopReason") != "error":
             content = message.get("content", [])
             for part in content if isinstance(content, list) else []:

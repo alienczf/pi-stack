@@ -1982,7 +1982,7 @@ export class PiSessionService {
         if (!this.isCurrentActiveSession(session) || this.isSessionEntryMutationActive(session) || sessionHasActiveWork(session, this.compactionQueuedMessages(session.sessionId).length)) {
             throw new AutomaticAdmissionRejected("Stop current session activity before replacement");
         }
-        if (unresolvedEffects(persistedFailureBranch(session)))
+        if (unresolvedEffects(persistedFailureBranch(session), this.failureBoundaries.snapshot(session)))
             throw new AutomaticAdmissionRejected("Replacement retains unresolved external effects; no replay or retirement");
         if (safety.entryId !== entryId || !safety.callbacksKnown || safety.nativeChildCallbacks.length > 0 || this.pendingAskStore.pendingAsk(session.sessionId) !== undefined || this.pendingExtensionDialogStore.pendingDialogs(session.sessionId).length > 0) {
             throw new AutomaticAdmissionRejected("Replacement checkpoint is stale or has unresolved native input/callback ownership");
@@ -3544,7 +3544,7 @@ export class PiSessionService {
             ...(this.failureBoundaries.supported(session) ? { recoveryReadinessSupport: "same-provider-v1", streamRetrySupport: "entry-bound-v1", streamRetry: this.failureBoundaries.retrySnapshot(session), ...(this.failureRecoveries.policyConfigured() ? { engineFailureRecoverySupport: "enrolled-prefix-v1" } : {}) } : {}),
             ...(this.failureBoundaries.supported(session) ? { ...(this.failureRetirements === undefined ? {} : { failureRetirementSupport: "singular-original-v1" }), ...(this.maintenance === undefined ? {} : { failureMaintenanceSupport: "operation-scoped-v1" }), failureForkSupport: "engine-prefix-v1", failureBoundarySupport: "persisted-turn-v1", ...(failureBoundary === undefined ? {} : { failureBoundary }) } : {}),
             ...(this.automaticAdmissionStore === undefined ? {} : { conditionalAdmissionSupport: "generation-cas-v1", automaticAdmission: this.automaticAdmissionStore.snapshot({ id: session.sessionId, cwd: session.sessionManager.getCwd() }), rotationSafety: this.rotationSafety(session) }),
-            ...(this.maintenance === undefined || session.sessionManager.appendCustomEntry === undefined ? {} : { maintenanceTargetSupport: "below-150000-v1", maintenanceSupport: "checkpoint-input-v1" }),
+            ...(this.maintenance === undefined || session.sessionManager.appendCustomEntry === undefined ? {} : { maintenanceTargetSupport: "same-model-capacity-v1", maintenanceSupport: "checkpoint-input-v1" }),
             ...(this.maintenance === undefined || session.agent.subscribe === undefined ? {} : { resumeObservationSupport: "completed-assistant-v1" }),
             ...(supportsPotetoInvocation(session) ? { potetoInvocationSupport: "exact-goal-v1" } : {}),
             ...(this.streamsDcrEvents === undefined ? {} : { dcrEventSupport: "phase-v1" }),

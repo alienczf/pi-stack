@@ -231,7 +231,7 @@ export class SessionFailureRecoveries {
         const continuation = request["continuation"];
         const assignment = enrollment ?? continuation;
         const binding = enrollment?.id ?? session.sessionId;
-        if (authority.policyId !== this.hooks.policy || authority.enrollmentId !== binding || !object(assignment) || typeof assignment.role !== "string" || !/^[a-z][a-z0-9_-]*$/.test(assignment.role) || typeof assignment.assignment !== "string" || !assignment.assignment || createHash("sha256").update(assignment.assignment).digest("hex") !== assignment.assignmentSha256 || boundary.parking?.owned !== true || boundary.parking.generation !== control.generation || unresolvedEffects(original))
+        if (authority.policyId !== this.hooks.policy || authority.enrollmentId !== binding || !object(assignment) || typeof assignment.role !== "string" || !/^[a-z][a-z0-9_-]*$/.test(assignment.role) || typeof assignment.assignment !== "string" || !assignment.assignment || createHash("sha256").update(assignment.assignment).digest("hex") !== assignment.assignmentSha256 || boundary.parking?.owned !== true || boundary.parking.generation !== control.generation || unresolvedEffects(original, boundary))
             throw new AutomaticAdmissionRejected("Engine policy lacks exact lane assignment, failure-owned parking or resolved effects");
         const authorization = { authority: { kind: "engine-policy", policyId: authority.policyId, enrollmentId: binding }, continuation: structuredClone(assignment) };
         this.hooks.quiescent(session);

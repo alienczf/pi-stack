@@ -46,6 +46,22 @@ class Operation:
     recovery_original: str = ""
     observation: dict | None = None
     continuation: dict | None = None
+    rebuilt_tokens: int = 0
+
+
+def safe_context(native: dict, status: dict) -> int:
+    tokens, target = native.get("tokensAfter"), native.get("targetTokens")
+    model = status.get("model", {})
+    capacity = model.get("contextWindow")
+    if type(capacity) is not int or capacity <= 0 or type(tokens) is not int or tokens < 0 or type(target) is not int or target <= 0:
+        raise StreamsError("Native compaction has unknown same-model context capacity")
+    budget = {"provider": model.get("provider"), "model": model.get("id"), "contextWindow": capacity, "targetTokens": int(capacity * 0.8)}
+    if target == THRESHOLD and native.get("contextBudget") is None:
+        if tokens >= min(target, budget["targetTokens"]):
+            raise StreamsError("Legacy native compaction has no verified rebuilt context below 150000 tokens")
+    elif native.get("contextBudget") != budget or target != budget["targetTokens"] or tokens >= target:
+        raise StreamsError("Native compaction exceeds or changed the same-model safe context capacity")
+    return tokens
 
 
 def load(stream_dir: Path, sid: str) -> Operation | None:
@@ -57,7 +73,7 @@ def load(stream_dir: Path, sid: str) -> Operation | None:
         return None
     try:
         op = Operation(**{key: item for key, item in value.items() if key != "recovery_instructions"})
-        if op.session != sid or op.phase not in PHASES or not op.id or not Path(op.cwd).is_absolute() or op.automatic.get("sessionId") != sid or op.automatic.get("cwd") != op.cwd or op.automatic.get("kind") != "wake":
+        if op.session != sid or op.phase not in PHASES or not op.id or not Path(op.cwd).is_absolute() or op.automatic.get("sessionId") != sid or op.automatic.get("cwd") != op.cwd or op.automatic.get("kind") != "wake" or type(op.rebuilt_tokens) is not int or op.rebuilt_tokens < 0:
             raise ValueError("mismatched DCR owner or phase")
         return op
     except (TypeError, ValueError, AttributeError) as exc:
@@ -285,7 +301,26 @@ def step(index: Path, project: Project, stream: str, stream_dir: Path, resolved:
         return True
     token, allowed = piweb.automatic_admission(status, sid, resolved.row.worktree, "wake")
     if op is not None and op.phase == "blocked":
-        return True
+        legacy_gate = "below 150000 tokens" in op.detail and not op.resume_text and op.checkpoint_entry
+        if not legacy_gate:
+            return True
+        native = piweb.maintenance_status(op.cwd, sid, op.id, original=op.recovery_original)
+        if native.get("generation") != op.automatic["generation"] or native.get("entryId") != op.checkpoint_entry:
+            raise StreamsError("Legacy DCR reconciliation changed its exact checkpoint/generation")
+        if native.get("resume") is not None or native.get("inputs") or native.get("inputSequence"):
+            return True
+        if native.get("state") == "superseded":
+            op.phase, op.detail = "superseded", "Dead legacy context-gate ownership was reconciled without replay; current admission remains authoritative."
+            save(stream_dir, op)
+            close_events(stream_dir, op)
+            return False
+        if native.get("state") != "complete" or not allowed or token != op.automatic:
+            return True
+        safe_context(native, status)
+        if piweb.compaction_result(op.cwd, sid, op.id, original=op.recovery_original) is None:
+            return True
+        op.phase, op.detail = "compacting", "Reconciled exact completed compaction after the legacy context gate."
+        save(stream_dir, op)
     if op is not None and op.phase not in TERMINAL and (not allowed or token != op.automatic):
         if op.phase in {"compact-sending", "compacting", "resume-sending", "resuming"}:
             native = piweb.maintenance_status(op.cwd, sid, op.id, original=op.recovery_original)
@@ -305,7 +340,8 @@ def step(index: Path, project: Project, stream: str, stream_dir: Path, resolved:
         tokens = usage.get("tokens") if isinstance(usage, dict) else None
         safety = status.get("rotationSafety")
         leaf = safety.get("entryId") if isinstance(safety, dict) else None
-        if not allowed or type(tokens) is not int or tokens < THRESHOLD:
+        trigger = max(THRESHOLD, op.rebuilt_tokens + max(20000, op.rebuilt_tokens // 10)) if op is not None and op.rebuilt_tokens else THRESHOLD
+        if not allowed or type(tokens) is not int or tokens < trigger:
             return False
         if status.get("isCompacting") is True or status.get("isBashRunning") is True or status.get("pendingAsk") or status.get("pendingExtensionDialogs"):
             return True
@@ -394,9 +430,7 @@ def step(index: Path, project: Project, stream: str, stream_dir: Path, resolved:
             proof = piweb.compaction_result(op.cwd, sid, op.id, original=op.recovery_original)
             if proof is None:
                 return True
-            tokens_after = native.get("tokensAfter")
-            if native.get("targetTokens") != THRESHOLD or type(tokens_after) is not int or tokens_after >= THRESHOLD or tokens_after < 0:
-                raise StreamsError("Native compaction has no verified rebuilt context below 150000 tokens")
+            op.rebuilt_tokens = safe_context(native, status)
             artifacts._rotate_log_locked(stream_dir)
             state = artifacts._read_stream_state_locked(stream_dir)
             require_ratified(stream_dir)

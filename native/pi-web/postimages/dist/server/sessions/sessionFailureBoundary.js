@@ -364,10 +364,24 @@ export class SessionFailureBoundaries {
                 throw new AutomaticAdmissionRejected("Invalid persisted stream failure boundary");
             this.records.set(session, structuredClone(data));
         }
-        const retry = new StreamTransientRetry(session, this.control, persistedBranch, () => this.records.has(session), () => this.observe(session));
+        const retry = new StreamTransientRetry(session, this.control, persistedBranch, () => this.records.has(session), () => this.observe(session), () => this.records.get(session));
         this.retries.set(session, retry);
         session.setRuntimeRetryPolicy(retry);
         if (this.records.has(session)) {
+            const saved = this.records.get(session);
+            if (saved.state === "parked" && saved.failure) {
+                const branch = persistedBranch(session);
+                const item = branch.find(item => item.value.id === saved.failure.entryId);
+                if (!item || createHash("sha256").update(item.raw).digest("hex") !== saved.failure.sha256)
+                    throw new AutomaticAdmissionRejected("Persisted parked failure entry/hash changed");
+                const kind = failure(item.value.message);
+                if (kind !== undefined && kind !== saved.failure.kind) {
+                    const current = { ...saved, failure: { ...saved.failure, kind } };
+                    session.sessionManager.appendCustomEntry(CUSTOM_TYPE, current);
+                    persistedBranch(session);
+                    this.records.set(session, current);
+                }
+            }
             retry.reconcile();
             void this.observe(session);
         }
@@ -453,7 +467,7 @@ export class SessionFailureBoundaries {
             throw new AutomaticAdmissionRejected("Explicit resume was superseded or the original is busy");
         const branch = persistedBranch(session);
         const failed = branch.findIndex(item => item.value.id === previous.failure.entryId);
-        if (failed < 0 || branch.slice(failed + 1).some(item => item.value.message?.role === "user") || unresolvedEffects(branch))
+        if (failed < 0 || branch.slice(failed + 1).some(item => item.value.message?.role === "user") || unresolvedEffects(branch, previous))
             throw new AutomaticAdmissionRejected("Newer accepted input or unresolved effects require reconciliation before resume");
         if (isContentPolicyFailure(branch[failed].value.message))
             throw new AutomaticAdmissionRejected("Content-policy blocker. Do not recover the same rejected content");

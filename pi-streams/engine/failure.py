@@ -274,20 +274,20 @@ def observe(stream_dir: Path, sid: str, cwd: str, native: dict, status: dict, at
             if not isinstance(boundary["checkpoint"], dict):
                 raise StreamsError("native checkpoint is malformed")
             checkpoint = sessionlog.verify_good_checkpoint(Path(path), sid, cwd, leaf, boundary["checkpoint"], failed["entryId"])
+    if checkpoint is not None and not observation["uncertainJobs"]:
+        observation = sessionlog.failure_observation(Path(path), sid, cwd, leaf, failed["entryId"], native_retry=status.get("streamRetry") if status.get("streamRetrySupport") == "entry-bound-v1" else None, checkpoint=checkpoint)
     jobs = observation["uncertainJobs"]
     replay = artifacts._read_tick_data(stream_dir).get("sessions", {}).get(sid, {}).get("replay", [])
     if replay:
         jobs.append({"id": "saved-unconfirmed-replay", "state": "unknown"})
     policy = classify(observation["provider"], observation["message"], at, tool_error=observation["toolError"])
     if previous is not None and previous.failure_entry == observation["entryId"] and previous.failure_sha256 == observation["sha256"]:
-        if policy.kind == "content-policy":
-            if previous.kind != "content-policy":
-                previous.continuation = None
-            previous.kind, previous.code, previous.label = policy.kind, policy.code, policy.label
+        if policy.kind != previous.kind:
             previous.authority = None
-        if previous.uncertain_jobs != jobs:
-            previous.uncertain_jobs = jobs
-            save(stream_dir, previous)
+            previous.continuation = None
+        previous.kind, previous.code, previous.label, previous.provider = policy.kind, policy.code, policy.label, policy.provider
+        previous.uncertain_jobs = jobs
+        save(stream_dir, previous)
         if previous.kind != "usage-limit" and previous.authority is None:
             _admit_recovery(stream_dir, previous, Path(path), leaf, boundary, status)
         _publish_marker(stream_dir, previous, checkpoint)

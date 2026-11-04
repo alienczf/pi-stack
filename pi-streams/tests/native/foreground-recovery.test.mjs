@@ -17,7 +17,7 @@ const call = command => ({ ...response('', 'toolUse'), content: [{ type: 'toolCa
 const item = value => ({ value, raw: JSON.stringify(value) + '\n' });
 
 test('completed foreground shell syntax resolves without jobId while unmatched and detached launches stay fenced', () => {
-    for (const command of [heredoc, 'echo "$HOME"', 'printf `pwd`', '[[ -f fixture ]] && echo yes', "eval 'printf done'", 'bash -c "printf done"', 'printf done > fixture 2>&1']) {
+    for (const command of [heredoc, 'echo "$HOME"', 'printf `pwd`', '[[ -f fixture ]] && echo yes', "eval 'printf done'", 'bash -c "printf done"', 'cat <(printf done)', 'printf done > fixture 2>&1']) {
         const branch = [item({ id: 'call', message: call(command) }), item({ id: 'result', message: { role: 'toolResult', toolCallId: 'foreground', details: { exitCode: 0 } } })];
         assert.equal(unresolvedEffects(branch), false, command);
         assert.equal(unresolvedEffects(branch.slice(0, 1)), true, command);
@@ -116,6 +116,32 @@ test('cold parked terminated and fetch-failed classifications refresh without re
         assert.equal(cold.calls.length, 0);
         cold.session.dispose();
     }
+});
+
+test('live old maintenance owners survive map reset and accepted or uncertain input never loses its fence', async () => {
+    const f = await fixture();
+    f.manager.appendMessage(response('Owned checkpoint'));
+    const ref = { id: f.session.sessionId, cwd: f.dir }, store = new SessionMaintenanceStore(join(f.dir, 'owner-maintenance'));
+    let release, finish;
+    const done = new Promise(resolve => { finish = resolve; });
+    f.session.compact = () => new Promise(resolve => { release = resolve; });
+    const host = { current: () => true, busy: () => false, humanInputPending: () => false, begin: () => {}, end: () => finish(), publish: () => {}, failure: (_, detail) => assert.fail(detail), send: () => assert.fail('No input can replay') };
+    const old = new SessionMaintenanceController(store, f.control, host);
+    old.start(f.session, { id: 'owned', instructions: 'Bounded fixture' }, { sessionId: ref.id, cwd: ref.cwd, generation: f.control.snapshot(ref).generation, entryId: f.manager.getLeafId() });
+    old.compacting.clear();
+    const cold = new SessionMaintenanceController(store, f.control, host);
+    assert.equal(cold.status(f.session, 'owned').state, 'compacting');
+    assert.equal(cold.blocksAutomatic(f.session), true);
+    release(); await done; await flush();
+    assert.equal(cold.blocksAutomatic(f.session), false);
+    for (const state of ['queued', 'sending', 'uncertain']) {
+        store.update(ref, 'owned', op => { op.state = 'uncertain'; op.inputSequence = 1; op.inputs = [{ id: 'accepted', sequence: 1, text: 'Retain exact accepted input', kind: 'followUp', images: [], attachments: [], echoUserMessage: true, generation: op.generation, state }]; });
+        assert.equal(cold.blocksAutomatic(f.session), true, state);
+        assert.equal(store.get(ref, 'owned').inputs[0].text, 'Retain exact accepted input');
+    }
+    assert.equal(f.calls.length, 0);
+    assert.equal(f.control.snapshot(ref).allowed, false);
+    f.session.dispose();
 });
 
 test('same-model native 200k compaction completes, legacy gate reconciles, and empty dead ownership releases without replay', async () => {
