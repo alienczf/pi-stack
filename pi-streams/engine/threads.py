@@ -387,7 +387,7 @@ def _one_stream(stream_id: str, stream_dir: Path) -> dict[str, object]:
     canonical = _canonical_stream(stream_dir)
     if canonical:
         state = artifacts.read_stream_state(stream_dir)
-        ratified = _has_ratified_authority(state)
+        ratified = _has_ratified_authority(state, stream_dir)
     else:
         ratified = is_ratified((stream_dir / "STREAM.md").read_text(encoding="utf-8"))
     rows = load_threads(stream_dir / "threads.tsv")
@@ -621,14 +621,14 @@ def _require_worker_role(role: str) -> None:
         raise StreamsError("coordinator is a reserved worker role")
 
 
-def _has_ratified_authority(state: artifacts.StreamState) -> bool:
+def _has_ratified_authority(state: artifacts.StreamState, stream_dir: Path | None = None) -> bool:
     authority = state.source[state.authority.start:state.authority.end].decode("utf-8")
-    return artifacts.has_ratified_authority_line(authority)
+    return artifacts.has_ratified_authority_line(authority, stream_dir)
 
 
 def require_ratified(stream_dir: Path) -> None:
     state = artifacts._read_stream_state_locked(stream_dir)
-    if not _has_ratified_authority(state):
+    if not _has_ratified_authority(state, stream_dir):
         raise StreamsError("STATE Goals is unratified or has no source-backed authority; no worker or automatic dispatch is authorized")
 
 

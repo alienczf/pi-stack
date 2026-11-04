@@ -7,7 +7,7 @@ These steps are for the parent operator. They do not authorize production action
 1. Run `pi-streams migrate STREAM --plan --home HOME`. Retain the exact output outside source Git. It identifies the selected registered root and raw source hashes.
 2. Classify byte spans explicitly with `--mapping MAP`. Map the genuine authority line, North Star, current objective, Charter, active Rules and historical text. Keep the broad original North Star distinct from a finite current objective. Do not infer authority from a heading, bare affirmative or old completion claim. Map the exact complete STREAM authority line. A valid calendar date followed by one sentence period, such as `2026-10-16.`, retains its original marker bytes.
 3. If historical Git traversal is impractical, add `--history-mode snapshot`. This retains exact ordered source bytes and source Git hashes. Entry timestamps are labeled migration-start fallbacks, not historical introduction times.
-4. For a bare legacy affirmative, supply the actual dated standing-grant relay record through `--relay-source SOURCE.json`. The migration plan binds its exact bytes and hash. This records source provenance, not transport authentication. A negative unratified marker stays negative. No duplicate human notice or body is required.
+4. For a bare legacy affirmative with an actual dated standing-grant relay record, supply `--relay-source SOURCE.json`. For historical Git contracts or source-backed legacy narratives without that envelope, use `--recovery-sources SOURCES.json` instead. Follow the [retained-source input reference](retained-source-migration.md). Never fabricate a relay or instruction date. A negative unratified marker stays negative.
 5. Save the ready plan, then run `pi-streams migrate STREAM --apply PLAN.json --home HOME`. Resume an interrupted operation with `--resume`. Changed source, plan, staged authority or ownership refuses application. Inspect the retained history and scoped commit before further work.
 
 ### Retain selected current STATE
@@ -16,7 +16,7 @@ Use mapping rows with exactly `source`, `start`, `end` and `target`. Offsets are
 
 The engine encloses active STATE selections in literal code fences so legacy headings cannot change canonical field boundaries. It records each projection's source span, source hash, selected-byte hash and target in the migration Log. It also retains every original ordered STATE occurrence by exact hash in history, including repeated entries and projected text. Other active mappings that change canonical field boundaries refuse planning.
 
-A plan without STATE mappings retains the existing archival-only behavior. Its `limitations` and migration Log state that current objectives, job state and STOPs are not inferred. A ready plan is not proof that its classification preserves unknown active work or authorizes a resume. Review the source-backed classifications before applying it.
+A plan without STATE mappings retains the existing archival-only behavior unless it uses `--recovery-sources`, which requires complete current and supplemental source classification. Its `limitations` and migration Log state that current objectives, job state and STOPs are not inferred. A ready plan is not proof that its classification preserves unknown active work or authorizes a resume. Review the source-backed classifications before applying it.
 
 ## Repair a classified prefix before canonical Goals
 
