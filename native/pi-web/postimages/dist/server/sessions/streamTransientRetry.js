@@ -161,7 +161,7 @@ export function unresolvedEffects(branch, boundary) {
     for (const { value } of branch) {
         const message = value.message;
         if (!message) continue;
-        if (message.role === "assistant" && message.stopReason !== "error")
+        if (message.role === "assistant" && !["error", "aborted"].includes(message.stopReason))
             for (const part of message.content ?? []) if (part.type === "toolCall") {
                 calls.add(part.id);
                 if (part.name === "bash" && shellSubmission(part.arguments?.command)) jobs.add("unclassified-shell-submission:" + part.id);

@@ -130,7 +130,7 @@ def verify_good_checkpoint(path: Path, sid: str, cwd: str, leaf: object, checkpo
         if message.get("role") == "assistant":
             healthy = not pending
             calls = message.get("content", [])
-            if isinstance(calls, list):
+            if isinstance(calls, list) and message.get("stopReason") not in ("error", "aborted"):
                 for call in calls:
                     if isinstance(call, dict) and call.get("type") == "toolCall":
                         identity = call.get("id")
@@ -331,7 +331,7 @@ def failure_observation(path: Path, sid: str, cwd: str, leaf: object, failure_en
             saved = entry["id"], hashlib.sha256(raw).hexdigest()
         if index <= checkpoint_at:
             continue
-        if message.get("role") == "assistant" and message.get("stopReason") != "error":
+        if message.get("role") == "assistant" and message.get("stopReason") not in ("error", "aborted"):
             content = message.get("content", [])
             for part in content if isinstance(content, list) else []:
                 if not isinstance(part, dict) or part.get("type") != "toolCall":

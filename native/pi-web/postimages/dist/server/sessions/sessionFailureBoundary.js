@@ -551,7 +551,7 @@ export class SessionFailureBoundaries {
                 if (message["role"] === "assistant") {
                     healthy = pending.size === 0 && failed === undefined;
                     const content = message["content"];
-                    if (Array.isArray(content))
+                    if (Array.isArray(content) && !["error", "aborted"].includes(message["stopReason"]))
                         for (const part of content)
                             if (object(part) && part["type"] === "toolCall" && typeof part["id"] === "string") {
                                 if (pending.has(part["id"]))
