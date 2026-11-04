@@ -7,7 +7,7 @@ import os
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
-from engine import StreamsError, artifacts, dcr, delivery, drive, failure, piweb, sessionlog
+from engine import StreamsError, artifacts, dcr, delivery, drive, failure, piweb, sessionlog, terminal_sessions
 from engine.project import _write
 from engine.threads import Coordinator, Status, _native_session, designated_coordinator, dump_threads, load_threads, require_ratified
 
@@ -133,6 +133,10 @@ def resume_parked_locked(stream: Path, at: str, *, index: Path, project, operato
         if any(op is not None and op.fork == row.session and op.phase != "complete" for op in operations):
             continue
         try:
+            terminal = terminal_sessions.load(stream, row.session, row.worktree)
+            if terminal is not None:
+                results.append({"session": row.session, "state": "terminal-preserved", "detail": terminal["state"]})
+                continue
             if row.role == "coordinator" and load(stream, row.session) is None and designated_coordinator(load_threads(stream / "threads.tsv")) != row:
                 raise StreamsError("Explicit resume preserves the designated coordinator")
             native = _native_session(row.session, Path(row.worktree))
