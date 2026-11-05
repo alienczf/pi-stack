@@ -296,7 +296,7 @@ export class SessionMaintenanceController {
             session.abortCompaction?.();
     }
     pending(session) {
-        return this.store.current(identity(session))?.inputs.filter((input) => input.state === "queued") ?? [];
+        return this.store.pending(identity(session));
     }
     blocksAutomatic(session) {
         const saved = this.store.current(identity(session));

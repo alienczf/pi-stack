@@ -679,7 +679,7 @@ export class PiSessionService {
             if (siblingCwds.length === 0)
                 return new Map();
             const listings = await Promise.all(siblingCwds.map(async (siblingCwd) => {
-                const entries = await this.sessionManager.list(siblingCwd);
+                const entries = await (this.sessionManager.listHeaders?.(siblingCwd) ?? this.sessionManager.list(siblingCwd));
                 return entries.flatMap((entry) => entry.parentSessionPath === undefined ? [] : [entry.parentSessionPath]);
             }));
             return countOutOfListingChildren(sessions, listings.flat());
@@ -2784,11 +2784,18 @@ export class PiSessionService {
             const { archivePath } = archived;
             return this.openExistingSession(archived.sessionId, archived.cwd, () => this.sessionManager.open(archivePath), { notifications: "disabled" });
         }
-        const match = isPiSessionRef(ref)
+        const match = this.sessionManager.locate !== undefined
+            ? await this.sessionManager.locate(isPiSessionRef(ref) ? ref.id : ref, isPiSessionRef(ref) ? ref.cwd : undefined)
+            : isPiSessionRef(ref)
             ? (await this.sessionManager.list(ref.cwd)).find((s) => s.id === ref.id || s.id.startsWith(ref.id))
             : (await this.sessionManager.listAll?.() ?? []).find((s) => s.id === ref || s.id.startsWith(ref));
         if (!match)
             throw new Error("Session not found");
+        if (this.sessionManager.locate !== undefined) {
+            const header = await readSessionHeaderSummary(match.path);
+            if (header?.id !== match.id || header.cwd === undefined || !cwdPathsEqual(header.cwd, match.cwd))
+                throw new Error("Session header changed during lookup");
+        }
         return this.openExistingSession(match.id, match.cwd, () => this.sessionManager.open(match.path), options);
     }
     openExistingSession(sessionId, cwd, openSessionManager, options = {}) {
@@ -3645,6 +3652,7 @@ export class PiSessionService {
         const pendingDialogs = this.pendingExtensionDialogStore.pendingDialogs(session.sessionId);
         const controlGoal = this.automaticAdmissionStore?.controlGoal({ id: session.sessionId, cwd: session.sessionManager.getCwd() });
         const failureBoundary = this.failureBoundaries.snapshot(session);
+        const compactionQueuedMessages = this.compactionQueuedMessages(session.sessionId);
         return {
             sessionId: session.sessionId,
             sessionFileDiagnostics: session.sessionManager.getSessionFileDiagnostics?.() ?? [],
@@ -3663,8 +3671,8 @@ export class PiSessionService {
             isStreaming: session.isStreaming,
             isCompacting: session.isCompacting,
             isBashRunning: session.isBashRunning,
-            pendingMessageCount: this.pendingMessageCount(session),
-            queuedMessages: queuedMessagesFromSession(session, this.compactionQueuedMessages(session.sessionId)),
+            pendingMessageCount: session.pendingMessageCount + compactionQueuedMessages.length,
+            queuedMessages: queuedMessagesFromSession(session, compactionQueuedMessages),
             messageCount: session.messages.length,
             tokens: stats.tokens,
             cost: stats.cost,

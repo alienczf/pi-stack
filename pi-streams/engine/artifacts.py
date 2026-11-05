@@ -178,8 +178,10 @@ def replace_current_objective(state: StreamState, objective: str) -> bytes:
 
 
 def update_current_objective(stream_dir: Path, objective: str) -> bool:
+    from engine.state_repair import heal_sections_locked
     with stream_lock(stream_dir):
         assert_artifacts_ready(stream_dir)
+        heal_sections_locked(stream_dir)
         path = stream_dir / "STATE.md"
         if path.is_symlink():
             raise StreamsError("refusing a STATE.md symlink")
@@ -330,9 +332,11 @@ def _checked_state(source: bytes, book: LogBook) -> StreamState:
 
 
 def _read_stream_state_locked(stream_dir: Path) -> StreamState:
+    from engine.state_repair import heal_sections_locked
     assert_artifacts_ready(stream_dir)
     if load_stream_config(stream_dir / "stream.toml").state_schema != STATE_SCHEMA:
         raise StreamsError("canonical STATE schema required; explicit migration is needed")
+    heal_sections_locked(stream_dir)
     path = stream_dir / "STATE.md"
     if path.is_symlink():
         raise StreamsError("refusing a STATE.md symlink")
@@ -498,9 +502,11 @@ def _recover_log_locked(stream_dir: Path, data: dict) -> tuple[LogBook, StreamSt
 
 
 def _open_log_locked(stream_dir: Path) -> tuple[dict, LogBook, StreamState]:
+    from engine.state_repair import heal_sections_locked
     assert_artifacts_ready(stream_dir)
     if load_stream_config(stream_dir / "stream.toml").state_schema != STATE_SCHEMA:
         raise StreamsError("canonical STATE schema required; explicit migration is needed")
+    heal_sections_locked(stream_dir)
     data = _read_tick_data(stream_dir)
     if "state_log" not in data:
         state = parse_state((stream_dir / "STATE.md").read_bytes())
