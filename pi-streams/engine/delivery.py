@@ -36,6 +36,7 @@ class Delivery:
     events: list[dict] = field(default_factory=list)
     evidence: dict[str, str] | None = None
     control: GoalControl | None = None
+    handoff: dict[str, str] | None = None
 
     def public(self) -> dict:
         return {key: value for key, value in asdict(self).items() if value is not None}
@@ -65,10 +66,16 @@ def _records(data: dict) -> dict[str, Delivery]:
                 or record.automatic["kind"] not in ("wake", "recovery", "resume")
             ):
                 raise ValueError("invalid automatic admission snapshot")
+            if record.handoff is not None and (not isinstance(record.handoff, dict) or set(record.handoff) != {"path", "sha256"} or not all(isinstance(value, str) and value for value in record.handoff.values()) or re.fullmatch(r"[0-9a-f]{64}", record.handoff["sha256"]) is None):
+                raise ValueError("invalid capacity handoff evidence")
             if record.origin == "drive":
                 control = record.control
-                if control is None or not all(isinstance(item, str) and item for item in (control.run_id, control.goal, control.revision)) or type(control.sequence) is not int or control.sequence < 1 or control.state not in ("prepared", "queued", "sending", "ended", "uncertain", "superseded") or record.body != "/poteto-mode " + control.goal or record.automatic is None or record.automatic["kind"] != "wake":
+                if control is None or not all(isinstance(item, str) and item for item in (control.run_id, control.goal, control.revision)) or type(control.sequence) is not int or control.sequence < 1 or control.state not in ("prepared", "queued", "sending", "ended", "uncertain", "superseded") or record.automatic is None:
                     raise ValueError("invalid current-goal control intent")
+                invocation = "/poteto-mode " + control.goal
+                if (record.handoff is None and (record.body != invocation or record.automatic["kind"] != "wake")
+                    or record.handoff is not None and (not record.body.endswith("\n" + invocation) or record.body.startswith("/") or record.automatic["kind"] != "recovery")):
+                    raise ValueError("invalid checkpoint-bearing current-goal invocation")
                 checkpoint = control.checkpoint
                 if checkpoint is not None and (not isinstance(checkpoint, dict) or set(checkpoint) != {'path', 'entryId', 'sha256', 'lines'} or not all(isinstance(checkpoint[key], str) and checkpoint[key] for key in ('path', 'entryId', 'sha256')) or re.fullmatch(r'[0-9a-f]{64}', checkpoint['sha256']) is None or type(checkpoint['lines']) is not int or checkpoint['lines'] < 2):
                     raise ValueError("invalid current-goal native checkpoint")
@@ -113,6 +120,40 @@ def receipts(stream_dir: Path) -> list[dict]:
     return [record.public() for record in _records(artifacts._read_tick_data(stream_dir)).values()]
 
 
+def _handoff_context(stream_dir: Path, proof: dict) -> str:
+    if _evidence(stream_dir, proof["path"]) != proof:
+        raise StreamsError("capacity continuation handoff changed; no dispatch")
+    with sessionlog.regular_reader(stream_dir / proof["path"]) as handle:
+        raw = handle.read()
+    if hashlib.sha256(raw).hexdigest() != proof["sha256"]:
+        raise StreamsError("capacity continuation handoff changed while reading")
+    return f"Retained capacity coordinator handoff {stream_dir / proof['path']}\nSHA-256 {proof['sha256']}\n{raw.decode('utf-8')}\n"
+
+
+def _attach_handoff(stream_dir: Path, record: Delivery) -> None:
+    from engine.replacement import successor_handoff
+
+    proof = successor_handoff(stream_dir, record.session)
+    if proof is None:
+        return
+    previous = [item for item in _records(artifacts._read_tick_data(stream_dir)).values() if item.session == record.session and item.handoff is not None]
+    if any(item.state in {"prepared", "sending", "uncertain"} or item.control is not None and item.control.state in {"sending", "uncertain"} for item in previous):
+        raise StreamsError("first capacity handoff delivery must settle before another continuation")
+    if any(item.state in {"consumed", "applied"} or item.control is not None and item.control.state == "ended" for item in previous):
+        return
+    record.handoff = proof
+    record.body = _handoff_context(stream_dir, proof) + record.body
+    if record.control is not None:
+        record.automatic = {**record.automatic, "kind": "recovery"}
+
+
+def _verify_handoff(stream_dir: Path, record: Delivery) -> None:
+    if record.handoff is not None:
+        context = _handoff_context(stream_dir, record.handoff)
+        if not record.body.startswith(context) or record.control is not None and record.body != context + "/poteto-mode " + record.control.goal:
+            raise StreamsError("saved capacity continuation changed its exact handoff context")
+
+
 def prepare_locked(stream_dir: Path, identity: str, session: str, body: str, *, events: list[dict] | None = None, behavior: str | None = None, automatic_kind: str = "wake") -> dict:
     if not identity.strip() or not session.strip() or not body.strip():
         raise StreamsError("delivery identity, destination and body are required")
@@ -120,12 +161,16 @@ def prepare_locked(stream_dir: Path, identity: str, session: str, body: str, *, 
     records = _records(artifacts._read_tick_data(stream_dir))
     if identity in records:
         old = records[identity]
+        if old.handoff is not None:
+            record.handoff = old.handoff
+            record.body = _handoff_context(stream_dir, old.handoff) + record.body
         if (old.session, old.body, old.origin, old.events, old.behavior) != (record.session, record.body, record.origin, record.events, record.behavior) or (old.automatic is not None and old.automatic["kind"] != automatic_kind):
             raise StreamsError(f"delivery {identity} has changed intent")
         return old.public()
     if events is not None:
         status = _require_destination(stream_dir, record, session)
         record.automatic, _allowed = piweb.automatic_admission(status, session, str(stream_dir), automatic_kind)
+    _attach_handoff(stream_dir, record)
     if events is None:
         artifacts.append_log_locked(stream_dir, clock.stamp(clock.now()), f"Steer {identity}", f"Destination session: {session}\n{body}", request_id=f"delivery:{identity}")
     return _save(stream_dir, record, tick=events is not None)
@@ -135,6 +180,7 @@ def prepare_control_locked(stream_dir: Path, identity: str, session: str, goal: 
     record = Delivery(identity, session, "/poteto-mode " + goal, origin="drive", automatic=automatic, control=GoalControl(run_id, sequence, goal, revision))
     if identity in _records(artifacts._read_tick_data(stream_dir)):
         raise StreamsError("current-goal delivery identity already exists; reconcile it instead")
+    _attach_handoff(stream_dir, record)
     return _save(stream_dir, record)
 
 
@@ -162,6 +208,7 @@ def reconcile_queued_control_locked(stream_dir: Path, identity: str) -> dict:
     record = _get(stream_dir, identity)
     if record.control is None or record.control.state != "queued" or record.automatic is None:
         raise StreamsError("only a proven unadmitted queued goal can be explicitly reconciled")
+    _verify_handoff(stream_dir, record)
     response = piweb.control_goal(record.session, identity, record.control.run_id, record.control.sequence, record.body, record.control.goal, record.automatic)
     _control_receipt(record, response)
     record.control.state = response["state"]
@@ -222,6 +269,7 @@ def send_locked(stream_dir: Path, identity: str) -> dict:
                     record.control.checkpoint = sessionlog.control_checkpoint(Path(sources[0]['path']), record.session, str(stream_dir), leaf)
                 except (StreamsError, OSError, ValueError):
                     pass
+    _verify_handoff(stream_dir, record)
     record.state = "sending"
     _save(stream_dir, record)
     try:
