@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import stat
@@ -127,6 +128,20 @@ def _handoff_context(stream_dir: Path, proof: dict) -> str:
         raw = handle.read()
     if hashlib.sha256(raw).hexdigest() != proof["sha256"]:
         raise StreamsError("capacity continuation handoff changed while reading")
+    try:
+        public = json.loads(raw)
+        for key in ("evidence", "syncedState", "currentState"):
+            reference = public[key]
+            if _evidence(stream_dir, reference["path"]) != reference:
+                raise StreamsError("capacity continuation referenced evidence changed; no dispatch")
+        archive = public["archive"]
+        with sessionlog.regular_reader(Path(archive["archivePath"])) as handle:
+            if hashlib.file_digest(handle, "sha256").hexdigest() != archive["sha256"]:
+                raise StreamsError("capacity continuation archived history changed; no dispatch")
+        checkpoint = public["checkpoint"]
+        sessionlog.read_record(Path(archive["archivePath"]), public["source"], checkpoint["entryId"], checkpoint["sha256"], archived=True)
+    except (KeyError, TypeError, ValueError, OSError) as exc:
+        raise StreamsError(f"capacity continuation evidence unavailable; no dispatch: {exc}") from exc
     return f"Retained capacity coordinator handoff {stream_dir / proof['path']}\nSHA-256 {proof['sha256']}\n{raw.decode('utf-8')}\n"
 
 

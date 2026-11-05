@@ -11,7 +11,7 @@ from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 
 from engine import StreamsError, artifacts, clock, delivery, failure, failure_recovery, piweb, sessionlog
-from engine.project import Project, _write, commit_repo, git, require_stream
+from engine.project import Project, _sync_directory, _write, commit_repo, git, require_stream
 from engine.threads import Coordinator, KICKOFF, Status, _canonical_stream, _has_ratified_authority, _native_session, _save_start, _start_record, _thread_row, _validated_handover, designated_coordinator, dump_threads, ensure_coordinator, load_threads, resolve_coordinator, save_threads, transition, require_ratified
 
 
@@ -453,6 +453,21 @@ def _archive_proof(stream: Path, intent: ReplacementIntent, listing: list[dict])
     return {"sessionId": intent.source, "cwd": str(stream), "archivePath": path, "archivedAt": info["archivedAt"], "sha256": digest}
 
 
+def _publish_handoff(path: Path, text: str) -> None:
+    directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        descriptor = os.open(path.name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=directory)
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(text.encode("utf-8"))
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.fsync(directory)
+    except OSError as exc:
+        raise StreamsError(f"capacity handoff publication held: {exc}") from exc
+    finally:
+        os.close(directory)
+
+
 def _capacity_handoff(stream: Path, intent: ReplacementIntent) -> None:
     if intent.mode != "capacity":
         return
@@ -463,30 +478,49 @@ def _capacity_handoff(stream: Path, intent: ReplacementIntent) -> None:
             raise StreamsError("capacity handoff lost its frozen SYNC STATE")
         proof = intent.archive["evidence"]
         checkpoint = sessionlog.read_record(Path(proof["archivePath"]), intent.source, intent.outcome["checkpoint_entry"], intent.outcome["checkpoint_sha256"], archived=True)
-        facts = {
-            "source": intent.source, "target": intent.target, "stream": str(stream),
-            "checkpoint": {"entryId": intent.outcome["checkpoint_entry"], "sha256": intent.outcome["checkpoint_sha256"], "record": json.loads(checkpoint.raw)},
-            "syncedState": synced.decode("utf-8"), "syncedStateSha256": op["ready_revision"],
-            "currentStateSha256": intent.state, "archive": proof,
-            "retainedWork": intent.references, "retainedInputDispositions": intent.records,
+        with _regular_reader(stream / "STATE.md") as handle:
+            current = handle.read()
+        if hashlib.sha256(current).hexdigest() != intent.state:
+            raise StreamsError("capacity handoff current STATE changed")
+        prefix = f"handover/capacity-{intent.id}"
+        contents = {
+            f"{prefix}-synced-state.md": synced.decode("utf-8"),
+            f"{prefix}-current-state.md": current.decode("utf-8"),
+            f"{prefix}-evidence.json": json.dumps({
+                "id": intent.id, "source": intent.source, "target": intent.target, "stream": str(stream),
+                "checkpoint": {"operation": op["id"], "entryId": intent.outcome["checkpoint_entry"], "sha256": intent.outcome["checkpoint_sha256"], "record": json.loads(checkpoint.raw)},
+                "retainedWork": intent.references, "retainedInputDispositions": intent.records,
+            }, indent=2, sort_keys=True) + "\n",
         }
-        text = (
-            f"# Capacity coordinator handoff\n\nSource session: {intent.source}\nSuccessor session: {intent.target}\n"
-            f"You coordinate stream {stream.name} in {stream}. You never write product code.\n"
-            f"Read {stream}/AGENTS.md and {stream}/STATE.md before acting. Current Goals, Charter and Rules take precedence.\n"
-            "This is retained checkpoint context, not a new assignment or authority. Preserve bounded coordinator role, stops, pending input and uncertain effects.\n"
-            "Never replay SYNC, RESUME, tools or uncertain effects. Accepted input is not completed work. Do not infer permission to rearm admission or drive.\n\n"
-            + json.dumps(facts, indent=2, sort_keys=True) + "\n"
-        )
-        relative = f"handover/capacity-{intent.id}.md"
-        path = stream / relative
-        if path.parent.is_symlink() or path.is_symlink() or path.exists():
-            raise StreamsError("capacity handoff requires a new owned regular artifact")
+        references = {path: {"path": path, "sha256": hashlib.sha256(text.encode()).hexdigest()} for path, text in contents.items()}
+        facts = {
+            "id": intent.id, "source": intent.source, "target": intent.target, "stream": str(stream),
+            "checkpoint": {"operation": op["id"], "entryId": intent.outcome["checkpoint_entry"], "sha256": intent.outcome["checkpoint_sha256"]},
+            "archive": proof, "syncedState": references[f"{prefix}-synced-state.md"],
+            "currentState": references[f"{prefix}-current-state.md"], "liveState": str(stream / "STATE.md"),
+            "evidence": references[f"{prefix}-evidence.json"],
+            "retainedWork": "evidence.retainedWork", "retainedInputDispositions": "evidence.retainedInputDispositions",
+            "instructions": [
+                f"You coordinate stream {stream.name} in {stream}. You never write product code.",
+                f"Read {stream}/AGENTS.md and current {stream}/STATE.md before acting. Current Goals, Charter and Rules take precedence.",
+                "This is retained checkpoint context, not a new assignment or authority. Preserve bounded coordinator role, stops, pending input and uncertain effects.",
+                "Never replay SYNC, RESUME, tools or uncertain effects. Accepted input is not completed work. Do not infer permission to rearm admission or drive.",
+                "STATE references are immutable checkpoint snapshots. Read only relevant historical evidence entries on demand, not the full evidence artifact or archive.",
+            ],
+        }
+        relative = f"{prefix}.json"
+        text = json.dumps(facts, indent=2, sort_keys=True) + "\n"
+        contents[relative] = text
+        directory = stream / "handover"
+        if directory.is_symlink() or any((stream / path).is_symlink() or (stream / path).exists() for path in contents):
+            raise StreamsError("capacity handoff requires new owned regular artifacts")
         intent.handoff = {"path": relative, "sha256": hashlib.sha256(text.encode()).hexdigest()}
         _save_replacement(stream, intent)
-        _write(path, text)
-    if delivery._evidence(stream, intent.handoff.get("path")) != intent.handoff:
-        raise StreamsError("capacity handoff is missing or changed; publication held")
+        directory.mkdir(exist_ok=True)
+        _sync_directory(stream)
+        for path, content in contents.items():
+            _publish_handoff(stream / path, content)
+    delivery._handoff_context(stream, intent.handoff)
 
 
 def successor_handoff(stream: Path, session: str) -> dict | None:
