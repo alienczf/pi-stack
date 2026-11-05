@@ -124,22 +124,37 @@ def receipts(stream_dir: Path) -> list[dict]:
 def _handoff_context(stream_dir: Path, proof: dict) -> str:
     if _evidence(stream_dir, proof["path"]) != proof:
         raise StreamsError("capacity continuation handoff changed; no dispatch")
-    with sessionlog.regular_reader(stream_dir / proof["path"]) as handle:
+    path = stream_dir / proof["path"]
+    with sessionlog.regular_reader(path) as handle:
         raw = handle.read()
-    if hashlib.sha256(raw).hexdigest() != proof["sha256"]:
-        raise StreamsError("capacity continuation handoff changed while reading")
+        if hashlib.sha256(raw).hexdigest() != proof["sha256"]:
+            raise StreamsError("capacity continuation handoff changed while reading")
+        os.fsync(handle.fileno())
+    directories = {path.parent}
     try:
         public = json.loads(raw)
         for key in ("evidence", "syncedState", "currentState"):
             reference = public[key]
             if _evidence(stream_dir, reference["path"]) != reference:
                 raise StreamsError("capacity continuation referenced evidence changed; no dispatch")
+            path = stream_dir / reference["path"]
+            with sessionlog.regular_reader(path) as handle:
+                if hashlib.file_digest(handle, "sha256").hexdigest() != reference["sha256"]:
+                    raise StreamsError("capacity continuation referenced evidence changed while reading")
+                os.fsync(handle.fileno())
+            directories.add(path.parent)
         archive = public["archive"]
         with sessionlog.regular_reader(Path(archive["archivePath"])) as handle:
             if hashlib.file_digest(handle, "sha256").hexdigest() != archive["sha256"]:
                 raise StreamsError("capacity continuation archived history changed; no dispatch")
         checkpoint = public["checkpoint"]
         sessionlog.read_record(Path(archive["archivePath"]), public["source"], checkpoint["entryId"], checkpoint["sha256"], archived=True)
+        for directory in directories:
+            descriptor = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
     except (KeyError, TypeError, ValueError, OSError) as exc:
         raise StreamsError(f"capacity continuation evidence unavailable; no dispatch: {exc}") from exc
     return f"Retained capacity coordinator handoff {stream_dir / proof['path']}\nSHA-256 {proof['sha256']}\n{raw.decode('utf-8')}\n"
