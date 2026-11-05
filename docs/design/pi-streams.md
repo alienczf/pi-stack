@@ -127,7 +127,7 @@ The artifact contract does not claim the remaining runtime fixes are complete:
 - S3 owns same-session tick-observed 150k DCR and the fixed engine resume, including the receiving-side compaction/input boundary.
 - S4 owns cause-independent driven-stall goal reinjection through the actual argument-preserving skill adapter.
 - S5 owns saved-step usage-reset retry and the quiet off-host alert route.
-- S6 owns human-ratified failure recovery, exact-prefix fork/DCR, and narrowly scoped original retirement.
+- S6 owns recovery under the standing charter without per-error ratification. It also owns exact-prefix forking, DCR, and narrowly scoped retirement of the original session.
 
 Do not enable production driving or DCR from this partial stack. Existing legacy runtime compatibility is not endorsement of its superseded size/age replacement policy. Canonical replacement pickup reads AGENTS/STATE and uses the shared current-goal resolver; replacement safety remains S2 work.
 
@@ -137,6 +137,6 @@ Disposable runtime verification needs a separate port, all private XDG/index pat
 
 The original request was Cursor Projects on pi-web threads, with one shared harness repository and private stream state. The original design also removed Jig in favor of pstack's existing verification/learning tools. Those ownership choices remain.
 
-The 2026-10-06 analysis in [inner-loop-steering.md](inner-loop-steering.md) is background evidence. The original design recorded 3,031 calls across 12 campaign sessions, a 77% cache-hit rate, and $1,043 in notional list-price usage. It attributed 91% of the notional spend to rereading context. These are historical recorded observations, not a fresh measurement, current model mandate, spend allowance, or proof of an optimal rotation threshold.
+The 2026-10-06 analysis in [inner-loop-steering.md](https://github.com/alienczf/pi-stack/blob/f685e3ad1485192a45bc7b6eed6b260961a965e4/docs/design/inner-loop-steering.md) is background evidence. The original design recorded 3,031 calls across 12 campaign sessions, a 77% cache-hit rate, and $1,043 in notional list-price usage. It attributed 91% of the notional spend to rereading context. These are historical recorded observations, not a fresh measurement, current model mandate, spend allowance, or proof of an optimal rotation threshold.
 
-[pi-streams-handover.md](pi-streams-handover.md) is the dated historical pickup note. Its old file layout, not-yet-built status, model rule, and fresh-session policy are not current instructions.
+[pi-streams-handover.md](https://github.com/alienczf/pi-stack/blob/f685e3ad1485192a45bc7b6eed6b260961a965e4/docs/design/pi-streams-handover.md) is the dated historical pickup note. Its old file layout, not-yet-built status, model rule, and fresh-session policy are not current instructions.
