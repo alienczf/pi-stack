@@ -386,7 +386,7 @@ def _replacement_inputs(stream: Path, sid: str) -> None:
     if isinstance(rotation, dict) and rotation.get("phase") != "complete":
         raise StreamsError("another coordinator rotation owns this stream")
     for receipt in delivery.receipts(stream):
-        if receipt["session"] == sid and (receipt["state"] in {"prepared", "sending", "uncertain"} or (receipt.get("control") or {}).get("state") in {"sending", "uncertain"}):
+        if receipt["session"] == sid and (receipt["state"] in {"sending", "uncertain"} or (receipt.get("control") or {}).get("state") in {"sending", "uncertain"}):
             raise StreamsError("unsettled old coordinator delivery must be retained before replacement")
     from engine import dcr
     op = dcr.load(stream, sid)
