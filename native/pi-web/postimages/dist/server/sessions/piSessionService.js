@@ -3652,6 +3652,7 @@ export class PiSessionService {
         const pendingDialogs = this.pendingExtensionDialogStore.pendingDialogs(session.sessionId);
         const controlGoal = this.automaticAdmissionStore?.controlGoal({ id: session.sessionId, cwd: session.sessionManager.getCwd() });
         const failureBoundary = this.failureBoundaries.snapshot(session);
+        const compactionQueuedMessages = this.compactionQueuedMessages(session.sessionId);
         return {
             sessionId: session.sessionId,
             sessionFileDiagnostics: session.sessionManager.getSessionFileDiagnostics?.() ?? [],
@@ -3670,8 +3671,8 @@ export class PiSessionService {
             isStreaming: session.isStreaming,
             isCompacting: session.isCompacting,
             isBashRunning: session.isBashRunning,
-            pendingMessageCount: this.pendingMessageCount(session),
-            queuedMessages: queuedMessagesFromSession(session, this.compactionQueuedMessages(session.sessionId)),
+            pendingMessageCount: session.pendingMessageCount + compactionQueuedMessages.length,
+            queuedMessages: queuedMessagesFromSession(session, compactionQueuedMessages),
             messageCount: session.messages.length,
             tokens: stats.tokens,
             cost: stats.cost,
