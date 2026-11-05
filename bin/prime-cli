@@ -1,0 +1,891 @@
+#!/usr/bin/env python3
+"""Direct Prime supervisor client with the pi-web-cli compatibility envelope."""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import socket
+import sys
+import time
+import uuid
+from dataclasses import dataclass
+from typing import Any
+
+PROTOCOL_NAME = "prime-agent.daemon"
+PROTOCOL_VERSION = 7
+MIN_SCHEMA_REVISION = 30
+DEFAULT_TIMEOUT = 30.0
+NATIVE_OPERATIONS = [
+    "sessions.list",
+    "sessions.create",
+    "prompt.admit",
+    "prompt.wait",
+    "prompt.steer",
+    "session.status",
+    "session.stats",
+    "session.model",
+    "session.thinking",
+    "session.abort",
+    "session.queueClear",
+    "session.compact",
+    "session.fork",
+]
+REQUIRED_SEMANTICS = [
+    "stop-correction-epoch",
+    "durable-admission-and-outcome",
+    "same-provider-retry-policy-readback",
+    "recovery-readiness-and-receipts",
+    "conditional-archive",
+    "callback-ownership-transfer",
+    "session-evidence-records",
+    "terminal-session-disposition",
+    "awaited-compaction-hooks",
+    "non-inference-engine-scheduler",
+]
+THINKING_LEVELS = {"off", "minimal", "low", "medium", "high", "xhigh", "max"}
+
+
+@dataclass(frozen=True)
+class NativeReply:
+    response: dict[str, Any]
+    frames: list[dict[str, Any]]
+
+
+@dataclass(frozen=True)
+class SessionRef:
+    session_id: str
+    active_session_id: str
+    cwd: str
+    lifecycle: str
+    worker_state: str | None
+
+
+class CliFailure(Exception):
+    def __init__(
+        self,
+        message: str,
+        *,
+        status: int | None = None,
+        kind: str = "prime_cli_error",
+        effect_state: str = "none",
+        capability: str | None = None,
+        native_response: dict[str, Any] | None = None,
+        native_frames: list[dict[str, Any]] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.status = status
+        self.kind = kind
+        self.effect_state = effect_state
+        self.capability = capability
+        self.native_response = native_response
+        self.native_frames = native_frames
+
+
+def emit(value: object, ok: bool) -> int:
+    print(json.dumps(value, ensure_ascii=False, indent=2))
+    return 0 if ok else 1
+
+
+def native_result_fields(reply: NativeReply) -> dict[str, Any]:
+    fields: dict[str, Any] = {
+        "result": reply.response.get("data"),
+        "nativeResponse": reply.response,
+    }
+    if reply.frames:
+        fields["nativeEvents"] = reply.frames
+    return fields
+
+
+def failure_payload(error: CliFailure) -> dict[str, Any]:
+    value: dict[str, Any] = {
+        "ok": False,
+        "status": error.status,
+        "error": str(error),
+        "errorKind": error.kind,
+        "effectState": error.effect_state,
+    }
+    if error.capability is not None:
+        value["capability"] = error.capability
+    if error.native_response is not None:
+        value["nativeResponse"] = error.native_response
+        value["errorInfo"] = error.native_response.get("errorInfo")
+    if error.native_frames:
+        value["nativeEvents"] = error.native_frames
+    return value
+
+
+def unsupported(capability: str, explanation: str) -> CliFailure:
+    return CliFailure(
+        explanation,
+        status=501,
+        kind="unsupported_capability",
+        effect_state="none",
+        capability=capability,
+    )
+
+
+def read_frame(sock: socket.socket, buffer: bytearray, deadline: float) -> dict[str, Any]:
+    while True:
+        newline = buffer.find(b"\n")
+        if newline >= 0:
+            raw = bytes(buffer[:newline])
+            del buffer[: newline + 1]
+            try:
+                value = json.loads(raw.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as error:
+                raise CliFailure(
+                    f"Prime returned an invalid JSON Lines frame: {error}",
+                    kind="invalid_native_frame",
+                    effect_state="none",
+                ) from error
+            if not isinstance(value, dict):
+                raise CliFailure(
+                    "Prime returned a non-object JSON Lines frame",
+                    kind="invalid_native_frame",
+                    effect_state="none",
+                )
+            return value
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("Prime socket request timed out")
+        sock.settimeout(remaining)
+        chunk = sock.recv(65536)
+        if not chunk:
+            raise EOFError("Prime socket closed before a complete response frame")
+        buffer.extend(chunk)
+
+
+def validate_hello(value: object) -> dict[str, Any]:
+    if not isinstance(value, dict) or value.get("type") != "daemon_hello":
+        raise CliFailure(
+            "Prime socket did not begin with daemon_hello",
+            kind="invalid_native_handshake",
+            effect_state="none",
+        )
+    protocol = value.get("protocol")
+    capabilities = value.get("serverCapabilities")
+    if (
+        not isinstance(protocol, dict)
+        or not isinstance(protocol.get("name"), str)
+        or type(protocol.get("version")) is not int
+        or not isinstance(capabilities, list)
+        or not all(isinstance(item, str) for item in capabilities)
+    ):
+        raise CliFailure(
+            "Prime daemon_hello is missing protocol or server capability fields",
+            kind="invalid_native_handshake",
+            effect_state="none",
+        )
+    return value
+
+
+def known_schema(hello: dict[str, Any]) -> bool:
+    protocol = hello["protocol"]
+    revision = hello.get("schemaRevision")
+    return (
+        protocol.get("name") == PROTOCOL_NAME
+        and protocol.get("version") == PROTOCOL_VERSION
+        and type(revision) is int
+        and revision >= MIN_SCHEMA_REVISION
+        and isinstance(hello.get("schemaId"), str)
+    )
+
+
+class PrimeClient:
+    def __init__(self, socket_path: str | None, timeout: float = DEFAULT_TIMEOUT) -> None:
+        self.socket_path = socket_path
+        self.timeout = timeout
+
+    def _connect(self, deadline: float) -> tuple[socket.socket, dict[str, Any], bytearray]:
+        if not self.socket_path:
+            raise CliFailure(
+                "Set PRIME_AGENT_SOCKET or pass --socket for the owned Prime supervisor",
+                kind="missing_prime_socket",
+                effect_state="none",
+            )
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            sock.settimeout(max(0.001, deadline - time.monotonic()))
+            sock.connect(self.socket_path)
+            buffer = bytearray()
+            hello = validate_hello(read_frame(sock, buffer, deadline))
+            return sock, hello, buffer
+        except Exception:
+            sock.close()
+            raise
+
+    def handshake(self) -> dict[str, Any]:
+        deadline = time.monotonic() + self.timeout
+        sock, hello, _buffer = self._connect(deadline)
+        sock.close()
+        return hello
+
+    def request(self, command: dict[str, Any], *, mutation: bool) -> NativeReply:
+        deadline = time.monotonic() + self.timeout
+        sock: socket.socket | None = None
+        sent = False
+        frames: list[dict[str, Any]] = []
+        try:
+            sock, hello, buffer = self._connect(deadline)
+            if not known_schema(hello):
+                raise CliFailure(
+                    "Prime protocol or schema is older than this client's supported contract",
+                    kind="unsupported_native_schema",
+                    effect_state="none",
+                    capability="prime-daemon-protocol-v7-schema-30",
+                )
+            request_id = uuid.uuid4().hex
+            envelope = {
+                "type": "command",
+                "id": request_id,
+                "protocol": {"name": PROTOCOL_NAME, "version": PROTOCOL_VERSION},
+                "command": command,
+            }
+            payload = (json.dumps(envelope, ensure_ascii=False) + "\n").encode("utf-8")
+            sent = True
+            sock.sendall(payload)
+            while True:
+                frame = read_frame(sock, buffer, deadline)
+                if frame.get("type") == "response" and frame.get("id") == request_id:
+                    if frame.get("success") is not True:
+                        message = frame.get("error")
+                        if not isinstance(message, str) or not message:
+                            message = "Prime command failed without an error message"
+                        raise CliFailure(
+                            message,
+                            kind="native_command_error",
+                            effect_state="uncertain" if mutation else "none",
+                            native_response=frame,
+                            native_frames=frames,
+                        )
+                    return NativeReply(frame, frames)
+                frames.append(frame)
+        except CliFailure as error:
+            if sent and mutation and error.effect_state == "none":
+                error.effect_state = "uncertain"
+            if frames and error.native_frames is None:
+                error.native_frames = frames
+            raise
+        except (OSError, TimeoutError, EOFError, ValueError) as error:
+            raise CliFailure(
+                f"Prime socket request failed: {error}",
+                kind="native_transport_error",
+                effect_state="uncertain" if sent and mutation else "none",
+                native_frames=frames,
+            ) from error
+        finally:
+            if sock is not None:
+                sock.close()
+
+
+def compatibility_session(value: object) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise CliFailure("Prime session row is not an object", kind="invalid_native_response")
+    session_id = value.get("sessionId")
+    if not isinstance(session_id, str) or not session_id:
+        raise CliFailure(
+            "Prime session row has no durable sessionId",
+            kind="unconfirmed_native_identity",
+        )
+    result = dict(value)
+    result["id"] = session_id
+    return result
+
+
+def native_list(client: PrimeClient, cwd: str | None = None) -> list[dict[str, Any]]:
+    command: dict[str, Any] = {"type": "list", "all": True}
+    if cwd is not None:
+        command["cwd"] = cwd
+    reply = client.request(command, mutation=False)
+    data = reply.response.get("data")
+    sessions = data.get("sessions") if isinstance(data, dict) else None
+    if not isinstance(sessions, list):
+        raise CliFailure("Prime list returned no session list", kind="invalid_native_response")
+    return [compatibility_session(item) for item in sessions]
+
+
+def resolve_session(client: PrimeClient, session_id: str) -> SessionRef:
+    matches = [item for item in native_list(client) if item.get("sessionId") == session_id]
+    if not matches:
+        raise CliFailure(
+            f"Prime has no listed session matching durable ID {session_id}; deletion is unconfirmed",
+            kind="unresolved_native_identity",
+            effect_state="none",
+        )
+    if len(matches) != 1:
+        raise CliFailure(
+            f"Prime returned multiple sessions matching durable ID {session_id}",
+            kind="ambiguous_native_identity",
+            effect_state="none",
+        )
+    summary = matches[0]
+    active_id = summary.get("activeSessionId")
+    cwd = summary.get("cwd")
+    lifecycle = summary.get("lifecycle")
+    worker_state = summary.get("workerState")
+    if not isinstance(active_id, str) or not active_id or not isinstance(cwd, str):
+        raise CliFailure(
+            "Prime session row has no active runtime ID or cwd",
+            kind="unconfirmed_native_identity",
+            effect_state="none",
+        )
+    if not isinstance(lifecycle, str):
+        lifecycle = "unknown"
+    if not isinstance(worker_state, str):
+        worker_state = None
+    return SessionRef(session_id, active_id, cwd, lifecycle, worker_state)
+
+
+def require_resident(ref: SessionRef) -> None:
+    if ref.lifecycle == "archived":
+        raise CliFailure(
+            f"Prime reports lifecycle=archived for {ref.session_id}, but this projection does not distinguish archive from crash",
+            kind="ambiguous_native_lifecycle",
+            effect_state="none",
+        )
+    if ref.worker_state != "ready":
+        raise CliFailure(
+            f"Prime has no ready runtime for durable session {ref.session_id}; no terminal outcome is inferred",
+            kind="native_runtime_unavailable",
+            effect_state="none",
+        )
+
+
+def command_reply(
+    client: PrimeClient,
+    ref: SessionRef,
+    command_type: str,
+    *,
+    mutation: bool,
+    **fields: Any,
+) -> NativeReply:
+    require_resident(ref)
+    return client.request(
+        {"type": command_type, "activeSessionId": ref.active_session_id, **fields},
+        mutation=mutation,
+    )
+
+
+def live_status(client: PrimeClient, ref: SessionRef) -> dict[str, Any]:
+    require_resident(ref)
+    state_reply = command_reply(client, ref, "get_state", mutation=False)
+    state = state_reply.response.get("data")
+    if not isinstance(state, dict) or state.get("sessionId") != ref.session_id:
+        raise CliFailure(
+            "Prime get_state returned a different or unconfirmed durable session ID",
+            kind="unconfirmed_native_identity",
+        )
+    active_id = state.get("activeSessionId")
+    if active_id != ref.active_session_id:
+        raise CliFailure(
+            "Prime get_state returned a different active runtime ID",
+            kind="unconfirmed_native_identity",
+        )
+    stats_reply = command_reply(client, ref, "get_session_stats", mutation=False)
+    stats = stats_reply.response.get("data")
+    if not isinstance(stats, dict) or stats.get("sessionId") != ref.session_id:
+        raise CliFailure(
+            "Prime get_session_stats returned a different or unconfirmed durable session ID",
+            kind="unconfirmed_native_identity",
+        )
+    result = dict(state)
+    result["id"] = ref.session_id
+    result["sessionId"] = ref.session_id
+    result["activeSessionId"] = active_id
+    result["contextUsage"] = stats.get("contextUsage")
+    result["nativeStats"] = stats
+    return result
+
+
+def make_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Prime native supervisor CLI")
+    parser.add_argument("--socket", default=os.environ.get("PRIME_AGENT_SOCKET"))
+    parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT)
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    ls = sub.add_parser("list")
+    ls.add_argument("--cwd", required=True)
+
+    spawn = sub.add_parser("spawn")
+    spawn.add_argument("cwd")
+
+    status = sub.add_parser("status")
+    status.add_argument("sid")
+
+    prompt = sub.add_parser("prompt")
+    prompt.add_argument("sid")
+    prompt.add_argument("text", nargs="?")
+    behavior = prompt.add_mutually_exclusive_group()
+    behavior.add_argument("--steer", action="store_true")
+    behavior.add_argument("--follow-up", action="store_true")
+    prompt.add_argument("--wait", action="store_true")
+    prompt.add_argument("--delivery-id")
+    prompt.add_argument("--automatic-admission")
+    prompt.add_argument("--poteto", action="store_true")
+
+    abort = sub.add_parser("abort")
+    abort.add_argument("sid")
+
+    compact = sub.add_parser("compact")
+    compact.add_argument("sid")
+    compact.add_argument("instructions", nargs="?")
+    compact.add_argument("--expected-idle")
+
+    model = sub.add_parser("model")
+    model.add_argument("sid")
+    model.add_argument("model")
+
+    thinking = sub.add_parser("thinking-level")
+    thinking.add_argument("sid")
+    thinking.add_argument("level")
+
+    fork = sub.add_parser("fork")
+    fork.add_argument("sid")
+    fork.add_argument("entry_id")
+    fork.add_argument("--position", choices=("before", "at"), default="at")
+
+    clear = sub.add_parser("queue-clear")
+    clear.add_argument("sid")
+
+    archive = sub.add_parser("archive")
+    archive.add_argument("sid")
+    archive.add_argument("--expected-idle")
+
+    sub.add_parser("runtime")
+    sub.add_parser("capabilities")
+
+    admission = sub.add_parser("automatic-admission")
+    admission.add_argument("sid")
+    admission.add_argument("mode", choices=("on", "off"))
+    admission.add_argument("--expected-generation")
+    admission.add_argument("--initialize-if-absent", action="store_true")
+
+    goal = sub.add_parser("control-goal")
+    goal.add_argument("sid")
+    goal.add_argument("identity")
+    goal.add_argument("--run-id")
+    goal.add_argument("--sequence", type=int)
+    goal.add_argument("--automatic-admission")
+    goal.add_argument("--cwd")
+    goal.add_argument("--status", action="store_true")
+
+    boundary = sub.add_parser("failure-boundary")
+    boundary.add_argument("sid")
+    boundary.add_argument("--cwd", required=True)
+    boundary.add_argument("--stream", required=True)
+    boundary.add_argument("--root", required=True)
+    boundary.add_argument("--enroll")
+
+    for name in ("failure-resume", "failure-readiness", "failure-analysis", "failure-fork", "failure-maintenance", "failure-retire"):
+        recovery = sub.add_parser(name)
+        recovery.add_argument("sid")
+        recovery.add_argument("--cwd", required=True)
+
+    maintenance_events = sub.add_parser("maintenance-events")
+    maintenance_events.add_argument("sid")
+    maintenance_events.add_argument("identity")
+    maintenance_events.add_argument("--cwd", required=True)
+    maintenance_events.add_argument("--index")
+    maintenance_events.add_argument("--stream")
+    maintenance_events.add_argument("--generation")
+    maintenance_events.add_argument("--close", action="store_true")
+
+    maintenance = sub.add_parser("maintenance")
+    maintenance.add_argument("sid")
+    maintenance.add_argument("identity")
+    maintenance.add_argument("--cwd", required=True)
+    maintenance.add_argument("--reconcile", action="store_true")
+
+    resume = sub.add_parser("maintenance-resume")
+    resume.add_argument("sid")
+    resume.add_argument("identity")
+    resume.add_argument("--compaction-entry", required=True)
+    resume.add_argument("--input-sequence", type=int, required=True)
+    resume.add_argument("--delivery-id", required=True)
+    resume.add_argument("--automatic-admission", required=True)
+    resume.add_argument("--poteto", action="store_true")
+    resume.add_argument("text", nargs="?")
+
+    command_run = sub.add_parser("command-run")
+    command_run.add_argument("sid")
+    command_run.add_argument("text", nargs="?")
+
+    return parser
+
+
+def read_prompt_text(argument: str | None) -> str:
+    if argument is not None:
+        return argument
+    try:
+        return sys.stdin.buffer.read().decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise CliFailure("Prompt stdin must be UTF-8", kind="invalid_input") from error
+
+
+def list_command(client: PrimeClient, cwd: str) -> dict[str, Any]:
+    sessions = native_list(client, cwd)
+    return {"ok": True, "status": 200, "sessions": sessions}
+
+
+def spawn_command(client: PrimeClient, cwd: str) -> dict[str, Any]:
+    reply = client.request({"type": "create", "cwd": cwd}, mutation=True)
+    summary = reply.response.get("data")
+    if not isinstance(summary, dict):
+        raise CliFailure(
+            "Prime create succeeded without a session summary",
+            kind="unconfirmed_native_identity",
+            effect_state="uncertain",
+            native_response=reply.response,
+        )
+    session = compatibility_session(summary)
+    active_id = summary.get("activeSessionId")
+    returned_cwd = summary.get("cwd")
+    if not isinstance(active_id, str) or not active_id or not isinstance(returned_cwd, str):
+        raise CliFailure(
+            "Prime create returned no active runtime ID or cwd",
+            kind="unconfirmed_native_identity",
+            effect_state="uncertain",
+            native_response=reply.response,
+        )
+    if os.path.realpath(returned_cwd) != os.path.realpath(cwd):
+        raise CliFailure(
+            "Prime create returned a different cwd",
+            kind="unconfirmed_native_identity",
+            effect_state="uncertain",
+            native_response=reply.response,
+        )
+    session["activeSessionId"] = active_id
+    return {
+        "ok": True,
+        "status": 200,
+        "session": session,
+        "nativeResponse": reply.response,
+    }
+
+
+def status_command(client: PrimeClient, session_id: str) -> dict[str, Any]:
+    ref = resolve_session(client, session_id)
+    session = live_status(client, ref)
+    return {"ok": True, "status": 200, "session": session}
+
+
+def prompt_command(client: PrimeClient, args: argparse.Namespace) -> dict[str, Any]:
+    if args.delivery_id is not None or args.automatic_admission is not None or args.poteto:
+        raise unsupported(
+            "prompt.delivery-control",
+            "Prime does not provide the requested stream delivery, admission generation, or exact poteto receipt",
+        )
+    text = read_prompt_text(args.text)
+    if not text.strip():
+        raise CliFailure("Prompt cannot be empty", kind="invalid_input")
+    ref = resolve_session(client, args.sid)
+    require_resident(ref)
+    command_type = "prompt_and_wait" if args.wait else "prompt"
+    command: dict[str, Any] = {
+        "type": command_type,
+        "activeSessionId": ref.active_session_id,
+        "message": text,
+    }
+    if args.steer:
+        command["streamingBehavior"] = "steer"
+    elif args.follow_up:
+        command["streamingBehavior"] = "followUp"
+    reply = client.request(command, mutation=True)
+    result: dict[str, Any] = {
+        "ok": True,
+        "transportAccepted": True,
+        "status": 200,
+        "result": reply.response.get("data"),
+        "nativeResponse": reply.response,
+        "sessionId": ref.session_id,
+        "activeSessionId": ref.active_session_id,
+        "turnState": "settled" if args.wait else "admitted",
+    }
+    if reply.frames:
+        result["nativeEvents"] = reply.frames
+    return result
+
+
+def abort_command(client: PrimeClient, session_id: str) -> dict[str, Any]:
+    ref = resolve_session(client, session_id)
+    reply = command_reply(client, ref, "abort", mutation=True)
+    return {
+        "ok": True,
+        "transportAccepted": True,
+        "status": 200,
+        **native_result_fields(reply),
+        "sessionId": ref.session_id,
+        "activeSessionId": ref.active_session_id,
+        "cancellationSettled": None,
+    }
+
+
+def compact_command(client: PrimeClient, args: argparse.Namespace) -> dict[str, Any]:
+    if args.expected_idle is not None:
+        raise unsupported(
+            "sessions.maintenanceCheckpoint",
+            "Prime compact has no expected-idle checkpoint or stream maintenance receipt",
+        )
+    ref = resolve_session(client, args.sid)
+    instructions = args.instructions
+    if instructions is None and not sys.stdin.isatty():
+        instructions = read_prompt_text(None)
+    fields = {} if instructions is None else {"customInstructions": instructions}
+    reply = command_reply(client, ref, "compact", mutation=True, **fields)
+    result: dict[str, Any] = {
+        "ok": True,
+        "status": 200,
+        **native_result_fields(reply),
+        "sessionId": ref.session_id,
+        "activeSessionId": ref.active_session_id,
+    }
+    try:
+        updated_ref = resolve_session(client, ref.session_id)
+        result["postCompactContextUsage"] = live_status(client, updated_ref).get("contextUsage")
+    except CliFailure as error:
+        result["postCompactContextUsage"] = None
+        result["postCompactObservationError"] = str(error)
+    return result
+
+
+def parse_model(value: str) -> tuple[str, str]:
+    provider, separator, model_id = value.partition("/")
+    if not separator or not provider or not model_id:
+        raise CliFailure("Model must be provider/modelId", kind="invalid_input")
+    return provider, model_id
+
+
+def model_command(client: PrimeClient, session_id: str, model: str) -> dict[str, Any]:
+    provider, model_id = parse_model(model)
+    ref = resolve_session(client, session_id)
+    reply = command_reply(
+        client,
+        ref,
+        "set_model",
+        mutation=True,
+        provider=provider,
+        modelId=model_id,
+    )
+    result: dict[str, Any] = {
+        "ok": True,
+        "status": 200,
+        "transportAccepted": True,
+        **native_result_fields(reply),
+        "readbackVerified": False,
+        "sessionId": ref.session_id,
+        "activeSessionId": ref.active_session_id,
+    }
+    try:
+        current = live_status(client, resolve_session(client, session_id))
+        current_model = current.get("model")
+        if isinstance(current_model, dict):
+            result["model"] = current_model
+            result["readbackVerified"] = (
+                current_model.get("provider") == provider and current_model.get("id") == model_id
+            )
+    except CliFailure as error:
+        result["readbackError"] = str(error)
+    if not result["readbackVerified"]:
+        result.update(
+            ok=False,
+            status=None,
+            error="Prime acknowledged the model selection but did not verify it by native status readback",
+            errorKind="model_readback_unconfirmed",
+            effectState="uncertain",
+        )
+    return result
+
+
+def thinking_command(client: PrimeClient, session_id: str, level: str) -> dict[str, Any]:
+    if level not in THINKING_LEVELS:
+        raise CliFailure("Invalid Prime thinking level", kind="invalid_input")
+    ref = resolve_session(client, session_id)
+    reply = command_reply(client, ref, "set_thinking_level", mutation=True, level=level)
+    result: dict[str, Any] = {
+        "ok": True,
+        "status": 200,
+        "transportAccepted": True,
+        **native_result_fields(reply),
+        "readbackVerified": False,
+        "sessionId": ref.session_id,
+        "activeSessionId": ref.active_session_id,
+    }
+    try:
+        current = live_status(client, resolve_session(client, session_id))
+        result["thinkingLevel"] = current.get("thinkingLevel")
+        result["readbackVerified"] = current.get("thinkingLevel") == level
+    except CliFailure as error:
+        result["readbackError"] = str(error)
+    if not result["readbackVerified"]:
+        result.update(
+            ok=False,
+            status=None,
+            error="Prime acknowledged the thinking selection but did not verify it by native status readback",
+            errorKind="thinking_readback_unconfirmed",
+            effectState="uncertain",
+        )
+    return result
+
+
+def fork_command(client: PrimeClient, args: argparse.Namespace) -> dict[str, Any]:
+    ref = resolve_session(client, args.sid)
+    reply = command_reply(
+        client,
+        ref,
+        "fork",
+        mutation=True,
+        entryId=args.entry_id,
+        position=args.position,
+    )
+    result: dict[str, Any] = {
+        "ok": True,
+        "status": 200,
+        **native_result_fields(reply),
+        "sourceSessionId": ref.session_id,
+        "sourceActiveSessionId": ref.active_session_id,
+        "replacementIdentityVerified": False,
+    }
+    try:
+        rows = native_list(client, ref.cwd)
+        replacements = [row for row in rows if row.get("activeSessionId") == ref.active_session_id]
+        if len(replacements) == 1:
+            result["session"] = replacements[0]
+            result["replacementIdentityVerified"] = True
+    except CliFailure as error:
+        result["replacementObservationError"] = str(error)
+    if not result["replacementIdentityVerified"]:
+        result.update(
+            ok=False,
+            status=None,
+            error="Prime acknowledged the fork but replacement identity was not verified",
+            errorKind="fork_identity_unconfirmed",
+            effectState="uncertain",
+        )
+    return result
+
+
+def queue_clear_command(client: PrimeClient, session_id: str) -> dict[str, Any]:
+    ref = resolve_session(client, session_id)
+    reply = command_reply(client, ref, "clear_queue", mutation=True)
+    return {
+        "ok": True,
+        "status": 200,
+        **native_result_fields(reply),
+    }
+
+
+def capability_envelope(hello: dict[str, Any]) -> dict[str, Any]:
+    protocol = hello.get("protocol")
+    runtime: dict[str, Any] = {"protocol": protocol}
+    for key in (
+        "socketPath",
+        "schemaId",
+        "schemaRevision",
+        "appVersion",
+        "supervisorGeneration",
+        "supervisorPid",
+        "supervisorProcessStartId",
+        "supervisorSocketPath",
+        "clientId",
+    ):
+        if key in hello:
+            runtime[key] = hello[key]
+    if "runtime" in hello:
+        runtime["daemon"] = hello["runtime"]
+    runtime["serverCapabilities"] = hello.get("serverCapabilities")
+    available = known_schema(hello)
+    return {
+        "ok": True,
+        "status": 200,
+        "runtime": runtime,
+        "capabilities": {
+            "schemaVersion": 1,
+            "nativeOperations": list(NATIVE_OPERATIONS) if available else [],
+            "requiredSemantics": list(REQUIRED_SEMANTICS),
+            "missingSemantics": list(REQUIRED_SEMANTICS),
+            "streamReady": False,
+        },
+    }
+
+
+def command_main(args: argparse.Namespace) -> dict[str, Any]:
+    client = PrimeClient(args.socket, args.timeout)
+    if args.cmd in {"runtime", "capabilities"}:
+        hello = client.handshake()
+        if args.cmd == "capabilities":
+            return capability_envelope(hello)
+        return {"ok": True, "status": 200, "runtime": capability_envelope(hello)["runtime"]}
+    if args.cmd == "list":
+        return list_command(client, args.cwd)
+    if args.cmd == "spawn":
+        return spawn_command(client, args.cwd)
+    if args.cmd == "status":
+        return status_command(client, args.sid)
+    if args.cmd == "prompt":
+        return prompt_command(client, args)
+    if args.cmd == "abort":
+        return abort_command(client, args.sid)
+    if args.cmd == "compact":
+        return compact_command(client, args)
+    if args.cmd == "model":
+        return model_command(client, args.sid, args.model)
+    if args.cmd == "thinking-level":
+        return thinking_command(client, args.sid, args.level)
+    if args.cmd == "fork":
+        return fork_command(client, args)
+    if args.cmd == "queue-clear":
+        return queue_clear_command(client, args.sid)
+    if args.cmd == "archive":
+        raise unsupported(
+            "sessions.conditionalArchive",
+            "Prime has no compatible archive operation or expected-idle retirement fence",
+        )
+    if args.cmd == "automatic-admission":
+        raise unsupported(
+            "sessions.conditionalAdmission",
+            "Prime has no durable stream automatic-admission generation control",
+        )
+    if args.cmd == "control-goal":
+        raise unsupported(
+            "prompt.controlGoal",
+            "Prime has no durable delivery identity, goal sequence, or applied receipt",
+        )
+    if args.cmd == "failure-boundary":
+        raise unsupported("sessions.failureBoundary", "Prime has no stream failure-boundary command")
+    if args.cmd.startswith("failure-"):
+        raise unsupported("sessions.engineFailureRecovery", "Prime has no stream failure-recovery command family")
+    if args.cmd in {"maintenance-events", "maintenance", "maintenance-resume"}:
+        raise unsupported(
+            "sessions.maintenanceCheckpoint",
+            "Prime has no stream maintenance checkpoint, receipt, or exact RESUME admission",
+        )
+    if args.cmd == "command-run":
+        raise unsupported("prompt.nativeCommandRun", "Prime has no compatible command-run operation")
+    raise CliFailure(f"Unsupported Prime CLI command {args.cmd}", status=2, kind="invalid_input")
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = make_parser().parse_args(argv)
+    if args.timeout <= 0:
+        return emit(failure_payload(CliFailure("Timeout must be positive", kind="invalid_input")), False)
+    try:
+        result = command_main(args)
+    except CliFailure as error:
+        return emit(failure_payload(error), False)
+    except (OSError, TimeoutError, EOFError) as error:
+        return emit(
+            failure_payload(
+                CliFailure(
+                    f"Prime CLI failed: {error}",
+                    kind="native_transport_error",
+                    effect_state="none",
+                )
+            ),
+            False,
+        )
+    return emit(result, result.get("ok") is True)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
