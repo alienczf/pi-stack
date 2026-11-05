@@ -5,20 +5,99 @@ import os
 import re
 import subprocess
 import sys
+from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 
 from engine import StreamsError, repo_root, sessionlog
 from engine.project import default_pi_web_url
 
 
-def _run(args: list[str], stdin: str | None = None) -> subprocess.CompletedProcess[str]:
-    # project.toml's pi_web_url is the address a browser opens, which may be a
-    # tunnel. The engine runs beside pi-web, so it follows pi-web's own config.
+class BackendName(str, Enum):
+    PI = "pi"
+    PRIME = "prime"
+
+
+@dataclass(frozen=True)
+class BackendSelection:
+    name: BackendName
+    client: Path
+
+
+_READ_ONLY_COMMANDS = frozenset({"capabilities", "commands", "list", "runtime", "status"})
+_PRIME_NATIVE_OPERATIONS = frozenset({
+    "sessions.list",
+    "sessions.create",
+    "prompt.admit",
+    "prompt.wait",
+    "prompt.steer",
+    "session.status",
+    "session.stats",
+    "session.model",
+    "session.thinking",
+    "session.abort",
+    "session.queueClear",
+    "session.compact",
+    "session.fork",
+})
+_PRIME_REQUIRED_SEMANTICS = frozenset({
+    "stop-correction-epoch",
+    "durable-admission-and-outcome",
+    "same-provider-retry-policy-readback",
+    "recovery-readiness-and-receipts",
+    "conditional-archive",
+    "session-evidence-records",
+    "terminal-session-disposition",
+    "callback-ownership-transfer",
+    "awaited-compaction-hooks",
+    "non-inference-engine-scheduler",
+})
+
+
+def _client_file(path: Path, label: str) -> Path:
+    if path.is_symlink() or not path.is_file():
+        raise StreamsError(f"selected backend client is unavailable: {label} ({path})")
+    return path
+
+
+def _select_backend() -> BackendSelection:
+    raw = os.environ.get("PI_STACK_BACKEND") or BackendName.PI.value
+    try:
+        name = BackendName(raw)
+    except ValueError as exc:
+        raise StreamsError(f"unknown PI_STACK_BACKEND {raw!r}; expected 'pi' or 'prime'") from exc
+
+    bin_dir = repo_root() / "bin"
+    dispatcher = bin_dir / "agent-cli"
+    pi_client = bin_dir / "pi-web-cli"
+    prime_client = bin_dir / "prime-cli"
+    if name is BackendName.PRIME:
+        _client_file(dispatcher, "bin/agent-cli")
+        _client_file(prime_client, "bin/prime-cli")
+        return BackendSelection(name, dispatcher)
+    if dispatcher.exists() or dispatcher.is_symlink():
+        _client_file(dispatcher, "bin/agent-cli")
+        _client_file(pi_client, "bin/pi-web-cli")
+        return BackendSelection(name, dispatcher)
+    return BackendSelection(name, _client_file(pi_client, "bin/pi-web-cli"))
+
+
+def _run(
+    args: list[str], stdin: str | None = None, *, selection: BackendSelection | None = None
+) -> subprocess.CompletedProcess[str]:
+    if not args:
+        raise StreamsError("selected backend requires a command")
+    selected = selection or _select_backend()
     env = os.environ.copy()
-    env.setdefault("PI_WEB_URL", default_pi_web_url())
+    env["PI_STACK_BACKEND"] = selected.name.value
+    if selected.name is BackendName.PI:
+        # pi_web_url is the browser address; the engine uses pi-web's local configuration.
+        env.setdefault("PI_WEB_URL", default_pi_web_url())
+    else:
+        env.pop("PI_WEB_URL", None)
     try:
         return subprocess.run(
-            [sys.executable, os.fspath(repo_root() / "bin" / "pi-web-cli"), *args],
+            [sys.executable, os.fspath(selected.client), *args],
             input=stdin,
             capture_output=True,
             text=True,
@@ -28,7 +107,9 @@ def _run(args: list[str], stdin: str | None = None) -> subprocess.CompletedProce
             timeout=30,
         )
     except subprocess.TimeoutExpired as exc:
-        raise StreamsError(f"pi-web receiving boundary timed out for {args[0]}") from exc
+        raise StreamsError(f"selected {selected.name.value} backend timed out for {args[0]}") from exc
+    except OSError as exc:
+        raise StreamsError(f"selected {selected.name.value} backend could not start for {args[0]}: {exc.strerror}") from exc
 
 
 class PromptRejected(StreamsError):
@@ -51,37 +132,99 @@ class RecoveryRefused(StreamsError):
         self.receipt = receipt
 
 
-def call(args: list[str], stdin: str | None = None) -> dict[str, object]:
-    proc = _run(args, stdin)
+def _call_raw(selection: BackendSelection, args: list[str], stdin: str | None = None) -> dict[str, object]:
+    proc = _run(args, stdin, selection=selection)
+    label = f"selected {selection.name.value} backend"
     try:
         data = json.loads(proc.stdout) if proc.stdout.strip() else {}
     except json.JSONDecodeError as exc:
         detail = proc.stderr.strip() or proc.stdout.strip()
-        raise StreamsError(f"pi-web-cli {' '.join(args)}: {detail}") from exc
+        raise StreamsError(f"{label} {args[0]}: {detail}") from exc
     if not isinstance(data, dict):
-        raise StreamsError(f"pi-web-cli {' '.join(args)} returned {type(data).__name__}")
+        raise StreamsError(f"{label} {args[0]} returned {type(data).__name__}")
     if proc.returncode != 0 or data.get("ok") is False:
         detail = proc.stderr.strip() or proc.stdout.strip()
         status = data.get("status")
-        if args[0] in {"status", "archive"} and status in {404, 410}:
+        if args[0] in {"status", "archive"} and type(status) is int and status in {404, 410}:
             raise TerminalSession(args[1], "missing", detail)
         if args[0] == "status" and status == 409 and "archived" in detail.casefold():
             raise TerminalSession(args[1], "archived", detail)
-        if args[0] == "archive" and status in {400, 409, 422}:
+        if args[0] == "archive" and type(status) is int and status in {400, 409, 422}:
             raise ArchiveRejected(detail)
         receipt = data.get("result", {}).get("admission") if isinstance(data.get("result"), dict) else None
-        if args[0] == "failure-fork" and data.get("status") == 409 and isinstance(receipt, dict) and receipt.get("state") == "refused-before-effect":
+        if args[0] == "failure-fork" and status == 409 and isinstance(receipt, dict) and receipt.get("state") == "refused-before-effect":
             raise RecoveryRefused(detail, receipt)
-        error = PromptRejected if args[0] in ("prompt", "compact", "maintenance-resume", "control-goal", "failure-maintenance") and data.get("status") in (400, 404, 409, 422) else StreamsError
-        raise error(f"pi-web-cli {' '.join(args)} failed: {detail}")
+        error = PromptRejected if args[0] in ("prompt", "compact", "maintenance-resume", "control-goal", "failure-maintenance") and status in (400, 404, 409, 422) else StreamsError
+        raise error(f"{label} {args[0]} failed: {detail}")
     return data
+
+
+@dataclass(frozen=True)
+class PrimeStreamReady:
+    pass
+
+
+@dataclass(frozen=True)
+class PrimeStreamBlocked:
+    missing_semantics: frozenset[str]
+
+
+def _string_set(value: object, field: str) -> frozenset[str]:
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value) or len(value) != len(set(value)):
+        raise StreamsError(f"Prime capability envelope has malformed {field}")
+    return frozenset(value)
+
+
+def _parse_prime_capabilities(data: dict[str, object]) -> PrimeStreamReady | PrimeStreamBlocked:
+    runtime, capabilities = data.get("runtime"), data.get("capabilities")
+    protocol = runtime.get("protocol") if isinstance(runtime, dict) else None
+    if (data.get("ok") is not True or type(data.get("status")) is not int or data["status"] != 200
+        or not isinstance(runtime, dict) or not isinstance(protocol, dict)
+        or not isinstance(runtime.get("schemaId"), str) or not runtime["schemaId"]
+        or not _string_set(runtime.get("serverCapabilities"), "serverCapabilities")):
+        raise StreamsError("Prime capability envelope is malformed; refusing stream operation")
+    if (protocol.get("name") != "prime-agent.daemon" or type(protocol.get("version")) is not int or protocol["version"] < 7
+        or type(runtime.get("schemaRevision")) is not int or runtime["schemaRevision"] < 30):
+        raise StreamsError("Prime daemon schema is unsupported; refusing stream operation")
+    if not isinstance(capabilities, dict) or type(capabilities.get("schemaVersion")) is not int or capabilities["schemaVersion"] != 1:
+        raise StreamsError("Prime capability schema is unsupported; refusing stream operation")
+    operations = _string_set(capabilities.get("nativeOperations"), "nativeOperations")
+    required = _string_set(capabilities.get("requiredSemantics"), "requiredSemantics")
+    missing = _string_set(capabilities.get("missingSemantics"), "missingSemantics")
+    stream_ready = capabilities.get("streamReady")
+    if type(stream_ready) is not bool:
+        raise StreamsError("Prime capability envelope has malformed streamReady; refusing stream operation")
+    if not _PRIME_NATIVE_OPERATIONS.issubset(operations) or required != _PRIME_REQUIRED_SEMANTICS or not missing.issubset(required):
+        raise StreamsError("Prime capability envelope does not match the required stream contract")
+    if stream_ready and missing:
+        raise StreamsError("Prime capability envelope claims readiness with missing native semantics")
+    if stream_ready:
+        return PrimeStreamReady()
+    return PrimeStreamBlocked(missing)
+
+
+def _require_prime_stream_ready(selection: BackendSelection) -> None:
+    state = _parse_prime_capabilities(_call_raw(selection, ["capabilities"]))
+    if isinstance(state, PrimeStreamBlocked):
+        detail = ", ".join(sorted(state.missing_semantics)) or "required native semantics are unverified"
+        raise StreamsError(f"Prime streamReady=false; refusing stream operation: {detail}")
+
+
+def call(args: list[str], stdin: str | None = None) -> dict[str, object]:
+    if not args:
+        raise StreamsError("selected backend requires a command")
+    selection = _select_backend()
+    show_help = len(args) > 1 and args[1] == "--help"
+    if selection.name is BackendName.PRIME and args[0] not in _READ_ONLY_COMMANDS and not show_help:
+        _require_prime_stream_ready(selection)
+    return _call_raw(selection, args, stdin)
 
 
 def list_sessions(cwd: str) -> list[dict[str, object]]:
     data = call(["list", "--cwd", cwd])
     sessions = data.get("sessions")
     if not isinstance(sessions, list):
-        raise StreamsError("pi-web-cli list returned no session list")
+        raise StreamsError("selected backend list returned no session list")
     return [item for item in sessions if isinstance(item, dict)]
 
 
@@ -109,7 +252,7 @@ def spawn(cwd: str) -> str:
     data = call(["spawn", cwd])
     session = data.get("session")
     if not isinstance(session, dict) or not isinstance(session.get("id"), str) or not session["id"]:
-        raise StreamsError("pi-web-cli spawn returned no session id")
+        raise StreamsError("selected backend spawn returned no session id")
     returned_cwd = session.get("cwd")
     if not isinstance(returned_cwd, str) or Path(returned_cwd).resolve() != Path(cwd).resolve():
         raise StreamsError("spawn identity has no matching native cwd")
@@ -128,7 +271,7 @@ def session_status(sid: str) -> dict[str, object]:
     data = call(["status", sid])
     session = data.get("session")
     if not isinstance(session, dict):
-        raise StreamsError("pi-web-cli status returned no session")
+        raise StreamsError("selected backend status returned no session")
     return session
 
 
