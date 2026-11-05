@@ -3,6 +3,7 @@ import { isDeepStrictEqual } from "node:util";
 import { createServer } from "node:net";
 import { closeSync, constants, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { setImmediate as yieldToEvents } from "node:timers/promises";
 import { AutomaticAdmissionRejected } from "./automaticAdmissionStore.js";
 import { retirementSource } from "./sessionFailureRetirement.js";
 
@@ -163,38 +164,36 @@ export async function completeRecoveryArchive(store, intent, hooks) {
             if (journal === undefined ? current !== undefined : JSON.stringify(current) !== JSON.stringify(journal))
                 reject("Recovery completion ownership changed");
         };
-        const mutate = effect => { guard(); return effect(); };
-        const ensureDirectory = directory => {
+        const mutate = async effect => { await yieldToEvents(); guard(); return effect(); };
+        const ensureDirectory = async directory => {
             if (exists(directory)) {
                 if (!lstatSync(directory).isDirectory()) reject("Recovery artifact directory is not regular");
                 return;
             }
-            ensureDirectory(dirname(directory));
-            mutate(() => mkdirSync(directory, { mode: 0o700 }));
-            mutate(() => syncDirectory(directory));
+            await ensureDirectory(dirname(directory));
+            await mutate(() => mkdirSync(directory, { mode: 0o700 }));
+            await mutate(() => syncDirectory(directory));
         };
-        const durable = (file, raw, replace, published = () => {}) => {
+        const durable = async (file, raw, replace, published = () => {}) => {
             const temporary = `${file}.${owner.token}.${randomUUID()}.tmp`;
-            const fd = mutate(() => openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600));
+            const fd = await mutate(() => openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600));
             try {
-                mutate(() => writeFileSync(fd, raw));
-                mutate(() => fsyncSync(fd));
+                await mutate(() => writeFileSync(fd, raw));
+                await mutate(() => fsyncSync(fd));
             } finally { closeSync(fd); }
-            mutate(() => replace ? renameSync(temporary, file) : linkSync(temporary, file));
+            await mutate(() => replace ? renameSync(temporary, file) : linkSync(temporary, file));
             published();
-            mutate(() => syncDirectory(file));
-            mutate(() => unlinkSync(temporary));
+            await mutate(() => syncDirectory(file));
+            if (!replace) await mutate(() => unlinkSync(temporary));
         };
-        const save = next => {
-            durable(location.file, `${JSON.stringify(next)}\n`, journal !== undefined, () => { journal = next; });
-        };
+        const save = next => durable(location.file, `${JSON.stringify(next)}\n`, journal !== undefined, () => { journal = next; });
         const readRegistry = () => store.parseRecoveryRegistry(JSON.parse((optional(store.filePath) ?? Buffer.from('{"sessions":[]}')).toString("utf8")));
         const publishRegistry = record => {
             const data = readRegistry();
             const existing = data.sessions.filter(item => item.sessionId === intent.originalSessionId);
             if (existing.length > 1 || existing.length === 1 && !exactRecord(existing[0], journal.record) && !exactRecord(existing[0], journal.tombstone))
                 reject("Conflicting recovery archive registry ownership");
-            durable(store.filePath, `${JSON.stringify({ sessions: [...data.sessions.filter(item => item.sessionId !== intent.originalSessionId), record] }, null, 2)}\n`, exists(store.filePath));
+            return durable(store.filePath, `${JSON.stringify({ sessions: [...data.sessions.filter(item => item.sessionId !== intent.originalSessionId), record] }, null, 2)}\n`, exists(store.filePath));
         };
         guard();
         hooks.dispatched();
@@ -210,72 +209,72 @@ export async function completeRecoveryArchive(store, intent, hooks) {
             const record = existing ?? { sessionId: intent.originalSessionId, cwd: intent.cwd, originalPath: intent.originalFile, archivePath, archivedAt: new Date().toISOString(), recoveryOperationId: intent.id };
             const owned = { ...record, recoveryCompletionId: location.key };
             const { archivePath: omitted, ...metadata } = owned;
-            ensureDirectory(dirname(location.file));
-            save({ version: 1, historicalArchiveOutcome: "not-inferred", binding: binding(intent), key: location.key, owner, phase: existing ? "artifact" : "claimed", archivePath, originalQuarantine: location.originalQuarantine, archiveQuarantine: `${archivePath}.recovery-${location.key}.deleted`, originalIdentity: inode(intent.originalFile), ...(existing ? { artifactReceipt: inode(archivePath) } : {}), record: owned, priorRecord: existing, tombstone: { ...metadata, recoveryDeleted: true } });
+            await ensureDirectory(dirname(location.file));
+            await save({ version: 1, historicalArchiveOutcome: "not-inferred", binding: binding(intent), key: location.key, owner, phase: existing ? "artifact" : "claimed", archivePath, originalQuarantine: location.originalQuarantine, archiveQuarantine: `${archivePath}.recovery-${location.key}.deleted`, originalIdentity: inode(intent.originalFile), ...(existing ? { artifactReceipt: inode(archivePath) } : {}), record: owned, priorRecord: existing, tombstone: { ...metadata, recoveryDeleted: true } });
         } else if (journal.owner.token !== owner.token) {
-            save({ ...journal, owner });
+            await save({ ...journal, owner });
         }
         const advance = (phase, additions = {}) => save({ ...journal, ...additions, phase });
         const at = phase => phases.indexOf(journal.phase) <= phases.indexOf(phase);
         if (at("claimed")) {
-            ensureDirectory(store.archiveDir);
+            await ensureDirectory(store.archiveDir);
             const stage = `${location.artifact}.${owner.token}.${randomUUID()}.stage`;
-            durable(stage, Buffer.from(intent.sourceBase64, "base64"), false);
+            await durable(stage, Buffer.from(intent.sourceBase64, "base64"), false);
             source(stage, intent);
-            advance("staged", { stage, artifactReceipt: inode(stage) });
+            await advance("staged", { stage, artifactReceipt: inode(stage) });
         }
         if (at("staged")) {
             source(journal.stage, intent, journal.artifactReceipt);
-            if (!exists(journal.archivePath)) mutate(() => linkSync(journal.stage, journal.archivePath));
+            if (!exists(journal.archivePath)) await mutate(() => linkSync(journal.stage, journal.archivePath));
             source(journal.archivePath, intent, journal.artifactReceipt);
-            mutate(() => syncDirectory(journal.archivePath));
-            advance("artifact");
+            await mutate(() => syncDirectory(journal.archivePath));
+            await advance("artifact");
         }
         if (at("artifact")) {
             source(journal.archivePath, intent, journal.artifactReceipt);
-            mutate(() => syncFile(journal.archivePath));
-            mutate(() => syncDirectory(journal.archivePath));
+            await mutate(() => syncFile(journal.archivePath));
+            await mutate(() => syncDirectory(journal.archivePath));
             const data = readRegistry();
             const existing = data.sessions.filter(item => item.sessionId === intent.originalSessionId);
             if (existing.length > 1 || existing.length === 1 && !exactRecord(existing[0], journal.record) && !exactRecord(existing[0], journal.priorRecord))
                 reject("Archive receipt publication conflicts with existing ownership");
-            durable(store.filePath, `${JSON.stringify({ sessions: [...data.sessions.filter(item => item.sessionId !== intent.originalSessionId), journal.record] }, null, 2)}\n`, exists(store.filePath));
-            advance("published");
+            await durable(store.filePath, `${JSON.stringify({ sessions: [...data.sessions.filter(item => item.sessionId !== intent.originalSessionId), journal.record] }, null, 2)}\n`, exists(store.filePath));
+            await advance("published");
         }
-        const quarantine = (file, target, receiptKey) => {
+        const quarantine = async (file, target, receiptKey) => {
             if (!journal[receiptKey]) {
                 source(file, intent, file === intent.originalFile ? journal.originalIdentity : journal.artifactReceipt);
                 if (exists(target)) {
                     if (!sameInode(target, inode(file))) reject("Unexplained quarantine is preserved");
-                } else mutate(() => linkSync(file, target));
+                } else await mutate(() => linkSync(file, target));
                 source(target, intent, inode(file));
-                mutate(() => syncFile(target));
-                mutate(() => syncDirectory(target));
-                save({ ...journal, [receiptKey]: inode(target) });
+                await mutate(() => syncFile(target));
+                await mutate(() => syncDirectory(target));
+                await save({ ...journal, [receiptKey]: inode(target) });
             }
             source(target, intent, journal[receiptKey]);
             if (exists(file)) {
                 source(file, intent, journal[receiptKey]);
-                mutate(() => unlinkSync(file));
+                await mutate(() => unlinkSync(file));
             }
-            mutate(() => syncDirectory(file));
+            await mutate(() => syncDirectory(file));
             if (exists(file)) reject("Retired session path reappeared");
         };
         if (at("published")) {
             if (!exactRecord(readRegistry().sessions.find(item => item.sessionId === intent.originalSessionId), journal.record))
                 reject("Positive archive ownership must precede original retirement");
             source(journal.archivePath, intent, journal.artifactReceipt);
-            quarantine(intent.originalFile, journal.originalQuarantine, "originalReceipt");
-            advance("original-retired");
+            await quarantine(intent.originalFile, journal.originalQuarantine, "originalReceipt");
+            await advance("original-retired");
         }
         if (at("original-retired")) {
-            quarantine(journal.archivePath, journal.archiveQuarantine, "deletedReceipt");
-            advance("quarantined");
+            await quarantine(journal.archivePath, journal.archiveQuarantine, "deletedReceipt");
+            await advance("quarantined");
         }
         if (at("quarantined")) {
             source(journal.archiveQuarantine, intent, journal.deletedReceipt);
-            publishRegistry(journal.tombstone);
-            advance("deleted");
+            await publishRegistry(journal.tombstone);
+            await advance("deleted");
         }
         const verify = () => {
             guard();
