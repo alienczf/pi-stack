@@ -7,7 +7,7 @@ import os
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
-from engine import StreamsError, artifacts, dcr, delivery, drive, failure, piweb, sessionlog
+from engine import StreamsError, artifacts, dcr, delivery, drive, failure, piweb, sessionlog, terminal_sessions
 from engine.project import _write
 from engine.threads import Coordinator, Status, _native_session, designated_coordinator, dump_threads, load_threads, require_ratified
 
@@ -133,6 +133,10 @@ def resume_parked_locked(stream: Path, at: str, *, index: Path, project, operato
         if any(op is not None and op.fork == row.session and op.phase != "complete" for op in operations):
             continue
         try:
+            terminal = terminal_sessions.load(stream, row.session, row.worktree)
+            if terminal is not None:
+                results.append({"session": row.session, "state": "terminal-preserved", "detail": terminal["state"]})
+                continue
             if row.role == "coordinator" and load(stream, row.session) is None and designated_coordinator(load_threads(stream / "threads.tsv")) != row:
                 raise StreamsError("Explicit resume preserves the designated coordinator")
             native = _native_session(row.session, Path(row.worktree))
@@ -324,6 +328,52 @@ def advance_locked(stream: Path, sid: str, episode_id: str, at: str, *, index: P
     return asdict(op)
 
 
+def _past_control_owner(stream: Path, op: Recovery, episode: failure.Episode, item: dict) -> bool:
+    automatic, control = item.get("automatic", {}), item.get("control", {})
+    if (item.get("origin") != "drive" or item.get("state") != "transport_accepted" or control.get("state") != "sending"
+            or automatic.get("sessionId") != op.session or automatic.get("cwd") != op.cwd or op.result is None):
+        return False
+    data = artifacts._read_tick_data(stream)
+    proofs = data.get("recovery_control_ownership", {})
+    if not isinstance(proofs, dict) or not isinstance(proofs.get(op.id, {}), dict):
+        raise StreamsError("Recovery control ownership evidence is malformed")
+    proof = proofs.get(op.id, {}).get(item["id"])
+    generation = op.result["generation"]
+    if isinstance(proof, dict) and op.source_sha256 and proof.get("original_sha256") == op.source_sha256 and proof.get("generation") == generation and proof.get("old_automatic") == automatic:
+        receiver = proof.get("receiver", {})
+        if isinstance(receiver, dict) and receiver.get("state") == "ended" and receiver.get("id") != item["id"] and receiver.get("automaticAdmission", {}).get("generation") != automatic.get("generation"):
+            delivery._control_receipt(delivery._get(stream, receiver["id"]), receiver)
+            return True
+    native = _native_session(op.session, Path(op.cwd))
+    status, safety = native.status, native.status.get("rotationSafety", {})
+    token, allowed = piweb.automatic_admission(status, op.session, op.cwd, "recovery")
+    piweb.require_settings(status, episode.authorized_model, episode.authorized_thinking)
+    if (allowed or token["generation"] != generation or automatic.get("generation") == generation
+            or any(status.get(key) for key in ("isStreaming", "isCompacting", "isBashRunning", "pendingMessageCount", "pendingAsk", "pendingDialogs"))
+            or not safety.get("callbacksKnown") or safety.get("nativeChildCallbacks") or safety.get("unprovenCallbacks")
+            or any(owner.get("kind") not in {"none", "safe-to-drop"} or owner.get("owners") for owner in safety.get("callbackOwners", []))):
+        return False
+    candidates = [row for row in delivery.receipts(stream) if row["session"] == op.session and row.get("origin") == "drive" and row.get("control", {}).get("state") == "ended"]
+    candidates.sort(key=lambda row: row["control"]["sequence"], reverse=True)
+    for candidate in candidates:
+        try:
+            receiver = piweb.control_goal_status(op.session, op.cwd, candidate["id"])
+            delivery._control_receipt(delivery._get(stream, candidate["id"]), receiver)
+        except (StreamsError, OSError):
+            continue
+        if receiver.get("state") != "ended" or receiver.get("id") == item["id"] or receiver.get("automaticAdmission", {}).get("generation") == automatic.get("generation"):
+            continue
+        with sessionlog.regular_reader(Path(native.info["path"])) as source:
+            original_sha256 = hashlib.sha256(source.read()).hexdigest()
+        proof = {"version": 1, "generation": generation, "old_automatic": automatic, "receiver": receiver,
+                 "original_sha256": original_sha256, "original_leaf": safety.get("entryId"),
+                 "scope": "Historical control no longer owns input; application outcome and original delivery are unchanged."}
+        data.setdefault("recovery_control_ownership", {}).setdefault(op.id, {})[item["id"]] = proof
+        artifacts._save_tick_data(stream, data)
+        return True
+    return False
+
+
 def _unresolved(stream: Path, op: Recovery, episode: failure.Episode) -> None:
     if drive.is_paused(stream) or episode.cancelled or episode.uncertain_jobs:
         raise StreamsError("Newer local stop, cancellation or uncertain jobs preserve the failure marker")
@@ -334,8 +384,15 @@ def _unresolved(stream: Path, op: Recovery, episode: failure.Episode) -> None:
         unsent.state, unsent.control.state = "blocked", "superseded"
         unsent.detail = f"Prepared original drive intent was never admitted; superseded by verified recovery {op.id}. Exact original body is retained without transport."
         delivery._save(stream, unsent)
-    if any(item["session"] == op.session and item["state"] not in {"applied", "blocked"} for item in delivery.receipts(stream)):
-        raise StreamsError("An unresolved original delivery still owns its evidence/input")
+    for item in delivery.receipts(stream):
+        if item["session"] != op.session or item["state"] in {"applied", "blocked"}:
+            continue
+        automatic, control = item.get("automatic", {}), item.get("control", {})
+        terminal = (item.get("origin") == "drive" and item["state"] in {"transport_accepted", "consumed"}
+                    and control.get("state") in {"ended", "superseded"}
+                    and automatic.get("sessionId") == op.session and automatic.get("cwd") == op.cwd)
+        if not terminal and not _past_control_owner(stream, op, episode, item):
+            raise StreamsError("An unresolved original delivery still owns its evidence/input")
     rows = load_threads(stream / "threads.tsv")
     old = [row for row in rows if row.session == op.session]
     forks = [row for row in rows if row.session == op.fork]

@@ -964,7 +964,8 @@ export interface FailureRetirement {
 }
 export type FailureRetirementReceipt = Omit<FailureRetirement, "sourceBase64">;
 export interface SessionMaintenance {
-    targetTokens: 150000;
+    targetTokens: number;
+    contextBudget?: { provider: string; model: string; contextWindow: number; targetTokens: number };
     tokensBefore: number;
     tokensAfter?: number;
     version: 1;
@@ -1005,10 +1006,21 @@ export interface RotationSafety {
 }
 export interface SessionStatus {
     sessionId: string;
+    sessionFileDiagnostics?: {
+        kind: "torn-message";
+        line: number;
+        lostEntryId: string;
+        previousEntryId: string | null;
+        recoveredEntryId: string | null;
+        recoveredPreviousParentId?: string;
+        fragmentCodeUnits: number;
+        fragmentUtf8Sha256: string;
+        reparented: string[];
+    }[];
     automaticAdmission?: AutomaticAdmissionState;
     rotationSafety?: RotationSafety;
     maintenanceSupport?: "checkpoint-input-v1";
-    maintenanceTargetSupport?: "below-150000-v1";
+    maintenanceTargetSupport?: "same-model-capacity-v1";
     recoveryReadinessSupport?: "same-provider-v1";
     resumeObservationSupport?: "completed-assistant-v1";
     potetoInvocationSupport?: "exact-goal-v1";

@@ -8,6 +8,19 @@ import { AutomaticAdmissionRejected } from "./automaticAdmissionStore.js";
 import { StreamTransientRetry, retryDispositions, unresolvedEffects } from "./streamTransientRetry.js";
 const CUSTOM_TYPE = "pi-web.stream-failure";
 function object(value) { return typeof value === "object" && value !== null && !Array.isArray(value); }
+function assertIntactSession(session) {
+    const diagnostics = session.sessionManager.getSessionFileDiagnostics?.() ?? [];
+    if (diagnostics.length)
+        throw new AutomaticAdmissionRejected(`Torn session record at line ${diagnostics[0].line}. Intact records were retained for inspection; backed-up repair is required before input, inference or recovery because fragment effects are unknown`);
+}
+function evidenceValue(raw, label) {
+    try {
+        return JSON.parse(raw);
+    }
+    catch {
+        throw new AutomaticAdmissionRejected(`${label} contains a torn or malformed JSONL record. Preserve the original and perform backed-up repair; no replay or checkpoint is permitted`);
+    }
+}
 function evidence(value) { return object(value) && typeof value["entryId"] === "string" && value["entryId"] !== "" && typeof value["sha256"] === "string" && /^[a-f0-9]{64}$/.test(value["sha256"]); }
 function failureEvidence(value) {
     return object(value) && ["resource", "tool-login", "codex-login", "model-error", "transient", "content-policy"].includes(String(value["kind"])) && evidence(value);
@@ -27,6 +40,7 @@ function boundary(value, session) {
         && (value["parking"] === undefined || object(value["parking"]) && typeof value["parking"].generation === "string" && typeof value["parking"].owned === "boolean");
 }
 export function assertGoalNotBlocked(session, text) {
+    assertIntactSession(session);
     const contentText = content => typeof content === "string" ? content : (Array.isArray(content) ? content : []).filter(part => part?.type === "text").map(part => part.text).join("\n");
     const fingerprint = value => {
         const closing = value.lastIndexOf("</skill>\n\n");
@@ -128,6 +142,7 @@ function persistInitialRegistration(session) {
     manager.setSessionFile(file);
 }
 function persistedBranch(session) {
+    assertIntactSession(session);
     const file = session.sessionManager.getSessionFile();
     if (file === undefined)
         throw new Error("A persisted native file is required for failure checkpoint evidence");
@@ -137,14 +152,14 @@ function persistedBranch(session) {
         if (!before.isFile())
             throw new Error("Failure checkpoint evidence must be regular");
         const lines = new TextDecoder("utf-8", { fatal: true }).decode(readFileSync(fd)).match(/[^\n]*\n|[^\n]+$/g) ?? [];
-        const header = JSON.parse(lines[0] ?? "null");
+        const header = evidenceValue(lines[0] ?? "null", "Failure checkpoint header");
         if (!object(header) || header["type"] !== "session" || header["id"] !== session.sessionId || typeof header["cwd"] !== "string" || !cwdPathsEqual(header["cwd"], session.sessionManager.getCwd()))
             throw new Error("Failure checkpoint native identity changed");
         const entries = new Map();
         for (const raw of lines.slice(1)) {
             if (raw.trim() === "")
                 continue;
-            const value = JSON.parse(raw);
+            const value = evidenceValue(raw, "Failure checkpoint evidence");
             if (!object(value) || typeof value["id"] !== "string" || entries.has(value["id"]))
                 throw new Error("Malformed or ambiguous persisted checkpoint entries");
             entries.set(value["id"], { value, raw });
@@ -302,6 +317,7 @@ export class SessionFailureBoundaries {
         return structuredClone(this.retries.get(session)?.active);
     }
     assertAdmission(session) {
+        assertIntactSession(session);
         const record = this.records.get(session);
         if (record !== undefined && (record.state !== "watching" || record.recovery !== undefined && this.permitsRelease?.(session, record.recovery.id, record.recovery.originalSessionId) !== true))
             throw new AutomaticAdmissionRejected("Stream failure is parked; only its engine-owned good-prefix recovery may replace the original");
@@ -312,7 +328,7 @@ export class SessionFailureBoundaries {
         if (record?.state === "recovering" && scope !== undefined && record.recovery?.id === scope.id && scope.count > 0) {
             const fork = this.control?.snapshot({ id: session.sessionId, cwd: session.sessionManager.getCwd() });
             const original = this.control?.snapshot({ id: scope.originalSessionId, cwd: session.sessionManager.getCwd() });
-            if (fork?.durable === true && fork.allowed && fork.generation === scope.generation && original?.durable === true && !original.allowed && original.generation === scope.originalGeneration)
+            if (fork?.durable === true && fork.allowed && fork.generation === scope.generation && original?.durable === true && !original.allowed && original.generation === scope.originalGeneration && session.model?.provider === scope.identity.provider && session.model?.id === scope.identity.model && session.thinkingLevel === scope.identity.thinking)
                 return;
             throw new AutomaticAdmissionRejected("Recovery inference was superseded by newer stop/input or unconfirmed control");
         }
@@ -327,6 +343,7 @@ export class SessionFailureBoundaries {
             this.recoveryScopes.delete(session); };
     }
     async runRecovery(session, operation, action) {
+        assertIntactSession(session);
         if (operation.continuation?.mode === "permitted-analysis-v1" || operation.failure?.kind === "content-policy")
             throw new AutomaticAdmissionRejected("Content-policy blocker. Historical restricted operation has no proven clean model context/resource view");
         const id = operation.id;
@@ -338,7 +355,7 @@ export class SessionFailureBoundaries {
             throw new AutomaticAdmissionRejected("Another recovery owns runtime admission");
         if (operation.maintenance?.generation === undefined)
             throw new AutomaticAdmissionRejected("Recovery maintenance generation is unavailable");
-        const scope = prior ?? { id, count: 0, generation: operation.maintenance.generation, originalSessionId: operation.originalSessionId, originalGeneration: operation.generation };
+        const scope = prior ?? { id, count: 0, generation: operation.maintenance.generation, originalSessionId: operation.originalSessionId, originalGeneration: operation.generation, identity: { provider: session.model?.provider, model: session.model?.id, thinking: session.thinkingLevel } };
         scope.count++;
         this.recoveryScopes.set(session, scope);
         try {
@@ -364,10 +381,27 @@ export class SessionFailureBoundaries {
                 throw new AutomaticAdmissionRejected("Invalid persisted stream failure boundary");
             this.records.set(session, structuredClone(data));
         }
-        const retry = new StreamTransientRetry(session, this.control, persistedBranch, () => this.records.has(session), () => this.observe(session));
+        const diagnostics = session.sessionManager.getSessionFileDiagnostics?.() ?? [];
+        if (diagnostics.length && this.records.has(session))
+            this.records.set(session, { ...this.records.get(session), state: "uncertain", detail: `Torn session record at line ${diagnostics[0].line}; fragment effects are unknown and backed-up repair is required` });
+        const retry = new StreamTransientRetry(session, this.control, persistedBranch, () => this.records.has(session), () => this.observe(session), () => this.records.get(session));
         this.retries.set(session, retry);
         session.setRuntimeRetryPolicy(retry);
-        if (this.records.has(session)) {
+        if (this.records.has(session) && diagnostics.length === 0) {
+            const saved = this.records.get(session);
+            if (saved.state === "parked" && saved.failure) {
+                const branch = persistedBranch(session);
+                const item = branch.find(item => item.value.id === saved.failure.entryId);
+                if (!item || createHash("sha256").update(item.raw).digest("hex") !== saved.failure.sha256)
+                    throw new AutomaticAdmissionRejected("Persisted parked failure entry/hash changed");
+                const kind = failure(item.value.message);
+                if (kind !== undefined && kind !== saved.failure.kind) {
+                    const current = { ...saved, failure: { ...saved.failure, kind } };
+                    session.sessionManager.appendCustomEntry(CUSTOM_TYPE, current);
+                    persistedBranch(session);
+                    this.records.set(session, current);
+                }
+            }
             retry.reconcile();
             void this.observe(session);
         }
@@ -381,6 +415,7 @@ export class SessionFailureBoundaries {
         });
     }
     async watch(session, request) {
+        assertIntactSession(session);
         if (!this.supported(session) || !object(request) || typeof request["stream"] !== "string" || !/^[A-Za-z0-9_.-]+$/.test(request["stream"]) || typeof request["root"] !== "string" || !isAbsolute(request["root"]))
             throw new AutomaticAdmissionRejected("Exact stream registration and awaited native checkpoint capability are required");
         this.attach(session);
@@ -453,7 +488,7 @@ export class SessionFailureBoundaries {
             throw new AutomaticAdmissionRejected("Explicit resume was superseded or the original is busy");
         const branch = persistedBranch(session);
         const failed = branch.findIndex(item => item.value.id === previous.failure.entryId);
-        if (failed < 0 || branch.slice(failed + 1).some(item => item.value.message?.role === "user") || unresolvedEffects(branch))
+        if (failed < 0 || branch.slice(failed + 1).some(item => item.value.message?.role === "user") || unresolvedEffects(branch, previous))
             throw new AutomaticAdmissionRejected("Newer accepted input or unresolved effects require reconciliation before resume");
         if (isContentPolicyFailure(branch[failed].value.message))
             throw new AutomaticAdmissionRejected("Content-policy blocker. Do not recover the same rejected content");
@@ -471,6 +506,7 @@ export class SessionFailureBoundaries {
         return { id: randomUUID(), policyId: this.enginePolicy, role: enroll.role, assignment: enroll.assignment, assignmentSha256: createHash("sha256").update(enroll.assignment).digest("hex"), generation: control.generation };
     }
     releaseRecovery(session, operation) {
+        assertIntactSession(session);
         const previous = this.records.get(session);
         if (previous?.recovery?.id !== operation.id || previous.recovery.originalSessionId !== operation.originalSessionId || !["recovering", "watching"].includes(previous.state) || this.permitsRelease?.(session, operation.id, operation.originalSessionId) !== true)
             throw new AutomaticAdmissionRejected("No durable owned original deletion permits release");
@@ -492,6 +528,7 @@ export class SessionFailureBoundaries {
         return { entryId: String(saved.value["id"]), sha256: createHash("sha256").update(saved.raw).digest("hex") };
     }
     async holdRecovery(session, operation) {
+        assertIntactSession(session);
         if (!this.supported(session) || session.sessionId === operation.originalSessionId || !cwdPathsEqual(session.sessionManager.getCwd(), operation.cwd))
             throw new AutomaticAdmissionRejected("Recovery fork identity or receiving boundary is unavailable");
         this.attach(session);
@@ -537,7 +574,7 @@ export class SessionFailureBoundaries {
                 if (message["role"] === "assistant") {
                     healthy = pending.size === 0 && failed === undefined;
                     const content = message["content"];
-                    if (Array.isArray(content))
+                    if (Array.isArray(content) && !["error", "aborted"].includes(message["stopReason"]))
                         for (const part of content)
                             if (object(part) && part["type"] === "toolCall" && typeof part["id"] === "string") {
                                 if (pending.has(part["id"]))

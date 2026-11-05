@@ -82,6 +82,36 @@ class FailureMarkerTests(TickCase):
         self.assertEqual((self.stream / "failures/coi.lastgood").read_bytes(), b"e4\n")
         self.assertFalse(any(item[0] == "POST" for item in self.stub.requests))
 
+    def test_persisted_terminated_reclassifies_without_changing_identity_or_stop(self):
+        self.assert_transport_reclassification('terminated')
+
+    def test_persisted_fetch_failed_reclassifies_without_changing_identity_or_stop(self):
+        self.assert_transport_reclassification('fetch failed')
+
+    def assert_transport_reclassification(self, text):
+        path = Path(self.log_path('coi'))
+        entries = [json.loads(line) for line in path.read_text().splitlines()]
+        entries[-1]['message'] = failure(text)
+        path.write_text(''.join(json.dumps(entry) + '\n' for entry in entries))
+        body = self.body()
+        body['failureBoundary']['failure']['kind'] = 'model-error'
+        self.routes(body)
+        first = self.tick('2026-10-06T12:00:00Z')
+        self.assertEqual(first.returncode, 0, first.stderr)
+        state_path = self.stream / 'log/tick-state.json'
+        state = self.state(self.stream)
+        saved = state['failures']['coi']
+        identity = (saved['id'], saved['failure_entry'], saved['failure_sha256'], saved['authorized_model'], saved['authorized_thinking'])
+        saved['kind'], saved['code'], saved['label'] = 'model-error', 'model_error', 'Historical classifier'
+        state_path.write_text(json.dumps(state))
+        again = self.tick('2026-10-06T12:01:00Z')
+        self.assertEqual(again.returncode, 0, again.stderr)
+        current = self.state(self.stream)['failures']['coi']
+        self.assertEqual(current['kind'], 'transient')
+        self.assertEqual((current['id'], current['failure_entry'], current['failure_sha256'], current['authorized_model'], current['authorized_thinking']), identity)
+        self.assertFalse(self.stub.automatic_admissions['coi']['allowed'])
+        self.assertFalse(any(item[0] == 'POST' for item in self.stub.requests))
+
     def test_later_sdk_fence_noise_cannot_replace_the_original_native_failure_identity(self):
         with open(self.log_path("coi"),"a") as native:
             native.write(json.dumps({"type":"message","id":"e7","parentId":"e6","message":failure("Labelled SDK fence error, not another provider failure")})+"\n")

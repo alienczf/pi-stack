@@ -46,6 +46,22 @@ class Operation:
     recovery_original: str = ""
     observation: dict | None = None
     continuation: dict | None = None
+    rebuilt_tokens: int = 0
+
+
+def safe_context(native: dict, status: dict) -> int:
+    tokens, target = native.get("tokensAfter"), native.get("targetTokens")
+    model = status.get("model", {})
+    capacity = model.get("contextWindow")
+    if type(capacity) is not int or capacity <= 0 or type(tokens) is not int or tokens < 0 or type(target) is not int or target <= 0:
+        raise StreamsError("Native compaction has unknown same-model context capacity")
+    budget = {"provider": model.get("provider"), "model": model.get("id"), "contextWindow": capacity, "targetTokens": int(capacity * 0.8)}
+    if target == THRESHOLD and native.get("contextBudget") is None:
+        if tokens >= min(target, budget["targetTokens"]):
+            raise StreamsError("Legacy native compaction has no verified rebuilt context below 150000 tokens")
+    elif native.get("contextBudget") != budget or target != budget["targetTokens"] or tokens >= target:
+        raise StreamsError("Native compaction exceeds or changed the same-model safe context capacity")
+    return tokens
 
 
 def load(stream_dir: Path, sid: str) -> Operation | None:
@@ -57,7 +73,7 @@ def load(stream_dir: Path, sid: str) -> Operation | None:
         return None
     try:
         op = Operation(**{key: item for key, item in value.items() if key != "recovery_instructions"})
-        if op.session != sid or op.phase not in PHASES or not op.id or not Path(op.cwd).is_absolute() or op.automatic.get("sessionId") != sid or op.automatic.get("cwd") != op.cwd or op.automatic.get("kind") != "wake":
+        if op.session != sid or op.phase not in PHASES or not op.id or not Path(op.cwd).is_absolute() or op.automatic.get("sessionId") != sid or op.automatic.get("cwd") != op.cwd or op.automatic.get("kind") != "wake" or type(op.rebuilt_tokens) is not int or op.rebuilt_tokens < 0:
             raise ValueError("mismatched DCR owner or phase")
         return op
     except (TypeError, ValueError, AttributeError) as exc:
@@ -174,7 +190,7 @@ def native_branch(resolved: Coordinator) -> list[tuple[dict, bytes]]:
 
 def terminal_checkpoint(resolved: Coordinator, acknowledgement: str) -> tuple[str, str] | None:
     status = resolved.native.status
-    if any(status.get(key) is True for key in ("isStreaming", "isCompacting", "isBashRunning")) or status.get("pendingMessageCount", 0) or status.get("pendingAsk") or status.get("pendingExtensionDialogs"):
+    if any(status.get(key) is True for key in ("isStreaming", "isCompacting", "isBashRunning")) or status.get("pendingMessageCount", 0) or status.get("pendingAsk") or status.get("pendingDialogs"):
         return None
     branch = native_branch(resolved)
     suffix = []
@@ -212,12 +228,14 @@ def terminal_checkpoint(resolved: Coordinator, acknowledgement: str) -> tuple[st
 
 def completion_after(resolved: Coordinator, compaction: str) -> str | None:
     completed = None
-    for entry, _ in native_branch(resolved):
+    branch = native_branch(resolved)
+    retries = sessionlog.retry_dispositions(list(reversed(branch)), resolved.row.session, resolved.row.worktree)
+    for entry, _ in branch:
         if entry["id"] == compaction:
             return completed
         message = entry.get("message")
         if isinstance(message, dict) and message.get("role") == "assistant":
-            if message.get("stopReason") == "error":
+            if message.get("stopReason") == "error" and retries.get(entry["id"], {}).get("state") != "resolved":
                 raise StreamsError("Native RESUME contains an assistant error")
             if completed is None and message.get("stopReason") == "stop":
                 completed = entry["id"]
@@ -284,8 +302,39 @@ def step(index: Path, project: Project, stream: str, stream_dir: Path, resolved:
         save(stream_dir, op)
         return True
     token, allowed = piweb.automatic_admission(status, sid, resolved.row.worktree, "wake")
+    if op is not None and op.phase == "blocked" and op.detail == "Native RESUME contains an assistant error":
+        native = piweb.maintenance_status(op.cwd, sid, op.id, original=op.recovery_original)
+        resume = native.get("resume")
+        if (native.get("state") != "resumed" or native.get("generation") != op.automatic["generation"]
+            or native.get("entryId") != op.checkpoint_entry or native.get("compactionEntryId") != op.compaction_entry
+            or native.get("compactionSha256") != op.compaction_sha256 or native.get("inputs") or native.get("inputSequence")
+            or not isinstance(resume, dict) or resume.get("state") != "admitted"
+            or resume.get("deliveryId") != f"{op.id}:resume" or resume.get("text") != op.resume_text
+            or resume.get("potetoGoal") != op.resume_goal):
+            return True
+        op.phase, op.detail = "resuming", "Reconciled exact admitted RESUME; no redispatch."
+        save(stream_dir, op)
     if op is not None and op.phase == "blocked":
-        return True
+        legacy_gate = "below 150000 tokens" in op.detail and not op.resume_text and op.checkpoint_entry
+        if not legacy_gate:
+            return True
+        native = piweb.maintenance_status(op.cwd, sid, op.id, original=op.recovery_original)
+        if native.get("generation") != op.automatic["generation"] or native.get("entryId") != op.checkpoint_entry:
+            raise StreamsError("Legacy DCR reconciliation changed its exact checkpoint/generation")
+        if native.get("resume") is not None or native.get("inputs") or native.get("inputSequence"):
+            return True
+        if native.get("state") == "superseded":
+            op.phase, op.detail = "superseded", "Dead legacy context-gate ownership was reconciled without replay; current admission remains authoritative."
+            save(stream_dir, op)
+            close_events(stream_dir, op)
+            return False
+        if native.get("state") != "complete" or not allowed or token != op.automatic:
+            return True
+        safe_context(native, status)
+        if piweb.compaction_result(op.cwd, sid, op.id, original=op.recovery_original) is None:
+            return True
+        op.phase, op.detail = "compacting", "Reconciled exact completed compaction after the legacy context gate."
+        save(stream_dir, op)
     if op is not None and op.phase not in TERMINAL and (not allowed or token != op.automatic):
         if op.phase in {"compact-sending", "compacting", "resume-sending", "resuming"}:
             native = piweb.maintenance_status(op.cwd, sid, op.id, original=op.recovery_original)
@@ -305,9 +354,10 @@ def step(index: Path, project: Project, stream: str, stream_dir: Path, resolved:
         tokens = usage.get("tokens") if isinstance(usage, dict) else None
         safety = status.get("rotationSafety")
         leaf = safety.get("entryId") if isinstance(safety, dict) else None
-        if not allowed or type(tokens) is not int or tokens < THRESHOLD:
+        trigger = max(THRESHOLD, op.rebuilt_tokens + max(20000, op.rebuilt_tokens // 10)) if op is not None and op.rebuilt_tokens else THRESHOLD
+        if not allowed or type(tokens) is not int or tokens < trigger:
             return False
-        if status.get("isCompacting") is True or status.get("isBashRunning") is True or status.get("pendingAsk") or status.get("pendingExtensionDialogs"):
+        if status.get("isCompacting") is True or status.get("isBashRunning") is True or status.get("pendingAsk") or status.get("pendingDialogs"):
             return True
         if op is not None and op.completed_leaf == leaf:
             return False
@@ -321,7 +371,7 @@ def step(index: Path, project: Project, stream: str, stream_dir: Path, resolved:
             save(stream_dir, op)
             return True
         if op.phase == "sync-prepared":
-            if status.get("isCompacting") is True or status.get("isBashRunning") is True or status.get("pendingAsk") or status.get("pendingExtensionDialogs"):
+            if status.get("isCompacting") is True or status.get("isBashRunning") is True or status.get("pendingAsk") or status.get("pendingDialogs"):
                 return True
             op.phase = "sync-sending"
             save(stream_dir, op)
@@ -337,6 +387,25 @@ def step(index: Path, project: Project, stream: str, stream_dir: Path, resolved:
             return True
         if op.phase in {"sync-sending", "sync-admitted"}:
             if not op.ready_revision:
+                if op.recovery_original and status.get("failureSyncContinuationSupport") == "entry-bound-v1" and not any(status.get(key) for key in ("isStreaming", "isCompacting", "isBashRunning", "pendingMessageCount", "pendingAsk", "pendingDialogs")):
+                    branch = native_branch(resolved)
+                    entry, raw = branch[0]
+                    if entry.get("message", {}).get("role") == "assistant" and entry["message"].get("stopReason") == "aborted":
+                        expected = {"entryId": entry["id"], "sha256": hashlib.sha256(raw).hexdigest()}
+                        model = status.get("model", {})
+                        identity = {"provider": model.get("provider"), "model": model.get("id"), "thinking": resolved.row.thinking}
+                        try:
+                            receipt = piweb.failure_maintenance(op.recovery_original, op.cwd, {"id": op.id, "action": "continue-sync", "expected": expected, "identity": identity})
+                            sync = receipt["operation"].get("maintenance", {}).get("sync", {})
+                            if sync.get("text") != op.sync_text or sync.get("deliveryId") != f"{op.id}:sync":
+                                raise StreamsError("Recovery continuation changed the accepted SYNC intent")
+                            for continued in sync.get("continuations", []):
+                                if continued.get("checkpoint") == expected and (continued.get("operationId") != op.id or continued.get("originalSessionId") != op.recovery_original or continued.get("sessionId") != sid or continued.get("identity") != identity or continued.get("generation") != op.automatic["generation"] or continued.get("originalGeneration") != receipt["operation"].get("generation") or continued.get("state") not in {"sending", "ended", "uncertain"}):
+                                    raise StreamsError("Recovery continuation changed its frozen checkpoint/identity/generations")
+                            op.detail = "Recovery SYNC continuation is uncertain; no redispatch" if any(item.get("state") == "uncertain" for item in sync.get("continuations", [])) else ""
+                        except (StreamsError, OSError) as exc:
+                            op.detail = str(exc)
+                        save(stream_dir, op)
                 return True
             checkpoint = terminal_checkpoint(resolved, f"DCR SYNC ready: {op.id} {op.ready_revision}")
             if checkpoint is None:
@@ -394,9 +463,7 @@ def step(index: Path, project: Project, stream: str, stream_dir: Path, resolved:
             proof = piweb.compaction_result(op.cwd, sid, op.id, original=op.recovery_original)
             if proof is None:
                 return True
-            tokens_after = native.get("tokensAfter")
-            if native.get("targetTokens") != THRESHOLD or type(tokens_after) is not int or tokens_after >= THRESHOLD or tokens_after < 0:
-                raise StreamsError("Native compaction has no verified rebuilt context below 150000 tokens")
+            op.rebuilt_tokens = safe_context(native, status)
             artifacts._rotate_log_locked(stream_dir)
             state = artifacts._read_stream_state_locked(stream_dir)
             require_ratified(stream_dir)

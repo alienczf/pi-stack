@@ -18,7 +18,7 @@ async function scenario({ oversizedHook = false } = {}) {
         const { createEventBus } = await native('node_modules/@earendil-works/pi-coding-agent/dist/core/event-bus.js');
         const { writeFileSync } = await import('node:fs');
         const source = join(f.dir, 'oversized-summary.mjs'); writeFileSync(source, 'export default function extension() {}');
-        const extension = await loadExtensionFromFactory(pi => pi.on('session_before_compact', event => ({ compaction: { summary: 'Oversized extension summary '.repeat(30000), firstKeptEntryId: event.preparation.firstKeptEntryId, tokensBefore: event.preparation.tokensBefore } })), f.dir, createEventBus(), createExtensionRuntime(), source);
+        const extension = await loadExtensionFromFactory(pi => pi.on('session_before_compact', event => ({ compaction: { summary: 'Oversized extension summary '.repeat(60000), firstKeptEntryId: event.preparation.firstKeptEntryId, tokensBefore: event.preparation.tokensBefore } })), f.dir, createEventBus(), createExtensionRuntime(), source);
         f.extensions.extensions.push(extension);
         f.session._buildRuntime({ activeToolNames: [], includeAllExtensionTools: false });
     }
@@ -44,7 +44,7 @@ async function scenario({ oversizedHook = false } = {}) {
     assert(after < 150000, `${after} must be below the maintenance threshold`);
     assert(after < before, `${after} must be less than ${before}`);
     assert.equal(operation.tokensAfter, after);
-    assert.equal(operation.targetTokens, 150000);
+    assert.equal(operation.targetTokens, 320000);
     assert.equal(f.manager.getEntry(operation.compactionEntryId).type, 'compaction');
     return { ...f, ref, store, controller, work, operation, before, after, compactionCalls: f.calls.length };
 }

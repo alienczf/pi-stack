@@ -123,6 +123,7 @@ def _parser() -> argparse.ArgumentParser:
     migrate.add_argument("--mapping", help="explicit JSON byte-span authority/history map")
     migrate.add_argument("--history-mode", choices=("git", "snapshot"), default="git", help="snapshot retains exact source bytes with migration-start timestamps and avoids a Git history walk")
     migrate.add_argument("--relay-source", help="exact dated standing-grant source JSON for the migration plan; not transport authentication")
+    migrate.add_argument("--recovery-sources", help="documentary source-repair JSON version 2 for --plan only; never ratification or new execution authority")
 
     upgrade = sub.add_parser("upgrade")
     upgrade.add_argument("stream_id", metavar="id", nargs="?")
@@ -203,9 +204,10 @@ def _open_stream(index: Path, project_name: str, stream_id: str) -> Path:
 
 
 def cmd_migrate(args: argparse.Namespace) -> int:
-    if (args.mapping or args.relay_source or args.history_mode != "git") and not args.plan:
-        raise StreamsError("--mapping and --relay-source are only for --plan; application requires the exact reviewed plan file")
+    if (args.mapping or args.relay_source or args.recovery_sources or args.history_mode != "git") and not args.plan:
+        raise StreamsError("--mapping, --relay-source and --recovery-sources are only for --plan; application requires the exact reviewed plan file")
     mapping = json.loads(migration.regular_bytes(Path(args.mapping))) if args.mapping else None
+    recovery = json.loads(migration.regular_bytes(Path(args.recovery_sources))) if args.recovery_sources else None
     if (args.prefix_history_bytes is not None or args.prefix_rules_bytes is not None) and not args.repair_plan:
         raise StreamsError("--prefix-history-bytes and --prefix-rules-bytes are only for --repair-plan")
     document_file = args.apply or args.repair_apply
@@ -226,7 +228,7 @@ def cmd_migrate(args: argparse.Namespace) -> int:
             elif args.repair_apply or args.repair_resume:
                 result = state_repair.apply_locked(stream, document)
             else:
-                result = migration.plan_migration(stream, mapping, relay_source=source, history_mode=args.history_mode).public() if args.plan else migration.apply_migration_locked(stream, document)
+                result = migration.plan_migration(stream, mapping, relay_source=source, history_mode=args.history_mode, recovery_sources=recovery).public() if args.plan else migration.apply_migration_locked(stream, document)
     print(json.dumps(result, sort_keys=True))
     return 0
 

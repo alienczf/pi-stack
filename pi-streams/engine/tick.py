@@ -224,6 +224,8 @@ class StreamTick:
             self.state = load_state(self.state_path)
             self.loaded = True
             self.rows = load_threads(self.rows_path)
+            if drive.is_paused(self.stream_dir):
+                return
             if self.rows and all(row.status in {Status.done, Status.archived} for row in self.rows):
                 self.archive_done()
                 self.flush()
@@ -663,6 +665,10 @@ def tick_index(index: Path, now: datetime) -> bool:
                     bindings = [current for current in load_stream_rows(index) if current.id == row.id and current.project == row.project]
                     if len(bindings) != 1 or Path(bindings[0].path).resolve() != repo.resolve():
                         raise StreamsError("registered stream binding changed; refusing an unknown writer target")
+                    if drive.is_paused(repo):
+                        health.completed, health.ok = clock.stamp(clock.now()), True
+                        publish()
+                        continue
                     history = artifacts._rotate_log_locked(repo)
                     project = projects.get(row.project)
                     if project is None:

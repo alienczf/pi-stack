@@ -148,8 +148,9 @@ def observe_control_locked(stream_dir: Path, identity: str, *, state: str | None
         state = native["state"]
     record.control.state = state
     if state == "uncertain":
-        record.state = "uncertain"
-        record.detail = "Native control admission is uncertain; do not replay the saved task."
+        if record.state != "blocked":
+            record.state = "uncertain"
+            record.detail = "Native control admission is uncertain; do not replay the saved task."
     elif state == "superseded":
         record.detail = "Unadmitted automatic goal was superseded; original delivery intent is retained."
     elif record.state in ("sending", "uncertain"):
