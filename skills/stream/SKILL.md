@@ -24,7 +24,7 @@ The tick reasserts the shared current goal when driven and idle or waiting. It d
 
 ## Parked failures
 
-Use `pi-streams resume <id> --all-parked` within an explicit operator resume grant. It records drive-on intent while keeping a failed original disabled. Drive becomes on-confirmed only on its verified released successor. Ordinary ticks still preserve local off and newer stops or input. Use `pi-streams rotate <id>` for verified good-context and handover rotation without a live acknowledgement.
+Use `pi-streams resume <id> --all-parked` under the existing ratified charter. It uses the same idempotent recovery handler as automatic healing and requires no further human approval. It records drive-on intent while keeping a failed original disabled. Drive becomes on-confirmed only on its verified released successor. Ordinary ticks still preserve local off and newer stops or input. Use `pi-streams rotate <id>` for verified good-context and handover rotation without a live acknowledgement.
 
 The standing charter authorizes engine-owned recovery for all in-scope runtime failures. Native AgentSession retries eligible transient inference after fixed 5-second delays on the same provider, model and thinking. Usage and quota wait for a reset or safe readiness polling. Expired logins resume after native readiness confirms refreshed auth. Resource failures resume when safe native operations succeed. Never read tokens, repair credentials, switch provider/model, replay rejected content, or resubmit uncertain external effects. FYI alerts cannot block progress. Preserve independent authorized lanes, genuine stops, newer input, pending questions, callback ownership and uncertain outcomes.
 
