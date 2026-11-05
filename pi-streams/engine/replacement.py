@@ -6,12 +6,12 @@ import os
 import stat
 import uuid
 from contextlib import contextmanager
-from dataclasses import replace
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 
 from engine import StreamsError, artifacts, clock, delivery, failure, failure_recovery, piweb, sessionlog
 from engine.project import Project, _write, commit_repo, git, require_stream
-from engine.threads import KICKOFF, Status, _canonical_stream, _has_ratified_authority, _save_start, _start_record, _validated_handover, dump_threads, ensure_coordinator, load_threads, resolve_coordinator, save_threads, transition, require_ratified
+from engine.threads import Coordinator, KICKOFF, Status, _canonical_stream, _has_ratified_authority, _native_session, _save_start, _start_record, _thread_row, _validated_handover, designated_coordinator, dump_threads, ensure_coordinator, load_threads, resolve_coordinator, save_threads, transition, require_ratified
 
 
 @contextmanager
@@ -323,3 +323,261 @@ def rotate_locked(index: Path, project: Project, stream_id: str) -> str:
     artifacts._save_tick_data(stream, data)
     _save_start(stream, None)
     return target
+
+
+@dataclass
+class ReplacementIntent:
+    id: str
+    source: str
+    target: str
+    mode: str
+    registry: str
+    state: str
+    references: list[dict]
+    records: dict
+    original: dict
+    successor: dict = field(default_factory=dict)
+    outcome: dict = field(default_factory=dict)
+    phase: str = "prepared"
+    published: str = ""
+    archive: dict = field(default_factory=dict)
+    registry_sha256: str = ""
+    version: int = 1
+
+
+def replacement_intent(stream: Path) -> ReplacementIntent | None:
+    raw = artifacts._read_tick_data(stream).get("coordinator_replacement")
+    if raw is None:
+        return None
+    try:
+        intent = ReplacementIntent(**raw)
+        if (type(intent.version) is not int or intent.version != 1
+            or not all(isinstance(value, str) for value in (intent.id, intent.source, intent.target, intent.registry, intent.state, intent.published))
+            or not intent.id or not intent.source or intent.mode not in {"adopt", "capacity"}
+            or not isinstance(intent.original, dict) or not isinstance(intent.successor, dict) or not isinstance(intent.archive, dict)
+            or not isinstance(intent.references, list) or not isinstance(intent.records, dict) or not isinstance(intent.outcome, dict)
+            or intent.registry_sha256 != hashlib.sha256(intent.registry.encode()).hexdigest()
+            or intent.original.get("sessionId") != intent.source or intent.original.get("cwd") != str(stream)
+            or type(intent.original.get("allowed")) is not bool
+            or not all(isinstance(intent.original.get(key), str) and intent.original[key] for key in ("generation", "entryId", "path", "sha256", "leafSha256", "model", "thinking"))
+            or intent.phase not in {"prepared", "spawning", "created", "archiving", "archived", "complete"}
+            or (intent.mode == "adopt" or intent.phase == "complete") and not intent.target):
+            raise ValueError("invalid replacement identity or phase")
+        return intent
+    except (TypeError, ValueError) as exc:
+        raise StreamsError(f"invalid saved coordinator replacement: {exc}") from exc
+
+
+def _save_replacement(stream: Path, intent: ReplacementIntent) -> None:
+    _save(stream, "coordinator_replacement", asdict(intent))
+
+
+def _replacement_records(stream: Path) -> dict:
+    data = artifacts._read_tick_data(stream)
+    return {key: data[key] for key in ("drive", "deliveries", "tick_delivery", "dcr_operations", "failures", "failure_recoveries", "session_start", "state_log") if key in data}
+
+
+def _replacement_inputs(stream: Path, sid: str) -> None:
+    if _start_record(stream) is not None:
+        raise StreamsError("saved opening ownership must settle before replacement")
+    rotation = artifacts._read_tick_data(stream).get("coordinator_rotation")
+    if isinstance(rotation, dict) and rotation.get("phase") != "complete":
+        raise StreamsError("another coordinator rotation owns this stream")
+    for receipt in delivery.receipts(stream):
+        if receipt["session"] == sid and (receipt["state"] in {"prepared", "sending", "uncertain"} or (receipt.get("control") or {}).get("state") in {"sending", "uncertain"}):
+            raise StreamsError("unsettled old coordinator delivery must be retained before replacement")
+    from engine import dcr
+    op = dcr.load(stream, sid)
+    if op is not None and op.phase in {"sync-sending", "compact-sending", "resume-sending", "resuming", "compacting"}:
+        raise StreamsError("unsettled old coordinator maintenance must be reconciled before replacement")
+    for owner in artifacts._read_tick_data(stream).get("failure_recoveries", {}):
+        recovery = failure_recovery.load(stream, owner)
+        if recovery is not None and recovery.phase != "complete" and sid in {recovery.session, recovery.fork}:
+            raise StreamsError("owned failure recovery must settle before replacement")
+
+
+def _replacement_native(stream: Path, row, listing: list[dict]) -> tuple[Coordinator, dict]:
+    resolved = Coordinator(row, _native_session(row.session, stream, listing))
+    _idle(resolved)
+    piweb.require_settings(resolved.native.status, row.model, row.thinking)
+    automatic, allowed = piweb.automatic_admission(resolved.native.status, row.session, str(stream), "wake")
+    leaf = resolved.native.status["rotationSafety"].get("entryId")
+    path = resolved.native.info.get("path")
+    if not isinstance(leaf, str) or not leaf or not isinstance(path, str) or not Path(path).is_absolute():
+        raise StreamsError("replacement requires the exact persisted old native leaf and path")
+    with sessionlog.regular_reader(Path(path)) as handle:
+        digest = hashlib.file_digest(handle, "sha256").hexdigest()
+    branch = sessionlog.branch_records(Path(path), row.session, str(stream), leaf)
+    return resolved, {"sessionId": row.session, "cwd": str(stream), "entryId": leaf, "generation": automatic["generation"], "allowed": allowed, "path": path, "sha256": digest, "leafSha256": hashlib.sha256(branch[-1][1]).hexdigest(), "model": row.model, "thinking": row.thinking, "rotationSafety": resolved.native.status["rotationSafety"]}
+
+
+def _replacement_target(stream: Path, sid: str, model: str, thinking: str, listing: list[dict]) -> dict:
+    native = _native_session(sid, stream, listing)
+    piweb.require_settings(native.status, model, thinking)
+    automatic, allowed = piweb.automatic_admission(native.status, sid, str(stream), "wake")
+    return {"sessionId": sid, "cwd": str(stream), "path": native.info.get("path"), "entryId": (native.status.get("rotationSafety") or {}).get("entryId"), "generation": automatic["generation"], "allowed": allowed, "model": model, "thinking": thinking}
+
+
+def _validate_replacement(stream: Path, intent: ReplacementIntent) -> None:
+    if (intent.state != _digest(stream / "STATE.md") or intent.references != _workers(stream)
+        or intent.records != _replacement_records(stream)):
+        raise StreamsError("replacement STATE, worker references or input/drive ownership changed")
+    current = (stream / "threads.tsv").read_bytes().decode("utf-8")
+    if current != intent.registry and (not intent.published or current != intent.published):
+        raise StreamsError("replacement registry changed beyond its frozen publication")
+
+
+def _archive_proof(stream: Path, intent: ReplacementIntent, listing: list[dict]) -> dict | None:
+    matches = [item for item in listing if item.get("id") == intent.source]
+    if len(matches) != 1 or matches[0].get("cwd") != str(stream):
+        raise StreamsError("replacement old exact native identity is unavailable")
+    info = matches[0]
+    if info.get("archived") is not True:
+        return None
+    path = info.get("archivePath")
+    if not isinstance(path, str) or not Path(path).is_absolute() or not isinstance(info.get("archivedAt"), str):
+        raise StreamsError("replacement has no positive durable archive evidence")
+    with sessionlog.regular_reader(Path(path)) as handle:
+        digest = hashlib.file_digest(handle, "sha256").hexdigest()
+        os.fsync(handle.fileno())
+    descriptor = os.open(Path(path).parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    if digest != intent.original["sha256"]:
+        raise StreamsError("replacement archive does not retain the exact old native history")
+    sessionlog.read_record(Path(path), intent.source, intent.original["entryId"], intent.original["leafSha256"], archived=True)
+    return {"sessionId": intent.source, "cwd": str(stream), "archivePath": path, "archivedAt": info["archivedAt"], "sha256": digest}
+
+
+def _begin_replacement(stream: Path, source, target: str, *, outcome: dict | None = None) -> ReplacementIntent:
+    _replacement_inputs(stream, source.session)
+    listing = piweb.list_sessions(str(stream))
+    _resolved, original = _replacement_native(stream, source, listing)
+    if outcome is not None and {key: original[key] for key in ("entryId", "generation", "allowed")} != outcome.get("retirement"):
+        raise StreamsError("capacity source changed after its bound SYNC/receipt observation")
+    rows = load_threads(stream / "threads.tsv")
+    if designated_coordinator(rows) != source or Path(source.worktree).resolve() != stream:
+        raise StreamsError("replacement old designation changed")
+    if target == source.session or any(row.session == target for row in rows):
+        raise StreamsError("replacement target must be the exact approved unregistered session")
+    successor = _replacement_target(stream, target, source.model, source.thinking, listing) if target else {}
+    intent = ReplacementIntent(uuid.uuid4().hex, source.session, target, "capacity" if outcome else "adopt", (stream / "threads.tsv").read_bytes().decode("utf-8"), _digest(stream / "STATE.md"), _workers(stream), _replacement_records(stream), original, successor, outcome or {})
+    intent.registry_sha256 = hashlib.sha256(intent.registry.encode()).hexdigest()
+    previous = replacement_intent(stream)
+    if previous is not None:
+        if previous.phase != "complete":
+            raise StreamsError("another exact replacement intent owns this stream")
+        data = artifacts._read_tick_data(stream)
+        data.setdefault("coordinator_replacement_history", []).append(asdict(previous))
+        artifacts._save_tick_data(stream, data)
+    _save_replacement(stream, intent)
+    return intent
+
+
+def advance_replacement_locked(stream: Path, intent: ReplacementIntent) -> str:
+    if intent.phase == "complete":
+        row = designated_coordinator(load_threads(stream / "threads.tsv"))
+        if row is None or row.session != intent.target:
+            raise StreamsError("completed replacement no longer designates its exact target")
+        return intent.target
+    _validate_replacement(stream, intent)
+    if intent.mode == "capacity" and intent.phase == "prepared" and not intent.target:
+        listing = piweb.list_sessions(str(stream))
+        known = {row.session for row in load_threads(stream / "threads.tsv")}
+        if any(item.get("archived") is not True and item.get("id") not in known for item in listing):
+            raise StreamsError("capacity rotation never chooses an unregistered candidate")
+        intent.phase = "spawning"
+        _save_replacement(stream, intent)
+        intent.target = piweb.spawn(str(stream))
+        intent.phase = "created"
+        _save_replacement(stream, intent)
+    elif intent.phase == "spawning":
+        raise StreamsError("replacement spawn identity is uncertain; no retry or candidate selection")
+    if intent.mode == "capacity" and intent.phase == "created":
+        native = _native_session(intent.target, stream)
+        if native.info.get("messageCount") != 0 or any(native.status.get(key) for key in ("isStreaming", "isCompacting", "isBashRunning", "pendingMessageCount", "pendingAsk", "pendingDialogs")):
+            raise StreamsError("capacity successor changed before its no-input registration")
+        token, allowed = piweb.automatic_admission(native.status, intent.target, str(stream), "wake")
+        if allowed != intent.original["allowed"]:
+            if not allowed:
+                raise StreamsError("capacity successor received a newer stop; refusing to rearm it")
+            piweb.set_automatic_admission(intent.target, False, expected_generation=token["generation"])
+        piweb.configure_session(intent.target, intent.original["model"], intent.original["thinking"])
+        intent.successor = _replacement_target(stream, intent.target, intent.original["model"], intent.original["thinking"], piweb.list_sessions(str(stream)))
+        intent.phase = "prepared"
+        _save_replacement(stream, intent)
+    successor = _replacement_target(stream, intent.target, intent.original["model"], intent.original["thinking"], piweb.list_sessions(str(stream)))
+    if any(successor[key] != intent.successor[key] for key in ("path", "generation", "allowed", "model", "thinking")):
+        raise StreamsError("replacement target settings or receiving generation changed")
+    if intent.phase in {"prepared", "archiving"}:
+        proof = _archive_proof(stream, intent, piweb.list_sessions(str(stream)))
+        if proof is None:
+            rows = load_threads(stream / "threads.tsv")
+            row = designated_coordinator(rows)
+            if row is None or row.session != intent.source:
+                raise StreamsError("replacement old designation changed before retirement")
+            _replacement_inputs(stream, intent.source)
+            _resolved, current = _replacement_native(stream, row, piweb.list_sessions(str(stream)))
+            if any(current[key] != intent.original[key] for key in ("entryId", "generation", "allowed", "path", "sha256", "model", "thinking")):
+                raise StreamsError("replacement old checkpoint or receiving generation changed; no retirement replay")
+            _validate_replacement(stream, intent)
+            intent.phase = "archiving"
+            _save_replacement(stream, intent)
+            expected = {key: intent.original[key] for key in ("sessionId", "cwd", "entryId", "generation")}
+            receipt = piweb.archive(intent.source, expected_idle=expected)
+            intent.archive = {"receipt": receipt}
+            _save_replacement(stream, intent)
+            proof = _archive_proof(stream, intent, piweb.list_sessions(str(stream)))
+            if proof is None:
+                raise StreamsError("replacement retirement has no positive archive publication")
+        intent.archive["evidence"] = proof
+        intent.phase = "archived"
+        _save_replacement(stream, intent)
+    if intent.phase != "archived":
+        raise StreamsError("replacement has an unknown publication phase")
+    if _archive_proof(stream, intent, piweb.list_sessions(str(stream))) != intent.archive.get("evidence"):
+        raise StreamsError("replacement old archive evidence changed before publication")
+    _validate_replacement(stream, intent)
+    if not intent.published:
+        lines = []
+        for number, line in enumerate(intent.registry.splitlines(keepends=True)):
+            cells = line.rstrip("\r\n").split("\t")
+            if number and cells[0] == intent.source:
+                cells[8] = "archived"
+                line = "\t".join(cells) + ("\r\n" if line.endswith("\r\n") else "\n")
+            lines.append(line)
+        registry = "".join(lines)
+        intent.published = registry + ("" if registry.endswith("\n") else "\n") + dump_threads([_thread_row(intent.target, "coordinator", "", stream, "", "", intent.original["model"], intent.original["thinking"])]).split("\n", 1)[1]
+        _save_replacement(stream, intent)
+    _validate_replacement(stream, intent)
+    current_target = _replacement_target(stream, intent.target, intent.original["model"], intent.original["thinking"], piweb.list_sessions(str(stream)))
+    if any(current_target[key] != intent.successor[key] for key in ("path", "generation", "allowed", "model", "thinking")):
+        raise StreamsError("replacement target received newer control before publication")
+    _write(stream / "threads.tsv", intent.published)
+    intent.phase = "complete"
+    _save_replacement(stream, intent)
+    return intent.target
+
+
+def replace_locked(index: Path, project: Project, stream_id: str, target: str, *, source: str | None = None) -> str:
+    stream = require_stream(index, project.info.name, stream_id).resolve()
+    if not _canonical_stream(stream):
+        raise StreamsError("explicit replacement requires canonical STATE without migration or healing")
+    data = artifacts._read_tick_data(stream)
+    book = data.get("state_log")
+    if book is not None and book.get("pending") is not None:
+        raise StreamsError("pending artifact publication must settle before replacement")
+    with sessionlog.regular_reader(stream / "STATE.md") as handle:
+        artifacts._checked_state(handle.read(), artifacts._book(book) if book is not None else artifacts.LogBook())
+    intent = replacement_intent(stream)
+    if intent is not None and intent.target == target and intent.mode == "adopt":
+        if source is not None and source != intent.source:
+            raise StreamsError("replacement --from disagrees with its saved old designation")
+        return advance_replacement_locked(stream, intent)
+    row = designated_coordinator(load_threads(stream / "threads.tsv"))
+    if row is None or source is not None and row.session != source:
+        raise StreamsError("replacement requires the exact current old coordinator designation")
+    intent = _begin_replacement(stream, row, target)
+    return advance_replacement_locked(stream, intent)

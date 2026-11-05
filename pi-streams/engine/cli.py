@@ -153,6 +153,12 @@ def _parser() -> argparse.ArgumentParser:
     checkpoint.add_argument("--home")
     checkpoint.add_argument("--session", required=True)
 
+    replace = sub.add_parser("replace")
+    replace.add_argument("stream")
+    replace.add_argument("--home")
+    replace.add_argument("--coordinator-session", required=True)
+    replace.add_argument("--from", dest="source")
+
     rotate = sub.add_parser("rotate")
     rotate.add_argument("stream")
     rotate.add_argument("--home")
@@ -294,6 +300,17 @@ def cmd_rotate(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_replace(args: argparse.Namespace) -> int:
+    index = resolve_index(args.home)
+    with index_lock(index):
+        project = resolve_project(index)
+        stream_dir = require_stream(index, project.info.name, args.stream)
+        with stream_lock(stream_dir):
+            sid = replacement.replace_locked(index, project, args.stream, args.coordinator_session, source=args.source)
+    print(sid)
+    return 0
+
+
 def cmd_close(args: argparse.Namespace) -> int:
     index = resolve_index(args.home)
     with index_lock(index):
@@ -429,6 +446,10 @@ def cmd_dcr(args: argparse.Namespace) -> int:
             op = dcr.load(stream_dir, args.session)
             if op is None or op.id != args.operation:
                 raise StreamsError("DCR callback does not match the registered stream/SID/operation")
+            if args.dcr_cmd == "advance" and dcr.advance_capacity_replacement_locked(stream_dir, session=args.session, operation=args.operation):
+                current = dcr.load(stream_dir, args.session)
+                print(json.dumps({"id": args.operation, "phase": current.phase, "detail": current.detail}, sort_keys=True))
+                return 0
             recovery = failure_recovery.load(stream_dir, op.recovery_original) if op.recovery_original else None
             if recovery is not None:
                 if recovery.id != op.id or recovery.fork != args.session or recovery.cwd != op.cwd or recovery.phase != "dcr":
@@ -515,6 +536,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_checkpoint(args)
         if args.cmd == "rotate":
             return cmd_rotate(args)
+        if args.cmd == "replace":
+            return cmd_replace(args)
         if args.cmd == "close":
             return cmd_close(args)
         if args.cmd == "tick":
