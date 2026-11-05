@@ -404,6 +404,23 @@ def _unresolved(stream: Path, op: Recovery, episode: failure.Episode) -> None:
         raise StreamsError("Retirement original/fork registry fields changed")
 
 
+def _owned_deletion(op: Recovery, receipt: dict, digest: str) -> bool:
+    archive, deleted = receipt.get("archive"), receipt.get("deleted")
+    if not isinstance(archive, dict) or archive.get("sessionId") != op.session or archive.get("cwd") != op.cwd or archive.get("originalPath") != receipt["originalFile"] or not isinstance(deleted, dict):
+        return False
+    expected = {"sessionId": op.session, "archivePath": archive.get("archivePath"), "sourceSha256": digest}
+    if deleted == expected:
+        return True
+    identity = hashlib.sha256(json.dumps([op.cwd, op.session, op.fork, op.id], ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
+    journal = deleted.get("journalFile")
+    if not isinstance(journal, str) or not Path(journal).is_absolute() or not Path(journal).name.endswith(f".recovery-{identity}.json") or not isinstance(archive.get("archivePath"), str):
+        return False
+    extended = {**expected, "protocol": "intent-quarantine-v1", "completionId": identity, "journalFile": journal,
+                "originalQuarantine": str(Path(receipt["originalFile"]).parent / f".recovery-{identity}.original-retired"),
+                "archiveQuarantine": f"{archive['archivePath']}.recovery-{identity}.deleted"}
+    return deleted == extended
+
+
 def _retirement_cache(op: Recovery, episode: failure.Episode, receipt: dict) -> dict:
     if receipt.get("version") != 1 or receipt.get("id") != op.id or receipt.get("state") != "released" or receipt.get("originalSessionId") != op.session or receipt.get("forkSessionId") != op.fork or receipt.get("cwd") != op.cwd or receipt.get("originalFile") != episode.checkpoint["nativeFile"] or receipt.get("originalLeaf") != op.source_leaf or receipt.get("observation") != op.observation:
         raise StreamsError("Retirement receipt changed its exact target or RESUME proof")
@@ -450,8 +467,7 @@ def _retirement_cache(op: Recovery, episode: failure.Episode, receipt: dict) -> 
         evidence.append((op.receipt["entryId"], op.receipt["sha256"]))
     if any(records.get(identity) != digest for identity, digest in evidence):
         raise StreamsError("Required original entry/hash evidence is not retained exactly")
-    archive, deleted = receipt.get("archive"), receipt.get("deleted")
-    if not isinstance(archive, dict) or archive.get("sessionId") != op.session or archive.get("cwd") != op.cwd or archive.get("originalPath") != receipt["originalFile"] or not isinstance(deleted, dict) or deleted != {"sessionId": op.session, "archivePath": archive.get("archivePath"), "sourceSha256": digest}:
+    if not _owned_deletion(op, receipt, digest):
         raise StreamsError("No exact owned singular-original deletion receipt")
     return native
 
