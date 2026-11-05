@@ -538,7 +538,13 @@ def spawn_command(client: PrimeClient, cwd: str) -> dict[str, Any]:
             effect_state="uncertain",
             native_response=reply.response,
         )
-    session = compatibility_session(summary)
+    try:
+        session = compatibility_session(summary)
+    except CliFailure as error:
+        error.effect_state = "uncertain"
+        error.native_response = reply.response
+        error.native_frames = reply.frames or error.native_frames
+        raise
     active_id = summary.get("activeSessionId")
     returned_cwd = summary.get("cwd")
     if not isinstance(active_id, str) or not active_id or not isinstance(returned_cwd, str):
