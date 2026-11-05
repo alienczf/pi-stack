@@ -413,6 +413,12 @@ def make_parser() -> argparse.ArgumentParser:
     status = sub.add_parser("status")
     status.add_argument("sid")
 
+    messages_parser = sub.add_parser("messages")
+    messages_parser.add_argument("sid")
+
+    commands_parser = sub.add_parser("commands")
+    commands_parser.add_argument("sid")
+
     prompt = sub.add_parser("prompt")
     prompt.add_argument("sid")
     prompt.add_argument("text", nargs="?")
@@ -574,6 +580,52 @@ def status_command(client: PrimeClient, session_id: str) -> dict[str, Any]:
     ref = resolve_session(client, session_id)
     session = live_status(client, ref)
     return {"ok": True, "status": 200, "session": session}
+
+
+def messages_command(client: PrimeClient, session_id: str) -> dict[str, Any]:
+    ref = resolve_session(client, session_id)
+    reply = command_reply(client, ref, "get_messages", mutation=False)
+    data = reply.response.get("data")
+    if not isinstance(data, dict) or not isinstance(data.get("messages"), list):
+        raise CliFailure(
+            "Prime get_messages returned no messages array",
+            kind="invalid_native_response",
+            effect_state="none",
+            native_response=reply.response,
+            native_frames=reply.frames,
+        )
+    return {
+        "ok": True,
+        "status": 200,
+        "sessionId": ref.session_id,
+        "activeSessionId": ref.active_session_id,
+        **native_result_fields(reply),
+    }
+
+
+def commands_command(client: PrimeClient, session_id: str) -> dict[str, Any]:
+    ref = resolve_session(client, session_id)
+    reply = command_reply(client, ref, "get_commands", mutation=False)
+    data = reply.response.get("data")
+    if not isinstance(data, dict) or not isinstance(data.get("commands"), list):
+        raise CliFailure(
+            "Prime get_commands returned no commands array",
+            kind="invalid_native_response",
+            effect_state="none",
+            native_response=reply.response,
+            native_frames=reply.frames,
+        )
+    result: dict[str, Any] = {
+        "ok": True,
+        "status": 200,
+        "sessionId": ref.session_id,
+        "activeSessionId": ref.active_session_id,
+        "commands": data["commands"],
+        "nativeResponse": reply.response,
+    }
+    if reply.frames:
+        result["nativeEvents"] = reply.frames
+    return result
 
 
 def prompt_command(client: PrimeClient, args: argparse.Namespace) -> dict[str, Any]:
@@ -828,6 +880,10 @@ def command_main(args: argparse.Namespace) -> dict[str, Any]:
         return spawn_command(client, args.cwd)
     if args.cmd == "status":
         return status_command(client, args.sid)
+    if args.cmd == "messages":
+        return messages_command(client, args.sid)
+    if args.cmd == "commands":
+        return commands_command(client, args.sid)
     if args.cmd == "prompt":
         return prompt_command(client, args)
     if args.cmd == "abort":
