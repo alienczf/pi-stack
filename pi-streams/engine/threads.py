@@ -84,6 +84,12 @@ class RetiredCoordinatorResidue(StreamsError):
         super().__init__(f"archived coordinator {session} is still live in the native listing")
 
 
+class UnregisteredCoordinatorCandidates(StreamsError):
+    def __init__(self, candidates: list[dict]):
+        self.candidates = tuple({"session": item.get("id"), "cwd": item.get("cwd")} for item in candidates)
+        super().__init__("unregistered coordinator candidate; explicit adoption or reconciliation required")
+
+
 @dataclass
 class SessionStart:
     session: str
@@ -214,17 +220,12 @@ def resolve_coordinator(stream_dir: Path, rows: list[Thread] | None = None, *, l
     assert_artifacts_ready(stream_dir)
     rows = load_threads(stream_dir / "threads.tsv") if rows is None else rows
     row = designated_coordinator(rows)
-    if row is None:
-        return None
-    if Path(row.worktree).resolve() != stream_dir.resolve():
+    if row is not None and Path(row.worktree).resolve() != stream_dir.resolve():
         raise StreamsError(f"coordinator {row.session} registry cwd does not match {stream_dir}")
     listing = piweb.list_sessions(str(stream_dir))
     if listings is not None:
         listings[str(stream_dir)] = {item['id']: item for item in listing if isinstance(item.get('id'), str)}
     retired = {item.session for item in rows if item.role == "coordinator" and item.status is Status.archived}
-    for item in listing:
-        if item.get("id") in retired and item.get("archived") is not True:
-            raise RetiredCoordinatorResidue(item["id"])
     known = {item.session for item in rows if item.role == "coordinator"}
     unregistered = [
         item for item in listing
@@ -232,8 +233,11 @@ def resolve_coordinator(stream_dir: Path, rows: list[Thread] | None = None, *, l
         and (not isinstance(item.get("cwd"), str) or Path(item["cwd"]).resolve() == stream_dir.resolve())
     ]
     if unregistered:
-        raise StreamsError("unregistered coordinator candidate; explicit adoption or reconciliation required")
-    return Coordinator(row, _native_session(row.session, stream_dir, listing))
+        raise UnregisteredCoordinatorCandidates(unregistered)
+    for item in listing:
+        if item.get("id") in retired and item.get("archived") is not True:
+            raise RetiredCoordinatorResidue(item["id"])
+    return None if row is None else Coordinator(row, _native_session(row.session, stream_dir, listing))
 
 
 def _start_record(stream_dir: Path) -> SessionStart | None:
@@ -403,19 +407,24 @@ def _one_stream(stream_id: str, stream_dir: Path) -> dict[str, object]:
     paused = is_paused(stream_dir)
     terminal = {row.session for row in rows if terminal_sessions.load(stream_dir, row.session, row.worktree) is not None}
     eligible = [row for row in rows if row.session not in terminal]
-    blocker = None
+    blockers = []
+    candidates = []
     try:
         coordinator = None if paused else resolve_coordinator(stream_dir, eligible)
-    except RetiredCoordinatorResidue as exc:
+    except (RetiredCoordinatorResidue, UnregisteredCoordinatorCandidates) as exc:
         row = designated_coordinator(eligible)
-        if row is None or Path(row.worktree).resolve() != stream_dir.resolve():
+        if row is not None and Path(row.worktree).resolve() != stream_dir.resolve():
             raise
-        coordinator = Coordinator(row, _native_session(row.session, stream_dir))
+        coordinator = None if row is None else Coordinator(row, _native_session(row.session, stream_dir))
         fresh = [item for item in load_threads(stream_dir / "threads.tsv") if terminal_sessions.load(stream_dir, item.session, item.worktree) is None]
         if designated_coordinator(fresh) != row:
             raise StreamsError("coordinator designation changed during read-only observation")
-        blocker = {"kind": "retired-native-residue", "session": exc.session, "message": str(exc)}
-    if not paused and coordinator is None and not any(row.role == "coordinator" and (row.status in {Status.done, Status.archived} or row.session in terminal) for row in rows):
+        if isinstance(exc, UnregisteredCoordinatorCandidates):
+            candidates = list(exc.candidates)
+            blockers = [{"kind": "unregistered-coordinator-candidate", **item, "message": str(exc)} for item in candidates]
+        else:
+            blockers = [{"kind": "retired-native-residue", "session": exc.session, "message": str(exc)}]
+    if not paused and not blockers and coordinator is None and not any(row.role == "coordinator" and (row.status in {Status.done, Status.archived} or row.session in terminal) for row in rows):
         raise StreamsError(f"stream {stream_id} has no designated active coordinator")
     threads: list[Thread] = []
     for row in rows:
@@ -430,7 +439,7 @@ def _one_stream(stream_id: str, stream_dir: Path) -> dict[str, object]:
     # threads are counted but not queried.
     thread_cost: int | float = 0
     for row in threads:
-        if paused or row.status not in (Status.active, Status.waiting_quota) or row.session in terminal:
+        if paused or blockers or row.status not in (Status.active, Status.waiting_quota) or row.session in terminal:
             continue
         session = piweb.session_status(row.session)
         thread_cost += _as_cost(session.get("cost"))
@@ -442,9 +451,11 @@ def _one_stream(stream_id: str, stream_dir: Path) -> dict[str, object]:
         "threads": counts,
         "coordinatorCostShare": share,
     }
-    if blocker is not None:
+    if blockers:
         result["nativeObservation"] = "registered-coordinator-only; not dispatch readiness"
-        result["dispatchBlockers"] = [blocker]
+        result["dispatchBlockers"] = blockers
+    if candidates:
+        result["coordinatorCandidates"] = candidates
     if paused:
         result["nativeObservation"] = "not-queried-explicit-drive-off"
         result["coordinatorRegistration"] = [{"session": row.session, "worktree": row.worktree, "status": row.status.value} for row in rows if row.role == "coordinator"]
@@ -538,7 +549,8 @@ def format_status(report: dict[str, object]) -> str:
                     f"cost={coord['cost']}\tthreads={counted}\tshare={share_text}"
                 )
         for blocker in stream.get("dispatchBlockers", []):
-            lines.append(f"{stream['id']}\tdispatch-blocked={blocker['kind']}\tsession={blocker['session']}\t{blocker['message']}")
+            cwd = f"\tcwd={blocker['cwd']}" if "cwd" in blocker else ""
+            lines.append(f"{stream['id']}\tdispatch-blocked={blocker['kind']}\tsession={blocker['session']}{cwd}\t{blocker['message']}")
         for episode in stream.get("failures", []):
             lines.append(f"{stream['id']}\tfailure={episode['kind']}\tstate={episode['state']}\tsession={episode['session']}\treset={episode['resetAt'] or 'unknown'}\tretry={episode['retryState'] or '-'}")
         if isinstance(stream.get("drive"), dict):

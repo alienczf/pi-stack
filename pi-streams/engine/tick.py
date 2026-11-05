@@ -232,6 +232,9 @@ class StreamTick:
                 return
             self.drive_enabled = drive.load(self.stream_dir).enabled
             self.automatic_paused = drive.is_paused(self.stream_dir)
+            intent = replacement.replacement_intent(self.stream_dir)
+            if dcr.advance_capacity_replacement_locked(self.stream_dir) or intent is not None and intent.phase != "complete":
+                return
             if not self.automatic_paused:
                 for sid in artifacts._read_tick_data(self.stream_dir).get("failures", {}):
                     owned = next((row for row in self.rows if row.session == sid), None)
@@ -267,6 +270,9 @@ class StreamTick:
                 self.failure_owned = self.observe_failure(resolved.row, resolved.native.info, resolved.native.status)
             if not self.automatic_paused and not self.failure_owned:
                 self.dcr_owned = dcr.step(self.index, self.project, self.stream, self.stream_dir, self.coordinator_resolution)
+                intent = replacement.replacement_intent(self.stream_dir)
+                if load_threads(self.rows_path) != self.rows or intent is not None and intent.phase != "complete":
+                    return
             self.check_claims()
             self.observe()
             self.drive_owned = drive.step(self.stream_dir, self.coordinator_resolution, self.stalled, maintenance=self.dcr_owned or self.failure_owned)

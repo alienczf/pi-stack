@@ -145,7 +145,7 @@ def step(stream_dir: Path, resolved: Coordinator | None, stalled: bool, *, maint
                 return True
         if previous.control.state in ("sending", "uncertain") or previous.state in ("sending", "uncertain"):
             return True
-        same = previous.session == resolved.row.session and previous.control.revision == revision and previous.automatic == token
+        same = previous.session == resolved.row.session and previous.control.revision == revision and previous.automatic == {**token, "kind": "recovery" if previous.handoff is not None else "wake"}
         if previous.control.state == "queued" and same:
             if allowed and not maintenance:
                 delivery.reconcile_queued_control_locked(stream_dir, previous.id)
