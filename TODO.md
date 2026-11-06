@@ -3,9 +3,9 @@
 - [x] Read the Principles section of the poteto-mode skill.
 - [x] Phase A: Frame
 - [x] Phase B: Design the workflow
-- [ ] Phase C: Run the loop
-- [ ] Phase D: Keep the audit trail
-- [ ] Phase E: Verify and hand back
+- [x] Phase C: Run the loop
+- [x] Phase D: Keep the audit trail
+- [x] Phase E: Verify and hand back
 
 ## Definition of done
 
@@ -28,11 +28,15 @@ Use the existing stream drive record and stop provenance, per-role recovery reco
 - [x] Inspect ancestry and PR 44-47 context. Create an isolated branch from prime-stack.
 - [x] Trace shared-engine parity and Prime backend constraints. Compare a dependency-safe main integration with selected backports.
 - [x] Capture reproducible pre-change failures or missing behavior.
-- [ ] Integrate the merged implementation and a rerunnable parity acceptance check.
-- [ ] Run focused checks and the complete available stream suite in disposable state.
-- [ ] Review the diff, comments, provenance, and evidence without changing the model.
-- [ ] Inspect the actual artifacts and run a throwaway native-service validation when dependencies permit.
+- [x] Integrate the merged implementation and a rerunnable parity acceptance check.
+- [ ] Run focused checks and the complete available stream suite in disposable state. Focused acceptance passed 63 tests. The full run was interrupted at the deadline with failures already recorded and no summary. It was not repeated.
+- [x] Review the diff, comments, provenance, and evidence without changing the model. Writer self-review is complete. Independent review remains with the parent.
+- [x] Inspect the actual artifacts and run a throwaway native-service validation when dependencies permit. Writer native-module regressions pass. Parent supplied seven passing disposable Pi service cases. Neither proves native Prime.
 - [ ] Commit, push, and open a ready PR targeting prime-stack. Do not merge or deploy.
+
+## Handoff
+
+The hardened comparison runner rejects setup errors and requires three named baseline behavior failures. The final task-specific run passed 14 Python tests, including three native Node scenarios in one wrapper. Engine and native files remain byte-identical to cba29cd0. The explanation and append-only trail are under docs. Native Prime support, full-suite completion, independent review, push, and PR creation remain open. The writer yields ownership after the final local commit.
 
 ## Constraints
 
