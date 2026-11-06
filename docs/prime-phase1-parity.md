@@ -18,7 +18,7 @@ The Pi native controller uses a 180000 ms boot-monotonic compaction lease. Expir
 
 Recovery retains the synced STATE bytes, their digest, the exact terminal SYNC checkpoint, current STATE, input dispositions, worker references, and the original native archive. Retained data before the last validated dump is not discarded. Unsynced continuation after that boundary cannot be assumed complete or replayed. Changed native input, corrupt dumps, unknown effects, or missing evidence block retirement. External worktree references must remain available.
 
-This does not establish unconditional recovery whenever dumps exist. The fallback requires its matching maintenance attempt and readable native checkpoint. A later SYNC that never becomes ready has no new timeout or historical-dump selection here. Previously validated dumps remain retained, but automatic selection of one after that failure is not implemented. Full native Prime parity and that stronger recovery guarantee remain open.
+At Phase-1 delivery, historical dumps were retained but not selected after a later stalled SYNC. The Phase-2 repair below now selects the prior validated dump for a completed idle SYNC without `ready`. This is not unconditional recovery whenever dumps exist. Unreadable evidence, active or unknown native ownership, and native Prime support remain outside the verified guarantee.
 
 ## Rerunnable acceptance
 
@@ -42,7 +42,7 @@ The complete unittest suite was attempted but interrupted at the writer deadline
 
 [`native/README.md`](../native/README.md) targets `@jmfederico/pi-web@1.202607.3` and bundled Pi packages at `0.82.1`. No supported native Prime adapter is implemented here. These checks establish shared engine and Pi adapter parity only. Native Prime capability mapping and end-to-end proof remain blocked. Capability admission is unchanged.
 
-Newly authored changes are the acceptance runner, task tests, this explanation, the append-only [decision trail](prime-phase1-parity-decisions.tsv), TODO progress, HTTP-stub identity decoding, and stale DCR test corrections. Engine and native implementation changes are inherited exactly from merged main. Validation changed no live state, credentials, installed model, or production streams. No deployment occurred. The parent reviewed the final authored diff on the same model. Cross-model review was not performed under the supplied no-model-switch constraint.
+Phase-1 authored changes were the acceptance runner, task tests, this explanation, the append-only [decision trail](prime-phase1-parity-decisions.tsv), TODO progress, HTTP-stub identity decoding, and stale DCR test corrections. At that delivery, engine and native implementation matched merged main. Phase-2 changes the shared engine as described below. Native overlay files still match the reviewed Phase-1 tip. Validation changed no live state, credentials, installed model, or production streams. No deployment occurred. The parent reviewed the final authored diff on the same model. Cross-model review was not performed under the supplied no-model-switch constraint.
 
 
 ## Phase-2 review repairs
@@ -88,4 +88,12 @@ The parent identified another consequence of releasing stream-wide worker-load o
 
 The alternative was history-aware advancement and saving for concurrent pending loads. The refusal guard is smaller and avoids expanding mutable publication ownership. It serializes replacement starts, not healthy lane observation.
 
-The targeted command ran `test_phase2_review.MissingLoadAckTests.test_second_replacement_cannot_demote_pending_worker_load_before_ack` and `test_phase2_review.MissingLoadAckTests.test_pending_worker_load_does_not_starve_healthy_coordinator`. Both passed. Evidence is `/tmp/pr55-phase2-writer/logs/pending-history-green.log`. The definitive red assertion records a changed current replacement intent in `pending-history-red.log`. Initial incomplete admission setup and an unregistered target in the fixture were corrected before accepting that result. Runtime source is frozen at `817abd07`; the parent owns the final native rerun after this small guard.
+The targeted command ran `test_phase2_review.MissingLoadAckTests.test_second_replacement_cannot_demote_pending_worker_load_before_ack` and `test_phase2_review.MissingLoadAckTests.test_pending_worker_load_does_not_starve_healthy_coordinator`. Both passed. Evidence is `/tmp/pr55-phase2-writer/logs/pending-history-green.log`. The definitive red assertion records a changed current replacement intent in `pending-history-red.log`. Initial incomplete admission setup and an unregistered target in the fixture were corrected before accepting that result. Runtime source is frozen at `817abd07`.
+
+### Final parent verification
+
+The parent reviewed the complete engine diff and reran affected regressions with existing Phase-1 controls after the pending-load correction. All 89 Python tests passed without skips, including the three native late-writer scenarios in one wrapper. The log is `/tmp/pr55-phase2-parent/final-unit.log`.
+
+The parent also reran `scripts/check-pr55-recovery.py` against the final source and the frozen static package. Coordinator recovery, worker recovery, and worker missing-ack isolation all passed. Each case completed supported stream close and session archival, stopped its service, and removed its scratch paths. The package copy was removed. Evidence is `/tmp/pr55-phase2-parent/final-live/run-f51e57400b20496ab614318473e6a944/results.json`.
+
+Independent parent reproductions retain the failing original P1 service result under `/tmp/pr55-phase2-parent/live-red-f5664f9213344e6186b8835f8c5d4507` and the failing original P2 CLI result in `/tmp/pr55-phase2-parent/red-cli.log`. The P2 probe then passed in `/tmp/pr55-phase2-parent/p2-green-cli.log`. The parent independently reproduced the unrelated baseline lane-health assertion failure in `/tmp/pr55-phase2-parent/inherited-lane-failure.log`. No full-suite green or native Prime readiness is claimed. PR #55 remains open for adversarial re-review.
