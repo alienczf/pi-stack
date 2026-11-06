@@ -469,7 +469,9 @@ class StreamTick:
         native = self.listing(row.worktree).get(row.session, {}) if status.get("conditionalAdmissionSupport") == "generation-cas-v1" else {}
         if native.get("archived") is True:
             raise piweb.TerminalSession(row.session, "archived", "Exact native listing confirms archived session; a stale status runtime is not release authority")
-        parked = self.observe_failure(row, native, status) if native else False
+        parked = replacement.checkpoint_load_pending(self.stream_dir, row.session)
+        if native and not parked:
+            parked = self.observe_failure(row, native, status)
         if native and not parked and not self.automatic_paused:
             parked = dcr.step(self.index, self.project, self.stream, self.stream_dir, Coordinator(row, NativeSession(native, status)))
             if load_threads(self.rows_path) != self.rows:

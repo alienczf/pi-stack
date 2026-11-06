@@ -476,12 +476,10 @@ def advance_capacity_replacement_locked(stream_dir: Path, *, session: str | None
     if is_paused(stream_dir):
         return True
     if intent.phase == "complete" and op.phase == "rotated":
-        if intent.load.get("state") in {"observed", "stopped", "superseded"}:
-            _finish_rotation(stream_dir, op, intent.target)
-            return operation is not None
         target = replacement.advance_replacement_locked(stream_dir, intent)
         _finish_rotation(stream_dir, op, target)
-        return operation is not None or intent.load.get("state") not in {"observed", "stopped", "superseded"}
+        return operation is not None or (intent.original.get("thread", {}).get("role", "coordinator") == "coordinator"
+                                         and intent.load.get("state") not in {"observed", "stopped", "superseded"})
     if op.phase != "rotation-pending" or op.capacity != intent.outcome:
         raise StreamsError("Capacity replacement lost its exact DCR owner/receipt")
     target = replacement.advance_replacement_locked(stream_dir, intent)
@@ -497,6 +495,9 @@ def step(index: Path, project: Project, stream: str, stream_dir: Path, resolved:
     if is_paused(stream_dir):
         return True
     sid, status = resolved.row.session, resolved.native.status
+    from engine import replacement
+    if replacement.checkpoint_load_pending(stream_dir, sid):
+        return True
     op = load(stream_dir, sid)
     if op is not None and (op.continuation or {}).get("mode") == "permitted-analysis-v1":
         op.phase, op.detail = "blocked", "Content-policy blocker. Persisted restricted DCR has no proven clean context/resource view. No inference, compaction, or RESUME is admitted."

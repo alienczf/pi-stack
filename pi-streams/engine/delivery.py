@@ -253,8 +253,10 @@ def _control_receipt(record: Delivery, native: dict) -> None:
 
 def _require_destination(stream_dir: Path, record: Delivery, session: str) -> dict[str, object]:
     from engine.threads import Status, _native_session, designated_coordinator, load_threads, resolve_coordinator
-    from engine.replacement import successor_handoff
+    from engine.replacement import checkpoint_load_pending, successor_handoff
 
+    if checkpoint_load_pending(stream_dir, session, delivery_id=record.id):
+        raise StreamsError("Successor checkpoint load has no exact acknowledgement; task admission remains fenced")
     rows = load_threads(stream_dir / "threads.tsv")
     if record.handoff is not None and record.handoff == successor_handoff(stream_dir, session):
         target = next((row for row in rows if row.session == session and row.status is Status.active), None)

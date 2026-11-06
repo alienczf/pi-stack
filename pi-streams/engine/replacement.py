@@ -575,8 +575,16 @@ def _begin_replacement(stream: Path, source, target: str, *, outcome: dict | Non
     return intent
 
 
+def checkpoint_load_pending(stream: Path, session: str, *, delivery_id: str = "") -> bool:
+    data = artifacts._read_tick_data(stream)
+    candidates = [data.get("coordinator_replacement"), *data.get("coordinator_replacement_history", [])]
+    return any(isinstance(item, dict) and item.get("mode") == "capacity" and item.get("target") == session
+               and item.get("load", {}).get("state") != "observed"
+               and delivery_id != f"capacity:{item['id']}:load" for item in candidates)
+
+
 def _load_checkpoint(stream: Path, intent: ReplacementIntent) -> None:
-    if intent.mode != "capacity" or intent.load.get("state") in {"observed", "stopped", "superseded"}:
+    if intent.mode != "capacity" or intent.load.get("state") in {"observed", "blocked", "stopped", "superseded"}:
         return
     identity = f"capacity:{intent.id}:load"
     acknowledgement = f"Dump checkpoint loaded: {intent.id}"
@@ -611,7 +619,7 @@ def _load_checkpoint(stream: Path, intent: ReplacementIntent) -> None:
         intent.load = {"delivery": identity, "state": "stopped" if not allowed else "superseded", "detail": "Newer receiving control superseded checkpoint load; no replay."}
         _save_replacement(stream, intent)
         return
-    if any(native.status.get(key) for key in ("isStreaming", "isCompacting", "isBashRunning", "pendingAsk", "pendingDialogs")):
+    if any(native.status.get(key) for key in ("isStreaming", "isCompacting", "isBashRunning", "pendingMessageCount", "queuedMessages", "pendingAsk", "pendingDialogs")):
         return
     branch = sessionlog.branch_records(Path(native.info["path"]), intent.target, intent.original["cwd"], native.status.get("rotationSafety", {}).get("entryId"))
     prefix = delivery._handoff_context(stream, intent.handoff)
@@ -631,12 +639,14 @@ def _load_checkpoint(stream: Path, intent: ReplacementIntent) -> None:
         return
     entry, raw = assistants[-1]
     message = entry["message"]
-    if message.get("stopReason") != "stop" or any(item.get("message", {}).get("stopReason") in {"error", "aborted", "length"} for item, _ in assistants):
+    if message.get("stopReason") not in {"stop", "error", "aborted", "length"}:
         return
     text = "\n".join(part.get("text", "") for part in message.get("content", []) if isinstance(part, dict) and part.get("type") == "text")
-    if acknowledgement not in text.splitlines():
-        return
-    intent.load = {"delivery": identity, "state": "observed", "userEntryId": user["id"], "userSha256": hashlib.sha256(user_raw).hexdigest(), "assistantEntryId": entry["id"], "assistantSha256": hashlib.sha256(raw).hexdigest(), "generation": token["generation"]}
+    acknowledged = (acknowledgement in text.splitlines() and message.get("stopReason") == "stop"
+                    and not any(item.get("message", {}).get("stopReason") in {"error", "aborted", "length"} for item, _ in assistants))
+    intent.load = {"delivery": identity, "state": "observed" if acknowledged else "blocked", "userEntryId": user["id"], "userSha256": hashlib.sha256(user_raw).hexdigest(), "assistantEntryId": entry["id"], "assistantSha256": hashlib.sha256(raw).hexdigest(), "generation": token["generation"]}
+    if not acknowledged:
+        intent.load["detail"] = "Terminal checkpoint load has no valid exact acknowledgement; successor task admission remains fenced. No replay."
     _save_replacement(stream, intent)
 
 
