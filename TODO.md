@@ -32,11 +32,11 @@ Use the existing stream drive record and stop provenance, per-role recovery reco
 - [ ] Run focused checks and the complete available stream suite in disposable state. Parent final focused acceptance passed 64 tests without skips. The full run was interrupted at the deadline with failures already recorded and no summary. It was not repeated.
 - [x] Review the diff, comments, provenance, and evidence without changing the model. Parent review of the final writer diff is complete. The prematurely launched child review is not final verification.
 - [x] Inspect the actual artifacts and run a throwaway native-service validation when dependencies permit. Writer native-module regressions pass. Parent supplied seven passing disposable Pi service cases. Neither proves native Prime.
-- [ ] Commit, push, and open a ready PR targeting prime-stack. Do not merge or deploy.
+- [x] Commit, push, and open a ready PR targeting prime-stack. https://github.com/alienczf/pi-stack/pull/55 is open and not a draft. No merge or deployment occurred.
 
 ## Handoff
 
-The hardened comparison runner rejects setup errors and requires three named baseline behavior failures. The parent final focused run passed 64 Python tests without skips, including three native Node scenarios in one wrapper. Engine and native files remain byte-identical to cba29cd0. The explanation and append-only trail are under docs. Native Prime support, automatic selection of a historical dump after a later stalled SYNC, and full-suite completion remain open. The parent owns publication.
+The hardened comparison runner rejects setup errors and requires three named baseline behavior failures. The parent final focused run passed 64 Python tests without skips, including three native Node scenarios in one wrapper. Engine and native files remain byte-identical to cba29cd0. The explanation and append-only trail are under docs. Native Prime support, automatic selection of a historical dump after a later stalled SYNC, and full-suite completion remain open. PR https://github.com/alienczf/pi-stack/pull/55 delivers the verified shared-engine unit without claiming the complete acceptance predicate.
 
 ## Constraints
 
