@@ -381,6 +381,9 @@ class StreamTick:
         return resolved.row if resolved is not None and resolved.row.status is Status.active else None
 
     def observe_failure(self, row: Thread, native: dict, status: dict) -> bool:
+        if replacement.checkpoint_load_pending(self.stream_dir, row.session):
+            self.typed_failures.add(row.session)
+            return True
         for sid in artifacts._read_tick_data(self.stream_dir).get("failure_recoveries", {}):
             operation = failure_recovery.load(self.stream_dir, sid)
             if operation is not None and operation.phase not in {"complete", "rotated"} and operation.fork == row.session:

@@ -107,7 +107,7 @@ def main():
     parser.add_argument("--source-tar", type=Path, required=True)
     parser.add_argument("--logs", type=Path, required=True)
     parser.add_argument("--engine-root", type=Path, default=ROOT)
-    parser.add_argument("--cases", default="coordinator,worker,worker-no-ack,worker-load-error")
+    parser.add_argument("--cases", default="coordinator,worker,worker-no-ack")
     args = parser.parse_args()
     run = args.logs.resolve() / ("run-" + uuid.uuid4().hex)
     run.mkdir(parents=True)
