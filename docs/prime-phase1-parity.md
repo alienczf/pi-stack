@@ -18,7 +18,7 @@ The Pi native controller uses a 180000 ms boot-monotonic compaction lease. Expir
 
 Recovery retains the synced STATE bytes, their digest, the exact terminal SYNC checkpoint, current STATE, input dispositions, worker references, and the original native archive. Retained data before the last validated dump is not discarded. Unsynced continuation after that boundary cannot be assumed complete or replayed. Changed native input, corrupt dumps, unknown effects, or missing evidence block retirement. External worktree references must remain available.
 
-At Phase-1 delivery, historical dumps were retained but not selected after a later stalled SYNC. The Phase-2 repair below now selects the prior validated dump for a completed idle SYNC without `ready`. This is not unconditional recovery whenever dumps exist. Unreadable evidence, active or unknown native ownership, and native Prime support remain outside the verified guarantee.
+At Phase-1 delivery, historical dumps were retained but not selected after a later stalled SYNC. The Phase-2 repairs below select the prior validated dump when a completed idle SYNC lacks its final acknowledgement, whether or not `ready` succeeded. This is not unconditional recovery whenever dumps exist. Unreadable evidence, active or unknown native ownership, and native Prime support remain outside the verified guarantee.
 
 ## Rerunnable acceptance
 
@@ -97,3 +97,35 @@ The parent reviewed the complete engine diff and reran affected regressions with
 The parent also reran `scripts/check-pr55-recovery.py` against the final source and the frozen static package. Coordinator recovery, worker recovery, and worker missing-ack isolation all passed. Each case completed supported stream close and session archival, stopped its service, and removed its scratch paths. The package copy was removed. Evidence is `/tmp/pr55-phase2-parent/final-live/run-f51e57400b20496ab614318473e6a944/results.json`.
 
 Independent parent reproductions retain the failing original P1 service result under `/tmp/pr55-phase2-parent/live-red-f5664f9213344e6186b8835f8c5d4507` and the failing original P2 CLI result in `/tmp/pr55-phase2-parent/red-cli.log`. The P2 probe then passed in `/tmp/pr55-phase2-parent/p2-green-cli.log`. The parent independently reproduced the unrelated baseline lane-health assertion failure in `/tmp/pr55-phase2-parent/inherited-lane-failure.log`. No full-suite green or native Prime readiness is claimed. PR #55 remains open for adversarial re-review.
+
+## Re-review ownership repairs
+
+The independent [BLOCK at ac979607](https://github.com/alienczf/pi-stack/pull/55#issuecomment-6695085146) identified three remaining gaps. All reproduced through actual CLI commands and disposable HTTP/native-transcript fixtures. The ready-without-ack gap also reproduced through a running Pi service after a real earlier SYNC, compaction, and RESUME. The primary red run reports `Ran 3 tests` and `FAILED (failures=3)` in `/tmp/pr55-rereview-repairs/red-primary.log`. Tests were committed before runtime changes in `3cb6c08f` and `95e7f778`. Runtime repairs and the extended service check are `20024fa9`.
+
+The repairs retain separate source, replacement, and delivery ownership.
+
+- `IncompleteSyncAcknowledgement` distinguishes a complete well-formed assistant turn without its exact acknowledgement from malformed messages or watcher metadata. Eligible `sync-admitted` and persisted `blocked` attempts can select an older validated dump. Attempts with checkpoints, admitted compaction, RESUME, capacity, or failure-recovery ownership cannot use this path. The incomplete current snapshot never becomes a validated dump.
+- An initial loader exception no longer marks the already published replacement's source DCR blocked. Completed replacements can also reconcile an older corrupted blocked source. The current operation must match the entire frozen operation except its phase and detail, and its full capacity outcome must match. Exact active-target validation still applies. A new regression rejected an initial reconciliation draft that trusted only capacity-outcome equality.
+- Sending and uncertain load journals now call the existing receiver observer. Exact receiver intent, current receiving control, native load transcript, and final acknowledgement remain mandatory. Observation never resends the load or rearms admission.
+
+### Re-review verification
+
+The final focused command passed 88 tests without skips.
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=pi-streams:pi-streams/tests python3 -m unittest -v test_phase2_rereview test_phase2_review test_phase2_acceptance test_dcr test_phase1_parity test_failure_dcr test_failure_recovery test_mass_resume
+```
+
+The 21 new tests cover missing final acknowledgement with and without a prior dump, persisted blocked attempts, exact-ack normal compaction, maintenance ownership, receiving stops, malformed watchers, newer input, callback ownership, corrupt dumps, exact late receipts, changed owners, stale targets, initial refused loads, and lost replies. They assert persisted outcomes and no replay through the CLI. The log is `/tmp/pr55-rereview-repairs/final-focused.log`.
+
+The native-service command now includes coordinator and worker `ready` without final acknowledgement, alongside the three previous cases.
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 scripts/check-pr55-recovery.py --source-tar /home/alphalab/.local/state/pi-stack-backups/20261103T125658.584050Z/pi-web.tar --logs /tmp/pr55-rereview-repairs/verified-live
+```
+
+All five cases passed with supported stream close, session archival, process stop, and scratch removal. Evidence is `/tmp/pr55-rereview-repairs/verified-live/run-de505950873d4f7da0d250a7bfc4a4db/results.json`. The runner verifies a real successful `dcr ready`, absent final acknowledgement, unchanged prior dump, retained current STATE, role, and exact load disposition. Simulated provider responses made no provider requests.
+
+The ready coordinator case captured only a source prefix before the turn finished appending. The archive retains that prefix and matches the full source hash frozen by replacement before retirement. `archiveCapturedBeforeRetirement` is false for that case, not an independent full-file capture claim. The initial runner incorrectly equated an early capture with final bytes and failed. Its correction changes only verification, not runtime retirement fences.
+
+A wider command ran 193 tests with 169 passes and 24 errors in `test_resume_admission`. Every error was the same coordinator-status `NoneType` fixture failure. All 24 reproduce at unchanged `ac979607`. Logs are `/tmp/pr55-rereview-repairs/final-unit.log` and `baseline-resume.log`. Those failures and the previously recorded lane-health failure remain outside this bounded repair. No full-suite green, native Prime readiness, or recovery through active or unknown owners is claimed. The same Sol xhigh model was retained throughout. No live installation, production stream, credential, deployment, or merge changed.

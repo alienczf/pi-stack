@@ -2,12 +2,12 @@
 
 ## Bug fix playbook
 
-- [ ] 1. Reproduce it yourself on the matching surface via the control skill (Non-negotiables), even when a debug or instrumentation protocol says to ask the user to reproduce. Ask the user only with a stated, specific reason the control surface cannot reach the target, and only after driving it as far as it goes. If it won't reproduce directly, synthesize the trigger, tighten conditions, or instrument until it fires.
-- [ ] 2. Binary-search the cause. Form the candidate hypotheses, then rule them out until one survives. Seed them with `how` over the affected subsystem and the **why** skill for regression history. Each pass, take the split that cuts the most remaining problem space, get runtime evidence, eliminate. When program state is unclear, add instrumentation or logging and read it as the code runs. Don't guess. Drive a long or stubborn hunt with Cursor's `/loop` command. Confirm the surviving *mechanism* with runtime evidence before the step-3 architect/interrogate fan-out.
-- [ ] 3. Plan the fix. If it crosses a function boundary, `architect` first. Delegate implementation to a subagent using your configured bug-fix model (default `grok-4.7-xhigh-fast`) with a specific scope.
-- [ ] 4. Verify on the same surface. The original repro now passes. "Inconclusive" or wrong-surface is not a pass. Flag it. Unit tests show branch behavior, not bug absence.
-- [ ] 5. Stage the commits so the failing repro lands before the fix in git history. See the **tdd** skill for the failing-test-first cadence when the bug has a cheap local test path. Skip it when the test would be expensive, integration-heavy, or unclear.
-- [ ] 6. Run **Opening a PR**. Update the existing PR only. Leave it open and unmerged for re-review.
+- [x] 1. Reproduce it yourself on the matching surface via the control skill (Non-negotiables), even when a debug or instrumentation protocol says to ask the user to reproduce. Ask the user only with a stated, specific reason the control surface cannot reach the target, and only after driving it as far as it goes. If it won't reproduce directly, synthesize the trigger, tighten conditions, or instrument until it fires.
+- [x] 2. Binary-search the cause. Form the candidate hypotheses, then rule them out until one survives. Seed them with `how` over the affected subsystem and the **why** skill for regression history. Each pass, take the split that cuts the most remaining problem space, get runtime evidence, eliminate. When program state is unclear, add instrumentation or logging and read it as the code runs. Don't guess. Drive a long or stubborn hunt with Cursor's `/loop` command. Confirm the surviving *mechanism* with runtime evidence before the step-3 architect/interrogate fan-out.
+- [x] 3. Plan the fix. If it crosses a function boundary, `architect` first. Delegate implementation to a subagent using your configured bug-fix model (default `grok-4.7-xhigh-fast`) with a specific scope.
+- [x] 4. Verify on the same surface. The original repro now passes. "Inconclusive" or wrong-surface is not a pass. Flag it. Unit tests show branch behavior, not bug absence.
+- [x] 5. Stage the commits so the failing repro lands before the fix in git history. See the **tdd** skill for the failing-test-first cadence when the bug has a cheap local test path. Skip it when the test would be expensive, integration-heavy, or unclear.
+- [x] 6. Run **Opening a PR**. Update the existing PR only. Leave it open and unmerged for re-review.
 
 ## Current re-review scope and throughput checkpoint
 
@@ -15,12 +15,18 @@ Address P1, P2a and P2b from https://github.com/alienczf/pi-stack/pull/55#issuec
 
 The rejected premise is that one journal's intermediate state can determine another actor's completed ownership. The census covers the current SYNC operation with and without ready, replacement publication versus source DCR phase, and successor delivery transport state versus exact receiver receipt and native transcript. Existing HistoricalRecovery, Operation, ReplacementIntent and Delivery records remain the data shapes. The previous validated dump, published replacement owner and exact completed receipt are distinct facts.
 
-- [ ] Commit failing behavior regressions and a rerunnable census across the three ownership boundaries.
-- [ ] Select the historical dump for eligible incomplete ready-but-unacknowledged SYNC, including previously blocked records, without validating that incomplete current dump.
-- [ ] Preserve and reconcile the exact completed replacement owner after initial loader failures, including previously corrupted DCR phases.
-- [ ] Observe sending and uncertain receiver receipts without redispatch, retaining every intent, generation and transcript fence.
-- [ ] Run the affected state matrix, existing recovery controls, and throwaway native ready-without-ack checks before publication.
-- [ ] Push and document the repair on the existing PR, leaving it open for independent re-review.
+- [x] Commit failing behavior regressions and a rerunnable census across the three ownership boundaries. `3cb6c08f` and `95e7f778` precede runtime fixes.
+- [x] Select the historical dump for eligible incomplete ready-but-unacknowledged SYNC, including previously blocked records, without validating that incomplete current dump.
+- [x] Preserve and reconcile the exact completed replacement owner after initial loader failures, including previously corrupted DCR phases. Compare the entire frozen operation except phase and detail, not only its capacity receipt.
+- [x] Observe sending and uncertain receiver receipts without redispatch, retaining every intent, generation and transcript fence.
+- [x] Run the affected state matrix, existing recovery controls, and throwaway native ready-without-ack checks before publication. The final focused run passed 88 tests. All five native-service cases passed with supported cleanup.
+- [x] Push and document the repair on the existing PR, leaving it open for independent re-review. Runtime repairs are `20024fa9`. The remote branch was verified at that SHA after a normal push from `ac979607`. PR #55 remains open against `prime-stack`.
+
+### Re-review verification and limits
+
+Evidence is under `/tmp/pr55-rereview-repairs`. The three primary red regressions failed without errors. The expanded owner matrix found and prevented overly broad reconciliation of a changed worktree, ready snapshot, or maintenance phase. `final-focused.log` passed 88 tests without skips. `verified-live/run-de505950873d4f7da0d250a7bfc4a4db/results.json` passed the three existing cases and both new ready-without-final-ack role cases. Every case completed supported close/archive and process/path cleanup. The coordinator ready case independently captured a prefix, not the entire final source. The runner checks prefix retention and the full hash frozen before retirement and reports this distinction.
+
+A wider 193-test command passed 169 tests and produced 24 errors in the unrelated resume-admission status fixture. All 24 reproduce at `ac979607` in `baseline-resume.log`. No unrelated fix or full-suite rerun was attempted. The first native rerun failed because its verification captured bytes before the final turn finished appending. The corrected runner checks prefix retention rather than equating an early snapshot with a final file. No runtime safety rule changed to accommodate that probe. Native Prime support and general active/unknown-owner recovery remain outside this proof. The optional deslop skill was not found. Direct diff and comment review found no new application-code comments or suppressions to remove.
 
 ## Previous Phase-2 scope and throughput checkpoint
 
