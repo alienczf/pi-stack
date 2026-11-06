@@ -162,6 +162,26 @@ class MissingLoadAckTests(CapacityFixture):
         self.assertFalse(any(item[0] == "POST" and item[1].startswith("/api/sessions/successor/") for item in self.stub.requests))
         self.assertNotIn("successor", self.state(self.stream).get("dcr_operations", {}))
 
+    def test_second_replacement_cannot_demote_pending_worker_load_before_ack(self):
+        intent = self.rotate("research")
+        for method, path, _, body in self.routes:
+            if method == "GET" and path == "/api/sessions/healthy/status":
+                body["rotationSafety"] = {"entryId": "e1", "callbacksKnown": True, "callbackInventory": "native-and-extension-v1", "nativeChildCallbacks": []}
+        self.write_log("another", str(self.stream))
+        self.routes[0][3].append({"id": "another", "cwd": str(self.stream), "path": self.log_path("another")})
+        other = copy.deepcopy(self.successor_status)
+        other["sessionId"] = "another"
+        self.routes.append(("GET", "/api/sessions/another/status", 200, other))
+        self.stub.set_routes(self.routes)
+        denied = self.run_streams("replace", "etl", "--coordinator-session", "another", "--from", "healthy")
+        self.assertNotEqual(denied.returncode, 0)
+        self.assertEqual(self.state(self.stream)["coordinator_replacement"], intent, "a second replacement must not strand the pending first load in history")
+        self.assertIn("checkpoint load", denied.stderr)
+        ticked = self.tick("2026-10-06T12:15:00Z")
+        self.assertEqual(ticked.returncode, 0, ticked.stderr)
+        self.assertTrue(any(item[0] == "GET" and item[1] == "/api/sessions/healthy/status" for item in self.stub.requests))
+        self.load_acknowledgement(intent)
+
     def test_completed_worker_loader_error_does_not_abort_coordinator_observation(self):
         intent = self.rotate("research")
         handoff = self.stream / intent["handoff"]["path"]
