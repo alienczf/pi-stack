@@ -103,7 +103,7 @@ export class SessionMaintenanceController {
         let operation = this.required(ref, id);
         const opKey = key(ref, id);
         if (operation.compactionRetirement !== undefined) return operation;
-        if (operation.resume === undefined && (operation.lease !== undefined && operation.lease.finished !== true || ["prepared", "compacting", "uncertain"].includes(operation.state))) {
+        if (operation.resume === undefined && operation.lease?.finished !== true && (operation.lease !== undefined || ["prepared", "compacting", "uncertain"].includes(operation.state))) {
             if (operation.lease === undefined)
                 operation = this.store.update(ref, id, current => { current.lease ??= newLease(); });
             if (leaseExpired(operation.lease)) return this.retire(session, id);
@@ -409,8 +409,12 @@ export class SessionMaintenanceController {
             const owned = this.compacting.delete(opKey);
             liveOwners.delete(opKey);
             if (owned) {
-                this.store.update(ref, id, current => { if (current.compactionRetirement === undefined && current.lease !== undefined) current.lease.finished = true; });
-                this.host.end(session); this.host.publish(session);
+                try {
+                    this.store.update(ref, id, current => { if (current.compactionRetirement === undefined && current.lease !== undefined) current.lease.finished = true; });
+                }
+                finally {
+                    this.host.end(session); this.host.publish(session);
+                }
             }
         }
         const operation = this.required(ref, id);

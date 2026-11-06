@@ -278,6 +278,9 @@ class StreamTick:
                     return
             self.check_claims()
             self.observe()
+            intent = replacement.replacement_intent(self.stream_dir)
+            if intent is not None and intent.phase != "complete":
+                return
             self.drive_owned = drive.step(self.stream_dir, self.coordinator_resolution, self.stalled, maintenance=self.dcr_owned or self.failure_owned)
             self.check_subscriptions()
             self.flush()

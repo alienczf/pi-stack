@@ -473,7 +473,13 @@ def advance_capacity_replacement_locked(stream_dir: Path, *, session: str | None
     op = load(stream_dir, intent.source)
     if op is None or operation is not None and op.id != operation:
         return False
+    from engine.drive import is_paused
+    if is_paused(stream_dir):
+        return True
     if intent.phase == "complete" and op.phase == "rotated":
+        if intent.load.get("state") in {"observed", "stopped", "superseded"}:
+            _finish_rotation(stream_dir, op, intent.target)
+            return operation is not None
         target = replacement.advance_replacement_locked(stream_dir, intent)
         _finish_rotation(stream_dir, op, target)
         return operation is not None or intent.load.get("state") not in {"observed", "stopped", "superseded"}

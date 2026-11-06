@@ -452,7 +452,7 @@ def _archive_proof(stream: Path, intent: ReplacementIntent, listing: list[dict])
     if digest != intent.original["sha256"]:
         raise StreamsError("replacement archive does not retain the exact old native history")
     sessionlog.read_record(Path(path), intent.source, intent.original["entryId"], intent.original["leafSha256"], archived=True)
-    return {"sessionId": intent.source, "cwd": str(stream), "archivePath": path, "archivedAt": info["archivedAt"], "sha256": digest}
+    return {"sessionId": intent.source, "cwd": intent.original["cwd"], "archivePath": path, "archivedAt": info["archivedAt"], "sha256": digest}
 
 
 def _publish_handoff(path: Path, text: str) -> None:
@@ -666,15 +666,16 @@ def advance_replacement_locked(stream: Path, intent: ReplacementIntent) -> str:
     elif intent.phase == "spawning":
         raise StreamsError("replacement spawn identity is uncertain; no retry or candidate selection")
     if intent.mode == "capacity" and intent.phase == "created":
-        native = _native_session(intent.target, cwd)
-        if native.info.get("messageCount") != 0 or any(native.status.get(key) for key in ("isStreaming", "isCompacting", "isBashRunning", "pendingMessageCount", "pendingAsk", "pendingDialogs")):
+        status = piweb.session_status(intent.target)
+        piweb.require_identity(status, intent.target)
+        if status.get("messageCount") != 0 or any(status.get(key) for key in ("isStreaming", "isCompacting", "isBashRunning", "pendingMessageCount", "pendingAsk", "pendingDialogs")):
             raise StreamsError("capacity successor changed before its no-input registration")
-        if any(native.status.get(key) != value for key, value in {
+        if any(status.get(key) != value for key, value in {
             "potetoInvocationSupport": "exact-goal-v1", "controlGoalSupport": "preserve-ask-v1",
             "recoveryControlSupport": "question-safe-v1", "conditionalAdmissionSupport": "generation-cas-v1",
         }.items()):
             raise StreamsError("capacity successor lacks supported checkpoint-bearing goal control")
-        token, allowed = piweb.automatic_admission(native.status, intent.target, str(cwd), "wake")
+        token, allowed = piweb.automatic_admission(status, intent.target, str(cwd), "wake")
         if allowed != intent.original["allowed"]:
             if not allowed:
                 raise StreamsError("capacity successor received a newer stop; refusing to rearm it")
