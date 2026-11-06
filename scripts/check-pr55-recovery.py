@@ -25,6 +25,7 @@ class Sandbox(chaos.Sandbox):
         self.engine_root = engine_root
         self.env["PI_STREAMS_BIN"] = str(engine_root / "bin/pi-streams")
         self.env["CHAOS_LOAD_ACK"] = "1" if acknowledge else "0"
+        self.env["CHAOS_LOAD_ERROR"] = "1" if self.case == "worker-load-error" else "0"
 
     def cli(self, *args, **kwargs):
         return self.command(self.engine_root / "bin/pi-streams", *args, "--home", self.index, **kwargs)
@@ -94,12 +95,19 @@ def historical(sandbox, worker, acknowledge):
             "dump": dump["id"], "stalledOperation": stalled["id"], "archiveSha256": hashlib.sha256(original).hexdigest()}
 
 
+def cleanup_ok(cleanup):
+    return (cleanup.get("processStopped") is True and cleanup.get("pathRemoved") is True and not cleanup.get("error")
+            and all(item.get("closed") is True for item in cleanup.get("streams", []))
+            and all(item.get("state") in {"archived", "already-archived-or-retired", "deleted-through-supported-api"}
+                    for item in cleanup.get("sessions", [])))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-tar", type=Path, required=True)
     parser.add_argument("--logs", type=Path, required=True)
     parser.add_argument("--engine-root", type=Path, default=ROOT)
-    parser.add_argument("--cases", default="coordinator,worker,worker-no-ack")
+    parser.add_argument("--cases", default="coordinator,worker,worker-no-ack,worker-load-error")
     args = parser.parse_args()
     run = args.logs.resolve() / ("run-" + uuid.uuid4().hex)
     run.mkdir(parents=True)
@@ -111,18 +119,25 @@ def main():
         chaos.copy_native_archive(args.source_tar, native)
         subprocess.run([sys.executable, str(ROOT / "scripts/apply-native-overlay.py"), str(native)], check=True)
         for case in args.cases.split(","):
-            chaos.check(case in {"coordinator", "worker", "worker-no-ack"}, "unknown recovery case")
-            sandbox = Sandbox(run, case, native, shutil.which("node"), engine_root=args.engine_root.resolve(), acknowledge=case != "worker-no-ack")
+            chaos.check(case in {"coordinator", "worker", "worker-no-ack", "worker-load-error"}, "unknown recovery case")
+            acknowledge = case in {"coordinator", "worker"}
+            sandbox = Sandbox(run, case, native, shutil.which("node"), engine_root=args.engine_root.resolve(), acknowledge=acknowledge)
             result = {"case": case, "result": "FAIL"}
             try:
                 sandbox.start()
-                result.update(historical(sandbox, case != "coordinator", case != "worker-no-ack"))
+                result.update(historical(sandbox, case != "coordinator", acknowledge))
             except Exception as error:
                 result["error"] = str(error)
                 if sandbox.url:
-                    sandbox.snapshot()
+                    try:
+                        sandbox.snapshot()
+                    except Exception as snapshot_error:
+                        result["snapshotError"] = str(snapshot_error)
             finally:
-                result["cleanup"] = sandbox.cleanup()
+                try:
+                    result["cleanup"] = sandbox.cleanup()
+                except Exception as cleanup_error:
+                    result["cleanup"] = {"error": str(cleanup_error)}
                 results.append(result)
                 chaos.save(run / "results.json", results)
             print(json.dumps(result), flush=True)
@@ -130,7 +145,7 @@ def main():
         shutil.rmtree(fixture)
         chaos.save(run / "fixture-cleanup.json", {"path": str(fixture), "removed": not fixture.exists()})
     print(run)
-    return 0 if all(item["result"] == "PASS" and item["cleanup"]["processStopped"] and item["cleanup"]["pathRemoved"] for item in results) else 1
+    return 0 if all(item["result"] == "PASS" and cleanup_ok(item["cleanup"]) for item in results) else 1
 
 
 if __name__ == "__main__":

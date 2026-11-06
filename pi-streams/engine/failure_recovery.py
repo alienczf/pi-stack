@@ -128,6 +128,7 @@ class ResumeIntent(Enum):
 
 
 def resume_parked_locked(stream: Path, at: str, *, index: Path, project, intent: ResumeIntent | drive.LegacyResume = ResumeIntent.CONTINUE_OWNED) -> list[dict]:
+    from engine.replacement import checkpoint_load_pending
     explicit = intent is ResumeIntent.OPERATOR
     legacy = intent if isinstance(intent, drive.LegacyResume) else None
     if intent is not ResumeIntent.CONTINUE_OWNED and not explicit and legacy is None:
@@ -135,6 +136,8 @@ def resume_parked_locked(stream: Path, at: str, *, index: Path, project, intent:
     if drive.is_paused(stream) and not explicit and legacy is None:
         return [{"stream": stream.name, "state": "stopped", "detail": "Explicit local off remains authoritative"}]
     if legacy is not None and legacy.recovery_id:
+        if checkpoint_load_pending(stream, legacy.session):
+            return [{"session": legacy.session, "state": "load-blocked", "detail": "Successor checkpoint load requires its exact acknowledgement before failure recovery"}]
         try:
             artifacts._read_stream_state_locked(stream)
             op, episode = load(stream, legacy.session), failure.load(stream, legacy.session)
@@ -190,6 +193,9 @@ def resume_parked_locked(stream: Path, at: str, *, index: Path, project, intent:
             if op is not None and op.phase == "complete" or episode is None or episode.state != "parked" or episode.kind in {"usage-limit", "content-policy"} or episode.checkpoint is None or episode.authority is None and op is None:
                 continue
             processed.add(sid)
+            if checkpoint_load_pending(stream, sid):
+                results.append({"session": sid, "state": "load-blocked", "detail": "Successor checkpoint load requires its exact acknowledgement before failure recovery"})
+                continue
             try:
                 results.append(advance_locked(stream, sid, episode.id, at, index=index, project=project))
             except (StreamsError, OSError) as exc:
@@ -201,6 +207,9 @@ def resume_parked_locked(stream: Path, at: str, *, index: Path, project, intent:
         if row.session in processed or row.status not in {Status.active, Status.waiting_quota, Status.parked} or legacy is not None and (row.session != legacy.session or row.worktree != legacy.cwd):
             continue
         if any(op is not None and op.fork == row.session and op.phase != "complete" for op in operations):
+            continue
+        if checkpoint_load_pending(stream, row.session):
+            results.append({"session": row.session, "state": "load-blocked", "detail": "Successor checkpoint load requires its exact acknowledgement before failure recovery"})
             continue
         try:
             terminal = terminal_sessions.load(stream, row.session, row.worktree)
@@ -262,6 +271,9 @@ def resume_parked_locked(stream: Path, at: str, *, index: Path, project, intent:
 
 
 def advance_locked(stream: Path, sid: str, episode_id: str, at: str, *, index: Path | None = None, project=None) -> dict:
+    from engine.replacement import checkpoint_load_pending
+    if checkpoint_load_pending(stream, sid):
+        raise StreamsError("Successor checkpoint load requires its exact acknowledgement before failure recovery")
     artifacts._read_stream_state_locked(stream)
     episode = failure.load(stream, sid)
     if episode is not None and episode.kind == "content-policy":

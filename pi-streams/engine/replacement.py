@@ -619,7 +619,12 @@ def _load_checkpoint(stream: Path, intent: ReplacementIntent) -> None:
         return
     native = _native_session(intent.target, Path(intent.original["cwd"]))
     token, allowed = piweb.automatic_admission(native.status, intent.target, intent.original["cwd"], "recovery")
-    if not allowed or token != record.automatic:
+    boundary = native.status.get("failureBoundary", {})
+    failed_load = (isinstance(boundary, dict) and boundary.get("sessionId") == intent.target
+                   and boundary.get("cwd") == intent.original["cwd"] and boundary.get("state") == "parked"
+                   and isinstance(boundary.get("failure"), dict))
+    current_control = allowed and token == record.automatic
+    if not current_control and not failed_load:
         intent.load = {"delivery": identity, "state": "stopped" if not allowed else "superseded", "detail": "Newer receiving control superseded checkpoint load; no replay."}
         _save_replacement(stream, intent)
         return
@@ -646,7 +651,7 @@ def _load_checkpoint(stream: Path, intent: ReplacementIntent) -> None:
     if message.get("stopReason") not in {"stop", "error", "aborted", "length"}:
         return
     text = "\n".join(part.get("text", "") for part in message.get("content", []) if isinstance(part, dict) and part.get("type") == "text")
-    acknowledged = (acknowledgement in text.splitlines() and message.get("stopReason") == "stop"
+    acknowledged = (current_control and acknowledgement in text.splitlines() and message.get("stopReason") == "stop"
                     and not any(item.get("message", {}).get("stopReason") in {"error", "aborted", "length"} for item, _ in assistants))
     intent.load = {"delivery": identity, "state": "observed" if acknowledged else "blocked", "userEntryId": user["id"], "userSha256": hashlib.sha256(user_raw).hexdigest(), "assistantEntryId": entry["id"], "assistantSha256": hashlib.sha256(raw).hexdigest(), "generation": token["generation"]}
     if not acknowledged:

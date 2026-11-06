@@ -234,7 +234,14 @@ class StreamTick:
             self.drive_enabled = drive.load(self.stream_dir).enabled
             self.automatic_paused = drive.is_paused(self.stream_dir)
             intent = replacement.replacement_intent(self.stream_dir)
-            if dcr.advance_capacity_replacement_locked(self.stream_dir) or intent is not None and intent.phase != "complete":
+            try:
+                capacity_owned = dcr.advance_capacity_replacement_locked(self.stream_dir)
+            except (StreamsError, OSError) as exc:
+                if intent is None or intent.phase != "complete" or intent.original.get("thread", {}).get("role", "coordinator") == "coordinator":
+                    raise
+                self.fail(f"worker checkpoint load {intent.target}: {exc}")
+                capacity_owned = False
+            if capacity_owned or intent is not None and intent.phase != "complete":
                 return
             results = failure_recovery.resume_parked_locked(
                 self.stream_dir, self.at, index=self.index, project=self.project,

@@ -221,6 +221,14 @@ class FailedLoadRecoveryFenceTests(TickCase):
         self.assertEqual(self.state(self.stream), self.before)
         self.assertEqual(self.stub.requests, [])
 
+    def test_automatic_parked_resume_cannot_create_recovery_for_unloaded_successor(self):
+        self.unloaded_failure()
+        result = self.tick("2026-10-06T12:20:00Z")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("coi", self.state(self.stream).get("failure_recoveries", {}))
+        self.assertEqual(self.state(self.stream)["failures"], self.before["failures"])
+        self.assertFalse(any(item[0] == "POST" and item[1].startswith("/api/sessions/coi/") for item in self.stub.requests))
+
     def test_explicit_parked_resume_cannot_bypass_unloaded_successor_fence(self):
         self.unloaded_failure()
         result = self.run_streams("resume", "etl", "--all-parked")

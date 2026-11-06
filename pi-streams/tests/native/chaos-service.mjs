@@ -82,6 +82,9 @@ function controlledStream(selected, context, options, sid, cwd) {
         if (!title && !summary && process.env.CHAOS_LOAD_ACK === '1' && last.includes('Do not perform task effects or replay commands during this load.')) {
             text = /Dump checkpoint loaded: [a-zA-Z0-9-]+/.exec(last)?.[0] ?? text;
         }
+        if (!title && !summary && process.env.CHAOS_LOAD_ERROR === '1' && last.includes('Do not perform task effects or replay commands during this load.')) {
+            plan.error = 'Terminal model error: unsupported fixture checkpoint load';
+        }
         call.result = { text, error: plan.error ?? null };
         const message = response(text, plan.error, context.messages.reduce((sum, message) => sum + estimateTokens(message), 0));
         stream.push(plan.error ? { type: 'error', reason: 'error', error: message } : { type: 'done', reason: 'stop', message });
