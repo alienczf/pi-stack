@@ -1726,6 +1726,8 @@ export class PiSessionService {
         return this.failureRecoveries.maintenance(session, request);
     }
     async runFailureMaintenance(session, operation, request) {
+        if (request["action"] === "maintenance-status" && this.maintenance !== undefined)
+            return { maintenance: this.maintenance.status(session, operation.id) };
         return this.failureBoundaries.runRecovery(session, operation, async () => {
             if (request["action"] === "sync") {
                 if (typeof request["text"] !== "string")
@@ -2034,7 +2036,15 @@ export class PiSessionService {
             ref = { id: expected.sessionId, cwd: expected.cwd };
         }
         const session = await this.getOrOpen(ref);
-        this.assertFailureLifecycleRecord(session.sessionId, session.sessionManager.getCwd(), session.sessionManager.getSessionFile());
+        const maintenance = this.maintenance?.store.current({ id: session.sessionId, cwd: session.sessionManager.getCwd() });
+        const branch = expected === undefined ? [] : persistedFailureBranch(session);
+        const checkpointAt = branch.findIndex(item => item.value.id === maintenance?.entryId);
+        const acknowledgement = checkpointAt < 0 ? undefined : branch.slice(0, checkpointAt + 1).filter(item => item.value.message?.role === "assistant").at(-1)?.value.message;
+        const dumpFallback = expected !== undefined && maintenance !== undefined && ["failed", "superseded"].includes(maintenance.state)
+            && maintenance.resume === undefined && maintenance.inputSequence === 0 && maintenance.inputs.length === 0
+            && acknowledgement?.stopReason === "stop" && Array.isArray(acknowledgement.content)
+            && acknowledgement.content.some(part => part.type === "text" && part.text.split("\n").some(line => line.startsWith(`DCR SYNC ready: ${maintenance.id} `) && /^[a-f0-9]{64}$/.test(line.slice(`DCR SYNC ready: ${maintenance.id} `.length))));
+        if (!dumpFallback) this.assertFailureLifecycleRecord(session.sessionId, session.sessionManager.getCwd(), session.sessionManager.getSessionFile());
         if (this.hasActiveWork(session))
             throw new Error("Stop current session activity before archiving");
         let frozen;
@@ -2051,6 +2061,7 @@ export class PiSessionService {
                 if (!current.durable || current.generation !== frozen.generation)
                     throw new AutomaticAdmissionRejected("Replacement checkpoint was superseded before retirement");
             }
+            if (dumpFallback) session.sessionManager.fenceMaintenanceWrites();
             await this.closeActive(session.sessionId, { kind: "clear", reason: "archive" });
             await this.archiveStore.archive(archiveInput);
             await this.forgetUnreadSessions([archiveInput]);

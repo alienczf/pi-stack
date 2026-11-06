@@ -18,6 +18,11 @@ function operationId(value) {
 }
 const contextTokens = session => session.messages.reduce((sum, message) => sum + estimateTokens(message), 0);
 const liveOwners = new Set();
+const COMPACTION_LEASE_MS = 180000;
+const leaseNow = () => Number(process.hrtime.bigint() / 1000000n);
+const bootIdentity = () => readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
+const leaseExpired = lease => lease.boot !== bootIdentity() || leaseNow() >= lease.deadline;
+const newLease = () => ({ clock: "boot-monotonic-v1", boot: bootIdentity(), deadline: leaseNow() + COMPACTION_LEASE_MS });
 function processStart(pid) {
     if (!Number.isSafeInteger(pid) || pid <= 0) return "unknown";
     try { return readFileSync(`/proc/${pid}/stat`, "utf8").split(") ").at(-1).split(" ")[19]; }
@@ -49,6 +54,7 @@ export class SessionMaintenanceController {
         this.compacting = new Map();
         this.draining = new Set();
         this.resuming = new Set();
+        this.deadlines = new Map();
     }
     start(session, request, expected) {
         if (!record(request) || typeof request["instructions"] !== "string")
@@ -70,7 +76,7 @@ export class SessionMaintenanceController {
             throw new AutomaticAdmissionRejected("Maintenance requires the expected idle checkpoint without pending human input");
         if (session.sessionManager.getLeafId() !== expected.entryId || session.sessionManager.appendCustomEntry === undefined)
             throw new AutomaticAdmissionRejected("Maintenance checkpoint is stale or native marker capability is unavailable");
-        const operation = this.store.create(ref, { version: 1, id, sessionId: ref.id, cwd: ref.cwd, entryId: expected.entryId, generation: expected.generation, instructions: request["instructions"], targetTokens: contextBudget(session).targetTokens, contextBudget: contextBudget(session), ownerProcess: { pid: process.pid, start: processStart(process.pid) }, tokensBefore: contextTokens(session), state: "prepared", inputSequence: 0, lastInputGeneration: expected.generation, inputs: [] });
+        const operation = this.store.create(ref, { version: 1, id, sessionId: ref.id, cwd: ref.cwd, entryId: expected.entryId, generation: expected.generation, instructions: request["instructions"], targetTokens: contextBudget(session).targetTokens, contextBudget: contextBudget(session), ownerProcess: { pid: process.pid, start: processStart(process.pid) }, writerFenceSupport: typeof session.sessionManager.withMaintenanceWriteLock === "function" ? "native-file-lock-v1" : undefined, lease: newLease(), tokensBefore: contextTokens(session), state: "prepared", inputSequence: 0, lastInputGeneration: expected.generation, inputs: [] });
         const opKey = key(ref, id);
         this.compacting.set(opKey, session);
         liveOwners.add(opKey);
@@ -80,6 +86,7 @@ export class SessionMaintenanceController {
             maintenanceEvidence(session.sessionFile, operation);
             this.store.update(ref, id, (current) => { current.markerEntryId = markerEntryId; current.state = "compacting"; });
             this.controls.assertCurrent(ref, { ...expected, kind: "wake" });
+            this.armDeadline(session, id);
             this.background(session, this.compact(session, id));
             return this.required(ref, id);
         }
@@ -95,6 +102,13 @@ export class SessionMaintenanceController {
         const ref = identity(session);
         let operation = this.required(ref, id);
         const opKey = key(ref, id);
+        if (operation.compactionRetirement !== undefined) return operation;
+        if (operation.resume === undefined && (operation.lease !== undefined && operation.lease.finished !== true || ["prepared", "compacting", "uncertain"].includes(operation.state))) {
+            if (operation.lease === undefined)
+                operation = this.store.update(ref, id, current => { current.lease ??= newLease(); });
+            if (leaseExpired(operation.lease)) return this.retire(session, id);
+            this.armDeadline(session, id);
+        }
         const owner = operation.ownerProcess;
         const start = owner === undefined ? undefined : processStart(owner.pid);
         const processAlive = owner !== undefined && owner.pid !== process.pid && start !== undefined && (start === "unknown" || start === owner.start);
@@ -146,6 +160,48 @@ export class SessionMaintenanceController {
         }
         return operation;
     }
+    armDeadline(session, id) {
+        const ref = identity(session), opKey = key(ref, id);
+        if (this.deadlines.has(opKey)) return;
+        const operation = this.required(ref, id);
+        if (operation.compactionRetirement !== undefined || operation.resume !== undefined || operation.lease === undefined || operation.lease.finished === true) return;
+        const timer = setTimeout(() => {
+            this.deadlines.delete(opKey);
+            try { this.status(session, id); }
+            catch (error) { this.host.failure(session, String(error)); }
+        }, Math.max(1, operation.lease.deadline - leaseNow()));
+        timer.unref?.();
+        this.deadlines.set(opKey, timer);
+    }
+    retire(session, id) {
+        return this.store.withWriteLock(identity(session), () => this.retireOwned(session, id));
+    }
+    retireOwned(session, id) {
+        const ref = identity(session), opKey = key(ref, id);
+        const operation = this.required(ref, id);
+        if (operation.compactionRetirement !== undefined) return operation;
+        if (!operation.lease || operation.lease.finished === true || !leaseExpired(operation.lease) || operation.resume !== undefined)
+            throw new AutomaticAdmissionRejected("Compaction lease has not expired or RESUME still owns admission");
+        if (typeof session.retireMaintenanceCompaction !== "function")
+            throw new AutomaticAdmissionRejected("Native compaction writer fencing is unavailable");
+        const owner = operation.ownerProcess;
+        const ownerStart = owner === undefined ? undefined : processStart(owner.pid);
+        const foreignLive = owner !== undefined && owner.pid !== process.pid && ownerStart !== undefined && (ownerStart === "unknown" || ownerStart === owner.start);
+        if (foreignLive && operation.writerFenceSupport !== "native-file-lock-v1")
+            throw new AutomaticAdmissionRejected("Foreign legacy compaction writer has no exclusion protocol; preserve ownership until its death is proven");
+        session.retireMaintenanceCompaction();
+        const retired = this.store.updateOwned(ref, id, current => {
+            current.compactionRetirement = { kind: "bounded-compaction-v1", deadline: current.lease.deadline, boot: bootIdentity(), retiredAt: leaseNow(), entryId: current.entryId, writerFenced: true };
+            if (current.state !== "superseded") current.state = "failed";
+            current.detail = "Compaction lease expired; native writer fenced without replay. Recover only from a verified saved dump.";
+        });
+        clearTimeout(this.deadlines.get(opKey)); this.deadlines.delete(opKey);
+        const owned = this.compacting.delete(opKey);
+        liveOwners.delete(opKey);
+        if (owned) this.host.end(session);
+        this.host.publish(session);
+        return retired;
+    }
     hasInput(session, text, kind, images, attachments, deliveryId, potetoGoal) {
         const operation = this.store.current(identity(session));
         const input = operation?.inputs.find((candidate) => candidate.id === deliveryId);
@@ -157,7 +213,7 @@ export class SessionMaintenanceController {
     }
     activateQueued(session) {
         const operation = this.store.current(identity(session));
-        if (operation !== undefined && operation.cancelledByStop !== true && (operation.state === "complete" || operation.state === "superseded") && operation.inputs.some(input => input.state === "queued") && !operation.inputs.some(input => input.state === "sending" || input.state === "uncertain"))
+        if (operation !== undefined && operation.compactionRetirement === undefined && operation.cancelledByStop !== true && (operation.state === "complete" || operation.state === "superseded") && operation.inputs.some(input => input.state === "queued") && !operation.inputs.some(input => input.state === "sending" || input.state === "uncertain"))
             this.background(session, this.drain(session, operation.id));
     }
     queue(session, text, kind, images, attachments, echo, deliveryId, potetoGoal) {
@@ -166,6 +222,8 @@ export class SessionMaintenanceController {
         if (operation === undefined)
             return false;
         const opKey = key(ref, operation.id);
+        if (operation.compactionRetirement !== undefined)
+            throw new AutomaticAdmissionRejected("Retired compaction retains input for checkpoint replacement; no admission or replay");
         const owner = this.compacting.get(opKey);
         if (operation.cancelledByStop === true)
             return false;
@@ -200,6 +258,7 @@ export class SessionMaintenanceController {
         if (!control.durable)
             throw new AutomaticAdmissionRejected("Maintenance input cannot be accepted without durable generation state");
         this.store.update(ref, operation.id, (current) => {
+            if (current.compactionRetirement !== undefined) throw new AutomaticAdmissionRejected("Compaction retired before input admission; retain the new input without replay");
             current.inputSequence++;
             current.lastInputGeneration = control.generation;
             current.inputs.push({ id, sequence: current.inputSequence, text, kind, images, attachments, echoUserMessage: echo, generation: control.generation, ...(potetoGoal === undefined ? {} : { potetoGoal }), state: "queued" });
@@ -213,7 +272,7 @@ export class SessionMaintenanceController {
         const operation = this.status(session, id);
         if (operation.inputs.some((input) => input.state === "queued") && !this.controls.snapshot(identity(session)).allowed)
             throw new AutomaticAdmissionRejected("Automatic maintenance admission is disabled; accepted input is retained pending explicit reconciliation or stop/cancel");
-        if ((operation.state === "complete" || operation.state === "superseded") && operation.inputs.some((input) => input.state === "queued"))
+        if (operation.compactionRetirement === undefined && (operation.state === "complete" || operation.state === "superseded") && operation.inputs.some((input) => input.state === "queued"))
             this.background(session, this.drain(session, id));
         return this.required(identity(session), id);
     }
@@ -301,7 +360,7 @@ export class SessionMaintenanceController {
     blocksAutomatic(session) {
         const saved = this.store.current(identity(session));
         const operation = saved === undefined ? undefined : this.status(session, saved.id);
-        return operation !== undefined && (liveOwners.has(key(identity(session), operation.id)) || this.compacting.has(key(identity(session), operation.id)) || this.draining.has(key(identity(session), operation.id)) || this.resuming.has(key(identity(session), operation.id)) || operation.state !== "resumed" && operation.state !== "superseded" || operation.inputs.some((input) => input.state === "queued" || input.state === "sending" || input.state === "uncertain"));
+        return operation !== undefined && (liveOwners.has(key(identity(session), operation.id)) || this.compacting.has(key(identity(session), operation.id)) || this.draining.has(key(identity(session), operation.id)) || this.resuming.has(key(identity(session), operation.id)) || operation.compactionRetirement !== undefined || operation.state !== "resumed" && operation.state !== "superseded" || operation.inputs.some((input) => input.state === "queued" || input.state === "sending" || input.state === "uncertain"));
     }
     background(session, operation) {
         void operation.catch(async (error) => {
@@ -329,35 +388,30 @@ export class SessionMaintenanceController {
         try {
             const operation = this.required(ref, id);
             if (!budgetMatches(session, operation)) throw new Error("Maintenance same-model context capacity changed");
-            await session.compact(operation.instructions, { targetTokens: operation.targetTokens });
+            await session.compact(operation.instructions, { targetTokens: operation.targetTokens, isCurrent: () => this.required(ref, id).compactionRetirement === undefined });
+            if (this.required(ref, id).compactionRetirement !== undefined) return;
             const tokensAfter = contextTokens(session);
             if (!budgetMatches(session, operation) || !Number.isSafeInteger(tokensAfter) || tokensAfter < 0 || tokensAfter >= operation.targetTokens)
                 throw new Error("Native compaction exceeds the same-model safe context capacity");
             const evidence = maintenanceEvidence(session.sessionFile, operation);
             if (!this.host.current(session) || evidence.compactionEntryId === undefined)
                 throw new Error("Completed native compaction evidence or owning runtime is unavailable");
-            this.store.update(ref, id, (current) => { Object.assign(current, evidence, { tokensAfter }); if (current.state !== "superseded")
+            this.store.update(ref, id, (current) => { if (current.compactionRetirement !== undefined) return; Object.assign(current, evidence, { tokensAfter }); if (current.state !== "superseded")
                 current.state = current.inputs.length === 0 ? "complete" : "superseded"; });
         }
         catch (error) {
-            let barrierFailure = "";
-            if (this.host.current(session)) {
-                try {
-                    if (this.required(ref, id).state !== "superseded" && this.controls.snapshot(ref).allowed)
-                        await this.controls.setAllowed(ref, false);
-                }
-                catch (failure) {
-                    barrierFailure = `; durable stop barrier unconfirmed: ${failure instanceof Error ? failure.message : String(failure)}`;
-                }
-            }
-            this.store.update(ref, id, (current) => { if (current.state !== "superseded")
-                current.state = this.host.current(session) ? "failed" : "uncertain"; current.detail = `${error instanceof Error ? error.message : String(error)}${barrierFailure}`; });
+            if (this.required(ref, id).compactionRetirement !== undefined) return;
+            this.store.update(ref, id, current => { if (current.compactionRetirement !== undefined) return; if (current.state !== "superseded")
+                current.state = this.host.current(session) ? "failed" : "uncertain"; current.detail = error instanceof Error ? error.message : String(error); });
         }
         finally {
-            this.compacting.delete(opKey);
+            clearTimeout(this.deadlines.get(opKey)); this.deadlines.delete(opKey);
+            const owned = this.compacting.delete(opKey);
             liveOwners.delete(opKey);
-            this.host.end(session);
-            this.host.publish(session);
+            if (owned) {
+                this.store.update(ref, id, current => { if (current.compactionRetirement === undefined && current.lease !== undefined) current.lease.finished = true; });
+                this.host.end(session); this.host.publish(session);
+            }
         }
         const operation = this.required(ref, id);
         if (operation.state === "superseded")
@@ -372,7 +426,7 @@ export class SessionMaintenanceController {
         try {
             while (this.host.current(session)) {
                 const operation = this.required(ref, id);
-                if (!["complete", "superseded"].includes(operation.state))
+                if (operation.compactionRetirement !== undefined || !["complete", "superseded"].includes(operation.state))
                     return;
                 const input = operation.inputs.find((item) => item.state !== "admitted" && item.state !== "cancelled");
                 if (input === undefined)

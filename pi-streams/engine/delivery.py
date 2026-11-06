@@ -157,7 +157,7 @@ def _handoff_context(stream_dir: Path, proof: dict) -> str:
                 os.close(descriptor)
     except (KeyError, TypeError, ValueError, OSError) as exc:
         raise StreamsError(f"capacity continuation evidence unavailable; no dispatch: {exc}") from exc
-    return f"Retained capacity coordinator handoff {stream_dir / proof['path']}\nSHA-256 {proof['sha256']}\n{raw.decode('utf-8')}\n"
+    return f"Retained dump recovery handoff {stream_dir / proof['path']}\nSHA-256 {proof['sha256']}\n{raw.decode('utf-8')}\n"
 
 
 def _attach_handoff(stream_dir: Path, record: Delivery) -> None:
@@ -219,7 +219,7 @@ def observe_control_locked(stream_dir: Path, identity: str, *, state: str | None
     if record.control is None or record.automatic is None:
         raise StreamsError("delivery is not a saved current-goal control intent")
     if state is None:
-        native = piweb.control_goal_status(record.session, str(stream_dir), identity)
+        native = piweb.control_goal_status(record.session, record.automatic["cwd"], identity)
         _control_receipt(record, native)
         state = native["state"]
     record.control.state = state
@@ -252,9 +252,15 @@ def _control_receipt(record: Delivery, native: dict) -> None:
 
 
 def _require_destination(stream_dir: Path, record: Delivery, session: str) -> dict[str, object]:
-    from engine.threads import designated_coordinator, load_threads, resolve_coordinator
+    from engine.threads import Status, _native_session, designated_coordinator, load_threads, resolve_coordinator
+    from engine.replacement import successor_handoff
 
-    row = designated_coordinator(load_threads(stream_dir / "threads.tsv"))
+    rows = load_threads(stream_dir / "threads.tsv")
+    if record.handoff is not None and record.handoff == successor_handoff(stream_dir, session):
+        target = next((row for row in rows if row.session == session and row.status is Status.active), None)
+        if target is not None and target.role != "coordinator" and session == record.session:
+            return _native_session(session, Path(target.worktree)).status
+    row = designated_coordinator(rows)
     if session != record.session or row is None or row.session != session:
         raise StreamsError(f"delivery {record.id} destination is stale or does not match")
     resolved = resolve_coordinator(stream_dir)
@@ -280,7 +286,7 @@ def send_locked(stream_dir: Path, identity: str) -> dict:
             record.state = "blocked"
             record.detail = "No saved automatic admission generation; reconcile the old request without renewing it."
             return _save(stream_dir, record)
-        current, allowed = piweb.automatic_admission(status, record.session, str(stream_dir), record.automatic["kind"])
+        current, allowed = piweb.automatic_admission(status, record.session, record.automatic["cwd"], record.automatic["kind"])
         if not allowed or current != record.automatic:
             record.state = "blocked"
             record.detail = "Automatic admission was disabled or superseded; the saved generation is not renewed."
@@ -293,10 +299,10 @@ def send_locked(stream_dir: Path, identity: str) -> dict:
         record.control.checkpoint = None
         leaf = status.get('rotationSafety', {}).get('entryId')
         if isinstance(leaf, str) and leaf:
-            sources = [item for item in piweb.list_sessions(str(stream_dir)) if item.get('id') == record.session]
+            sources = [item for item in piweb.list_sessions(record.automatic['cwd']) if item.get('id') == record.session]
             if len(sources) == 1 and isinstance(sources[0].get('path'), str):
                 try:
-                    record.control.checkpoint = sessionlog.control_checkpoint(Path(sources[0]['path']), record.session, str(stream_dir), leaf)
+                    record.control.checkpoint = sessionlog.control_checkpoint(Path(sources[0]['path']), record.session, record.automatic['cwd'], leaf)
                 except (StreamsError, OSError, ValueError):
                     pass
     _verify_handoff(stream_dir, record)

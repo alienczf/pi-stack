@@ -92,7 +92,7 @@ def load(stream_dir: Path, sid: str) -> Operation | None:
             raise ValueError("mismatched DCR owner or phase")
         if op.capacity is not None:
             outcome = CapacityOutcome(**op.capacity)
-            if (outcome.kind != "known-capacity-v1" or outcome.operation != op.id
+            if (outcome.kind not in {"known-capacity-v1", "dump-fallback-v1"} or outcome.operation != op.id
                 or outcome.checkpoint_entry != op.checkpoint_entry or outcome.checkpoint_sha256 != op.checkpoint_sha256
                 or outcome.generation != op.automatic["generation"] or not isinstance(outcome.receipt, dict)):
                 raise ValueError("invalid saved capacity outcome")
@@ -236,7 +236,7 @@ def terminal_checkpoint(resolved: Coordinator, acknowledgement: str) -> tuple[st
         proof = {"entryId": entry["id"], "sha256": hashlib.sha256(raw).hexdigest()}
         if (not isinstance(boundary, dict) or type(boundary.get("version")) is not int or boundary["version"] != 1
             or boundary.get("sessionId") != resolved.row.session or boundary.get("cwd") != resolved.row.worktree
-            or boundary.get("state") != "watching" or boundary.get("failure") is not None
+            or boundary.get("state") not in {"watching", "recovering"} or boundary.get("failure") is not None
             or not isinstance(boundary.get("root"), str) or not Path(boundary["root"]).is_absolute()
             or not isinstance(boundary.get("stream"), str) or not re.fullmatch(r"[A-Za-z0-9_.-]+", boundary["stream"])
             or boundary.get("checkpoint") != proof
@@ -290,7 +290,14 @@ def continuation_text(op: Operation, stream_dir: Path) -> str:
 def prepare(index: Path, stream: str, stream_dir: Path, resolved: Coordinator, identity: str, token: dict, *, original: str = "", continuation: dict | None = None) -> Operation:
     if (continuation or {}).get("mode") == "permitted-analysis-v1":
         raise StreamsError("Content-policy blocker. A clean model context and resource view is not proven; do not prepare recovery SYNC")
+    if continuation is None and resolved.row.role != "coordinator":
+        enrollment = (resolved.native.status.get("failureBoundary") or {}).get("enrollment", {})
+        if enrollment.get("role") != resolved.row.role or not isinstance(enrollment.get("assignment"), str) or not enrollment["assignment"]:
+            raise StreamsError("Worker DCR requires its exact enrolled bounded assignment")
+        continuation = {"role": resolved.row.role, "assignment": enrollment["assignment"], "nativeFile": resolved.native.info.get("path")}
     previous = load(stream_dir, resolved.row.session)
+    if previous is not None and previous.checkpoint_entry and previous.checkpoint_sha256:
+        retain_dump(stream_dir, previous)
     if previous is not None and (original or previous.phase not in {"complete", "superseded"}):
         if previous.id != identity or previous.recovery_original != original or previous.automatic != token or previous.continuation != continuation:
             raise StreamsError("Another DCR operation owns the returned fork")
@@ -309,21 +316,41 @@ def prepare(index: Path, stream: str, stream_dir: Path, resolved: Coordinator, i
     return op
 
 
-def _capacity_detail(detail: str) -> int | None:
-    if not isinstance(detail, str):
-        return None
-    if detail == "Legacy native compaction has no verified rebuilt context below 150000 tokens":
-        return THRESHOLD
-    for prefix in ("Native DCR failed: ", "maintenance failed: ", "Dead empty maintenance ownership released without replay. Prior failed: "):
-        if detail.startswith(prefix):
-            detail = detail[len(prefix):]
-            break
-    match = re.fullmatch(r"Native compaction did not reduce rebuilt context below ([0-9]+) tokens", detail)
-    return int(match[1]) if match else None
+def saved_dump(op: Operation) -> bytes:
+    try:
+        source = base64.b64decode(op.ready_source, validate=True)
+    except (ValueError, TypeError) as exc:
+        raise StreamsError("Dump rotation requires an intact saved STATE checkpoint") from exc
+    if not source or hashlib.sha256(source).hexdigest() != op.ready_revision:
+        raise StreamsError("Dump rotation requires an intact saved STATE checkpoint")
+    artifacts.parse_state(source)
+    return source
+
+
+def retain_dump(stream_dir: Path, op: Operation) -> None:
+    try:
+        saved_dump(op)
+    except StreamsError:
+        return
+    data = artifacts._read_tick_data(stream_dir)
+    dumps = data.setdefault("dcr_dumps", {})
+    if not isinstance(dumps, dict):
+        raise StreamsError("Invalid retained regular dumps")
+    previous = dumps.get(op.session)
+    if previous is not None and previous.get("id") == op.id:
+        if any(previous.get(key) != getattr(op, key) for key in ("ready_revision", "ready_source", "checkpoint_entry", "checkpoint_sha256")):
+            raise StreamsError("A validated regular dump is immutable within its attempt")
+        return
+    dumps[op.session] = asdict(op)
+    artifacts._save_tick_data(stream_dir, data)
 
 
 def capacity_outcome(op: Operation, native: dict, status: dict) -> CapacityOutcome | None:
-    if (op.recovery_original or not op.ready_revision or not op.ready_source or not op.checkpoint_entry or not op.checkpoint_sha256
+    try:
+        saved_dump(op)
+    except StreamsError:
+        return None
+    if (not op.ready_revision or not op.ready_source or not op.checkpoint_entry or not op.checkpoint_sha256
         or op.resume_text or op.resume_goal or native.get("resume") is not None or native.get("inputs") != []
         or native.get("inputSequence") != 0 or native.get("cancelledByStop") is True
         or native.get("generation") != op.automatic["generation"] or native.get("entryId") != op.checkpoint_entry
@@ -340,10 +367,7 @@ def capacity_outcome(op: Operation, native: dict, status: dict) -> CapacityOutco
     budget = {"provider": model.get("provider"), "model": model.get("id"), "contextWindow": capacity, "targetTokens": int(capacity * 0.8)}
     if not (target == THRESHOLD and native.get("contextBudget") is None) and (native.get("contextBudget") != budget or target != budget["targetTokens"]):
         return None
-    known = _capacity_detail(native.get("detail", "")) == target
-    legacy = (native.get("state") == "superseded"
-              and native.get("detail") == "Dead empty maintenance ownership released without replay. Prior uncertain: Interrupted maintenance has no proven completed native compaction; do not replay"
-              and (_capacity_detail(op.detail) in {THRESHOLD, target} or op.capacity is not None and _capacity_detail(op.capacity["receipt"].get("detail", "")) in {THRESHOLD, target}))
+    known = native.get("state") in {"failed", "superseded"} and bool(native.get("detail"))
     if native.get("state") == "complete":
         known = False
         if (not isinstance(native.get("compactionEntryId"), str) or not native["compactionEntryId"]
@@ -355,14 +379,13 @@ def capacity_outcome(op: Operation, native: dict, status: dict) -> CapacityOutco
             known = True
         except StreamsError:
             return None
-    if not known and not legacy:
+    if not known:
         return None
-    return CapacityOutcome(op.id, op.checkpoint_entry, op.checkpoint_sha256, op.automatic["generation"], native)
+    return CapacityOutcome(op.id, op.checkpoint_entry, op.checkpoint_sha256, op.automatic["generation"], native, kind="dump-fallback-v1")
 
 
 def _capacity_checkpoint(stream_dir: Path, op: Operation, resolved: Coordinator, outcome: CapacityOutcome) -> None:
-    if not synced_state(stream_dir, op):
-        raise StreamsError("Capacity rotation retains changed STATE; no stale checkpoint replacement")
+    saved_dump(op)
     from engine import replacement
     replacement._idle(resolved)
     path = Path(resolved.native.info["path"])
@@ -388,7 +411,7 @@ def _capacity_checkpoint(stream_dir: Path, op: Operation, resolved: Coordinator,
             digest = hashlib.sha256(raw).hexdigest()
             sessionlog.compaction_record(sessionlog.read_record(path, op.session, entry["id"], digest))
             compactions.append((entry["id"], digest))
-        elif entry.get("type") == "custom" and entry.get("customType") == "pi-web.stream-failure" and data == resolved.native.status.get("failureBoundary") and data.get("state") == "watching" and data.get("failure") is None:
+        elif entry.get("type") == "custom" and entry.get("customType") == "pi-web.stream-failure" and data == resolved.native.status.get("failureBoundary") and data.get("state") in {"watching", "recovering"} and data.get("failure") is None:
             continue
         elif (entry.get("type") == "custom" and entry.get("customType") == "pi-web.streams-dcr"
               and data.get("id") == op.id and data.get("sessionId") == op.session and data.get("cwd") == op.cwd
@@ -402,16 +425,33 @@ def _capacity_checkpoint(stream_dir: Path, op: Operation, resolved: Coordinator,
         raise StreamsError("Capacity rotation compaction receipt changed")
 
 
+def _finish_rotation(stream_dir: Path, op: Operation, target: str) -> None:
+    op.phase, op.detail = "rotated", f"Compaction fallback rotated from saved SYNC checkpoint to {target}; original input receipts retained."
+    save(stream_dir, op)
+    if op.recovery_original:
+        from engine import failure_recovery
+        recovery = failure_recovery.load(stream_dir, op.recovery_original)
+        if recovery is None or recovery.fork != op.session or recovery.id != op.id:
+            raise StreamsError("Dump replacement lost its exact failure recovery owner")
+        from engine import replacement
+        intent = replacement.replacement_intent(stream_dir)
+        recovery.phase = "rotated" if intent.load.get("state") == "observed" else "loading"
+        recovery.replacement = {"id": intent.id, "target": target, "cwd": intent.original["cwd"], "load": intent.load}
+        recovery.detail = op.detail + " Failed original and marker remain parked evidence; no RESUME completion is claimed."
+        failure_recovery.save(stream_dir, recovery)
+
+
 def rotate_capacity_locked(stream_dir: Path, resolved: Coordinator, op: Operation, outcome: CapacityOutcome) -> str:
     from engine import replacement
     op.capacity = asdict(outcome)
     save(stream_dir, op)
     _capacity_checkpoint(stream_dir, op, resolved, outcome)
+    retain_dump(stream_dir, op)
     token, allowed = piweb.automatic_admission(resolved.native.status, op.session, op.cwd, "wake")
     if allowed and token != op.automatic:
         raise StreamsError("Newer receiving input superseded capacity rotation")
     outcome = CapacityOutcome(outcome.operation, outcome.checkpoint_entry, outcome.checkpoint_sha256, outcome.generation, outcome.receipt,
-                              {"entryId": resolved.native.status["rotationSafety"]["entryId"], "generation": token["generation"], "allowed": allowed})
+                              {"entryId": resolved.native.status["rotationSafety"]["entryId"], "generation": token["generation"], "allowed": allowed}, outcome.kind)
     op.capacity = asdict(outcome)
     op.phase = "rotation-pending"
     save(stream_dir, op)
@@ -421,8 +461,7 @@ def rotate_capacity_locked(stream_dir: Path, resolved: Coordinator, op: Operatio
     elif intent.mode != "capacity" or intent.source != op.session or intent.outcome != op.capacity:
         raise StreamsError("Another replacement intent owns this capacity outcome")
     target = replacement.advance_replacement_locked(stream_dir, intent)
-    op.phase, op.detail = "rotated", f"Known capacity failure rotated from saved SYNC checkpoint to {target}; original input receipts retained."
-    save(stream_dir, op)
+    _finish_rotation(stream_dir, op, target)
     return target
 
 
@@ -435,12 +474,13 @@ def advance_capacity_replacement_locked(stream_dir: Path, *, session: str | None
     if op is None or operation is not None and op.id != operation:
         return False
     if intent.phase == "complete" and op.phase == "rotated":
-        return operation is not None
+        target = replacement.advance_replacement_locked(stream_dir, intent)
+        _finish_rotation(stream_dir, op, target)
+        return operation is not None or intent.load.get("state") not in {"observed", "stopped", "superseded"}
     if op.phase != "rotation-pending" or op.capacity != intent.outcome:
         raise StreamsError("Capacity replacement lost its exact DCR owner/receipt")
     target = replacement.advance_replacement_locked(stream_dir, intent)
-    op.phase, op.detail = "rotated", f"Known capacity failure rotated from saved SYNC checkpoint to {target}; original input receipts retained."
-    save(stream_dir, op)
+    _finish_rotation(stream_dir, op, target)
     return True
 
 
@@ -460,9 +500,10 @@ def step(index: Path, project: Project, stream: str, stream_dir: Path, resolved:
     token, allowed = piweb.automatic_admission(status, sid, resolved.row.worktree, "wake")
     if op is not None and op.phase == "rotated":
         return True
-    if op is not None and op.phase in {"blocked", "compact-sending", "compacting", "rotation-pending"} and op.checkpoint_entry and not op.recovery_original:
+    if op is not None and op.phase in {"blocked", "compact-sending", "compacting", "rotation-pending"} and op.checkpoint_entry:
+        native = None
         try:
-            native = piweb.maintenance_status(op.cwd, sid, op.id)
+            native = piweb.maintenance_status(op.cwd, sid, op.id, original=op.recovery_original)
             outcome = capacity_outcome(op, native, status)
             if outcome is not None:
                 rotate_capacity_locked(stream_dir, resolved, op, outcome)
@@ -475,7 +516,8 @@ def step(index: Path, project: Project, stream: str, stream_dir: Path, resolved:
             if intent is not None and intent.phase != "complete":
                 replacement._save(stream_dir, "coordinator_replacement_error", {"replacement": intent.id, "detail": str(exc)})
             else:
-                op.detail = str(exc)
+                reason = native.get("detail", "") if isinstance(native, dict) else ""
+                op.phase, op.detail = "blocked", (reason + "; " if reason else "") + str(exc)
                 save(stream_dir, op)
             return True
     if op is not None and op.phase == "blocked" and op.detail == "Native RESUME contains an assistant error":
@@ -592,6 +634,7 @@ def step(index: Path, project: Project, stream: str, stream_dir: Path, resolved:
                 close_events(stream_dir, op)
                 return False
             op.checkpoint_entry, op.checkpoint_sha256 = checkpoint
+            retain_dump(stream_dir, op)
             op.phase = "compact-sending"
             save(stream_dir, op)
             piweb.compact_at_checkpoint(sid, op.id, {"sessionId": sid, "cwd": op.cwd, "entryId": op.checkpoint_entry, "generation": token["generation"]}, op.compact_instructions, original=op.recovery_original)

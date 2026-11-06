@@ -151,7 +151,7 @@ export class SessionFailureRecoveries {
             return { operation, automaticAdmission };
         }
         const maintenance = operation.maintenance;
-        if (maintenance?.phase !== "ready" || maintenance.generation !== automaticAdmission.generation || !automaticAdmission.durable || !automaticAdmission.allowed)
+        if (maintenance?.phase !== "ready" || request["action"] !== "maintenance-status" && (maintenance.generation !== automaticAdmission.generation || !automaticAdmission.durable || !automaticAdmission.allowed))
             throw new AutomaticAdmissionRejected("Recovery maintenance generation is unprepared, stopped or uncertain");
         const key = JSON.stringify([operation.originalSessionId, operation.cwd, id]);
         if (request["action"] === "status") {
