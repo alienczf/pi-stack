@@ -607,7 +607,7 @@ def _load_checkpoint(stream: Path, intent: ReplacementIntent) -> None:
     record = delivery._get(stream, identity)
     if record.state == "prepared":
         delivery.send_locked(stream, identity)
-    elif record.state == "transport_accepted":
+    elif record.state in {"sending", "uncertain", "transport_accepted"}:
         delivery.observe_control_locked(stream, identity)
     record = delivery._get(stream, identity)
     if record.state == "blocked":

@@ -27,6 +27,10 @@ class CapacityExceeded(StreamsError):
     pass
 
 
+class IncompleteSyncAcknowledgement(StreamsError):
+    pass
+
+
 @dataclass(frozen=True)
 class CapacityOutcome:
     operation: str
@@ -269,8 +273,6 @@ def terminal_checkpoint(resolved: Coordinator, acknowledgement: str) -> tuple[st
                or not isinstance(block.get(block["type"]), str) for block in content)):
         raise StreamsError("DCR has no complete native SYNC acknowledgement at its exact idle leaf")
     text = "\n".join(block["text"] for block in content if block.get("type") == "text")
-    if acknowledgement not in text.splitlines():
-        raise StreamsError("DCR has no complete native SYNC acknowledgement at its exact idle leaf")
     if suffix:
         boundary = status.get("failureBoundary")
         proof = {"entryId": entry["id"], "sha256": hashlib.sha256(raw).hexdigest()}
@@ -283,6 +285,8 @@ def terminal_checkpoint(resolved: Coordinator, acknowledgement: str) -> tuple[st
             or any(not isinstance(child.get("data"), dict) or type(child["data"].get("version")) is not int
                    or child["data"] != boundary for child in suffix)):
             raise StreamsError("DCR checkpoint metadata does not bind its own complete native SYNC acknowledgement")
+    if acknowledgement not in text.splitlines():
+        raise IncompleteSyncAcknowledgement("DCR has no complete native SYNC acknowledgement at its exact idle leaf")
     leaf, leaf_raw = branch[0]
     return leaf["id"], hashlib.sha256(leaf_raw).hexdigest()
 
@@ -514,6 +518,21 @@ def _historical_outcome(recovery: HistoricalRecovery) -> dict:
 
 def _recover_historical(stream_dir: Path, resolved: Coordinator, op: Operation) -> bool:
     from engine import replacement
+    if (op.recovery_original or op.checkpoint_entry or op.checkpoint_sha256 or op.compaction_entry
+        or op.compaction_sha256 or op.resume_text or op.resume_goal or op.capacity is not None):
+        return False
+    if any(resolved.native.status.get(key) != value for key, value in {
+        "maintenanceSupport": "checkpoint-input-v1", "potetoInvocationSupport": "exact-goal-v1", "dcrEventSupport": "phase-v1",
+    }.items()):
+        return False
+    try:
+        terminal_checkpoint(resolved, f"DCR SYNC ready: {op.id} {op.ready_revision}")
+    except IncompleteSyncAcknowledgement:
+        pass
+    except (StreamsError, OSError, ValueError):
+        return False
+    else:
+        return False
     recovery = historical_recovery(stream_dir, op.session)
     if recovery is None:
         raw = artifacts._read_tick_data(stream_dir).get("dcr_dumps", {}).get(op.session)
@@ -588,7 +607,11 @@ def advance_capacity_replacement_locked(stream_dir: Path, *, session: str | None
         return (operation is not None or intent.phase != "complete"
                 or intent.original.get("thread", {}).get("role", "coordinator") == "coordinator"
                 and intent.load.get("state") not in {"observed", "stopped", "superseded"})
-    if intent.phase == "complete" and op.phase == "rotated":
+    if intent.phase == "complete":
+        owner = intent.records.get("dcr_operations", {}).get(intent.source, {})
+        if (op.phase not in {"rotation-pending", "rotated", "blocked"} or op.capacity != intent.outcome
+            or asdict(op) != {**owner, "phase": op.phase, "detail": op.detail}):
+            raise StreamsError("Capacity replacement lost its exact DCR owner/receipt")
         target = replacement.advance_replacement_locked(stream_dir, intent)
         _finish_rotation(stream_dir, op, target)
         return operation is not None or (intent.original.get("thread", {}).get("role", "coordinator") == "coordinator"
@@ -632,12 +655,20 @@ def step(index: Path, project: Project, stream: str, stream_dir: Path, resolved:
         except (StreamsError, OSError, ValueError) as exc:
             from engine import replacement
             intent = replacement.replacement_intent(stream_dir)
-            if intent is not None and intent.phase != "complete":
+            if intent is not None and (intent.phase != "complete" or
+                                      intent.mode == "capacity" and intent.source == op.session and intent.outcome == op.capacity):
                 replacement._save(stream_dir, "coordinator_replacement_error", {"replacement": intent.id, "detail": str(exc)})
             else:
                 reason = native.get("detail", "") if isinstance(native, dict) else ""
                 op.phase, op.detail = "blocked", (reason + "; " if reason else "") + str(exc)
                 save(stream_dir, op)
+            return True
+    if op is not None and op.phase in {"sync-admitted", "blocked"} and allowed and token == op.automatic:
+        try:
+            if _recover_historical(stream_dir, resolved, op):
+                return True
+        except (StreamsError, OSError, ValueError, TypeError) as exc:
+            replacement._save(stream_dir, "historical_dump_recovery_error", {"session": sid, "operation": op.id, "detail": str(exc)})
             return True
     if op is not None and op.phase == "blocked" and op.detail == "Native RESUME contains an assistant error":
         native = piweb.maintenance_status(op.cwd, sid, op.id, original=op.recovery_original)
@@ -724,13 +755,6 @@ def step(index: Path, project: Project, stream: str, stream_dir: Path, resolved:
             return True
         if op.phase in {"sync-sending", "sync-admitted"}:
             if not op.ready_revision:
-                if op.phase == "sync-admitted" and not op.recovery_original:
-                    try:
-                        if _recover_historical(stream_dir, resolved, op):
-                            return True
-                    except (StreamsError, OSError, ValueError, TypeError) as exc:
-                        replacement._save(stream_dir, "historical_dump_recovery_error", {"session": sid, "operation": op.id, "detail": str(exc)})
-                        return True
                 if op.recovery_original and status.get("failureSyncContinuationSupport") == "entry-bound-v1" and not any(status.get(key) for key in ("isStreaming", "isCompacting", "isBashRunning", "pendingMessageCount", "pendingAsk", "pendingDialogs")):
                     branch = native_branch(resolved)
                     entry, raw = branch[0]

@@ -77,7 +77,7 @@ function controlledStream(selected, context, options, sid, cwd) {
             const args = ['dcr', 'ready', streamRoot.split(sep).at(-1), '--home', process.env.CHAOS_INDEX, '--session', sid, '--operation', operation];
             journal({ effect: 'controlled-agent-dcr-ready', session: sid, args });
             const result = await execute(process.env.PI_STREAMS_BIN, args, { cwd, timeout: 30000 });
-            text = JSON.parse(result.stdout).acknowledgement;
+            if (plan.acknowledgeReady !== false) text = JSON.parse(result.stdout).acknowledgement;
         }
         if (!title && !summary && process.env.CHAOS_LOAD_ACK === '1' && last.includes('Do not perform task effects or replay commands during this load.')) {
             text = /Dump checkpoint loaded: [a-zA-Z0-9-]+/.exec(last)?.[0] ?? text;
