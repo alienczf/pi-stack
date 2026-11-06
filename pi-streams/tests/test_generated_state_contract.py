@@ -35,9 +35,10 @@ class GeneratedStateContractTests(EngineCase):
             ("GET", "/api/sessions/coord-contract/status", 200, status_body("coord-contract")),
         ])
 
-    def test_new_stream_has_only_current_state_seeds_and_is_explicitly_unratified(self) -> None:
+    def test_new_stream_has_only_current_state_seeds_without_marker(self) -> None:
         state = artifacts.parse_state((self.stream / "STATE.md").read_bytes())
-        self.assertEqual(state.source[state.authority.start:state.authority.end], b"ratified: no\n")
+        self.assertIsNone(state.legacy_marker)
+        self.assertTrue(state.source.startswith(b"## Goals\n\n### North Star\n"))
         self.assertEqual(state.source[state.log.body.start:], b"")
         self.assertEqual([state.goals.name, state.rules.name, state.log.name], ["Goals", "Rules", "Log"])
         self.assertEqual(project.load_stream_config(self.stream / "stream.toml").state_schema, 1)
@@ -82,7 +83,7 @@ class GeneratedStateContractTests(EngineCase):
         self.assertIn(str(self.fx.alpha_wt), brief)
         self.assertIn("handover/worker/worker-contract.md", brief)
 
-    def test_canonical_status_reads_first_line_authority_and_opaque_log_without_registry_reads(self) -> None:
+    def test_canonical_status_reads_structure_and_opaque_log_without_ratification_status(self) -> None:
         source = PREFIX.replace(b"ratified: ZF notice 42, charter v3", b"ratified: no", 1)
         (self.stream / "STATE.md").write_bytes(source)
         config = project.load_stream_config(self.stream / "stream.toml")
@@ -94,14 +95,14 @@ class GeneratedStateContractTests(EngineCase):
         result = self.run_streams("status", "contract", "--json", "--home", str(self.index))
         self.assertEqual(result.returncode, 0, result.stderr)
         view = json.loads(result.stdout)["streams"][0]
-        self.assertIs(view["ratified"], False)
+        self.assertNotIn("ratified", view)
         self.assertEqual(view["path"], str(self.stream))
         self.assertEqual(view["threadSessions"], [])
         self.assertEqual((self.stream / "log/tick-state.json").read_bytes(), metadata)
         (self.stream / "STATE.md").write_bytes((self.stream / "STATE.md").read_bytes().replace(b"ratified: no\n", b"ratified: 2026-10-23 ZF confirmed\n", 1))
         result = self.run_streams("status", "contract", "--json", "--home", str(self.index))
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIs(json.loads(result.stdout)["streams"][0]["ratified"], True)
+        self.assertEqual(json.loads(result.stdout)["streams"][0], view)
 
     def test_canonical_replacement_pickup_uses_paths_and_the_shared_current_goal(self) -> None:
         config = project.load_stream_config(self.stream / "stream.toml")
@@ -140,7 +141,7 @@ class GeneratedStateContractTests(EngineCase):
         self.assertEqual((result.returncode, result.stderr), (0, ""))
         view, = json.loads(result.stdout)["streams"]
         self.assertIn("artifact operation pending", view["error"]["message"])
-        self.assertIsNone(view["ratified"])
+        self.assertNotIn("ratified", view)
         self.assertEqual(view["drive"]["known"], True)
         self.assertEqual(path.read_bytes(), before)
         self.assertEqual((self.stream / "STATE.md").read_bytes(), source)

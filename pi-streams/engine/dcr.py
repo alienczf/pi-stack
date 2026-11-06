@@ -11,7 +11,7 @@ from pathlib import Path
 
 from engine import StreamsError, artifacts, piweb, sessionlog
 from engine.project import Project, STATE_SCHEMA, load_stream_config
-from engine.threads import Coordinator, NativeSession, require_ratified
+from engine.threads import Coordinator, NativeSession
 
 THRESHOLD = 150000
 COMPACT_INSTRUCTIONS = (
@@ -144,7 +144,6 @@ def ready(stream_dir: Path, index: Path, stream: str, resolved: Coordinator, ide
     if not allowed or token != op.automatic:
         raise StreamsError("SYNC was superseded by newer input or stop")
     state = artifacts._read_stream_state_locked(stream_dir)
-    require_ratified(stream_dir)
     revision = hashlib.sha256(state.source).hexdigest()
     if op.ready_revision and op.ready_revision != revision:
         raise StreamsError("SYNC ready STATE revision changed")
@@ -537,7 +536,7 @@ def step(index: Path, project: Project, stream: str, stream_dir: Path, resolved:
             return True
         if op is not None and op.completed_leaf == leaf:
             return False
-        require_ratified(stream_dir)
+        artifacts._read_stream_state_locked(stream_dir)
         identity = uuid.uuid4().hex
         op = prepare(index, stream, stream_dir, resolved, identity, token)
     try:
@@ -642,7 +641,6 @@ def step(index: Path, project: Project, stream: str, stream_dir: Path, resolved:
             op.rebuilt_tokens = safe_context(native, status)
             artifacts._rotate_log_locked(stream_dir)
             state = artifacts._read_stream_state_locked(stream_dir)
-            require_ratified(stream_dir)
             op.compaction_entry, op.compaction_sha256 = proof["entryId"], proof["sha256"]
             op.resume_goal = artifacts.resolve_current_goal(state)
             op.resume_text = continuation_text(op, stream_dir) + resume_text(stream_dir, op.resume_goal)

@@ -39,11 +39,11 @@ class DeliveryReceiptTests(EngineCase):
     def prepare(self, identity: str = "notice-1", body: str = "Change the current objective."):
         return delivery.prepare_locked(self.stream, identity, "current", body)
 
-    def test_explicit_human_correction_reaches_unratified_kickoff_without_authorizing_workers(self) -> None:
+    def test_explicit_human_correction_preserves_historical_marker(self) -> None:
         state = self.stream / "STATE.md"
         state.write_text(state.read_text().replace("ratified: 2026-10-23 fixture human confirmation", "ratified: no", 1))
         body = self.tmp / "human-notice.md"
-        text = "Fixture human notice 42. Correct the kickoff objective before ratification.\n原本\n"
+        text = "Fixture human notice 42. Correct the kickoff objective.\n原本\n"
         body.write_text(text)
         result = self.run_streams("delivery", "send", "etl", "--delivery-id", "human-notice-42", "--session", "current", "--body-file", str(body), "--behavior", "steer")
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -51,12 +51,6 @@ class DeliveryReceiptTests(EngineCase):
         self.assertEqual((record["origin"], record["state"], record["body"]), ("steer", "transport_accepted", text))
         self.assertEqual([request[3] for request in self.stub.requests if request[0] == "POST"], [{"text": text, "streamingBehavior": "steer", "deliveryId": "human-notice-42"}])
         self.assertTrue(state.read_text().startswith("## Goals\nratified: no\n"))
-        before = list(self.stub.requests)
-        worker = self.run_streams("thread", "spawn", "etl", "--repo", "alpha", "--role", "worker")
-        self.assertEqual(worker.returncode, 1, worker.stdout)
-        self.assertIn("unratified", worker.stderr)
-        self.assertEqual(self.stub.requests, before)
-        self.assertFalse((self.root / ".worktrees").exists())
 
     def test_cli_bodyfile_preserves_crlf_and_unicode_through_receipt_admission(self) -> None:
         body = self.tmp / "exact-notice.md"
@@ -67,15 +61,15 @@ class DeliveryReceiptTests(EngineCase):
         self.assertEqual(json.loads(result.stdout)["body"], raw.decode())
         self.assertEqual([request[3]["text"] for request in self.stub.requests if request[0] == "POST"], [raw.decode()])
 
-    def test_automatic_tick_delivery_remains_blocked_when_kickoff_is_unratified(self) -> None:
+    def test_automatic_tick_delivery_accepts_historical_negative_marker(self) -> None:
         state = self.stream / "STATE.md"
         state.write_text(state.read_text().replace("ratified: 2026-10-23 fixture human confirmation", "ratified: no", 1))
         events = [{"at": "2026-10-23T00:00:00Z", "kind": "idle", "session": "private-worker", "role": "worker", "detail": ""}]
-        delivery.prepare_locked(self.stream, "automatic-1", "current", "Do not admit this automatic wake.", events=events)
-        with self.assertRaisesRegex(StreamsError, "unratified"):
-            delivery.send_locked(self.stream, "automatic-1")
-        self.assertEqual([request for request in self.stub.requests if request[0] == "POST"], [])
-        self.assertEqual(delivery.receipts(self.stream)[0]["state"], "prepared")
+        delivery.prepare_locked(self.stream, "automatic-1", "current", "Continue the supplied task.", events=events)
+        result = delivery.send_locked(self.stream, "automatic-1")
+        self.assertEqual(result["state"], "transport_accepted")
+        self.assertEqual([request[3] for request in self.stub.requests if request[0] == "POST"], [{"text": "Continue the supplied task.", "deliveryId": "automatic-1", "automaticAdmission": {"sessionId": "current", "cwd": str(self.stream), "generation": "fixture-current", "kind": "wake"}}])
+        self.assertEqual(delivery.receipts(self.stream)[0]["state"], "transport_accepted")
         self.assertFalse((self.root / ".worktrees").exists())
 
     def test_acceptance_retains_body_and_is_not_an_applied_receipt(self) -> None:

@@ -231,8 +231,8 @@ def enrolled_authority(stream_dir: Path, sid: str, cwd: str, path: Path, leaf: o
         return None
     branch = sessionlog.branch_records(path, sid, cwd, leaf)
     if enrollment is None:
-        from engine.threads import load_threads, require_ratified
-        require_ratified(stream_dir)
+        from engine.threads import load_threads
+        artifacts._read_stream_state_locked(stream_dir)
         rows = [row for row in load_threads(stream_dir / "threads.tsv") if row.session == sid and row.worktree == cwd]
         opening = next((entry["message"] for entry, _ in branch if entry.get("message", {}).get("role") == "user"), None)
         if len(rows) != 1 or opening is None:
@@ -354,8 +354,7 @@ def _admit_recovery(stream_dir: Path, episode: Episode, path: Path, leaf: object
         save(stream_dir, episode)
         artifacts.append_log_locked(stream_dir, episode.observed_at, "Content-policy safe blocker", f"{POLICY_BLOCKER} Native refusal {episode.failure_entry} SHA-256 {episode.failure_sha256}.", request_id=f"policy-safe-blocker:{episode.id}")
         if status.get("cleanPolicyAnalysisSupport") == "clean-policy-analysis-v1" and episode.analysis is None and episode.continuation is not None and not episode.uncertain_jobs and not episode.cancelled:
-            from engine.threads import require_ratified
-            require_ratified(stream_dir)
+            artifacts._read_stream_state_locked(stream_dir)
             token, allowed = piweb.automatic_admission(status, episode.session, episode.cwd, "recovery")
             if allowed or not episode.authorized_model or not episode.authorized_thinking or boundary is None or boundary.get("parking") != {"generation": token["generation"], "owned": True}:
                 return

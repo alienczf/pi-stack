@@ -10,7 +10,7 @@ from pathlib import Path
 
 from engine import StreamsError, artifacts, dcr, delivery, drive, failure, piweb, sessionlog, terminal_sessions
 from engine.project import _write
-from engine.threads import Coordinator, Status, _native_session, designated_coordinator, dump_threads, load_threads, require_ratified
+from engine.threads import Coordinator, Status, _native_session, designated_coordinator, dump_threads, load_threads
 
 
 @dataclass
@@ -135,7 +135,7 @@ def resume_parked_locked(stream: Path, at: str, *, index: Path, project, intent:
         return [{"stream": stream.name, "state": "stopped", "detail": "Explicit local off remains authoritative"}]
     if legacy is not None and legacy.recovery_id:
         try:
-            require_ratified(stream)
+            artifacts._read_stream_state_locked(stream)
             op, episode = load(stream, legacy.session), failure.load(stream, legacy.session)
             if op is None or op.id != legacy.recovery_id or op.cwd != legacy.cwd or op.result is None or op.result.get("generation") != legacy.generation or episode is None or episode.id != op.episode or episode.recovery_id != op.id:
                 raise StreamsError("Legacy continuation lost its exact recovery journal")
@@ -195,7 +195,7 @@ def resume_parked_locked(stream: Path, at: str, *, index: Path, project, intent:
                 results.append({"session": sid, "state": "pending", "detail": str(exc)})
     if not explicit and legacy is None and not drive.load(stream).enabled:
         return results
-    require_ratified(stream)
+    artifacts._read_stream_state_locked(stream)
     for row in rows:
         if row.session in processed or row.status not in {Status.active, Status.waiting_quota, Status.parked} or legacy is not None and (row.session != legacy.session or row.worktree != legacy.cwd):
             continue
@@ -261,7 +261,7 @@ def resume_parked_locked(stream: Path, at: str, *, index: Path, project, intent:
 
 
 def advance_locked(stream: Path, sid: str, episode_id: str, at: str, *, index: Path | None = None, project=None) -> dict:
-    require_ratified(stream)
+    artifacts._read_stream_state_locked(stream)
     episode = failure.load(stream, sid)
     if episode is not None and episode.kind == "content-policy":
         raise StreamsError(failure.POLICY_BLOCKER)

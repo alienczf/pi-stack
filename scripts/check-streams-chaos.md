@@ -97,9 +97,9 @@ Every case has a fresh project, index, HOME, XDG directories, session store, pro
 
 Cleanup first uses `pi-streams close` and `pi-web-cli archive`. A case cannot pass if those operations fail. Product lifecycle guards can refuse archive for failed or held sessions. The report preserves those refusals instead of claiming successful archival. The runner then stops its fixture process and removes only marker-owned scratch paths. A red run can therefore have complete process/path cleanup but incomplete supported session archival.
 
-## Known failures at acfd37a
+## Historical failures at acfd37a
 
-These are observed product findings, not expected-pass substitutions. Rerun against the combined source before rollout.
+These are historical observed findings, not current policy or expected-pass substitutions. The former ratification gate no longer applies. The retained `unratified-close` case now checks compatibility with documentary `ratified: no` bytes. Rerun against the combined source before rollout.
 
 - High. `pi-streams/engine/failure_recovery.py:329` prevents coordinator retirement because an unsent prepared drive delivery remains attached to the original. Large-context login, model-error, and rotation cases reach completed native RESUME but do not release the successor.
 - High. `native/pi-web/postimages/node_modules/@earendil-works/pi-coding-agent/dist/core/agent-session.js:1404` rejects small-session compaction. `sessionMaintenanceController.js:297` makes that compaction mandatory during recovery. The small recovery becomes failed maintenance and later reports a superseded generation.
@@ -108,4 +108,4 @@ These are observed product findings, not expected-pass substitutions. Rerun agai
 - Medium. `pi-streams/engine/tick.py:549` repeats the charter error after closing a never-ratified coordinator.
 - Medium. `pi-streams/engine/tick.py:423` repeatedly queries an archived worker still registered active and reports the missing original JSONL path on each tick. The dead-worker variant observes repeated 404 status requests after supported deletion of that exact owned fixture.
 
-Ratified done-coordinator cleanup passes one-shot reconciliation at this base. Parked-worker recovery with large simulated history also passes, including completed RESUME and scoped original retirement. The coordinator-specific failures remain red.
+Done-coordinator cleanup with the former affirmative marker passed one-shot reconciliation at this base. Parked-worker recovery with large simulated history also passes, including completed RESUME and scoped original retirement. The coordinator-specific failures remain red.

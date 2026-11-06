@@ -7,7 +7,7 @@ from enum import Enum
 from pathlib import Path
 
 from engine import StreamsError, artifacts, delivery, piweb
-from engine.threads import Coordinator, Status, _native_session, designated_coordinator, load_threads, require_ratified, resolve_coordinator
+from engine.threads import Coordinator, Status, _native_session, designated_coordinator, load_threads, resolve_coordinator
 
 
 class StopIntent(str, Enum):
@@ -74,7 +74,6 @@ def is_paused(stream_dir: Path) -> bool:
 
 def enable(stream_dir: Path, resolved: Coordinator) -> dict:
     artifacts._read_stream_state_locked(stream_dir)
-    require_ratified(stream_dir)
     raw = resolved.native.status.get("automaticAdmission")
     initial = (
         isinstance(raw, dict) and raw.get("generation") == "unarmed"
@@ -106,7 +105,6 @@ def reconcile_locked(stream_dir: Path) -> LegacyResume | None:
     if not live:
         return None
     state = artifacts._read_stream_state_locked(stream_dir)
-    require_ratified(stream_dir)
     goal = artifacts.resolve_current_goal(state)
     if not goal.strip() or failure.policy_blocks_goal(stream_dir, goal):
         return None
@@ -171,7 +169,7 @@ def reconcile_locked(stream_dir: Path) -> LegacyResume | None:
 
 
 def request_resume(stream_dir: Path, original: str, *, legacy: LegacyResume | None = None) -> dict:
-    require_ratified(stream_dir)
+    artifacts._read_stream_state_locked(stream_dir)
     if legacy is None:
         record = Drive(enabled=True, run_id=uuid.uuid4().hex, remote_state="on-unconfirmed", resume_original=original)
     else:
@@ -222,7 +220,6 @@ def step(stream_dir: Path, resolved: Coordinator | None, stalled: bool, *, maint
     if not stalled:
         return True
     state = artifacts._read_stream_state_locked(stream_dir)
-    require_ratified(stream_dir)
     goal = artifacts.resolve_current_goal(state)
     from engine.failure import policy_blocks_goal
     if policy_blocks_goal(stream_dir, goal):

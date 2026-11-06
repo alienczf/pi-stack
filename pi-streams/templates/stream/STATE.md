@@ -1,5 +1,4 @@
 ## Goals
-ratified: no
 
 ### North Star
 <the single human-authorized outcome>
