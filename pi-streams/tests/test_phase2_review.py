@@ -180,6 +180,8 @@ class MissingLoadAckTests(CapacityFixture):
         self.assertNotEqual(denied.returncode, 0)
         self.assertEqual(self.state(self.stream)["coordinator_replacement"], intent, "a second replacement must not strand the pending first load in history")
         self.assertIn("checkpoint load", denied.stderr)
+        self.routes[0][3][:] = [item for item in self.routes[0][3] if item.get("id") != "another"]
+        self.stub.set_routes(self.routes)
         ticked = self.tick("2026-10-06T12:15:00Z")
         self.assertEqual(ticked.returncode, 0, ticked.stderr)
         self.assertTrue(any(item[0] == "GET" and item[1] == "/api/sessions/healthy/status" for item in self.stub.requests))

@@ -551,6 +551,12 @@ def successor_handoff(stream: Path, session: str) -> dict | None:
 
 
 def _begin_replacement(stream: Path, source, target: str, *, outcome: dict | None = None) -> ReplacementIntent:
+    previous = replacement_intent(stream)
+    if previous is not None:
+        if previous.phase != "complete":
+            raise StreamsError("another exact replacement intent owns this stream")
+        if previous.mode == "capacity" and previous.load.get("state") not in {"observed", "blocked", "stopped", "superseded"}:
+            raise StreamsError("Current checkpoint load must settle before another replacement; coordinator observation remains available")
     _replacement_inputs(stream, source.session)
     listing = piweb.list_sessions(source.worktree)
     _resolved, original = _replacement_native(stream, source, listing)
@@ -568,10 +574,7 @@ def _begin_replacement(stream: Path, source, target: str, *, outcome: dict | Non
     successor = _replacement_target(Path(source.worktree), target, source.model, source.thinking, listing) if target else {}
     intent = ReplacementIntent(uuid.uuid4().hex, source.session, target, "capacity" if outcome else "adopt", (stream / "threads.tsv").read_bytes().decode("utf-8"), _digest(stream / "STATE.md"), _workers(stream), _replacement_records(stream), original, successor, outcome or {})
     intent.registry_sha256 = hashlib.sha256(intent.registry.encode()).hexdigest()
-    previous = replacement_intent(stream)
     if previous is not None:
-        if previous.phase != "complete":
-            raise StreamsError("another exact replacement intent owns this stream")
         data = artifacts._read_tick_data(stream)
         data.setdefault("coordinator_replacement_history", []).append(asdict(previous))
         artifacts._save_tick_data(stream, data)
