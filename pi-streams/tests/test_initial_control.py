@@ -58,7 +58,7 @@ class InitialControlTests(TickCase):
         self.assertEqual((self.drive()['enabled'], self.drive()['remote_state'], self.drive()['remote_generation']), (True, 'on-confirmed', 'initial-epoch'))
         self.assertEqual([(r[1], r[3]) for r in self.stub.requests if r[0] == 'POST'], [('/api/sessions/coord/automatic-admission/initialize', {'allowed': True, 'initializeIfAbsent': True})])
 
-    def test_ordinary_tick_does_not_infer_bootstrap_from_ratification(self):
+    def test_ordinary_tick_does_not_infer_bootstrap_from_goals(self):
         self.unarmed()
         self.bootstrap_route()
         result = self.tick('2026-10-06T12:00:00Z')
@@ -116,15 +116,16 @@ class InitialControlTests(TickCase):
         self.assertEqual([r for r in self.stub.requests if r[0] == 'POST'], [])
         self.assertFalse(self.drive()['enabled'])
 
-    def test_unratified_charter_cannot_use_bootstrap(self):
+    def test_historical_negative_marker_does_not_block_bootstrap(self):
         self.unarmed()
         self.bootstrap_route()
         charter = self.stream / 'STATE.md'
-        charter.write_text(charter.read_text().replace('ratified: 2026-10-23 fixture human confirmation', 'ratified: no'))
+        charter.write_text(charter.read_text().replace('## Goals\n', '## Goals\nratified: no\n', 1))
         result = self.run_streams('drive', 'etl', 'on')
-        self.assertNotEqual(result.returncode, 0)
-        self.assertEqual([r for r in self.stub.requests if r[0] == 'POST'], [])
-        self.assertFalse(self.stub.automatic_admissions['coord']['durable'])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual([r[1] for r in self.stub.requests if r[0] == 'POST'], ['/api/sessions/coord/automatic-admission/initialize'])
+        self.assertTrue(self.stub.automatic_admissions['coord']['durable'])
+        self.assertTrue(self.drive()['enabled'])
 
     def test_bootstrap_rejects_an_undurable_receipt(self):
         self.unarmed()

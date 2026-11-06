@@ -54,6 +54,8 @@ class SpawnTests(EngineCase):
         self.stream_dir = (self.home / "etl").resolve()
         self.stream_dir.mkdir(parents=True)
         seed_ratified_stream(self.stream_dir, self.root.name)
+        path = self.stream_dir / "STATE.md"
+        path.write_text(path.read_text().replace("ratified: 2026-10-23 fixture human confirmation\n", "", 1))
         (self.stream_dir / "threads.tsv").write_text(HEADER, encoding="utf-8")
         self.register_stream("etl", self.stream_dir)
         self.stub.requests.clear()

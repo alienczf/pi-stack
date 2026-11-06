@@ -21,7 +21,7 @@ from engine.project import (
     stream_lock,
 )
 from engine.subscriptions import SOURCES, Subscription, load_subscriptions
-from engine.threads import Coordinator, Status, Thread, _native_session, load_threads, require_ratified, resolve_coordinator, save_threads, transition
+from engine.threads import Coordinator, NativeSession, Status, Thread, _native_session, load_threads, resolve_coordinator, save_threads, transition
 
 WAKE_KINDS = frozenset({"idle", "ask", "context", "stale-steer", "outage", "recovered", "subscription", "claim"})
 QUEUE_FLAGS = {"steer": "steer", "followUp": "follow-up"}
@@ -224,24 +224,32 @@ class StreamTick:
             self.state = load_state(self.state_path)
             self.loaded = True
             self.rows = load_threads(self.rows_path)
+            legacy = drive.reconcile_locked(self.stream_dir)
+            if drive.is_paused(self.stream_dir) and legacy is None:
+                return
             if self.rows and all(row.status in {Status.done, Status.archived} for row in self.rows):
                 self.archive_done()
                 self.flush()
                 return
             self.drive_enabled = drive.load(self.stream_dir).enabled
             self.automatic_paused = drive.is_paused(self.stream_dir)
-            if not self.automatic_paused:
-                for sid in artifacts._read_tick_data(self.stream_dir).get("failures", {}):
-                    owned = next((row for row in self.rows if row.session == sid), None)
-                    if owned is None or owned.status in {Status.done, Status.archived} or terminal_sessions.load(self.stream_dir, sid, owned.worktree) is not None:
-                        continue
-                    episode = failure.load(self.stream_dir, sid)
-                    if episode is not None and episode.state == "parked" and episode.kind not in {"usage-limit", "content-policy"} and episode.checkpoint is not None and (episode.authority is not None or failure_recovery.load(self.stream_dir, sid) is not None):
-                        try:
-                            failure_recovery.advance_locked(self.stream_dir, sid, episode.id, self.at, index=self.index, project=self.project)
-                        except (StreamsError, OSError) as exc:
-                            self.typed_failures.add(sid)
-                            self.fail(f"recovery {sid}: {exc}")
+            intent = replacement.replacement_intent(self.stream_dir)
+            if dcr.advance_capacity_replacement_locked(self.stream_dir) or intent is not None and intent.phase != "complete":
+                return
+            results = failure_recovery.resume_parked_locked(
+                self.stream_dir, self.at, index=self.index, project=self.project,
+                intent=legacy or failure_recovery.ResumeIntent.CONTINUE_OWNED,
+            )
+            for result in results:
+                if result.get("state") == "pending":
+                    sid = result["session"]
+                    self.typed_failures.add(sid)
+                    self.fail(f"recovery {sid}: {result['detail']}")
+            self.drive_enabled = drive.load(self.stream_dir).enabled
+            self.automatic_paused = drive.is_paused(self.stream_dir)
+            if self.automatic_paused:
+                self.flush()
+                return
             rotation = artifacts._read_tick_data(self.stream_dir).get("coordinator_rotation")
             if not self.automatic_paused and isinstance(rotation, dict) and rotation.get("phase") != "complete":
                 try:
@@ -265,8 +273,14 @@ class StreamTick:
                 self.failure_owned = self.observe_failure(resolved.row, resolved.native.info, resolved.native.status)
             if not self.automatic_paused and not self.failure_owned:
                 self.dcr_owned = dcr.step(self.index, self.project, self.stream, self.stream_dir, self.coordinator_resolution)
+                intent = replacement.replacement_intent(self.stream_dir)
+                if load_threads(self.rows_path) != self.rows or intent is not None and intent.phase != "complete":
+                    return
             self.check_claims()
             self.observe()
+            intent = replacement.replacement_intent(self.stream_dir)
+            if intent is not None and intent.phase != "complete":
+                return
             self.drive_owned = drive.step(self.stream_dir, self.coordinator_resolution, self.stalled, maintenance=self.dcr_owned or self.failure_owned)
             self.check_subscriptions()
             self.flush()
@@ -362,7 +376,7 @@ class StreamTick:
     def observe_failure(self, row: Thread, native: dict, status: dict) -> bool:
         for sid in artifacts._read_tick_data(self.stream_dir).get("failure_recoveries", {}):
             operation = failure_recovery.load(self.stream_dir, sid)
-            if operation is not None and operation.phase != "complete" and operation.fork == row.session:
+            if operation is not None and operation.phase not in {"complete", "rotated"} and operation.fork == row.session:
                 self.typed_failures.add(row.session)
                 return True
         piweb.register_stream_failure(row.session, row.worktree, self.stream_dir, status)
@@ -456,6 +470,11 @@ class StreamTick:
         if native.get("archived") is True:
             raise piweb.TerminalSession(row.session, "archived", "Exact native listing confirms archived session; a stale status runtime is not release authority")
         parked = self.observe_failure(row, native, status) if native else False
+        if native and not parked and not self.automatic_paused:
+            parked = dcr.step(self.index, self.project, self.stream, self.stream_dir, Coordinator(row, NativeSession(native, status)))
+            if load_threads(self.rows_path) != self.rows:
+                self.rows = load_threads(self.rows_path)
+                return
         # The last resend stopped after queue/clear, so what is not queued now was dropped.
         # A replayed prompt starts the thread again, whatever the status said before it.
         self.stalled = self.stalled or drive.is_stalled(status)
@@ -468,7 +487,7 @@ class StreamTick:
         self.state.sessions[row.session] = new
         if old.busy and not new.busy:
             self.emit("idle", row)
-        if row.session not in self.typed_failures:
+        if not parked and row.session not in self.typed_failures:
             self.check_outage(row)
         ask = status.get("pendingAsk")
         if isinstance(ask, dict) and isinstance(ask.get("askId"), str):
@@ -492,7 +511,7 @@ class StreamTick:
         ))
         if not stale:
             return
-        require_ratified(self.stream_dir)
+        artifacts._read_stream_state_locked(self.stream_dir)
         for text in stale:
             self.emit("stale-steer", row, text)
         new.replay = [[text, "steer" if text in stale else QUEUE_FLAGS[kind]] for text, kind in queued]
@@ -505,7 +524,7 @@ class StreamTick:
 
     def replay(self, row: Thread, seen: Seen, waiting: Counter[str]) -> bool:
         if seen.replay:
-            require_ratified(self.stream_dir)
+            artifacts._read_stream_state_locked(self.stream_dir)
         sent = False
         while seen.replay:
             text, behavior = seen.replay[0]
@@ -541,7 +560,7 @@ class StreamTick:
             return
         if coord is not None and self.out(coord):
             return
-        require_ratified(self.stream_dir)
+        artifacts._read_stream_state_locked(self.stream_dir)
         text = "\n".join([f"pi-streams tick {self.at}:", *(event.line() for event in self.state.pending)])
         sid, behavior = self.wake_target(coord)
         identity = delivery.new_identity()

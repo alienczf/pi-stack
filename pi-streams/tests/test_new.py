@@ -76,7 +76,7 @@ class NewTests(EngineCase):
         )
         self.assertRegex(cells[9], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
         self.assertEqual(len(cells), 10)
-        self.assertTrue((self.home / "etl" / "STATE.md").read_text(encoding="utf-8").startswith("## Goals\nratified: no\n"))
+        self.assertTrue((self.home / "etl" / "STATE.md").read_text(encoding="utf-8").startswith("## Goals\n\n### North Star\n"))
         self.assertFalse((self.home / "etl" / "STREAM.md").exists())
         self.assertEqual(git(Path(self.stream()), self.env, "log", "-1", "--format=%s").strip(), "pi-streams new etl")
         self.assertEqual(git(Path(self.stream()), self.env, "rev-list", "--count", "HEAD").strip(), "1")

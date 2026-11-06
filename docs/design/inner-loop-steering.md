@@ -1,5 +1,7 @@
 # Inner-loop steering: a neutral stream home for multi-repo, multi-team pi work
 
+Historical design only. The former kickoff interview and ratification workflow below is not current policy. Supplied ZF orders and Grok Bot relays can start in-scope work without that gate. See [pi-streams.md](pi-streams.md) for the current contract.
+
 Status: draft for ZF review. Date: 2026-10-06 (SGT). Scope: research and design only. Nothing on hpc180-options-01 was modified, no pi session was prompted, no BigQuery table was read or written, and pi-stack install config is unchanged.
 
 > **Read [pi-streams.md](pi-streams.md) first.** It is the design to build: Cursor Projects run on pi-web threads, with ZF's 2026-10-06 answers to §9. This doc is the evidence and research behind it. Where the two differ, pi-streams.md wins:

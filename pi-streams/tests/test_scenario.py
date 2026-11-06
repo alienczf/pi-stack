@@ -99,9 +99,6 @@ class ScenarioTests(EngineCase):
         self.assertEqual(new.stdout, f"http://127.0.0.1:8504\n{COORD_1}\n")
         self.assertEqual(self.stub.requests[-1][3], {"text": "/skill:stream-kickoff"})
 
-        state_md = self.home / "etl" / "STATE.md"
-        state_md.write_text(state_md.read_text(encoding="utf-8").replace("ratified: no", "ratified: 2026-10-06 ZF confirmed"), encoding="utf-8")
-
         self.stub.requests.clear()
         self.stub.set_routes([
             ("GET", "/api/sessions", 200, []),
@@ -124,7 +121,6 @@ class ScenarioTests(EngineCase):
         self.assertEqual(json.loads(status.stdout), {
             "streams": [{
                 "id": "etl",
-                "ratified": True,
                 "coordinator": {
                     "session": COORD_1,
                     "isStreaming": False,
@@ -144,7 +140,7 @@ class ScenarioTests(EngineCase):
         self.assertEqual(text.returncode, 0, text.stderr)
         self.assertEqual(
             text.stdout,
-            f"etl\tratified=yes\t{COORD_1}\tstreaming=no\ttokens=-\tmodel=gpt-6-astra\tthinking=xhigh\t"
+            f"etl\t{COORD_1}\tstreaming=no\ttokens=-\tmodel=gpt-6-astra\tthinking=xhigh\t"
             "cost=0.5\tthreads=active=1,waiting_quota=0,done=0,archived=0\tshare=0.25\n"
             "etl\tdrive=off\tdelivery=-\tremote=not-requested\n",
         )

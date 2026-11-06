@@ -30,9 +30,9 @@ Agents use CLI views instead of reading raw engine files. Kickoff can open the c
 
 `pi-streams status` lists every registered stream in index order. A malformed STATE, missing artifact, invalid registry, archived coordinator, unregistered native candidate, or native observation failure produces a diagnostic for that stream. Later streams remain visible. `status <id>` uses the same diagnostic format.
 
-JSON keeps the `streams` list and existing successful field values. Each failed entry has `id`, `path`, and an `error` object with `type` and `message`. Its `ratified`, `coordinator`, `threads`, and `coordinatorCostShare` fields are `null`, not negative health or authority findings. Text output prints a separate error line for each failed stream.
+JSON keeps the `streams` list and existing successful field values. Each failed entry has `id`, `path`, and an `error` object with `type` and `message`. Its `coordinator`, `threads`, and `coordinatorCostShare` fields are `null`, not negative health findings. Status has no runtime ratification field. Text output prints a separate error line for each failed stream.
 
-Every entry includes an independently read `drive` object. `known: true` means the local drive record was read successfully. Existing drive fields retain their meanings. An absent record uses the existing disabled default with `remote_state: "not-requested"`. This default does not confirm a native stop. An unreadable or invalid drive record has `known: false`, `enabled: null`, `remote_state: "unknown"`, and its own structured `error`. Text output shows `drive=on`, `drive=off`, or `drive=unknown`, plus the recorded remote state. A known local switch does not prove current native confirmation, stream health, ratification, or task acceptance.
+Every entry includes an independently read `drive` object. `known: true` means the local drive record was read successfully. Existing drive fields retain their meanings. An absent record uses the existing disabled default with `remote_state: "not-requested"`. This default does not confirm a native stop. An unreadable or invalid drive record has `known: false`, `enabled: null`, `remote_state: "unknown"`, and its own structured `error`. Text output shows `drive=on`, `drive=off`, or `drive=unknown`, plus the recorded remote state. A known local switch does not prove current native confirmation, stream health or task acceptance.
 
 Status exits 0 after successful stream enumeration, even if one or all streams have diagnostics. Callers inspect each entry's `error` and `drive.known`, not the command exit code, for stream observations. Index resolution, index parsing, and unknown named-stream errors remain command failures. Status does not repair artifacts, adopt candidates, change drive controls, or mutate stream state.
 
@@ -40,11 +40,10 @@ The names STREAM.md, DECISIONS.md, GOAL.md, and ACTIONS.md are retired from new 
 
 ## STATE shape
 
-A new stream starts explicitly unratified:
+A new stream starts without a ratification marker:
 
 ```markdown
 ## Goals
-ratified: no
 
 ### North Star
 <one mutable human-authorized outcome>
@@ -59,9 +58,9 @@ ratified: no
 ## Log
 ```
 
-The actual template expands Charter's labels for the interview. North Star remains one goal and has no completion flag. A current objective can finish, be replaced, or end a drive run without completing North Star.
+The actual template expands Charter's labels for the supplied task. North Star remains one goal and has no completion flag. A current objective can finish, be replaced, or end a drive run without completing North Star.
 
-The first Goals line holds ratification authority. The coordinator drafts Goals while the marker remains unratified. Only explicit human confirmation changes that marker. After ratification, North Star and Charter change only with human authorization. The narrow objective operation cannot modify authority or other sections. Marker syntax alone is not authenticated ratification or a dispatch safety proof.
+ZF's supplied orders and Grok Bot relays of his instructions can start in-scope reversible work without another interview, transport authentication, or required body labels. North Star and Charter change only with ZF authorization. The narrow objective operation cannot modify other sections. Historical `ratified:` lines remain documentary bytes, not an admission predicate. Structural STATE and Log validation still applies to dispatch and lifecycle operations.
 
 Goals and Rules are rewritten in place. Rules contains only human rulings still in force. A new ruling also gets a Log entry. A superseded ruling leaves Rules only after the engine preserves its exact old text in a timestamped rule-retired history file. The caller supplies the exact source span; ambiguous authority is not classified automatically.
 
@@ -81,7 +80,7 @@ Append records completed work, failures, or a received ZF steer. Its optional `-
 
 Objective replacement preserves every byte outside the current-objective body, including Unicode and line endings. It revalidates the exact structural boundary. A metadata-aware reader is required when Log bodies contain literal section headings.
 
-Ruling input requires human notice provenance. Retirement uses `--supersedes-file PATH` for the exact old Rules text. Notice IDs are not authentication credentials. Receiver-side authenticated intake and applied-steer receipt integration are later units. A failure never authorizes new rules, skills, memory, or environment repair.
+Ruling input requires human notice provenance. Retirement uses `--supersedes-file PATH` for the exact old Rules text. Notice IDs are not authentication credentials. Relay provenance records do not impose an authentication prerequisite on supplied orders. The separate relay adapter retains its transport checks. A failure never authorizes new rules, skills, memory, or environment repair.
 
 Only Log is append-only and capped at 30 entries. Bodies have no length budget. Agents never prune or rotate. The tick archives the oldest overflow on every canonical pass before event, project, drive, or outage gates. Goals, Rules, and intervening sections are not rotated.
 
@@ -103,13 +102,13 @@ Pending engine history paths are committed explicitly. Their receipt clears only
 
 ## Kickoff and work
 
-The kickoff scouts referenced repos/worktrees, PRs, sessions, and named artifact metadata read-only. It asks only for human decisions. Existing sessions require explicit adoption; same-directory presence is not authority to take over work.
+The kickoff fills Goals from supplied orders and scouts missing repo, worktree, PR, session, and named-artifact facts read-only. It asks only for missing decisions that block the next action. Existing sessions require explicit adoption; same-directory presence is not authority to take over work.
 
-Interview answers fill Goals' North Star and Charter. The immediate plan uses Current objective and Log, not another planning file. Acceptance follows the actual ask and agreed oracle. Reuse existing checks when sufficient. There is no demand for a new script or proof campaign for every small task.
+Supplied task details fill Goals' North Star and Charter. The immediate plan uses Current objective and Log, not another planning file. Acceptance follows the actual ask and agreed oracle. Reuse existing checks when sufficient. There is no demand for a new script or proof campaign for every small task.
 
 Writes and autonomy are explicit grants. Record a resource or spend limit only when the incoming task names it. There is no mandatory numeric-cap, dry-run, or cost-budget workflow. Normal tool timeouts and the explicitly requested Log count/maintenance thresholds are not resource budgets.
 
-Ratification follows the human's explicit confirmation, with the dated confirming words in Goals. Historical rulings are presented for confirmation before becoming active Rules. A recommendation is not permission to act outside the grant, and silence is never approval.
+No ratification step precedes authorized work. Retain available source words, dates, identity and hashes as provenance. Historical rulings do not become active Rules merely because they appear in history. A recommendation is not permission to act outside the grant, and silence is never approval.
 
 The coordinator never writes product code. Workers stay in their assigned worktrees, apart from the rendered handover, explicitly authorized small exact evidence copies, and authorized engine Log append. Generated briefs disable TODO/PLAN planning and point at current STATE. Close reads actual handover and requested acceptance evidence. It does not force a busy archive or turn a failure into autonomous policy/skill repair.
 
@@ -122,12 +121,12 @@ Required tool outputs stay in the worker's owned worktree, or as explicitly auth
 The artifact contract does not claim the remaining runtime fixes are complete:
 
 - S1's artifact commits still need after-stack disposable verification.
-- S2 provides exact coordinator selection, dispatch/ratification enforcement, receiving stop generations, application receipts, archived evidence, and checkpoint-bound explicit replacement. Normal wakes reuse the designated coordinator at every size and age. Old warm size/age settings are accepted but ignored. Explicit replacement requires current coordinator acknowledgement, exact STATE/handover hashes, stable unfinished-worker references, a clean tree, an idle logical native entry and no unresolved input/callback ownership. It never aborts work or migrates native callbacks. Archive/spawn interruption resumes only on an explicit retry with the exact saved attempt, not a background tick. The after-stack private checks remain separate evidence.
+- S2 provides exact coordinator selection, dispatch identity checks, receiving stop generations, application receipts, archived evidence, and checkpoint-bound explicit replacement. Normal wakes reuse the designated coordinator at every size and age. Old warm size/age settings are accepted but ignored. Explicit replacement requires current coordinator acknowledgement, exact STATE/handover hashes, stable unfinished-worker references, a clean tree, an idle logical native entry and no unresolved input/callback ownership. It never aborts work or migrates native callbacks. Archive/spawn interruption resumes only on an explicit retry with the exact saved attempt, not a background tick. The after-stack private checks remain separate evidence.
 - S2a owns explicit lossless stream-root migration, with preserved original bytes/provenance and no worker-worktree writes.
 - S3 owns same-session tick-observed 150k DCR and the fixed engine resume, including the receiving-side compaction/input boundary.
 - S4 owns cause-independent driven-stall goal reinjection through the actual argument-preserving skill adapter.
 - S5 owns saved-step usage-reset retry and the quiet off-host alert route.
-- S6 owns human-ratified failure recovery, exact-prefix fork/DCR, and narrowly scoped original retirement.
+- S6 owns engine-owned failure recovery, exact-prefix fork/DCR, and narrowly scoped original retirement.
 
 Do not enable production driving or DCR from this partial stack. Existing legacy runtime compatibility is not endorsement of its superseded size/age replacement policy. Canonical replacement pickup reads AGENTS/STATE and uses the shared current-goal resolver; replacement safety remains S2 work.
 

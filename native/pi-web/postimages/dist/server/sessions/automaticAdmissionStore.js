@@ -69,6 +69,14 @@ export class AutomaticAdmissionStore {
         if (this.operations.has(identity(ref).key))
             throw new AutomaticAdmissionRejected("Receiving control mutation is pending; preserve recovery originals");
     }
+    recoverySnapshot(ref) {
+        this.assertSettled(ref);
+        const { key } = identity(ref);
+        if (this.writing.has(key))
+            throw new AutomaticAdmissionRejected("Recovery control publication is pending");
+        this.records.delete(key);
+        return this.snapshot(ref);
+    }
     initialize(ref) {
         return this.serial(ref, async () => {
             if (this.read(ref) !== undefined)
@@ -214,9 +222,14 @@ export class AutomaticAdmissionStore {
             if (!lstatSync(file).isFile())
                 throw new Error("Automatic admission metadata is not a regular file");
             descriptor = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
-            if (!fstatSync(descriptor).isFile())
+            const before = fstatSync(descriptor);
+            if (!before.isFile())
                 throw new Error("Automatic admission metadata is not a regular file");
-            const value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(readFileSync(descriptor)));
+            const raw = readFileSync(descriptor);
+            const after = fstatSync(descriptor), current = lstatSync(file);
+            if ([after, current].some(stat => ["dev", "ino", "size", "mtimeMs", "ctimeMs"].some(key => stat[key] !== before[key])))
+                throw new Error("Automatic admission metadata changed while reading");
+            const value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(raw));
             if (!isRecord(value))
                 throw new Error("Invalid automatic admission metadata");
             const data = value;

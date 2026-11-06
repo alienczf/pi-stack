@@ -78,6 +78,22 @@ class FailureRecoveryTests(TickCase):
     def advance(self):
         return self.run_streams("failure", "advance", "etl", "--session", "coi", "--episode", self.episode["id"])
 
+    def test_explicit_resume_preserves_terminal_owner_before_any_native_query(self):
+        self.fixture()
+        state = self.state(self.stream)
+        state['terminal_sessions'] = {'coi': {'cwd': str(self.cwd), 'state': 'archived', 'detail': 'Retired owner'}}
+        tick = self.stream / 'log' / 'tick-state.json'
+        tick.write_text(json.dumps(state))
+        before = tick.read_bytes()
+        registry = (self.stream / 'threads.tsv').read_bytes()
+        self.stub.requests.clear()
+        result = self.run_streams('resume', 'etl', '--all-parked')
+        self.assertEqual((result.returncode, result.stderr), (0, ''), result.stdout)
+        self.assertEqual(json.loads(result.stdout), [{'session': 'coi', 'state': 'terminal-preserved', 'detail': 'archived'}])
+        self.assertEqual(tick.read_bytes(), before)
+        self.assertEqual((self.stream / 'threads.tsv').read_bytes(), registry)
+        self.assertEqual(self.stub.requests, [])
+
     def test_exact_native_result_rebinds_coordinator_and_preserves_original_lineage(self):
         self.fixture()
         result = self.advance()

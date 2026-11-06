@@ -8,7 +8,6 @@ STATUS_JSON = """\
   "streams": [
     {
       "id": "etl",
-      "ratified": false,
       "coordinator": {
         "session": "coord-1",
         "isStreaming": false,
