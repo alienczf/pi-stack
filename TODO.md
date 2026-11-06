@@ -7,7 +7,7 @@
 - [x] 3. Plan the fix. If it crosses a function boundary, `architect` first. Delegate implementation to a subagent using your configured bug-fix model (default `grok-4.7-xhigh-fast`) with a specific scope.
 - [x] 4. Verify on the same surface. The original repro now passes. "Inconclusive" or wrong-surface is not a pass. Flag it. Unit tests show branch behavior, not bug absence.
 - [x] 5. Stage the commits so the failing repro lands before the fix in git history. See the **tdd** skill for the failing-test-first cadence when the bug has a cheap local test path. Skip it when the test would be expensive, integration-heavy, or unclear.
-- [ ] 6. Run **Opening a PR**. Update the existing PR only. Do not merge.
+- [x] 6. Run **Opening a PR**. Updated the existing PR body and posted the repair evidence. PR #55 remains open and unmerged for re-review.
 
 ## Current scope and throughput checkpoint
 
@@ -21,7 +21,7 @@ The data shapes are a separately bound historical-dump recovery intent, the immu
 - [x] Implement historical-dump selection with exact checkpoint, current generation, role, assignment, archive, and stop protections.
 - [x] Record terminal failed load evidence, fence its successor, and scope post-publication ownership to the worker lane.
 - [x] Verify repeated ticks, restart reconciliation, negative safety cases, and the targeted acceptance suites. Parent final validation passed 89 tests without skips and three running-service cases after the pending-load guard. The unrelated baseline lane-health assertion still fails at ace53a4f. No full suite was repeated.
-- [ ] Push one fix wave to PR #55 and leave it open for re-review. Parent owns publication.
+- [x] Push one fix wave to PR #55 and leave it open for re-review. The parent pushed all runtime repairs through 98be5f52 and posted https://github.com/alienczf/pi-stack/pull/55#issuecomment-6694492612. No merge occurred.
 
 ## Phase-2 writer handoff
 
