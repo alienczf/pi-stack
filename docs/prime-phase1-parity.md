@@ -43,3 +43,40 @@ The complete unittest suite was attempted but interrupted at the writer deadline
 [`native/README.md`](../native/README.md) targets `@jmfederico/pi-web@1.202607.3` and bundled Pi packages at `0.82.1`. No supported native Prime adapter is implemented here. These checks establish shared engine and Pi adapter parity only. Native Prime capability mapping and end-to-end proof remain blocked. Capability admission is unchanged.
 
 Newly authored changes are the acceptance runner, task tests, this explanation, the append-only [decision trail](prime-phase1-parity-decisions.tsv), TODO progress, HTTP-stub identity decoding, and stale DCR test corrections. Engine and native implementation changes are inherited exactly from merged main. Validation changed no live state, credentials, installed model, or production streams. No deployment occurred. The parent reviewed the final authored diff on the same model. Cross-model review was not performed under the supplied no-model-switch constraint.
+
+
+## Phase-2 review repairs
+
+The preceding sections record Phase-1 delivery at `ace53a4f`. Phase-2 changes shared engine behavior beyond source parity. Both findings in https://github.com/alienczf/pi-stack/pull/55#issuecomment-6692763141 are repaired for the supported idle case.
+
+`HistoricalRecovery` keeps the stalled SYNC operation, immutable selected dump, current receiving token, retirement leaf and original native digest separate. The alternative was to make `ReplacementIntent` select and interpret historical operations. The separate intent keeps replacement responsible for publication rather than choosing recovery authority. The stalled operation and validated dump remain unchanged. The handoff retains both STATE snapshots, the original archive, current bounded assignment, worker references and input dispositions.
+
+Recovery selects an older validated dump only after the later exact SYNC user message has a completed idle turn without `ready`. An active turn, unknown callbacks, pending input, changed generation, malformed checkpoint or native unresolved effect does not acquire retirement authority. `_capacity_checkpoint` and native lifecycle checks are unchanged. The existing native checkpoint archive path provides the final ownership fence. No native overlay change or manifest regeneration was required.
+
+A terminal load without its exact acknowledgement receives a blocked disposition with persisted user and assistant entry hashes. `checkpoint_load_pending` fences delivery, DCR, tick failure observation, automatic parked resume and explicit failure advance. A failed worker loader remains visible in tick health without preventing healthy coordinator observation. Neither a terminal response nor an HTTP receipt counts as a successful load. No task or command is replayed.
+
+### Phase-2 verification
+
+The first commit, `344159a3`, contains three failing CLI regressions. `ac71e9c3` fixes load disposition and lane ownership. `9fb8922e` adds separately bound historical recovery. `36337253` adds failing safety-sibling regressions before `6d3b8829` fixes recovery bypass and loader exceptions. `419d1dd3` also fences unloaded coordinator failure observation.
+
+Run the real-service check with the frozen static package:
+
+```sh
+python3 scripts/check-pr55-recovery.py --source-tar /home/alphalab/.local/state/pi-stack-backups/20261103T125658.584050Z/pi-web.tar --logs /tmp/pr55-phase2-writer/final-live-three
+```
+
+The final run passed coordinator historical recovery, worker historical recovery and missing worker-load acknowledgement. Each first completed a real SYNC, native compaction and RESUME. It then stalled a distinct later SYNC. The fixture retained `openai-codex/gpt-6.1-sol` with `xhigh`, used simulated provider responses, and denied external network connections. All three cases completed supported cleanup. Evidence is `/tmp/pr55-phase2-writer/final-live-three/run-1098150765534b3285bb855caa18e6e2/results.json`.
+
+The same service probe against an isolated `ace53a4f` engine failed with `P1 later idle SYNC did not recover from its retained validated dump`. Its supported cleanup passed. Evidence is `/tmp/pr55-phase2-writer-live-red/run-8af4f62f504346508c2ff5c109480aec/results.json`. CLI red and green logs are under `/tmp/pr55-phase2-writer/logs`.
+
+The initial focused DCR and capacity check passed 34 tests. Final affected validation passed 24 tests with this command:
+
+```sh
+PYTHONPATH=pi-streams:pi-streams/tests python3 -m unittest -v test_phase2_review test_phase2_acceptance test_failure_recovery test_mass_resume
+```
+
+The existing Phase-1 focused acceptance and new regressions ran with a disposable native package in a 28-test command. Twenty-seven tests passed. `test_recovery_lane_isolation.RecoveryLaneIsolationTests.test_unresolved_job_in_ratified_worker_does_not_block_other_authorized_lanes` failed because tick health returned success rather than the expected failure. The same test fails unchanged at `ace53a4f`. It is not fixed in this bounded pass. Logs are `final-focused.log` and `baseline-lane-check.log` in `/tmp/pr55-phase2-writer/logs`. No full suite was repeated.
+
+An additional `worker-load-error` diagnostic demonstrated the native parked-failure fence and blocked load evidence. Supported stream close and archive then correctly refused that parked successor. The strengthened verification runner returned failure rather than accepting process and path cleanup alone. That diagnostic is opt-in, not part of the three passing acceptance scenarios. Evidence is `/tmp/pr55-phase2-writer/final-live/run-e50ddf1e4ec142bd95bb5bd0aa86cc32/results.json`. Safe automatic retirement of an active or parked native failure without its required ownership proof is not claimed.
+
+All writer-owned fixture processes stopped. Disposable package copies, baseline source copy and session scratch paths were removed. Evidence logs remain outside the worktree. Native Prime support, full-suite completion and general recovery through indefinitely active or unknown owners remain outside this proof. The parent owns final review, independent reruns and publication. The child did not push, update the PR, merge, change credentials, edit a live install or contact a provider.

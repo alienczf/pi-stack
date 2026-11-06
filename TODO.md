@@ -1,4 +1,37 @@
-# Phase-1 Prime stream parity
+# Phase-2 BLOCK fixes for PR #55
+
+## Bug fix playbook
+
+- [x] 1. Reproduce it yourself on the matching surface via the control skill (Non-negotiables), even when a debug or instrumentation protocol says to ask the user to reproduce. Ask the user only with a stated, specific reason the control surface cannot reach the target, and only after driving it as far as it goes. If it won't reproduce directly, synthesize the trigger, tighten conditions, or instrument until it fires.
+- [x] 2. Binary-search the cause. Form the candidate hypotheses, then rule them out until one survives. Seed them with `how` over the affected subsystem and the **why** skill for regression history. Each pass, take the split that cuts the most remaining problem space, get runtime evidence, eliminate. When program state is unclear, add instrumentation or logging and read it as the code runs. Don't guess. Drive a long or stubborn hunt with Cursor's `/loop` command. Confirm the surviving *mechanism* with runtime evidence before the step-3 architect/interrogate fan-out.
+- [x] 3. Plan the fix. If it crosses a function boundary, `architect` first. Delegate implementation to a subagent using your configured bug-fix model (default `grok-4.7-xhigh-fast`) with a specific scope.
+- [x] 4. Verify on the same surface. The original repro now passes. "Inconclusive" or wrong-surface is not a pass. Flag it. Unit tests show branch behavior, not bug absence.
+- [x] 5. Stage the commits so the failing repro lands before the fix in git history. See the **tdd** skill for the failing-test-first cadence when the bug has a cheap local test path. Skip it when the test would be expensive, integration-heavy, or unclear.
+- [ ] 6. Run **Opening a PR**. Update the existing PR only. Do not merge.
+
+## Current scope and throughput checkpoint
+
+Address P1 and P2 from https://github.com/alienczf/pi-stack/pull/55#issuecomment-6692763141 at ace53a4f. One child owns implementation in this worktree. The parent independently reproduces and explores design in disposable state, then verifies and publishes. All work remains on openai-codex/gpt-6.1-sol xhigh. No live-install edits, provider requests, model changes, force-push, or merge. This is a bounded review-fix pass, not a merge-readiness watcher.
+
+The data shapes are a separately bound historical-dump recovery intent, the immutable validated dump record, current retirement identity, and a terminal lane-local load disposition. The selected dump must not impersonate the stalled SYNC operation. No acknowledgement means no worker task admission, but unrelated coordinator observation must continue.
+
+- [x] Reproduce stalled SYNC with retained dump and missing worker-load acknowledgement on the CLI and disposable native service.
+- [x] Compare distinct recovery-intent and lane-ownership designs before implementation.
+- [x] Add red-first regression tests for both findings and safety fences.
+- [x] Implement historical-dump selection with exact checkpoint, current generation, role, assignment, archive, and stop protections.
+- [x] Record terminal failed load evidence, fence its successor, and scope post-publication ownership to the worker lane.
+- [x] Verify repeated ticks, restart reconciliation, negative safety cases, and the targeted acceptance suites. Final affected checks passed 24 tests. The 28-test focused check had one unchanged baseline failure. No full suite was repeated.
+- [ ] Push one fix wave to PR #55 and leave it open for re-review. Parent owns publication.
+
+## Phase-2 writer handoff
+
+The writer completed bounded P1 and P2 fixes through `419d1dd3`. `HistoricalRecovery` freezes the selected dump separately from the later stalled SYNC, current generation and retirement leaf. Native idle archival still enforces callback, input, effect and lifecycle ownership. Active or unknown owners remain fenced. Terminal unacknowledged loads retain transcript hashes and block successor task and failure-recovery admission. Worker loading and loader exceptions no longer starve coordinator observation.
+
+Delegation, model diversity, and child publication are skipped under the explicit one-writer, same-model, no-children contract. The parent owns review and publication. No native overlay change or manifest regeneration was necessary.
+
+The final three running-service scenarios passed with supported stream close, archive dispositions, process stop and scratch cleanup. Evidence is `/tmp/pr55-phase2-writer/final-live-three/run-1098150765534b3285bb855caa18e6e2/results.json`. CLI red, green and unchanged-baseline evidence is under `/tmp/pr55-phase2-writer/logs`. An extra native model-error probe proved its successor stayed fenced, but supported cleanup refused its parked failure. The strengthened runner correctly failed that diagnostic. No lifecycle bypass was added. Full native Prime support and unconditional active-owner recovery remain unverified.
+
+# Previous Phase-1 work
 
 - [x] Read the Principles section of the poteto-mode skill.
 - [x] Phase A: Frame
