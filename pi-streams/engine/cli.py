@@ -123,7 +123,7 @@ def _parser() -> argparse.ArgumentParser:
     migrate.add_argument("--mapping", help="explicit JSON byte-span authority/history map")
     migrate.add_argument("--history-mode", choices=("git", "snapshot"), default="git", help="snapshot retains exact source bytes with migration-start timestamps and avoids a Git history walk")
     migrate.add_argument("--relay-source", help="exact dated standing-grant source JSON for the migration plan; not transport authentication")
-    migrate.add_argument("--recovery-sources", help="documentary source-repair JSON version 2 for --plan only; never ratification or new execution authority")
+    migrate.add_argument("--recovery-sources", help="documentary source-repair JSON version 2 for --plan only; never new execution authority")
 
     upgrade = sub.add_parser("upgrade")
     upgrade.add_argument("stream_id", metavar="id", nargs="?")

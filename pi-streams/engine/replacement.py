@@ -12,7 +12,7 @@ from pathlib import Path
 
 from engine import StreamsError, artifacts, clock, delivery, failure, failure_recovery, piweb, sessionlog
 from engine.project import Project, _sync_directory, _write, commit_repo, git, require_stream
-from engine.threads import Coordinator, KICKOFF, Status, _canonical_stream, _has_ratified_authority, _native_session, _save_start, _start_record, _thread_row, _validated_handover, designated_coordinator, dump_threads, ensure_coordinator, load_threads, resolve_coordinator, save_threads, transition, require_ratified
+from engine.threads import Coordinator, Status, _canonical_stream, _native_session, _save_start, _start_record, _thread_row, _validated_handover, designated_coordinator, dump_threads, ensure_coordinator, load_threads, resolve_coordinator, save_threads, transition
 
 
 @contextmanager
@@ -173,8 +173,6 @@ def _idle(resolved) -> None:
 
 def _pickup(stream: Path) -> str:
     state = artifacts._read_stream_state_locked(stream)
-    if not _has_ratified_authority(state):
-        return KICKOFF
     return (
         f"You are the new coordinator for stream {stream.name}. "
         f"Read {stream}/AGENTS.md and {stream}/STATE.md before acting. "
@@ -209,7 +207,7 @@ def _healthy_source(resolved) -> dict:
 
 def rotate_locked(index: Path, project: Project, stream_id: str) -> str:
     stream = require_stream(index, project.info.name, stream_id)
-    require_ratified(stream)
+    artifacts._read_stream_state_locked(stream)
     data = artifacts._read_tick_data(stream)
     checkpoint = data.get("coordinator_checkpoint")
     operation = data.get("coordinator_rotation")

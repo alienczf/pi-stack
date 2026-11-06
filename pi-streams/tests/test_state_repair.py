@@ -183,7 +183,7 @@ class ActiveStateRepairTests(EngineCase):
         status = self.run_streams('status', self.stream.name, '--json')
         self.assertEqual(status.returncode, 0, status.stderr)
         report = json.loads(status.stdout)['streams'][0]
-        self.assertTrue(report['ratified'])
+        self.assertNotIn('ratified', report)
         self.assertIsNone(report['coordinator'])
         self.assertEqual(report['drive'], {'known': True, 'enabled': False, 'run_id': '', 'sequence': 0, 'current_delivery': '', 'desired': None, 'remote_state': 'not-requested', 'remote_generation': '', 'resume_original': ''})
         self.assertEqual({name: (self.stream / name).read_bytes() for name in frozen}, frozen)

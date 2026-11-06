@@ -21,7 +21,7 @@ from engine.project import (
     stream_lock,
 )
 from engine.subscriptions import SOURCES, Subscription, load_subscriptions
-from engine.threads import Coordinator, Status, Thread, _native_session, load_threads, require_ratified, resolve_coordinator, save_threads, transition
+from engine.threads import Coordinator, Status, Thread, _native_session, load_threads, resolve_coordinator, save_threads, transition
 
 WAKE_KINDS = frozenset({"idle", "ask", "context", "stale-steer", "outage", "recovered", "subscription", "claim"})
 QUEUE_FLAGS = {"steer": "steer", "followUp": "follow-up"}
@@ -503,7 +503,7 @@ class StreamTick:
         ))
         if not stale:
             return
-        require_ratified(self.stream_dir)
+        artifacts._read_stream_state_locked(self.stream_dir)
         for text in stale:
             self.emit("stale-steer", row, text)
         new.replay = [[text, "steer" if text in stale else QUEUE_FLAGS[kind]] for text, kind in queued]
@@ -516,7 +516,7 @@ class StreamTick:
 
     def replay(self, row: Thread, seen: Seen, waiting: Counter[str]) -> bool:
         if seen.replay:
-            require_ratified(self.stream_dir)
+            artifacts._read_stream_state_locked(self.stream_dir)
         sent = False
         while seen.replay:
             text, behavior = seen.replay[0]
@@ -552,7 +552,7 @@ class StreamTick:
             return
         if coord is not None and self.out(coord):
             return
-        require_ratified(self.stream_dir)
+        artifacts._read_stream_state_locked(self.stream_dir)
         text = "\n".join([f"pi-streams tick {self.at}:", *(event.line() for event in self.state.pending)])
         sid, behavior = self.wake_target(coord)
         identity = delivery.new_identity()

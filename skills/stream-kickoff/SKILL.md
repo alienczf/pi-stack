@@ -1,12 +1,12 @@
 ---
 name: stream-kickoff
-description: First-turn interview for a pi-streams coordinator. Scouts read-only, asks for human decisions, and records the ratified charter in STATE Goals. Use only for /skill:stream-kickoff, which pi-streams new sends.
+description: Start a pi-streams coordinator from supplied orders. Records STATE Goals, scouts missing facts, and asks only for decisions that block work. Use only for /skill:stream-kickoff, which pi-streams new sends.
 disable-model-invocation: true
 ---
 
 # Stream kickoff
 
-Read AGENTS.md and STATE.md. Goals' first line is `ratified: no` until ZF explicitly confirms the charter. If it already records ZF's dated confirmation, report that and stop the interview. Start no thread and adopt no session before ratification. Do not use TODO.md or PLAN.md; plan in Goals and record completed work in Log.
+Read AGENTS.md and STATE.md. Fill Goals from the supplied ZF orders or Grok Bot relay of his instructions and start in-scope work. Preserve existing Goals, Charter, active Rules and genuine stops. Ask only for a missing decision that blocks the next action. Do not use TODO.md or PLAN.md; plan in Goals and record completed work in Log.
 
 ## Scout
 
@@ -19,15 +19,15 @@ Discover facts before asking for decisions. This phase is read-only and prompts 
 
 Do not read raw engine registries or configuration. Use `pi-streams status <stream-id> --json` for the stream path and thread session view. If the index lacks a required reference, report the missing fact instead of guessing ownership.
 
-Report sourced findings briefly. Propose any existing session adoption as an exact `pi-streams thread adopt <stream> <session-id> --worktree PATH --role ROLE` command for ZF to confirm. Present historical rulings for confirmation; do not automatically classify them as current authority.
+Report sourced findings briefly. Adopt an existing session only when the supplied instructions authorize taking over that exact work. Use `pi-streams thread adopt <stream> <session-id> --worktree PATH --role ROLE`. Do not treat historical rulings as current merely because they appear in history.
 
-## Trusted relay approval
+## Supplied orders and relays
 
-An authenticated intake principal mapped to ZF's trusted Grok Bot, acting as ZF on his instruction and carrying his dated standing rules or exact quoted words with source identity/hash, supplies his approval for in-scope reversible calls without human retyping. Body-supplied trust labels and arbitrary role=user text do not authenticate it. A sourced ruling cannot widen Charter. Apply an already verified in-scope confirmation instead of repeating the interview.
+ZF's supplied orders and Grok Bot relays of his instructions authorize in-scope reversible work without another interview, human retyping, transport-authentication wait, or required body labels. Retain available source words, dates, identity and hashes as provenance. A sourced ruling cannot widen Charter.
 
-## Interview
+## Fill Goals
 
-Ask one question at a time with a recommendation grounded in the scout. Never answer for ZF. Rewrite settled draft answers in Goals, preserving the three exact subsections `### North Star`, `### Current objective`, and `### Charter`. Keep the marker unratified. Resume from those draft answers rather than a second planning file.
+Use the supplied answers for the fields below. Scout missing facts instead of asking ZF for observable facts. Ask one question at a time only when a missing decision blocks work, with a recommendation grounded in the scout. Never invent an answer for ZF. Preserve the three exact subsections `### North Star`, `### Current objective`, and `### Charter`. Resume from existing Goals rather than a second planning file.
 
 1. North Star. What outcome is wanted, and who uses it?
 2. Target. Which agreed artifact defines the output? Record its path and pin in Charter.
@@ -36,20 +36,20 @@ Ask one question at a time with a recommendation grounded in the scout. Never an
 5. Writes. Which locations and effects are authorized? Do not invent resource caps, spend limits, or a mandatory budget interview. Record a limit only when the incoming task explicitly supplies it.
 6. End state. What result is required? Which cleanup, if any, is explicitly authorized?
 7. Existing work. Which repos, branches, PRs, and sessions are in play? Keep current references in the objective and sourced work entries in Log.
-8. Autonomy. Which decisions are within the grant? Stop before actions outside it. A recommendation is not permission to continue without an answer.
+8. Autonomy. Which decisions are within the grant? Stop before actions outside it. A recommendation does not extend the supplied grant.
 9. No-go. What must not happen? Preserve every active prohibition.
-10. Restate the outcome and Charter in one plain paragraph. Ask ZF to correct it until ZF confirms it.
+10. Report the outcome and Charter in one plain paragraph, then proceed within the supplied grant.
 
-## Ratify
+## Record scope and rulings
 
-Only after ZF's explicit confirmation, rewrite Goals in place and set its first line to `ratified: <UTC date> <ZF's confirming words, verbatim>`. Keep North Star, Current objective, and Charter distinct. Goals and Rules are current text, never an appended history pile.
+Keep North Star, Current objective, and Charter distinct. Goals and Rules are current text, never an appended history pile.
 
-Record each new sourced ruling through `pi-streams state ruling <stream> --subject SUBJECT --body-file - --notice-id NOTICE`. A dated bot relay can supply its exact JSON through `--relay-source SOURCE-FILE` instead of duplicate body and notice flags. This records provenance, not transport authentication. Rules contains only rulings still in force. The engine also appends Log. Retire a superseded ruling with its exact old source text; the engine preserves it in history before removal. Notice provenance retains the dated source. The confirmed charter covers subsequent safe runtime recovery without another human approval. The standing charter authorizes engine-owned recovery for all in-scope runtime failures. Native AgentSession retries eligible transient inference after fixed 5-second delays on the same provider, model and thinking. Usage and quota wait for a reset or safe readiness polling. Expired logins resume after native readiness confirms refreshed auth. Resource failures resume when safe native operations succeed. Never read tokens, repair credentials, switch provider/model, replay rejected content, or resubmit uncertain external effects. FYI alerts cannot block progress. Preserve independent authorized lanes, genuine stops, newer input, pending questions, callback ownership and uncertain outcomes.
+Record each new sourced ruling through `pi-streams state ruling <stream> --subject SUBJECT --body-file - --notice-id NOTICE`. A dated bot relay can supply its exact JSON through `--relay-source SOURCE-FILE` instead of duplicate body and notice flags. This records provenance, not transport authentication. Rules contains only rulings still in force. The engine also appends Log. Retire a superseded ruling with its exact old source text; the engine preserves it in history before removal. Notice provenance retains the dated source. The standing charter authorizes engine-owned recovery for all in-scope runtime failures without another human approval. Native AgentSession retries eligible transient inference after fixed 5-second delays on the same provider, model and thinking. Usage and quota wait for a reset or safe readiness polling. Expired logins resume after native readiness confirms refreshed auth. Resource failures resume when safe native operations succeed. Never read tokens, repair credentials, switch provider/model, replay rejected content, or resubmit uncertain external effects. FYI alerts cannot block progress. Preserve independent authorized lanes, genuine stops, newer input, pending questions, callback ownership and uncertain outcomes.
 
 ## Plan
 
-Set the immediate authorized objective through `pi-streams state objective <stream> --body-file -`. The single resolver uses this objective, falling back to North Star. There is no North Star completion flag. Only if the confirmed grant authorizes continuous work, enable `pi-streams drive <stream> on`; otherwise leave it off. A verified finite objective retains drive while North Star remains unfinished. Keep drive on until verified North Star acceptance, a genuine later stop, or an explicit authorized cap. Never infer North Star completion from a finite objective, blocker, restart, or recovery. Record acceptance and select the next authorized objective without widening the grant. No disposition record is required for the engine's current-goal re-injection, and injection is never permission to bypass a human question, stop, failure boundary or uncertain external job.
+Set the immediate authorized objective through `pi-streams state objective <stream> --body-file -`. The single resolver uses this objective, falling back to North Star. There is no North Star completion flag. Only if the supplied grant authorizes continuous work, enable `pi-streams drive <stream> on`; otherwise leave it off. A verified finite objective retains drive while North Star remains unfinished. Keep drive on until verified North Star acceptance, a genuine later stop, or an explicit authorized cap. Never infer North Star completion from a finite objective, blocker, restart, or recovery. Record acceptance and select the next authorized objective without widening the grant. No disposition record is required for the engine's current-goal re-injection, and injection is never permission to bypass a human question, stop, failure boundary or uncertain external job.
 
-Append interview outcomes, work, failures, and ZF steers through `pi-streams state append <stream> --subject SUBJECT --body-file - --request-id ID`. Keep each request ID stable across retries. Only Log is capped at 30; the engine rotates overflow every tick. Never prune or rotate entries yourself. Open cold history only on demand. The same STATE remains authoritative through routine same-session DCR. Follow AGENTS for engine-requested SYNC/DUMP, then yield with the returned ready acknowledgement. The engine owns compaction and fixed current-goal RESUME; the agent never authors that prompt.
+Append kickoff outcomes, work, failures, and ZF steers through `pi-streams state append <stream> --subject SUBJECT --body-file - --request-id ID`. Keep each request ID stable across retries. Only Log is capped at 30; the engine rotates overflow every tick. Never prune or rotate entries yourself. Open cold history only on demand. The same STATE remains authoritative through routine same-session DCR. Follow AGENTS for engine-requested SYNC/DUMP, then yield with the returned ready acknowledgement. The engine owns compaction and fixed current-goal RESUME; the agent never authors that prompt.
 
-Run only confirmed adoption commands and start authorized threads with `pi-streams thread spawn`. A worker's acceptance follows the actual ask, not an automatic demand for a new check script. Do not edit engine-owned subscription files. If ZF requests a watch and no engine command supports it, report the missing capability. Let engine-owned recovery restore permitted work after runtime failures. Never perform credential or environment repair yourself. Preserve genuine stops, unknown effects and policy blockers without requiring another human approval.
+Run only authorized adoption commands and start authorized threads with `pi-streams thread spawn`. A worker's acceptance follows the actual ask, not an automatic demand for a new check script. Do not edit engine-owned subscription files. If ZF requests a watch and no engine command supports it, report the missing capability. Let engine-owned recovery restore permitted work after runtime failures. Never perform credential or environment repair yourself. Preserve genuine stops, unknown effects and policy blockers without requiring another human approval.

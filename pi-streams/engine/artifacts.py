@@ -16,7 +16,7 @@ from engine.project import STATE_SCHEMA, _sync_directory, _write, assert_artifac
 _HEADER = re.compile(rb" {0,3}(#{1,6})(?:[ \t]+(.*)|[ \t]*)")
 _FENCE = re.compile(rb" {0,3}(`{3,}|~{3,})(.*)")
 _CLOSING_HASHES = re.compile(rb"(?:[ \t]+|^)#+[ \t]*$")
-_RATIFIED = re.compile(rb"ratified:(?:[ \t].*)?")
+_LEGACY_MARKER = re.compile(rb"ratified:(?:[ \t].*)?")
 
 
 @dataclass(frozen=True)
@@ -39,7 +39,7 @@ class StreamState:
     rules: Section
     log: Section
     extras: tuple[Section, ...]
-    authority: ByteSpan
+    legacy_marker: ByteSpan | None
     north_star: Section
     current_objective: Section
     charter: Section
@@ -119,38 +119,18 @@ def parse_state(source: bytes, *, log_size: int | None = None) -> StreamState:
         for index, heading in enumerate(goal_headers)
     )
     first_line = source[goals.body.start:goals.body.end].splitlines(keepends=True)[0]
-    if not _RATIFIED.fullmatch(first_line.rstrip(b"\r\n")):
-        raise StreamsError("STATE Goals must start with its ratified: marker")
-    authority = ByteSpan(goals.body.start, goals.body.start + len(first_line))
-    if source[authority.end:goal_sections[0].heading.start].strip():
+    legacy_marker = (ByteSpan(goals.body.start, goals.body.start + len(first_line))
+                     if _LEGACY_MARKER.fullmatch(first_line.rstrip(b"\r\n")) else None)
+    preamble_end = legacy_marker.end if legacy_marker is not None else goals.body.start
+    if source[preamble_end:goal_sections[0].heading.start].strip():
         raise StreamsError("STATE Goals has content before North Star")
     north_star, current_objective, charter = goal_sections
     if not source[north_star.body.start:north_star.body.end].decode("utf-8").strip():
         raise StreamsError("STATE North Star is empty")
     return StreamState(
-        source, goals, sections[1], sections[-1], sections[2:-1], authority,
+        source, goals, sections[1], sections[-1], sections[2:-1], legacy_marker,
         north_star, current_objective, charter,
     )
-
-
-def has_ratified_authority_line(line: str) -> bool:
-    if len(line.splitlines()) != 1:
-        return False
-    match = re.fullmatch(r"ratified:[ \t]+(\S+)[ \t]+(.+)", line.rstrip("\r\n"))
-    if match is None:
-        return False
-    reference, provenance = match.groups()
-    if reference.casefold() == "zf":
-        return re.fullmatch(r"notice[ \t]+\S.*", provenance, re.IGNORECASE) is not None
-    if re.fullmatch(r"\d{4}-\d{2}-\d{2}\.", reference):
-        reference = reference[:-1]
-    if re.fullmatch(r"\d{4}-\d{2}-\d{2}(?:T\S+)?", reference) is None:
-        return False
-    try:
-        stamp = datetime.fromisoformat(reference)
-    except ValueError:
-        return False
-    return bool(provenance.strip()) and ("T" not in reference or stamp.tzinfo is not None)
 
 
 def resolve_current_goal(state: StreamState) -> str:
