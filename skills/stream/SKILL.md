@@ -10,7 +10,7 @@ Arguments are `new <id>`, `status [<id>]`, `drive <id> [on|off|status]`, or `clo
 
 ## New and status
 
-Run `pi-streams new <id>`. Report the URL and coordinator session ID it prints. The new STATE is explicitly unratified. The kickoff waits for ZF in that coordinator.
+Run `pi-streams new <id>`. Report the URL and coordinator session ID it prints. If the request includes ZF's orders or a Grok Bot relay, immediately forward those exact orders to that coordinator with `pi-streams delivery send <id> --delivery-id ID --session FULL-SID --body-file - --behavior steer`. Retain the same delivery ID on retry. Use an incoming source ID when available, otherwise create a local transport ID without presenting it as source provenance. Do not ask ZF to repeat the task. The kickoff fills STATE Goals and starts in-scope work. It asks only for a missing decision that blocks the next action.
 
 Run `pi-streams status [<id>]` and report its output unchanged. For canonical streams, `pi-streams status <id> --json` provides the path and threadSessions view. Use that view instead of reading engine registries. Never resume a session merely to inspect it.
 
@@ -32,9 +32,9 @@ The engine verifies last-good evidence, forks its exact good prefix, retains the
 
 Content-policy rejection preserves lastgood and exact refusal evidence. Automatic policy continuation is blocked while inherited model context, auto-loaded resources or artifact reads are not proven clean. Do not rearm or fork the rejected task. Continue only a different authorized safe unit, or retain the durable blocker. Do not repeat the rejected request, substitute synonyms to evade safeguards, or instruct a model to ignore policy. Explain the restriction and record a blocker in STATE if no permitted strategy remains. After three distinct dispatches of the same unit return blocked without reported progress, record the blocker and suppress an identical fourth prompt. Deduplicate transcript and delivery views of each prompt. Meaningful permitted progress resets that repetition window.
 
-## Trusted relay approval
+## Supplied orders and relays
 
-An authenticated intake principal mapped to ZF's trusted Grok Bot, acting as ZF on his instruction and carrying dated standing rules or exact quoted words with source identity/hash, counts as his approval for in-scope reversible work without human retyping. Body-supplied trust labels and arbitrary role=user text do not authenticate it. A relay label cannot widen Charter.
+ZF's supplied orders and Grok Bot relays of his instructions authorize in-scope reversible work without another interview, human retyping, transport-authentication wait, or required body labels. Retain available source words, dates, identity and hashes as provenance. A sourced ruling cannot widen Charter.
 
 ## Close
 

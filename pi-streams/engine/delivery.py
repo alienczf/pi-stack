@@ -270,8 +270,6 @@ def _require_destination(stream_dir: Path, record: Delivery, session: str) -> di
 
 
 def send_locked(stream_dir: Path, identity: str) -> dict:
-    from engine.threads import require_ratified
-
     record = _get(stream_dir, identity)
     if record.state == "sending":
         record.state = "uncertain"
@@ -281,7 +279,7 @@ def send_locked(stream_dir: Path, identity: str) -> dict:
         return record.public()
     status = _require_destination(stream_dir, record, record.session)
     if record.origin in ("tick", "drive"):
-        require_ratified(stream_dir)
+        artifacts._read_stream_state_locked(stream_dir)
         if record.automatic is None:
             record.state = "blocked"
             record.detail = "No saved automatic admission generation; reconcile the old request without renewing it."

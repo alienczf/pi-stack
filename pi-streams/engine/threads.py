@@ -174,18 +174,6 @@ def save_threads(path: Path, rows: list[Thread]) -> None:
     _write(path, dump_threads(rows))
 
 
-def is_ratified(text: str) -> bool:
-    marker = "ratified: "
-    for line in text.splitlines():
-        at = line.find(marker)
-        if at < 0:
-            continue
-        rest = line[at + len(marker) :].strip()
-        value = rest.split(" ", 1)[0] if rest else ""
-        return value != "" and value != "no"
-    return False
-
-
 def designated_coordinator(rows: list[Thread]) -> Thread | None:
     active = [row for row in rows if row.role == "coordinator" and row.status is Status.active]
     if len(active) > 1:
@@ -396,10 +384,9 @@ def _canonical_stream(stream_dir: Path) -> bool:
 def _one_stream(stream_id: str, stream_dir: Path) -> dict[str, object]:
     canonical = _canonical_stream(stream_dir)
     if canonical:
-        state = artifacts.read_stream_state(stream_dir)
-        ratified = _has_ratified_authority(state)
+        artifacts.read_stream_state(stream_dir)
     else:
-        ratified = is_ratified((stream_dir / "STREAM.md").read_text(encoding="utf-8"))
+        (stream_dir / "STREAM.md").read_text(encoding="utf-8")
     rows = load_threads(stream_dir / "threads.tsv")
     counts = {name: 0 for name in ("active", "waiting_quota", "done", "archived")}
     from engine import terminal_sessions
@@ -446,7 +433,6 @@ def _one_stream(stream_id: str, stream_dir: Path) -> dict[str, object]:
     share = None if thread_cost == 0 else coord_cost / thread_cost
     result = {
         "id": stream_id,
-        "ratified": ratified,
         "coordinator": coord_state,
         "threads": counts,
         "coordinatorCostShare": share,
@@ -496,7 +482,6 @@ def status_report(index: Path, stream_id: str | None) -> dict[str, object]:
                 "id": row.id,
                 "path": str(stream_dir),
                 "error": {"type": type(exc).__name__, "message": str(exc)},
-                "ratified": None,
                 "coordinator": None,
                 "threads": None,
                 "coordinatorCostShare": None,
@@ -526,17 +511,16 @@ def format_status(report: dict[str, object]) -> str:
             continue
         if "error" in stream:
             error = stream["error"]
-            lines.append(f"{stream['id']}\terror={error['type']}\tmessage={json.dumps(error['message'], ensure_ascii=False)}\tratified=unknown")
+            lines.append(f"{stream['id']}\terror={error['type']}\tmessage={json.dumps(error['message'], ensure_ascii=False)}")
         else:
             counts = stream["threads"]
             counted = ",".join(f"{name}={counts[name]}" for name in ("active", "waiting_quota", "done", "archived"))
             share = stream["coordinatorCostShare"]
             share_text = "-" if share is None else str(share)
-            ratified = "yes" if stream["ratified"] else "no"
             coord = stream["coordinator"]
             if not isinstance(coord, dict):
                 observation = f"\tnative={stream['nativeObservation']}" if "nativeObservation" in stream else ""
-                lines.append(f"{stream['id']}\tratified={ratified}\t-\tthreads={counted}\tshare={share_text}{observation}")
+                lines.append(f"{stream['id']}\t-\tthreads={counted}\tshare={share_text}{observation}")
             else:
                 usage = coord["contextUsage"]
                 tokens = usage.get("tokens") if isinstance(usage, dict) else None
@@ -544,7 +528,7 @@ def format_status(report: dict[str, object]) -> str:
                     tokens = "-"
                 streaming = "yes" if coord["isStreaming"] else "no"
                 lines.append(
-                    f"{stream['id']}\tratified={ratified}\t{coord['session']}\tstreaming={streaming}\t"
+                    f"{stream['id']}\t{coord['session']}\tstreaming={streaming}\t"
                     f"tokens={tokens}\tmodel={coord['model']}\tthinking={coord['thinkingLevel']}\t"
                     f"cost={coord['cost']}\tthreads={counted}\tshare={share_text}"
                 )
@@ -662,17 +646,6 @@ def _require_worker_role(role: str) -> None:
         raise StreamsError("coordinator is a reserved worker role")
 
 
-def _has_ratified_authority(state: artifacts.StreamState) -> bool:
-    authority = state.source[state.authority.start:state.authority.end].decode("utf-8")
-    return artifacts.has_ratified_authority_line(authority)
-
-
-def require_ratified(stream_dir: Path) -> None:
-    state = artifacts._read_stream_state_locked(stream_dir)
-    if not _has_ratified_authority(state):
-        raise StreamsError("STATE Goals is unratified or has no source-backed authority; no worker or automatic dispatch is authorized")
-
-
 def _require_stream(index: Path, project: Project, stream_id: str) -> Path:
     return require_stream(index, project.info.name, stream_id)
 
@@ -700,7 +673,7 @@ def spawn_thread(
 ) -> str:
     _require_worker_role(role)
     stream_dir = _require_stream(index, project, stream_id)
-    require_ratified(stream_dir)
+    artifacts._read_stream_state_locked(stream_dir)
     repo = _repo_named(project, repo_name)
     repo_path = Path(repo.path)
     base_ref = "HEAD" if base is None else base
@@ -832,7 +805,7 @@ def adopt_thread(
 ) -> str:
     _require_worker_role(role)
     stream_dir = _require_stream(index, project, stream_id)
-    require_ratified(stream_dir)
+    artifacts._read_stream_state_locked(stream_dir)
     worktree = worktree.expanduser().resolve()
     if not worktree.is_dir():
         raise StreamsError(f"worktree is not a directory: {worktree}")

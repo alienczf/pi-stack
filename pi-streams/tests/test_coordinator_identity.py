@@ -45,7 +45,7 @@ class CoordinatorIdentityTests(EngineCase):
         self.assertEqual((result.returncode, result.stderr), (0, ''), result.stdout)
         entry, = json.loads(result.stdout)['streams']
         self.assertEqual(entry['id'], 'etl')
-        self.assertIsNone(entry['ratified'])
+        self.assertNotIn('ratified', entry)
         self.assertIsNone(entry['coordinator'])
         return entry['error']['message']
 
@@ -157,9 +157,9 @@ class CoordinatorIdentityTests(EngineCase):
                 self.assertFalse((self.root / '.worktrees').exists())
                 self.assertFalse((self.fx.alpha_wt / '.stream').exists())
 
-    def test_first_line_unratified_authority_blocks_worker_spawn_and_adopt(self):
+    def test_malformed_state_still_blocks_worker_spawn_and_adopt(self):
         state = self.stream / 'STATE.md'
-        state.write_bytes(state.read_bytes().replace(b'ratified: 2026-10-23 fixture human confirmation', b'ratified: no', 1) + b'Historical quotation only: ratified: yes\n')
+        state.write_bytes(state.read_bytes().replace(b'## Rules\n', b'', 1))
         for args in (('thread', 'spawn', 'etl', '--repo', 'alpha', '--role', 'worker'), ('thread', 'adopt', 'etl', 'selected', '--worktree', str(self.fx.alpha_wt), '--role', 'worker')):
             with self.subTest(args=args):
                 self.stub.requests.clear()
@@ -196,14 +196,15 @@ class CoordinatorIdentityTests(EngineCase):
         self.assertIn('current', failures[0].detail)
         self.no_mutations()
 
-    def test_bare_affirmative_is_not_source_backed_ratification(self):
+    def test_historical_negative_marker_does_not_block_worker_adoption(self):
         state = self.stream / 'STATE.md'
-        state.write_bytes(state.read_bytes().replace(b'ratified: 2026-10-23 fixture human confirmation', b'ratified: yes', 1))
-        result = self.run_streams('thread', 'spawn', 'etl', '--repo', 'alpha', '--role', 'worker')
-        self.assertEqual(result.returncode, 1, result.stdout)
-        self.assertIn('authority', result.stderr)
-        self.assertEqual(self.stub.requests, [])
-        self.assertFalse((self.root / '.worktrees').exists())
+        state.write_bytes(state.read_bytes().replace(b'ratified: 2026-10-23 fixture human confirmation', b'ratified: no', 1))
+        self.stub.set_routes([('GET', '/api/sessions', 200, [self.info('selected', cwd=self.fx.alpha_wt)]), ('GET', '/api/sessions/selected/status', 200, live('selected'))])
+        result = self.run_streams('thread', 'adopt', 'etl', 'selected', '--worktree', str(self.fx.alpha_wt), '--role', 'worker')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, 'selected\n')
+        self.assertIn('selected\tworker\talpha\t', self.table.read_text())
+        self.assertEqual((self.fx.alpha_wt / '.stream').read_text(), str(self.stream) + '\n')
 
     def test_unrelated_directory_is_not_an_unregistered_coordinator_candidate(self):
         self.routes([self.info(), self.info('worker', cwd=self.fx.alpha_wt)])

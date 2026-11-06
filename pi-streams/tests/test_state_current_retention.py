@@ -9,7 +9,7 @@ from unittest import mock
 from support import EngineCase, snapshot
 from test_artifact_migration import AT, DECISIONS, STREAM, authority_map, extraction
 import test_artifact_migration_apply as fixtures
-from engine import StreamsError, artifacts, migration, threads
+from engine import StreamsError, artifacts, migration
 
 
 OBJECTIVE = b"## Actual next unit\r\nSTOP. Do not replay job-DONE-292.\r\n### Charter\r\nNo new grants. Inspect missing-eight-state only.\r\n````md\r\n## Log\r\n````\r\n"
@@ -128,8 +128,7 @@ class StateCurrentRetentionTests(EngineCase):
         plan = self.current_plan(rows + [extraction("STATE.md", 0, size, "current_objective")])
         self.assertTrue(plan["ready"], plan["unresolved"])
         state = artifacts.parse_state(base64.b64decode(plan["state"]))
-        self.assertEqual(state.source[state.authority.start:state.authority.end], b"ratified: no\n")
-        self.assertFalse(threads._has_ratified_authority(state))
+        self.assertEqual(state.source[state.legacy_marker.start:state.legacy_marker.end], b"ratified: no\n")
         self.assertNotIn("relay_source", plan)
 
     def test_inline_selections_cannot_change_sibling_fields(self):

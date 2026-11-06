@@ -44,7 +44,7 @@ class StatusToleranceTests(EngineCase):
     def assert_diagnostic(self, entry, message: str, error_type: str = "StreamsError") -> None:
         self.assertEqual(entry["error"]["type"], error_type)
         self.assertIn(message, entry["error"]["message"])
-        for field in ("ratified", "coordinator", "threads", "coordinatorCostShare"):
+        for field in ("coordinator", "threads", "coordinatorCostShare"):
             self.assertIsNone(entry[field], field)
 
     def assert_read_only(self, before) -> None:
@@ -70,7 +70,7 @@ class StatusToleranceTests(EngineCase):
             (True, True, "on-unconfirmed"), (True, False, "off-confirmed"),
             (True, False, "not-requested"), (True, False, "not-requested"),
         ])
-        self.assertEqual(streams[3]["ratified"], True)
+        self.assertNotIn("ratified", streams[3])
         self.assertEqual(streams[3]["coordinator"]["session"], "later-healthy-coord")
         self.assertEqual(streams[3]["coordinator"]["model"], "gpt-6-astra")
         self.assertEqual(streams[3]["coordinator"]["thinkingLevel"], "xhigh")
@@ -83,7 +83,7 @@ class StatusToleranceTests(EngineCase):
             self.assertIn(f"{stream.name}\tdrive=", text.stdout)
         self.assertIn("later-healthy-coord", text.stdout)
         self.assertIn("remote=on-unconfirmed", text.stdout)
-        self.assertNotIn(f"{malformed.name}\tratified=yes", text.stdout)
+        self.assertNotIn("ratified=", text.stdout)
         self.assert_read_only(before)
 
     def test_named_malformed_stream_is_a_diagnostic_not_an_exception(self) -> None:
@@ -93,7 +93,7 @@ class StatusToleranceTests(EngineCase):
         entry, = self.report("malformed")
         self.assertEqual(entry["id"], "malformed")
         self.assertIn("UTF-8", entry["error"]["message"])
-        self.assertIsNone(entry["ratified"])
+        self.assertNotIn("ratified", entry)
         self.assertEqual(entry["drive"]["known"], True)
         self.assertEqual(entry["drive"]["remote_state"], "not-requested")
         self.assert_read_only(before)
@@ -139,7 +139,7 @@ class StatusToleranceTests(EngineCase):
         self.routes([healthy])
         entries = self.report()
         self.assertEqual(entries[0]["error"]["type"], "FileNotFoundError")
-        self.assertIsNone(entries[0]["ratified"])
+        self.assertNotIn("ratified", entries[0])
         self.assertEqual(entries[1]["coordinator"]["session"], "healthy-coord")
 
     def test_retired_coordinator_still_has_a_visible_drive_state(self) -> None:

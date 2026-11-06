@@ -226,7 +226,7 @@ def _state(sources: dict[str, dict], mapping: tuple[dict, ...], identity: str, a
         if not relay_source["instructionDate"]:
             raise StreamsError("A bare legacy affirmative requires its dated standing-grant source provenance")
         marker = f"ratified: {relay_source['instructionDate']} recorded relay source {relay_source['messageId']} SHA-256 {relay_source['sha256']}; legacy affirmative retained, not transport authentication\n".encode()
-    if recovery_sources is None and marker.rstrip().lower() != b"ratified: no" and not artifacts.has_ratified_authority_line(marker.decode("utf-8")):
+    if recovery_sources is None and marker.rstrip().lower() != b"ratified: no" and not retained_sources.legacy_authority_line(marker.decode("utf-8")):
         raise StreamsError("migration authority must retain dated source provenance or an explicit ZF notice reference, or remain ratified: no")
     def body(parts: list[bytes]) -> bytes:
         return b"".join(part if part.endswith(b"\n") else part + b"\n" for part in parts)

@@ -4,12 +4,8 @@ from tick_support import TickCase, info, row, status
 
 
 class TerminalTickTests(TickCase):
-    def test_closed_unratified_coordinator_archives_once_without_dispatch_or_new_gate(self):
+    def test_closed_marker_free_coordinator_archives_once_without_dispatch_or_new_gate(self):
         stream = self.make_stream(self.home, 'etl', row('coord', 'coordinator', str(self.home / 'etl')))
-        source = (stream / 'STATE.md').read_text().replace('ratified: 2026-10-06 fixture source', 'ratified: no')
-        authority = source.split('ratified: ', 1)[1].splitlines()[0]
-        source = source.replace('ratified: ' + authority, 'ratified: no', 1)
-        (stream / 'STATE.md').write_text(source)
         closed = self.run_streams('close', 'etl')
         self.assertEqual(closed.returncode, 0, closed.stderr)
         for index in range(3):

@@ -193,7 +193,7 @@ class Sandbox:
         self.env['PI_WEB_URL'] = self.url
         self.cli('init', self.project, '-y', '--pi-web-url', self.url, '--coordinator-model', MODEL, '--coordinator-thinking', 'xhigh')
 
-    def new(self, name=None, ratified=True):
+    def new(self, name=None, driving=True):
         name = name or self.case
         self.journal(effect='own-stream-before-new', stream=name, path=str(self.project / 'streams' / name))
         self.streams.append(name)
@@ -201,9 +201,9 @@ class Sandbox:
         sid = result.stdout.strip().splitlines()[-1]
         stream = self.project / 'streams' / name
         self.wait_idle(sid)
-        if ratified:
+        if driving:
             path = stream / 'STATE.md'
-            path.write_text(path.read_text().replace('ratified: no', 'ratified: 2026-11-03 isolated task grant', 1).replace('<the single human-authorized outcome>', 'Finish all authorized fixture units without external effects.', 1))
+            path.write_text(path.read_text().replace('<the single human-authorized outcome>', 'Finish all authorized fixture units without external effects.', 1))
             self.objective(name, 'Continue permitted verification. The overall authorized outcome is not complete.')
             self.cli('drive', name, 'on')
         return name, stream, sid
@@ -672,8 +672,11 @@ def text_contains(messages, text):
     return text in (content if isinstance(content, str) else '\n'.join(p.get('text', '') for p in content))
 
 
-def tick_noise(sandbox, unratified=False):
-    name, stream, sid = sandbox.new(ratified=not unratified)
+def tick_noise(sandbox, legacy_marker=False):
+    name, stream, sid = sandbox.new(driving=not legacy_marker)
+    if legacy_marker:
+        path = stream / 'STATE.md'
+        path.write_text(path.read_text().replace('## Goals\n', '## Goals\nratified: no\n', 1))
     sandbox.cli('close', name)
     before = sandbox.control('snapshot')
     failures = []
@@ -728,7 +731,7 @@ RUNNERS = {
     'policy-narrowing': policy_narrowing,
     'blocked-loop': blocked_loop,
     'tick-noise': tick_noise,
-    'unratified-close': lambda s: tick_noise(s, unratified=True),
+    'unratified-close': lambda s: tick_noise(s, legacy_marker=True),
     'small-recovery': lambda s: fault_recovery(s, 'Terminal model error: unsupported fixture request', small=True),
     'archived-worker': archived_worker,
     'dead-worker': lambda s: archived_worker(s, dead=True),

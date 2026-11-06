@@ -42,6 +42,6 @@ class FailureAlignmentTests(EngineCase):
         self.assertIn("No live checkpoint acknowledgement or further human approval", instructions)
         self.assertIn("singular original", instructions)
         self.assertIn("independent authorized lanes", instructions)
-        self.assertIn("not authentication proof", instructions)
+        self.assertIn("without another interview", instructions)
         self.assertFalse((stream / "TODO.md").exists())
         self.assertFalse((stream / "PLAN.md").exists())

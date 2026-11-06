@@ -6,6 +6,7 @@ import json
 import os
 import re
 import stat
+from datetime import datetime
 from pathlib import Path
 from typing import Literal, TypedDict
 
@@ -128,13 +129,31 @@ def validate_sources(root: Path, recovery: RecoveryInput, *, fresh: bool) -> dic
         raise StreamsError(f"invalid documentary recovery sources: {exc}") from exc
 
 
-def current_authority(sources: dict[str, dict]) -> dict:
-    from engine import artifacts
+def legacy_authority_line(line: str) -> bool:
+    if len(line.splitlines()) != 1:
+        return False
+    match = re.fullmatch(r"ratified:[ \t]+(\S+)[ \t]+(.+)", line.rstrip("\r\n"))
+    if match is None:
+        return False
+    reference, provenance = match.groups()
+    if reference.casefold() == "zf":
+        return re.fullmatch(r"notice[ \t]+\S.*", provenance, re.IGNORECASE) is not None
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}\.", reference):
+        reference = reference[:-1]
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}(?:T\S+)?", reference) is None:
+        return False
+    try:
+        stamp = datetime.fromisoformat(reference)
+    except ValueError:
+        return False
+    return bool(provenance.strip()) and ("T" not in reference or stamp.tzinfo is not None)
 
+
+def current_authority(sources: dict[str, dict]) -> dict:
     source = "STREAM.md"
     raw = raw_source(sources[source])
     line = raw.splitlines(keepends=True)[0] if raw else b""
-    validated = artifacts.has_ratified_authority_line(line.decode("utf-8"))
+    validated = legacy_authority_line(line.decode("utf-8"))
     after = line if validated or line.strip().lower() == b"ratified: no" else b"ratified: no\n"
     if not after.endswith(b"\n"):
         after += b"\n"
