@@ -1,0 +1,4 @@
+ts	phase	decision	why	evidence	result
+2026-11-06T17:48:51Z	frame	Keep merged main intact rather than select leaf backports	The baseline is an ancestor and the parity fixes depend on retained-source, archive, and replacement prerequisites	f685e3ad..cba29cd0; TODO.md	exact integration selected
+2026-11-06T17:48:51Z	baseline	Capture seven CLI regressions before integration	A rerunnable old-versus-new check is stronger than a summary; fixture setup mistakes were corrected before accepting the baseline	pi-streams/tests/test_phase1_parity.py; baseline.log in implementation output	7 run; 6 behavioral failures; 0 errors
+2026-11-06T17:48:51Z	scope	Do not invent a native Prime adapter or merge PRs 44-47	The supplied user order authorizes shared parity and preserves native capability admission	TODO.md; native/README.md; pi-streams/engine/piweb.py	native Prime proof blocked
