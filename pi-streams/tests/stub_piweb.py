@@ -173,8 +173,9 @@ class StubPiWeb:
                 payload = {**body, "version": 1, "sessionId": goal_post[1], "state": payload.get("state", "queued")}
                 self.control_goals[str(body["id"])] = payload
             elif handler.command == "GET" and goal_get:
-                if goal_get[2] in self.control_goals:
-                    payload = copy.deepcopy(self.control_goals[goal_get[2]])
+                identity = urllib.parse.unquote(goal_get[2])
+                if identity in self.control_goals:
+                    payload = copy.deepcopy(self.control_goals[identity])
                 else:
                     status, payload = 409, {"error": "Control goal is absent or superseded"}
         cwd = urllib.parse.parse_qs(parsed.query).get("cwd", [None])[0]

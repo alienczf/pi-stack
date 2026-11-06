@@ -570,7 +570,7 @@ def _commit_paths(repo: Path, head: str, paths: tuple[str, ...] | None, *, scope
     def allowed(name: str) -> bool:
         return (
             Path(name).suffix in _TEXT_SUFFIXES
-            or re.fullmatch(r"history/relay-[a-f0-9]{64}\.json", name) is not None
+            or re.fullmatch(r"history/(?:relay|recovery)-[a-f0-9]{64}\.json", name) is not None
             or name in records
             or Path(name).name in {"README", ".gitkeep", ".gitignore"}
         )

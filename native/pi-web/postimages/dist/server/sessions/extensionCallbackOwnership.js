@@ -30,7 +30,8 @@ export function callbackInventory(loaded) {
     return { known: unproven.length === 0, owners, unproven };
 }
 
-export async function prepareCallbackDrops(loaded) {
+export async function prepareCallbackDrops(loaded, guard = () => {}) {
+    guard();
     const before = callbackInventory(loaded);
     if (!before.known) throw new AutomaticAdmissionRejected("Extension callback ownership is unknown or active");
     for (const owner of before.owners) {
@@ -39,7 +40,9 @@ export async function prepareCallbackDrops(loaded) {
         const current = callbackInventory(loaded).owners.find(item => item.path === owner.path);
         if (JSON.stringify(current) !== JSON.stringify(owner))
             throw new AutomaticAdmissionRejected("Extension callback ownership changed before drop");
+        guard();
         const receipt = await extension.callbackOwnership.drop(owner.revision);
+        guard();
         const after = callbackInventory(loaded);
         const settled = after.owners.find(item => item.path === owner.path);
         if (receipt?.droppedRevision !== owner.revision || !after.known || settled?.kind !== "none")

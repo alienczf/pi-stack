@@ -44,7 +44,7 @@ class StateParserTests(unittest.TestCase):
         self.assertEqual([section.name for section in state.extras], ["Future notes"])
         start = STATE.index(OBJECTIVE)
         self.assertEqual((state.current_objective.body.start, state.current_objective.body.end), (start, start + len(OBJECTIVE)))
-        self.assertEqual(STATE[state.authority.start:state.authority.end], b"ratified: ZF notice 42, charter v3\n")
+        self.assertEqual(STATE[state.legacy_marker.start:state.legacy_marker.end], b"ratified: ZF notice 42, charter v3\n")
         self.assertEqual(resolve_current_goal(state), 'Finish "phase α", then verify 東京.')
 
     def test_empty_objective_falls_back_to_the_single_north_star(self) -> None:
@@ -56,12 +56,12 @@ class StateParserTests(unittest.TestCase):
         state = parse_state(STATE.replace(OBJECTIVE, objective.encode(), 1))
         self.assertEqual(resolve_current_goal(state), 'Read "α".\n  Keep this indent, punctuation: / β!\nThen check γ.')
 
-    def test_empty_or_unratified_marker_is_parsed_without_granting_authority(self) -> None:
-        for marker in (b"ratified:\n", b"ratified: no\n"):
+    def test_marker_free_and_historical_markers_preserve_bytes_and_goal(self) -> None:
+        for marker in (b"", b"ratified:\n", b"ratified: no\n", b"ratified: unknown\r\n"):
             with self.subTest(marker=marker):
                 source = STATE.replace(b"ratified: ZF notice 42, charter v3\n", marker, 1)
                 state = parse_state(source)
-                self.assertEqual(source[state.authority.start:state.authority.end], marker)
+                self.assertEqual(source[state.legacy_marker.start:state.legacy_marker.end] if state.legacy_marker else b"", marker)
                 self.assertEqual(resolve_current_goal(state), 'Finish "phase α", then verify 東京.')
 
     def test_extra_sections_are_allowed_only_between_rules_and_log(self) -> None:
@@ -136,7 +136,7 @@ class StateParserTests(unittest.TestCase):
             with self.assertRaises(StreamsError):
                 parse_state(source)
 
-    def test_ratification_marker_must_be_the_first_goals_line(self) -> None:
+    def test_unrecognized_goals_preamble_is_rejected(self) -> None:
         for marker in (b"\nratified: ZF\n", b"Ratified: ZF\n", b"comment ratified: ZF\n", b"not a marker\n"):
             with self.subTest(marker=marker):
                 with self.assertRaises(StreamsError):

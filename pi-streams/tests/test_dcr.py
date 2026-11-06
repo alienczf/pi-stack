@@ -184,8 +184,52 @@ class DcrTests(TickCase):
         self.routes(tokens=150000, streaming=False, leaf='e3', operation=operation, native=native)
         self.assertEqual(self.tick('2026-10-06T12:06:00Z').returncode, 0)
         self.assertEqual(self.operation()['phase'], 'blocked')
-        self.assertIn('below 150000', self.operation()['detail'])
+        self.assertIn('callback inventory', self.operation()['detail'])
+        self.assertEqual(self.state(self.stream)['dcr_dumps']['coord']['checkpoint_entry'], 'e2')
         self.assertFalse(any(item[1].endswith('/resume') for item in self.stub.requests))
+
+    def test_same_model_100k_receipt_and_legacy_blocked_journal_resume_once(self):
+        operation = self.ready(self.start())
+        native = self.backend(operation)
+        self.routes(streaming=False, leaf='e2', operation=operation, native=native)
+        self.assertEqual(self.tick('2026-10-06T12:05:00Z').returncode, 0)
+        self.write_log('coord', str(self.stream), reply('Earlier work'), reply(f"DCR SYNC ready: {operation['id']} {operation['ready_revision']}"), {'type': 'compaction', 'summary': 'Verified compaction', 'firstKeptEntryId': 'e1', 'tokensBefore': 250000})
+        raw = Path(self.log_path('coord')).read_bytes().splitlines(keepends=True)[-1]
+        native.update(state='complete', compactionEntryId='e3', compactionSha256=hashlib.sha256(raw).hexdigest(), tokensAfter=100000, targetTokens=320000, contextBudget={'provider': 'openai-codex', 'model': 'gpt-6-astra', 'contextWindow': 400000, 'targetTokens': 320000})
+        saved = dcr.load(self.stream, 'coord')
+        saved.phase, saved.detail = 'blocked', 'Native DCR failed: Native compaction did not reduce rebuilt context below 150000 tokens'
+        dcr.save(self.stream, saved)
+        from engine import artifacts
+        goal = artifacts.resolve_current_goal(artifacts._read_stream_state_locked(self.stream))
+        resume_native = {**native, 'state': 'resuming', 'resume': {'deliveryId': operation['id'] + ':resume', 'text': self.resumed_text(goal), 'potetoGoal': goal, 'generation': operation['automatic']['generation'], 'inputSequence': 0, 'state': 'sending'}}
+        self.routes(tokens=100000, streaming=False, leaf='e3', operation=operation, native=native, resume_native=resume_native)
+        self.assertEqual(self.tick('2026-10-06T12:06:00Z').returncode, 0)
+        self.assertEqual(self.operation()['phase'], 'resuming')
+        self.assertEqual(self.operation()['rebuilt_tokens'], 100000)
+        self.assertEqual([item[1] for item in self.stub.requests if item[0] == 'POST'], ['/api/sessions/coord/maintenance/resume'])
+        native['resume'] = {'deliveryId': operation['id'] + ':resume', 'text': self.operation()['resume_text'], 'potetoGoal': self.operation()['resume_goal'], 'state': 'uncertain'}
+        native['state'] = 'uncertain'
+        self.routes(tokens=100000, streaming=False, leaf='e3', operation=operation, native=native)
+        self.assertEqual(self.tick('2026-10-06T12:07:00Z').returncode, 0)
+        self.assertEqual(self.operation()['phase'], 'blocked')
+        self.assertFalse(any(item[1].endswith('/resume') for item in self.stub.requests))
+        saved = dcr.load(self.stream, 'coord')
+        saved.phase, saved.detail = 'complete', ''
+        dcr.save(self.stream, saved)
+        self.routes(tokens=100000, streaming=False, leaf='newer-idle-leaf', operation=operation, native=native)
+        self.assertEqual(self.tick('2026-10-06T12:08:00Z').returncode, 0)
+        self.assertEqual(self.operation()['id'], operation['id'])
+        self.assertFalse(any(item[1].endswith('/prompt') for item in self.stub.requests))
+
+    def test_unknown_overcapacity_and_changed_model_context_remain_blocked(self):
+        body = status('coord')
+        receipt = {'targetTokens': 320000, 'tokensAfter': 100000, 'contextBudget': {'provider': 'openai-codex', 'model': 'gpt-6-astra', 'contextWindow': 400000, 'targetTokens': 320000}}
+        self.assertEqual(dcr.safe_context(receipt, body), 100000)
+        for changes in ({'tokensAfter': None}, {'tokensAfter': 150000}, {'tokensAfter': 200000}, {'tokensAfter': 320000}, {'tokensAfter': -1}, {'targetTokens': 400001}, {'contextBudget': {**receipt['contextBudget'], 'model': 'other'}}):
+            with self.subTest(changes=changes), self.assertRaises(StreamsError):
+                dcr.safe_context({**receipt, **changes}, body)
+        with self.assertRaises(StreamsError):
+            dcr.safe_context(receipt, {**body, 'model': {**body['model'], 'contextWindow': None}})
 
     def checkpoint_fixture(self, acknowledgement: str, *, descendants: int = 1):
         assistant = {"type": "message", "id": "32fffa62", "parentId": None, "message": reply(acknowledgement)}
@@ -285,7 +329,7 @@ class DcrTests(TickCase):
         resolved.native.status.pop("failureBoundary")
         with self.assertRaises(StreamsError):
             dcr.terminal_checkpoint(resolved, "exact ACK")
-        for key, value in (("isStreaming", True), ("isCompacting", True), ("isBashRunning", True), ("pendingMessageCount", 1), ("pendingAsk", {"id": "ask"}), ("pendingExtensionDialogs", [{"id": "dialog"}])):
+        for key, value in (("isStreaming", True), ("isCompacting", True), ("isBashRunning", True), ("pendingMessageCount", 1), ("pendingAsk", {"id": "ask"}), ("pendingDialogs", [{"id": "dialog"}])):
             with self.subTest(busy=key):
                 resolved, _ = self.checkpoint_fixture("exact ACK")
                 resolved.native.status[key] = value

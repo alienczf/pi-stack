@@ -231,8 +231,8 @@ def enrolled_authority(stream_dir: Path, sid: str, cwd: str, path: Path, leaf: o
         return None
     branch = sessionlog.branch_records(path, sid, cwd, leaf)
     if enrollment is None:
-        from engine.threads import load_threads, require_ratified
-        require_ratified(stream_dir)
+        from engine.threads import load_threads
+        artifacts._read_stream_state_locked(stream_dir)
         rows = [row for row in load_threads(stream_dir / "threads.tsv") if row.session == sid and row.worktree == cwd]
         opening = next((entry["message"] for entry, _ in branch if entry.get("message", {}).get("role") == "user"), None)
         if len(rows) != 1 or opening is None:
@@ -274,20 +274,20 @@ def observe(stream_dir: Path, sid: str, cwd: str, native: dict, status: dict, at
             if not isinstance(boundary["checkpoint"], dict):
                 raise StreamsError("native checkpoint is malformed")
             checkpoint = sessionlog.verify_good_checkpoint(Path(path), sid, cwd, leaf, boundary["checkpoint"], failed["entryId"])
+    if checkpoint is not None:
+        observation = sessionlog.failure_observation(Path(path), sid, cwd, leaf, failed["entryId"], native_retry=status.get("streamRetry") if status.get("streamRetrySupport") == "entry-bound-v1" else None, checkpoint=checkpoint)
     jobs = observation["uncertainJobs"]
     replay = artifacts._read_tick_data(stream_dir).get("sessions", {}).get(sid, {}).get("replay", [])
     if replay:
         jobs.append({"id": "saved-unconfirmed-replay", "state": "unknown"})
     policy = classify(observation["provider"], observation["message"], at, tool_error=observation["toolError"])
     if previous is not None and previous.failure_entry == observation["entryId"] and previous.failure_sha256 == observation["sha256"]:
-        if policy.kind == "content-policy":
-            if previous.kind != "content-policy":
-                previous.continuation = None
-            previous.kind, previous.code, previous.label = policy.kind, policy.code, policy.label
+        if policy.kind != previous.kind:
             previous.authority = None
-        if previous.uncertain_jobs != jobs:
-            previous.uncertain_jobs = jobs
-            save(stream_dir, previous)
+            previous.continuation = None
+        previous.kind, previous.code, previous.label, previous.provider = policy.kind, policy.code, policy.label, policy.provider
+        previous.uncertain_jobs = jobs
+        save(stream_dir, previous)
         if previous.kind != "usage-limit" and previous.authority is None:
             _admit_recovery(stream_dir, previous, Path(path), leaf, boundary, status)
         _publish_marker(stream_dir, previous, checkpoint)
@@ -354,8 +354,7 @@ def _admit_recovery(stream_dir: Path, episode: Episode, path: Path, leaf: object
         save(stream_dir, episode)
         artifacts.append_log_locked(stream_dir, episode.observed_at, "Content-policy safe blocker", f"{POLICY_BLOCKER} Native refusal {episode.failure_entry} SHA-256 {episode.failure_sha256}.", request_id=f"policy-safe-blocker:{episode.id}")
         if status.get("cleanPolicyAnalysisSupport") == "clean-policy-analysis-v1" and episode.analysis is None and episode.continuation is not None and not episode.uncertain_jobs and not episode.cancelled:
-            from engine.threads import require_ratified
-            require_ratified(stream_dir)
+            artifacts._read_stream_state_locked(stream_dir)
             token, allowed = piweb.automatic_admission(status, episode.session, episode.cwd, "recovery")
             if allowed or not episode.authorized_model or not episode.authorized_thinking or boundary is None or boundary.get("parking") != {"generation": token["generation"], "owned": True}:
                 return
@@ -435,7 +434,7 @@ def step(stream_dir: Path, episode: Episode, status: dict, at: str, native_info:
                 confirm_resume(stream_dir, episode.session, episode.session, episode.cwd, episode.retry_generation)
         return True
     token, allowed = piweb.automatic_admission(status, episode.session, episode.cwd, "recovery")
-    if not retry_ready(episode, at, token["generation"], allowed) or status.get("pendingAsk") or status.get("pendingExtensionDialogs") or status.get("pendingMessageCount", 0):
+    if not retry_ready(episode, at, token["generation"], allowed) or status.get("pendingAsk") or status.get("pendingDialogs") or status.get("pendingMessageCount", 0):
         return True
     if not episode.authorized_model or not episode.authorized_thinking:
         episode.detail = "Saved authorized model/thinking is unknown; no automatic trial is admitted."

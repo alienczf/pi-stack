@@ -1,5 +1,5 @@
 import { statSync, statfsSync } from "node:fs";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { readFile, writeFile } from "node:fs/promises";
 import { createAgentSessionFromServices, createAgentSessionRuntime, createAgentSessionServices, createEditToolDefinition, defineTool, readStoredCredential, SessionManager, } from "@earendil-works/pi-coding-agent";
@@ -41,7 +41,7 @@ import { StreamsDcrEvents } from "./streamsDcrEvents.js";
 import { SessionControlGoalController } from "./sessionControlGoal.js";
 import { assertFailureLifecycleFile, assertGoalNotBlocked, persistedFailureBranch, SessionFailureBoundaries } from "./sessionFailureBoundary.js";
 import { SessionFailureRecoveries } from "./sessionFailureRecovery.js";
-import { SessionFailureRetirements } from "./sessionFailureRetirement.js";
+import { retirementSource, SessionFailureRetirements } from "./sessionFailureRetirement.js";
 import { CleanPolicyAnalyses } from "./cleanPolicyAnalysis.js";
 const noopLogger = { info() { } };
 const DEFAULT_UNREAD_PUBLICATION_RETRY_MS = 1_000;
@@ -385,17 +385,15 @@ export class PiSessionService {
         this.modelRuntime = deps.modelRuntime;
         this.automaticAdmissionStore = deps.automaticAdmissionStore;
         this.failureBoundaries = new SessionFailureBoundaries(deps.automaticAdmissionStore, (session, id, original) => this.failureRetirements?.permitsRelease(session, id, original) === true, deps.engineRecoveryPolicy);
-        this.failureRetirements = deps.maintenanceDirectory === undefined || deps.automaticAdmissionStore === undefined || this.archiveStore.deleteRecoveryOriginal === undefined ? undefined : new SessionFailureRetirements(new SessionMaintenanceStore(deps.maintenanceDirectory), deps.automaticAdmissionStore, {
+        this.failureRetirements = deps.maintenanceDirectory === undefined || deps.automaticAdmissionStore === undefined || this.archiveStore.completeRecoveryOriginal === undefined ? undefined : new SessionFailureRetirements(new SessionMaintenanceStore(deps.maintenanceDirectory), deps.automaticAdmissionStore, {
             configured: () => this.failureRecoveries.policyConfigured(),
             authorized: operation => this.failureRecoveries.authorized(operation),
             boundary: session => this.failureBoundaries.snapshot(session),
             resolve: ref => this.getOrOpen(ref),
             operation: (session, id) => this.failureRecoveries.operation(session, id),
-            quiescent: session => { this.assertRecoveryQuiescent(session); },
+            quiescent: (session, operation) => { this.assertRecoveryQuiescent(session, operation); },
             archived: ref => this.getArchived(ref),
-            archive: (session, id, guard) => this.archiveFailureOriginal(session, id, guard),
-            delete: async (record, id, guard) => { if (this.archiveStore.deleteRecoveryOriginal === undefined)
-                throw new AutomaticAdmissionRejected("Scoped archive deletion is unavailable"); await this.archiveStore.deleteRecoveryOriginal(record, id, guard); await this.forgetUnreadSessions([record]); },
+            complete: (intent, fork, guard, dispatch) => this.completeFailureOriginal(intent, fork, guard, dispatch),
             release: (session, operation) => this.failureBoundaries.releaseRecovery(session, operation),
         });
         this.cleanPolicyAnalyses = deps.maintenanceDirectory === undefined || deps.automaticAdmissionStore === undefined || deps.engineRecoveryPolicy !== "enrolled-prefix-v1" ? undefined : new CleanPolicyAnalyses(join(deps.maintenanceDirectory, "clean-policy-analysis"), deps.automaticAdmissionStore, {
@@ -407,6 +405,7 @@ export class PiSessionService {
             policy: deps.engineRecoveryPolicy,
             boundary: session => this.failureBoundaries.snapshot(session),
             quiescent: session => { this.assertRecoveryQuiescent(session); },
+            continuationCheckpoint: (session, entryId) => this.assertRecoveryContinuationCheckpoint(session, entryId),
             fork: (session, operation) => this.forkFailureRuntime(session, operation),
             resolveFork: operation => this.getOrOpen({ id: operation.forkSessionId ?? "", cwd: operation.cwd }),
             maintenance: (session, operation, request) => this.runFailureMaintenance(session, operation, request),
@@ -680,7 +679,7 @@ export class PiSessionService {
             if (siblingCwds.length === 0)
                 return new Map();
             const listings = await Promise.all(siblingCwds.map(async (siblingCwd) => {
-                const entries = await this.sessionManager.list(siblingCwd);
+                const entries = await (this.sessionManager.listHeaders?.(siblingCwd) ?? this.sessionManager.list(siblingCwd));
                 return entries.flatMap((entry) => entry.parentSessionPath === undefined ? [] : [entry.parentSessionPath]);
             }));
             return countOutOfListingChildren(sessions, listings.flat());
@@ -1342,6 +1341,8 @@ export class PiSessionService {
         return this.statusFromSession(session);
     }
     reconcileQueuedMaintenance(session) {
+        if (session.sessionManager.getSessionFileDiagnostics?.().length)
+            return;
         const boundary = this.failureBoundaries.snapshot(session);
         if (boundary === undefined || boundary.state === "watching")
             this.maintenance?.activateQueued(session);
@@ -1631,18 +1632,90 @@ export class PiSessionService {
             throw new AutomaticAdmissionRejected("Exact original/fork retirement capability is unavailable");
         return this.failureRetirements.retire({ id: ref.id, cwd: canonicalizeStoredCwd(ref.cwd) }, request);
     }
-    async archiveFailureOriginal(session, id, guard) {
-        return this.runTreeExclusiveOperation([{ sessionId: session.sessionId, session }], "Recovery original must remain quiescent", async () => {
-            await prepareCallbackDrops(this.activeRuntimeForSession(session)?.services?.resourceLoader.getExtensions());
-            this.assertRecoveryQuiescent(session);
-            const input = await this.archiveInputForSession(session);
-            guard();
-            this.assertReplacementCheckpoint(session, session.sessionManager.getLeafId() ?? "");
-            await this.closeActive(session.sessionId, { kind: "clear", reason: "archive" });
-            guard();
-            const record = await this.archiveStore.archive({ ...input, recoveryOperationId: id });
-            await this.forgetUnreadSessions([record]);
-            return record;
+    async completeFailureOriginal(intent, fork, guard, dispatch) {
+        const ref = { id: intent.originalSessionId, cwd: intent.cwd };
+        await this.archiveStore.acquireRecoveryWriter();
+        guard();
+        let original = this.activeForLookup(ref)?.runtime.session;
+        if (original === undefined && await this.getArchived(ref) === undefined) {
+            let present;
+            try { present = retirementSource(intent.originalFile, ref.id, ref.cwd); }
+            catch (error) { if (error?.code !== "ENOENT") throw error; }
+            if (present !== undefined) {
+                if (createHash("sha256").update(present).digest("hex") !== intent.sourceSha256)
+                    throw new AutomaticAdmissionRejected("Original source changed before callback reconciliation");
+                original = await this.getOrOpen(ref);
+            }
+        }
+        const originalExtensions = original === undefined ? undefined : this.activeRuntimeForSession(original)?.services?.resourceLoader.getExtensions();
+        const forkExtensions = this.activeRuntimeForSession(fork)?.services?.resourceLoader.getExtensions();
+        this.recoveryCompletionTeardowns ??= new Set();
+        return this.runTreeExclusiveOperation([{ sessionId: ref.id, session: original }, { sessionId: fork.sessionId, session: fork }], "Recovery completion requires both identities to be idle", async () => {
+            const result = await this.archiveStore.completeRecoveryOriginal(intent, {
+                prepare: async evidence => {
+                    let callbacksSettled = false, originalClosed = original === undefined;
+                    const validate = () => {
+                        guard();
+                        const file = evidence();
+                        const raw = retirementSource(file, ref.id, ref.cwd);
+                        if (createHash("sha256").update(raw).digest("hex") !== intent.sourceSha256)
+                            throw new AutomaticAdmissionRejected("Original stable source changed during completion");
+                        const entries = new TextDecoder("utf-8", { fatal: true }).decode(raw).split("\n").filter(line => line.trim() !== "").slice(1).map(line => JSON.parse(line));
+                        const originalEvidence = { sessionId: ref.id, sessionManager: { getSessionFile: () => file, getCwd: () => ref.cwd, getLeafId: () => intent.originalLeaf, getBranch: () => [] } };
+                        const branch = persistedFailureBranch(originalEvidence);
+                        const checkpoint = branch.findIndex(item => item.value.id === intent.operation.checkpoint.entryId);
+                        const failed = branch.findIndex(item => item.value.id === intent.operation.failure.entryId);
+                        if (checkpoint < 0 || failed <= checkpoint || createHash("sha256").update(branch[checkpoint].raw).digest("hex") !== intent.operation.checkpoint.sha256 || createHash("sha256").update(branch[failed].raw).digest("hex") !== intent.operation.failure.sha256 || branch.slice(failed + 1).some(item => item.value.message?.role === "user"))
+                            throw new AutomaticAdmissionRejected("Original good prefix, failure or input changed during completion");
+                        if (this.recoveryCompletionTeardowns.has(ref.id) || this.startupSessionForLookup(ref) !== undefined || this.pendingSessionOpenPromises(ref.id).length > 0)
+                            throw new AutomaticAdmissionRejected("Original runtime teardown/startup ownership is unresolved");
+                        const active = this.activeForLookup(ref)?.runtime.session;
+                        if (active !== undefined) {
+                            if (originalClosed || active !== original || active.model?.provider !== intent.model.provider || active.model?.id !== intent.model.id || active.thinkingLevel !== intent.model.thinking || active.sessionManager.getSessionFile() !== intent.originalFile || active.sessionManager.getLeafId() !== intent.originalLeaf)
+                                throw new AutomaticAdmissionRejected("Original live runtime/model ownership changed");
+                            this.assertRecoveryQuiescent(active);
+                        }
+                        const maintenance = this.maintenance?.store.current(ref);
+                        if (maintenance !== undefined && (!["complete", "resumed", "superseded"].includes(maintenance.state) || maintenance.inputs.some(input => !["admitted", "cancelled"].includes(input.state)) || ["sending", "uncertain"].includes(maintenance.resume?.state)))
+                            throw new AutomaticAdmissionRejected("Original maintenance or input ownership is unresolved");
+                        const boundary = [...branch].reverse().find(item => item.value.customType === "pi-web.stream-failure" && item.value.data?.sessionId === ref.id && item.value.data?.cwd === ref.cwd)?.value.data;
+                        if (boundary?.checkpoint?.entryId !== intent.operation.checkpoint.entryId || boundary?.failure?.entryId !== intent.operation.failure.entryId)
+                            throw new AutomaticAdmissionRejected("Original effects checkpoint ownership changed");
+                        if (unresolvedEffects(branch, boundary) || (this.subsessionChildren.get(ref.id)?.size ?? 0) > 0 || entries.some(entry => parsePersistedParentSubsessionLink(entry)?.spawnedBySessionId === ref.id) || this.pendingAskStore.pendingAsk(ref.id) !== undefined || this.pendingExtensionDialogStore.pendingDialogs(ref.id).length > 0)
+                            throw new AutomaticAdmissionRejected("Original effects, native children or input still own completion");
+                        for (const loaded of [forkExtensions, ...(!originalClosed && originalExtensions !== undefined ? [originalExtensions] : [])]) {
+                            const inventory = callbackInventory(loaded);
+                            if (!inventory.known || callbacksSettled && inventory.owners.some(owner => owner.kind !== "none"))
+                                throw new AutomaticAdmissionRejected("Current callback ownership is not settled for completion");
+                        }
+                    };
+                    validate();
+                    dispatch("preparing");
+                    try {
+                        await prepareCallbackDrops(forkExtensions, validate);
+                        if (original !== undefined) await prepareCallbackDrops(originalExtensions, validate);
+                        callbacksSettled = true;
+                        validate();
+                        if (original !== undefined) {
+                            this.recoveryCompletionTeardowns.add(ref.id);
+                            await this.closeActive(ref.id, { kind: "clear", reason: "archive" });
+                            this.recoveryCompletionTeardowns.delete(ref.id);
+                            originalClosed = true;
+                            dispatch("teardown-complete");
+                        }
+                        validate();
+                    } catch (error) {
+                        try { validate(); dispatch("pre-effect-refused"); } catch {}
+                        throw error;
+                    }
+                    return validate;
+                },
+                dispatched: () => dispatch("store-dispatched"),
+            });
+            result.verify();
+            await this.forgetUnreadSessions([result.archive]);
+            result.verify();
+            return result;
         });
     }
     async failureMaintenance(ref, request) {
@@ -1653,11 +1726,22 @@ export class PiSessionService {
         return this.failureRecoveries.maintenance(session, request);
     }
     async runFailureMaintenance(session, operation, request) {
+        if (request["action"] === "maintenance-status" && this.maintenance !== undefined)
+            return { maintenance: this.maintenance.status(session, operation.id) };
         return this.failureBoundaries.runRecovery(session, operation, async () => {
             if (request["action"] === "sync") {
                 if (typeof request["text"] !== "string")
                     throw new AutomaticAdmissionRejected("Exact SYNC text is required");
                 await this.runSessionEntryMutation(session, "admit recovery SYNC", () => session.prompt(String(request["text"]), { expandPromptTemplates: false }));
+                return {};
+            }
+            if (request["action"] === "continue-sync") {
+                const receipt = this.failureRecoveries.continuationCheckpoint(session, operation, request["expected"], request["identity"]);
+                const saved = operation.maintenance?.sync?.continuations?.find(item => item.id === receipt.id);
+                if (saved?.state !== "sending")
+                    throw new AutomaticAdmissionRejected("Recovery continuation has no durable dispatch intent");
+                this.assertRecoveryContinuationCheckpoint(session, receipt.checkpoint.entryId);
+                await this.runSessionEntryMutation(session, "continue interrupted recovery SYNC", () => session.continueFromAborted(receipt.identity));
                 return {};
             }
             if (request["action"] === "watch" || request["action"] === "close") {
@@ -1705,8 +1789,21 @@ export class PiSessionService {
             }
         });
     }
-    assertRecoveryQuiescent(session) {
-        this.assertReplacementCheckpoint(session, session.sessionManager.getLeafId() ?? "");
+    assertRecoveryQuiescent(session, recovery) {
+        if (recovery === undefined) {
+            this.assertReplacementCheckpoint(session, session.sessionManager.getLeafId() ?? "");
+        }
+        else {
+            const boundary = this.failureBoundaries.snapshot(session);
+            const branch = persistedFailureBranch(session);
+            const at = branch.findIndex(item => item.value.id === recovery.checkpoint?.entryId);
+            const held = branch.findIndex(item => item.value.customType === "pi-web.stream-failure" && item.value.data?.sessionId === session.sessionId && item.value.data?.recovery?.id === recovery.id && item.value.data?.recovery?.originalSessionId === recovery.originalSessionId && item.value.data?.state === "recovering");
+            if (session.sessionId !== recovery.forkSessionId || session.sessionManager.getCwd() !== recovery.cwd || boundary?.recovery?.id !== recovery.id || boundary.recovery.originalSessionId !== recovery.originalSessionId || boundary.root !== recovery.root || boundary.stream !== recovery.stream || !["recovering", "watching"].includes(boundary.state) || at < 0 || held <= at || createHash("sha256").update(branch[at].raw).digest("hex") !== recovery.checkpoint.sha256)
+                throw new AutomaticAdmissionRejected("Recovery retirement has no exact copied good-prefix checkpoint");
+            this.assertQuiescentCheckpoint(session, session.sessionManager.getLeafId() ?? "");
+            if (unresolvedEffects(branch.slice(at + 1)))
+                throw new AutomaticAdmissionRejected("Recovery fork retains post-checkpoint external effects; no replay or retirement");
+        }
         const saved = this.maintenance?.store.current({ id: session.sessionId, cwd: session.sessionManager.getCwd() });
         if (saved !== undefined) {
             const operation = this.maintenance.status(session, saved.id);
@@ -1939,7 +2036,15 @@ export class PiSessionService {
             ref = { id: expected.sessionId, cwd: expected.cwd };
         }
         const session = await this.getOrOpen(ref);
-        this.assertFailureLifecycleRecord(session.sessionId, session.sessionManager.getCwd(), session.sessionManager.getSessionFile());
+        const maintenance = this.maintenance?.store.current({ id: session.sessionId, cwd: session.sessionManager.getCwd() });
+        const branch = expected === undefined ? [] : persistedFailureBranch(session);
+        const checkpointAt = branch.findIndex(item => item.value.id === maintenance?.entryId);
+        const acknowledgement = checkpointAt < 0 ? undefined : branch.slice(0, checkpointAt + 1).filter(item => item.value.message?.role === "assistant").at(-1)?.value.message;
+        const dumpFallback = expected !== undefined && maintenance !== undefined && ["failed", "superseded"].includes(maintenance.state)
+            && maintenance.resume === undefined && maintenance.inputSequence === 0 && maintenance.inputs.length === 0
+            && acknowledgement?.stopReason === "stop" && Array.isArray(acknowledgement.content)
+            && acknowledgement.content.some(part => part.type === "text" && part.text.split("\n").some(line => line.startsWith(`DCR SYNC ready: ${maintenance.id} `) && /^[a-f0-9]{64}$/.test(line.slice(`DCR SYNC ready: ${maintenance.id} `.length))));
+        if (!dumpFallback) this.assertFailureLifecycleRecord(session.sessionId, session.sessionManager.getCwd(), session.sessionManager.getSessionFile());
         if (this.hasActiveWork(session))
             throw new Error("Stop current session activity before archiving");
         let frozen;
@@ -1956,6 +2061,7 @@ export class PiSessionService {
                 if (!current.durable || current.generation !== frozen.generation)
                     throw new AutomaticAdmissionRejected("Replacement checkpoint was superseded before retirement");
             }
+            if (dumpFallback) session.sessionManager.fenceMaintenanceWrites();
             await this.closeActive(session.sessionId, { kind: "clear", reason: "archive" });
             await this.archiveStore.archive(archiveInput);
             await this.forgetUnreadSessions([archiveInput]);
@@ -1978,12 +2084,22 @@ export class PiSessionService {
         return { callbackOwners: ownership.owners, callbackRevision: JSON.stringify(ownership.owners), entryId: session.sessionManager.getLeafId(), callbacksKnown: entries !== undefined && unproven.size === 0, callbackInventory: "native-and-extension-v1", nativeChildCallbacks: [...children], unprovenCallbacks: [...unproven] };
     }
     assertReplacementCheckpoint(session, entryId) {
+        this.assertQuiescentCheckpoint(session, entryId);
+        if (unresolvedEffects(persistedFailureBranch(session), this.failureBoundaries.snapshot(session)))
+            throw new AutomaticAdmissionRejected("Replacement retains unresolved external effects; no replay or retirement");
+    }
+    assertRecoveryContinuationCheckpoint(session, entryId) {
+        this.assertQuiescentCheckpoint(session, entryId);
+        if (this.rotationSafety(session).callbackOwners.some(owner => !["none", "safe-to-drop"].includes(owner.kind) || !Array.isArray(owner.owners) || owner.owners.length !== 0))
+            throw new AutomaticAdmissionRejected("Pending callback ownership must settle before SYNC continuation");
+        if (this.maintenance?.store.current({ id: session.sessionId, cwd: session.sessionManager.getCwd() }) !== undefined)
+            throw new AutomaticAdmissionRejected("Existing compaction/input ownership must be reconciled before SYNC continuation");
+    }
+    assertQuiescentCheckpoint(session, entryId) {
         const safety = this.rotationSafety(session);
         if (!this.isCurrentActiveSession(session) || this.isSessionEntryMutationActive(session) || sessionHasActiveWork(session, this.compactionQueuedMessages(session.sessionId).length)) {
             throw new AutomaticAdmissionRejected("Stop current session activity before replacement");
         }
-        if (unresolvedEffects(persistedFailureBranch(session)))
-            throw new AutomaticAdmissionRejected("Replacement retains unresolved external effects; no replay or retirement");
         if (safety.entryId !== entryId || !safety.callbacksKnown || safety.nativeChildCallbacks.length > 0 || this.pendingAskStore.pendingAsk(session.sessionId) !== undefined || this.pendingExtensionDialogStore.pendingDialogs(session.sessionId).length > 0) {
             throw new AutomaticAdmissionRejected("Replacement checkpoint is stale or has unresolved native input/callback ownership");
         }
@@ -2673,15 +2789,24 @@ export class PiSessionService {
         if (active !== undefined)
             return active;
         const archived = await this.getArchived(ref);
+        if (archived?.recoveryCompletionId !== undefined)
+            throw new AutomaticAdmissionRejected("Recovery-owned archive or deletion tombstone cannot open a runnable native session");
         if (archived?.archivePath !== undefined) {
             const { archivePath } = archived;
             return this.openExistingSession(archived.sessionId, archived.cwd, () => this.sessionManager.open(archivePath), { notifications: "disabled" });
         }
-        const match = isPiSessionRef(ref)
+        const match = this.sessionManager.locate !== undefined
+            ? await this.sessionManager.locate(isPiSessionRef(ref) ? ref.id : ref, isPiSessionRef(ref) ? ref.cwd : undefined)
+            : isPiSessionRef(ref)
             ? (await this.sessionManager.list(ref.cwd)).find((s) => s.id === ref.id || s.id.startsWith(ref.id))
             : (await this.sessionManager.listAll?.() ?? []).find((s) => s.id === ref || s.id.startsWith(ref));
         if (!match)
             throw new Error("Session not found");
+        if (this.sessionManager.locate !== undefined) {
+            const header = await readSessionHeaderSummary(match.path);
+            if (header?.id !== match.id || header.cwd === undefined || !cwdPathsEqual(header.cwd, match.cwd))
+                throw new Error("Session header changed during lookup");
+        }
         return this.openExistingSession(match.id, match.cwd, () => this.sessionManager.open(match.path), options);
     }
     openExistingSession(sessionId, cwd, openSessionManager, options = {}) {
@@ -3538,13 +3663,15 @@ export class PiSessionService {
         const pendingDialogs = this.pendingExtensionDialogStore.pendingDialogs(session.sessionId);
         const controlGoal = this.automaticAdmissionStore?.controlGoal({ id: session.sessionId, cwd: session.sessionManager.getCwd() });
         const failureBoundary = this.failureBoundaries.snapshot(session);
+        const compactionQueuedMessages = this.compactionQueuedMessages(session.sessionId);
         return {
             sessionId: session.sessionId,
+            sessionFileDiagnostics: session.sessionManager.getSessionFileDiagnostics?.() ?? [],
             ...(this.cleanPolicyAnalyses === undefined ? {} : { cleanPolicyAnalysisSupport: "clean-policy-analysis-v1" }),
             ...(this.failureBoundaries.supported(session) ? { recoveryReadinessSupport: "same-provider-v1", streamRetrySupport: "entry-bound-v1", streamRetry: this.failureBoundaries.retrySnapshot(session), ...(this.failureRecoveries.policyConfigured() ? { engineFailureRecoverySupport: "enrolled-prefix-v1" } : {}) } : {}),
-            ...(this.failureBoundaries.supported(session) ? { ...(this.failureRetirements === undefined ? {} : { failureRetirementSupport: "singular-original-v1" }), ...(this.maintenance === undefined ? {} : { failureMaintenanceSupport: "operation-scoped-v1" }), failureForkSupport: "engine-prefix-v1", failureBoundarySupport: "persisted-turn-v1", ...(failureBoundary === undefined ? {} : { failureBoundary }) } : {}),
+            ...(this.failureBoundaries.supported(session) ? { ...(this.failureRetirements === undefined ? {} : { failureRetirementSupport: "singular-original-v1" }), ...(this.maintenance === undefined ? {} : { failureMaintenanceSupport: "operation-scoped-v1", ...(typeof session.continueFromAborted === "function" ? { failureSyncContinuationSupport: "entry-bound-v1" } : {}) }), failureForkSupport: "engine-prefix-v1", failureBoundarySupport: "persisted-turn-v1", ...(failureBoundary === undefined ? {} : { failureBoundary }) } : {}),
             ...(this.automaticAdmissionStore === undefined ? {} : { conditionalAdmissionSupport: "generation-cas-v1", automaticAdmission: this.automaticAdmissionStore.snapshot({ id: session.sessionId, cwd: session.sessionManager.getCwd() }), rotationSafety: this.rotationSafety(session) }),
-            ...(this.maintenance === undefined || session.sessionManager.appendCustomEntry === undefined ? {} : { maintenanceTargetSupport: "below-150000-v1", maintenanceSupport: "checkpoint-input-v1" }),
+            ...(this.maintenance === undefined || session.sessionManager.appendCustomEntry === undefined ? {} : { maintenanceTargetSupport: "same-model-capacity-v1", maintenanceSupport: "checkpoint-input-v1" }),
             ...(this.maintenance === undefined || session.agent.subscribe === undefined ? {} : { resumeObservationSupport: "completed-assistant-v1" }),
             ...(supportsPotetoInvocation(session) ? { potetoInvocationSupport: "exact-goal-v1" } : {}),
             ...(this.streamsDcrEvents === undefined ? {} : { dcrEventSupport: "phase-v1" }),
@@ -3555,8 +3682,8 @@ export class PiSessionService {
             isStreaming: session.isStreaming,
             isCompacting: session.isCompacting,
             isBashRunning: session.isBashRunning,
-            pendingMessageCount: this.pendingMessageCount(session),
-            queuedMessages: queuedMessagesFromSession(session, this.compactionQueuedMessages(session.sessionId)),
+            pendingMessageCount: session.pendingMessageCount + compactionQueuedMessages.length,
+            queuedMessages: queuedMessagesFromSession(session, compactionQueuedMessages),
             messageCount: session.messages.length,
             tokens: stats.tokens,
             cost: stats.cost,

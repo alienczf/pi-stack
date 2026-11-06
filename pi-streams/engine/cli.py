@@ -26,6 +26,7 @@ from engine.project import (
     upgrade_stream,
 )
 from engine.threads import (
+    Coordinator, Status, _native_session, load_threads,
     adopt_thread,
     close_stream,
     ensure_coordinator,
@@ -123,6 +124,7 @@ def _parser() -> argparse.ArgumentParser:
     migrate.add_argument("--mapping", help="explicit JSON byte-span authority/history map")
     migrate.add_argument("--history-mode", choices=("git", "snapshot"), default="git", help="snapshot retains exact source bytes with migration-start timestamps and avoids a Git history walk")
     migrate.add_argument("--relay-source", help="exact dated standing-grant source JSON for the migration plan; not transport authentication")
+    migrate.add_argument("--recovery-sources", help="documentary source-repair JSON version 2 for --plan only; never new execution authority")
 
     upgrade = sub.add_parser("upgrade")
     upgrade.add_argument("stream_id", metavar="id", nargs="?")
@@ -151,6 +153,12 @@ def _parser() -> argparse.ArgumentParser:
     checkpoint.add_argument("stream")
     checkpoint.add_argument("--home")
     checkpoint.add_argument("--session", required=True)
+
+    replace = sub.add_parser("replace")
+    replace.add_argument("stream")
+    replace.add_argument("--home")
+    replace.add_argument("--coordinator-session", required=True)
+    replace.add_argument("--from", dest="source")
 
     rotate = sub.add_parser("rotate")
     rotate.add_argument("stream")
@@ -203,9 +211,10 @@ def _open_stream(index: Path, project_name: str, stream_id: str) -> Path:
 
 
 def cmd_migrate(args: argparse.Namespace) -> int:
-    if (args.mapping or args.relay_source or args.history_mode != "git") and not args.plan:
-        raise StreamsError("--mapping and --relay-source are only for --plan; application requires the exact reviewed plan file")
+    if (args.mapping or args.relay_source or args.recovery_sources or args.history_mode != "git") and not args.plan:
+        raise StreamsError("--mapping, --relay-source and --recovery-sources are only for --plan; application requires the exact reviewed plan file")
     mapping = json.loads(migration.regular_bytes(Path(args.mapping))) if args.mapping else None
+    recovery = json.loads(migration.regular_bytes(Path(args.recovery_sources))) if args.recovery_sources else None
     if (args.prefix_history_bytes is not None or args.prefix_rules_bytes is not None) and not args.repair_plan:
         raise StreamsError("--prefix-history-bytes and --prefix-rules-bytes are only for --repair-plan")
     document_file = args.apply or args.repair_apply
@@ -226,7 +235,7 @@ def cmd_migrate(args: argparse.Namespace) -> int:
             elif args.repair_apply or args.repair_resume:
                 result = state_repair.apply_locked(stream, document)
             else:
-                result = migration.plan_migration(stream, mapping, relay_source=source, history_mode=args.history_mode).public() if args.plan else migration.apply_migration_locked(stream, document)
+                result = migration.plan_migration(stream, mapping, relay_source=source, history_mode=args.history_mode, recovery_sources=recovery).public() if args.plan else migration.apply_migration_locked(stream, document)
     print(json.dumps(result, sort_keys=True))
     return 0
 
@@ -288,6 +297,17 @@ def cmd_rotate(args: argparse.Namespace) -> int:
             sid = rotate_coordinator(index, project, args.stream)
             commit_repo(stream_dir, f"pi-streams rotate {args.stream}")
     print(project.info.pi_web_url)
+    print(sid)
+    return 0
+
+
+def cmd_replace(args: argparse.Namespace) -> int:
+    index = resolve_index(args.home)
+    with index_lock(index):
+        project = resolve_project(index)
+        stream_dir = require_stream(index, project.info.name, args.stream)
+        with stream_lock(stream_dir):
+            sid = replacement.replace_locked(index, project, args.stream, args.coordinator_session, source=args.source)
     print(sid)
     return 0
 
@@ -413,7 +433,7 @@ def cmd_resume(args: argparse.Namespace) -> int:
     for row in selected:
         stream = Path(row.path)
         with stream_lock(stream):
-            results.extend(failure_recovery.resume_parked_locked(stream, clock.stamp(clock.now()), index=index, project=project, operator_resume=True))
+            results.extend(failure_recovery.resume_parked_locked(stream, clock.stamp(clock.now()), index=index, project=project, intent=failure_recovery.ResumeIntent.OPERATOR))
     print(json.dumps(results, sort_keys=True))
     return 0
 
@@ -427,17 +447,28 @@ def cmd_dcr(args: argparse.Namespace) -> int:
             op = dcr.load(stream_dir, args.session)
             if op is None or op.id != args.operation:
                 raise StreamsError("DCR callback does not match the registered stream/SID/operation")
+            if args.dcr_cmd == "advance" and dcr.advance_capacity_replacement_locked(stream_dir, session=args.session, operation=args.operation):
+                current = dcr.load(stream_dir, args.session)
+                print(json.dumps({"id": args.operation, "phase": current.phase, "detail": current.detail}, sort_keys=True))
+                return 0
             recovery = failure_recovery.load(stream_dir, op.recovery_original) if op.recovery_original else None
             if recovery is not None:
                 if recovery.id != op.id or recovery.fork != args.session or recovery.cwd != op.cwd or recovery.phase != "dcr":
                     raise StreamsError("DCR callback does not own this held recovery fork")
                 resolved = failure_recovery.resolve_fork(stream_dir, recovery)
             else:
-                if op.recovery_original or Path(op.cwd).resolve() != stream_dir.resolve():
-                    raise StreamsError("DCR callback has no exact recovery owner")
-                resolved = resolve_coordinator(stream_dir)
-                if resolved is None or resolved.row.session != args.session:
-                    raise StreamsError("DCR callback does not own the designated native coordinator")
+                rows = [row for row in load_threads(stream_dir / "threads.tsv") if row.session == args.session and row.worktree == op.cwd and row.status in {Status.active, Status.waiting_quota}]
+                if op.recovery_original or len(rows) != 1:
+                    raise StreamsError("DCR callback has no exact registered owner")
+                row = rows[0]
+                if row.role == "coordinator":
+                    resolved = resolve_coordinator(stream_dir)
+                    if resolved is None or resolved.row.session != args.session:
+                        raise StreamsError("DCR callback does not own the designated native coordinator")
+                else:
+                    if Path(row.worktree).is_symlink() or (Path(row.worktree) / ".stream").read_text().strip() != str(stream_dir):
+                        raise StreamsError("DCR callback has no owned worker worktree")
+                    resolved = Coordinator(row, _native_session(args.session, Path(row.worktree)))
             if args.dcr_cmd == "ready":
                 result = dcr.ready(stream_dir, index, args.stream, resolved, args.operation)
             else:
@@ -513,6 +544,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_checkpoint(args)
         if args.cmd == "rotate":
             return cmd_rotate(args)
+        if args.cmd == "replace":
+            return cmd_replace(args)
         if args.cmd == "close":
             return cmd_close(args)
         if args.cmd == "tick":

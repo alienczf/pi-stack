@@ -1,0 +1,175 @@
+#!/usr/bin/env python3
+"""Verify PR 55 recovery through an isolated native service with no provider traffic."""
+from __future__ import annotations
+
+import argparse
+import base64
+import hashlib
+import importlib.util
+import json
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import time
+import uuid
+
+ROOT = Path(__file__).resolve().parents[1]
+spec = importlib.util.spec_from_file_location("chaos", ROOT / "scripts/check-streams-chaos.py")
+chaos = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(chaos)
+
+
+class Sandbox(chaos.Sandbox):
+    def __init__(self, *args, engine_root, acknowledge, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.engine_root = engine_root
+        self.env["PI_STREAMS_BIN"] = str(engine_root / "bin/pi-streams")
+        self.env["CHAOS_LOAD_ACK"] = "1" if acknowledge else "0"
+        self.env["CHAOS_LOAD_ERROR"] = "1" if self.case == "worker-load-error" else "0"
+
+    def cli(self, *args, **kwargs):
+        return self.command(self.engine_root / "bin/pi-streams", *args, "--home", self.index, **kwargs)
+
+
+def historical(sandbox, worker, acknowledge):
+    publish_ready = "ready-no-ack" in sandbox.case
+    name, stream, coordinator = sandbox.new()
+    sid = sandbox.worker(name) if worker else coordinator
+    sandbox.control("history", {"session": sid})
+    sandbox.tick()
+    for _ in range(12):
+        sandbox.wait_idle(sid)
+        sandbox.tick()
+        data = sandbox.state(stream)
+        if data.get("dcr_operations", {}).get(sid, {}).get("phase") == "complete":
+            break
+    else:
+        raise AssertionError("real first SYNC, compaction and RESUME did not complete")
+    sandbox.wait_idle(sid)
+    dump = sandbox.state(stream)["dcr_dumps"][sid]
+    sandbox.prompt(sid, "Finish this bounded later work without external effects.")
+    sandbox.objective(name, "Verify the newer objective without replaying old commands.")
+    sandbox.control("history", {"session": sid})
+    sandbox.plan(sid, {"ready": publish_ready, "acknowledgeReady": False,
+                       "text": "Finished the later SYNC turn without its final acknowledgement."})
+    sandbox.tick()
+    if publish_ready:
+        deadline = time.monotonic() + 25
+        while not sandbox.state(stream)["dcr_operations"][sid]["ready_revision"]:
+            chaos.check(time.monotonic() < deadline, "the real dcr ready command did not finish")
+            time.sleep(.1)
+    else:
+        sandbox.wait_idle(sid)
+    stalled = sandbox.state(stream)["dcr_operations"][sid]
+    chaos.check(stalled["id"] != dump["id"] and stalled["phase"] in {"sync-admitted", "blocked"}
+                and bool(stalled["ready_revision"]) == publish_ready and not stalled["checkpoint_entry"], "later incomplete SYNC trigger was not reached")
+    current = (stream / "STATE.md").read_bytes()
+    source = next(item for item in sandbox.control("snapshot")["evidence"] if item["session"] == sid)
+    try:
+        captured = Path(source["file"]).read_bytes()
+    except FileNotFoundError:
+        captured = None
+    for _ in range(6):
+        sandbox.tick()
+        intent = sandbox.state(stream).get("coordinator_replacement", {})
+        if intent.get("phase") == "complete":
+            sandbox.wait_idle(intent["target"])
+            sandbox.tick()
+            intent = sandbox.state(stream)["coordinator_replacement"]
+            if intent.get("load", {}).get("state") in {"observed", "blocked"}:
+                break
+    data = sandbox.state(stream)
+    intent = data.get("coordinator_replacement", {})
+    chaos.check(intent.get("phase") == "complete", "P1 later idle SYNC did not recover from its retained validated dump")
+    recovery = data["dcr_historical_recoveries"][sid]
+    chaos.check(recovery["dump"] == dump and recovery["stalled_operation"] == stalled["id"], "selected dump impersonated the stalled operation")
+    chaos.check(data["dcr_operations"][sid] == stalled and data["dcr_dumps"][sid] == dump, "immutable DCR evidence changed")
+    handoff = json.loads((stream / intent["handoff"]["path"]).read_text())
+    chaos.check((stream / handoff["syncedState"]["path"]).read_bytes() == base64.b64decode(dump["ready_source"]), "synced snapshot changed")
+    chaos.check((stream / handoff["currentState"]["path"]).read_bytes() == current, "current snapshot changed")
+    original = Path(handoff["archive"]["archivePath"]).read_bytes()
+    if captured is not None:
+        chaos.check(original.startswith(captured), "native archive lost independently captured source bytes")
+    chaos.check(hashlib.sha256(original).hexdigest() == intent["original"]["sha256"], "archive differs from the source hash frozen before retirement")
+    if publish_ready:
+        records = [json.loads(line) for line in original.splitlines()]
+        last_stop = next(item["message"] for item in reversed(records) if item.get("message", {}).get("role") == "assistant")
+        text = "\n".join(part.get("text", "") for part in last_stop.get("content", []) if part.get("type") == "text")
+        chaos.check(last_stop.get("stopReason") == "stop" and text == "Finished the later SYNC turn without its final acknowledgement.", "incomplete current dump unexpectedly received its final acknowledgement")
+    chaos.check((stream / "STATE.md").read_bytes() == current, "recovery rewrote current STATE")
+    expected = "observed" if acknowledge else "blocked"
+    chaos.check(intent["load"]["state"] == expected, "terminal load did not get its exact acknowledgement disposition")
+    if not acknowledge:
+        load = intent["load"]
+        before = sandbox.control("snapshot")
+        for _ in range(3):
+            sandbox.tick()
+        after = sandbox.control("snapshot")
+        reads = [item for item in after["requests"][len(before["requests"]):] if item["url"].split("?")[0] == f"/api/sessions/{coordinator}/status"]
+        chaos.check(len(reads) >= 3, "P2 unloaded worker starved healthy coordinator observation")
+        chaos.check(sandbox.state(stream)["coordinator_replacement"]["load"] == load, "blocked disposition changed or load replayed")
+        new_calls = after["calls"][len(before["calls"]):]
+        chaos.check(not any(item["session"] == intent["target"] for item in new_calls), "unloaded successor received task or command replay")
+    sandbox.snapshot()
+    return {"result": "PASS", "source": sid, "target": intent["target"], "role": handoff["role"], "load": intent["load"],
+            "dump": dump["id"], "stalledOperation": stalled["id"], "archiveSha256": hashlib.sha256(original).hexdigest(),
+            "readyPublished": publish_ready, "archiveCapturedBeforeRetirement": captured == original,
+            "sourcePrefixSha256": hashlib.sha256(captured).hexdigest() if captured is not None else None}
+
+
+def cleanup_ok(cleanup):
+    return (cleanup.get("processStopped") is True and cleanup.get("pathRemoved") is True and not cleanup.get("error")
+            and all(item.get("closed") is True for item in cleanup.get("streams", []))
+            and all(item.get("state") in {"archived", "already-archived-or-retired", "deleted-through-supported-api"}
+                    for item in cleanup.get("sessions", [])))
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--source-tar", type=Path, required=True)
+    parser.add_argument("--logs", type=Path, required=True)
+    parser.add_argument("--engine-root", type=Path, default=ROOT)
+    parser.add_argument("--cases", default="coordinator,worker,worker-no-ack,coordinator-ready-no-ack,worker-ready-no-ack")
+    args = parser.parse_args()
+    run = args.logs.resolve() / ("run-" + uuid.uuid4().hex)
+    run.mkdir(parents=True)
+    fixture = ROOT / ".harness-heal" / ("pr55-" + uuid.uuid4().hex)
+    native = fixture / "native"
+    native.mkdir(parents=True)
+    results = []
+    try:
+        chaos.copy_native_archive(args.source_tar, native)
+        subprocess.run([sys.executable, str(ROOT / "scripts/apply-native-overlay.py"), str(native)], check=True)
+        for case in args.cases.split(","):
+            chaos.check(case in {"coordinator", "worker", "worker-no-ack", "worker-load-error", "coordinator-ready-no-ack", "worker-ready-no-ack"}, "unknown recovery case")
+            acknowledge = case in {"coordinator", "worker", "coordinator-ready-no-ack", "worker-ready-no-ack"}
+            sandbox = Sandbox(run, case, native, shutil.which("node"), engine_root=args.engine_root.resolve(), acknowledge=acknowledge)
+            result = {"case": case, "result": "FAIL"}
+            try:
+                sandbox.start()
+                result.update(historical(sandbox, not case.startswith("coordinator"), acknowledge))
+            except Exception as error:
+                result["error"] = str(error)
+                if sandbox.url:
+                    try:
+                        sandbox.snapshot()
+                    except Exception as snapshot_error:
+                        result["snapshotError"] = str(snapshot_error)
+            finally:
+                try:
+                    result["cleanup"] = sandbox.cleanup()
+                except Exception as cleanup_error:
+                    result["cleanup"] = {"error": str(cleanup_error)}
+                results.append(result)
+                chaos.save(run / "results.json", results)
+            print(json.dumps(result), flush=True)
+    finally:
+        shutil.rmtree(fixture)
+        chaos.save(run / "fixture-cleanup.json", {"path": str(fixture), "removed": not fixture.exists()})
+    print(run)
+    return 0 if all(item["result"] == "PASS" and cleanup_ok(item["cleanup"]) for item in results) else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
