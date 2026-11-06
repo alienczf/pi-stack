@@ -224,7 +224,8 @@ class StreamTick:
             self.state = load_state(self.state_path)
             self.loaded = True
             self.rows = load_threads(self.rows_path)
-            if drive.is_paused(self.stream_dir):
+            legacy = drive.reconcile_locked(self.stream_dir)
+            if drive.is_paused(self.stream_dir) and legacy is None:
                 return
             if self.rows and all(row.status in {Status.done, Status.archived} for row in self.rows):
                 self.archive_done()
@@ -235,18 +236,20 @@ class StreamTick:
             intent = replacement.replacement_intent(self.stream_dir)
             if dcr.advance_capacity_replacement_locked(self.stream_dir) or intent is not None and intent.phase != "complete":
                 return
-            if not self.automatic_paused:
-                for sid in artifacts._read_tick_data(self.stream_dir).get("failures", {}):
-                    owned = next((row for row in self.rows if row.session == sid), None)
-                    if owned is None or owned.status in {Status.done, Status.archived} or terminal_sessions.load(self.stream_dir, sid, owned.worktree) is not None:
-                        continue
-                    episode = failure.load(self.stream_dir, sid)
-                    if episode is not None and episode.state == "parked" and episode.kind not in {"usage-limit", "content-policy"} and episode.checkpoint is not None and (episode.authority is not None or failure_recovery.load(self.stream_dir, sid) is not None):
-                        try:
-                            failure_recovery.advance_locked(self.stream_dir, sid, episode.id, self.at, index=self.index, project=self.project)
-                        except (StreamsError, OSError) as exc:
-                            self.typed_failures.add(sid)
-                            self.fail(f"recovery {sid}: {exc}")
+            results = failure_recovery.resume_parked_locked(
+                self.stream_dir, self.at, index=self.index, project=self.project,
+                intent=legacy or failure_recovery.ResumeIntent.CONTINUE_OWNED,
+            )
+            for result in results:
+                if result.get("state") == "pending":
+                    sid = result["session"]
+                    self.typed_failures.add(sid)
+                    self.fail(f"recovery {sid}: {result['detail']}")
+            self.drive_enabled = drive.load(self.stream_dir).enabled
+            self.automatic_paused = drive.is_paused(self.stream_dir)
+            if self.automatic_paused:
+                self.flush()
+                return
             rotation = artifacts._read_tick_data(self.stream_dir).get("coordinator_rotation")
             if not self.automatic_paused and isinstance(rotation, dict) and rotation.get("phase") != "complete":
                 try:
@@ -671,10 +674,6 @@ def tick_index(index: Path, now: datetime) -> bool:
                     bindings = [current for current in load_stream_rows(index) if current.id == row.id and current.project == row.project]
                     if len(bindings) != 1 or Path(bindings[0].path).resolve() != repo.resolve():
                         raise StreamsError("registered stream binding changed; refusing an unknown writer target")
-                    if drive.is_paused(repo):
-                        health.completed, health.ok = clock.stamp(clock.now()), True
-                        publish()
-                        continue
                     history = artifacts._rotate_log_locked(repo)
                     project = projects.get(row.project)
                     if project is None:
