@@ -36,6 +36,7 @@ class Recovery:
     source_leaf: str = ""
     cleanup_before: str = ""
     cleanup_after: str = ""
+    replacement: dict | None = None
 
 
 def load(stream: Path, sid: str) -> Recovery | None:
@@ -47,7 +48,7 @@ def load(stream: Path, sid: str) -> Recovery | None:
         return None
     try:
         op = Recovery(**value)
-        if op.session != sid or not op.id or not Path(op.cwd).is_absolute() or op.phase not in {"fork-refused", "fork-sending", "forked", "binding", "bound", "preparing", "dcr", "observed", "retiring", "retired", "clearing", "complete", "cancelled", "uncertain"} or not isinstance(op.request, dict):
+        if op.session != sid or not op.id or not Path(op.cwd).is_absolute() or op.phase not in {"fork-refused", "fork-sending", "forked", "binding", "bound", "preparing", "dcr", "observed", "retiring", "retired", "clearing", "complete", "loading", "rotated", "cancelled", "uncertain"} or not isinstance(op.request, dict):
             raise ValueError("Recovery identity/phase changed")
         return op
     except (TypeError, ValueError) as exc:
@@ -266,11 +267,11 @@ def advance_locked(stream: Path, sid: str, episode_id: str, at: str, *, index: P
     if episode is not None and episode.kind == "content-policy":
         raise StreamsError(failure.POLICY_BLOCKER)
     saved = load(stream, sid)
-    if saved is not None and saved.phase in {"retiring", "retired", "clearing", "complete"}:
+    if saved is not None and saved.phase in {"retiring", "retired", "clearing", "complete", "loading", "rotated"}:
         episode = failure.load(stream, sid)
         if saved.episode != episode_id or episode is None or episode.id != episode_id or episode.recovery_id != saved.id:
             raise StreamsError("Retirement does not own this exact episode")
-        if saved.phase != "complete":
+        if saved.phase not in {"complete", "loading", "rotated"}:
             if not isinstance(episode.checkpoint, dict) or not isinstance(episode.authority, dict) or episode.state not in {"parked", "recovered"}:
                 raise StreamsError("Retirement proof is unavailable; original and marker remain owned")
             _retire(stream, saved, episode)
@@ -701,6 +702,9 @@ def _advance_dcr(stream: Path, op: Recovery, episode: failure.Episode, row, orig
     if op.phase == "dcr":
         dcr.step(index, project, stream.name, stream, fork)
         current = dcr.load(stream, op.fork)
-        if current.phase == "complete" and current.observation is not None:
+        if current.phase == "rotated":
+            transferred = load(stream, op.session)
+            op.phase, op.detail, op.replacement = transferred.phase, transferred.detail, transferred.replacement
+        elif current.phase == "complete" and current.observation is not None:
             op.observation, op.phase = current.observation, "observed"
             save(stream, op)

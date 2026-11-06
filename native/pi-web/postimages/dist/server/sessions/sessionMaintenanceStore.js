@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { closeSync, constants, existsSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { spawnSync } from "node:child_process";
 import { piWebDataDir } from "../../config.js";
 import { canonicalizeStoredCwd } from "../workingDirectory.js";
 import { validFailureRetirement } from "./sessionFailureRetirement.js";
@@ -24,6 +25,10 @@ function validOperation(value, ref) {
         return false;
     if (value["retirement"] !== undefined && !validFailureRetirement(value["retirement"], ref, String(value["id"])))
         return false;
+    const lease = value["lease"];
+    if (lease !== undefined && (!record(lease) || lease.clock !== "boot-monotonic-v1" || typeof lease.boot !== "string" || !lease.boot || !Number.isSafeInteger(lease.deadline) || lease.deadline <= 0 || lease.finished !== undefined && typeof lease.finished !== "boolean")) return false;
+    const retired = value["compactionRetirement"];
+    if (retired !== undefined && (!record(retired) || retired.kind !== "bounded-compaction-v1" || retired.writerFenced !== true || retired.entryId !== value.entryId || retired.deadline !== lease?.deadline || typeof retired.boot !== "string" || !retired.boot || !Number.isSafeInteger(retired.retiredAt) || retired.boot === lease.boot && retired.retiredAt < retired.deadline)) return false;
     const resume = value["resume"];
     if (resume !== undefined && (!record(resume) || resume["potetoGoal"] !== undefined && typeof resume["potetoGoal"] !== "string"))
         return false;
@@ -113,7 +118,21 @@ export class SessionMaintenanceStore {
         const data = this.read(ref);
         return data !== undefined && Object.hasOwn(data.operations, id) ? structuredClone(data.operations[id]) : undefined;
     }
+    withWriteLock(ref, action) {
+        mkdirSync(this.directory, { recursive: true, mode: 0o700 });
+        if (lstatSync(this.directory).isSymbolicLink()) throw new Error("Maintenance directory must not be symlinked");
+        const descriptor = openSync(`${this.file(ref)}.lock`, constants.O_RDWR | constants.O_CREAT | constants.O_NOFOLLOW, 0o600);
+        try {
+            if (!fstatSync(descriptor).isFile()) throw new Error("Maintenance lock must be a regular file");
+            const acquired = spawnSync("/usr/bin/flock", ["-n", "3"], { stdio: ["ignore", "pipe", "pipe", descriptor], env: { PATH: "/usr/bin:/bin" } });
+            if (acquired.status !== 0) throw new Error("Maintenance receipt has another live writer; preserve its ownership");
+            return action();
+        } finally { closeSync(descriptor); }
+    }
     create(ref, operation) {
+        return this.withWriteLock(ref, () => this.createOwned(ref, operation));
+    }
+    createOwned(ref, operation) {
         const previous = this.get(ref, operation.id);
         if (previous !== undefined) {
             if (["sessionId", "cwd", "entryId", "generation", "instructions"].some((key) => Reflect.get(previous, key) !== Reflect.get(operation, key)))
@@ -130,6 +149,9 @@ export class SessionMaintenanceStore {
         return structuredClone(operation);
     }
     update(ref, id, change) {
+        return this.withWriteLock(ref, () => this.updateOwned(ref, id, change));
+    }
+    updateOwned(ref, id, change) {
         const data = this.read(ref);
         if (data === undefined || !Object.hasOwn(data.operations, id))
             throw new Error("Maintenance operation is unavailable");

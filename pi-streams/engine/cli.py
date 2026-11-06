@@ -26,6 +26,7 @@ from engine.project import (
     upgrade_stream,
 )
 from engine.threads import (
+    Coordinator, Status, _native_session, load_threads,
     adopt_thread,
     close_stream,
     ensure_coordinator,
@@ -456,11 +457,18 @@ def cmd_dcr(args: argparse.Namespace) -> int:
                     raise StreamsError("DCR callback does not own this held recovery fork")
                 resolved = failure_recovery.resolve_fork(stream_dir, recovery)
             else:
-                if op.recovery_original or Path(op.cwd).resolve() != stream_dir.resolve():
-                    raise StreamsError("DCR callback has no exact recovery owner")
-                resolved = resolve_coordinator(stream_dir)
-                if resolved is None or resolved.row.session != args.session:
-                    raise StreamsError("DCR callback does not own the designated native coordinator")
+                rows = [row for row in load_threads(stream_dir / "threads.tsv") if row.session == args.session and row.worktree == op.cwd and row.status in {Status.active, Status.waiting_quota}]
+                if op.recovery_original or len(rows) != 1:
+                    raise StreamsError("DCR callback has no exact registered owner")
+                row = rows[0]
+                if row.role == "coordinator":
+                    resolved = resolve_coordinator(stream_dir)
+                    if resolved is None or resolved.row.session != args.session:
+                        raise StreamsError("DCR callback does not own the designated native coordinator")
+                else:
+                    if Path(row.worktree).is_symlink() or (Path(row.worktree) / ".stream").read_text().strip() != str(stream_dir):
+                        raise StreamsError("DCR callback has no owned worker worktree")
+                    resolved = Coordinator(row, _native_session(args.session, Path(row.worktree)))
             if args.dcr_cmd == "ready":
                 result = dcr.ready(stream_dir, index, args.stream, resolved, args.operation)
             else:
