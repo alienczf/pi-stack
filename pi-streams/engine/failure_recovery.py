@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from dataclasses import asdict, dataclass, replace
+from enum import Enum
 from pathlib import Path
 
 from engine import StreamsError, artifacts, dcr, delivery, drive, failure, piweb, sessionlog, terminal_sessions
@@ -120,16 +121,84 @@ def _verify_fork(op: Recovery, original):
     return native
 
 
-def resume_parked_locked(stream: Path, at: str, *, index: Path, project, operator_resume: bool = False) -> list[dict]:
-    require_ratified(stream)
-    if drive.is_paused(stream) and not operator_resume:
+class ResumeIntent(Enum):
+    CONTINUE_OWNED = "continue-owned"
+    OPERATOR = "operator"
+
+
+def resume_parked_locked(stream: Path, at: str, *, index: Path, project, intent: ResumeIntent | drive.LegacyResume = ResumeIntent.CONTINUE_OWNED) -> list[dict]:
+    explicit = intent is ResumeIntent.OPERATOR
+    legacy = intent if isinstance(intent, drive.LegacyResume) else None
+    if intent is not ResumeIntent.CONTINUE_OWNED and not explicit and legacy is None:
+        raise StreamsError("Unknown parked resume authority")
+    if drive.is_paused(stream) and not explicit and legacy is None:
         return [{"stream": stream.name, "state": "stopped", "detail": "Explicit local off remains authoritative"}]
+    if legacy is not None and legacy.recovery_id:
+        try:
+            require_ratified(stream)
+            op, episode = load(stream, legacy.session), failure.load(stream, legacy.session)
+            if op is None or op.id != legacy.recovery_id or op.cwd != legacy.cwd or op.result is None or op.result.get("generation") != legacy.generation or episode is None or episode.id != op.episode or episode.recovery_id != op.id:
+                raise StreamsError("Legacy continuation lost its exact recovery journal")
+            if episode.cancelled or episode.uncertain_jobs or episode.kind in {"usage-limit", "content-policy"} or not isinstance(episode.authority, dict) or not isinstance(episode.checkpoint, dict):
+                raise StreamsError("Cancellation, policy, uncertain effects or lost authority preserve owned maintenance")
+            retiring = op.phase in {"retiring", "retired", "clearing"}
+            original = None if retiring else _native_session(op.session, Path(op.cwd))
+            if original is not None:
+                token, allowed = piweb.automatic_admission(original.status, op.session, op.cwd, "recovery")
+                if allowed or token["generation"] != legacy.generation:
+                    raise StreamsError("Newer original stop/input superseded legacy continuation")
+            if op.fork:
+                rows = load_threads(stream / "threads.tsv")
+                originals = [row for row in rows if row.session == op.session]
+                forks = [row for row in rows if row.session == op.fork]
+                if len(originals) != 1 or len(forks) != 1 or forks[0] != replace(originals[0], session=op.fork, status=Status.active) or terminal_sessions.load(stream, op.fork, op.cwd) is not None:
+                    raise StreamsError("Legacy continuation lost its exact registry fork")
+                fork = _native_session(op.fork, Path(op.cwd))
+                if fork.info.get("path") != op.fork_file or fork.status.get("failureBoundary", {}).get("recovery") != {"id": op.id, "originalSessionId": op.session}:
+                    raise StreamsError("Legacy continuation lost its native fork owner")
+            else:
+                fork = _verify_fork(op, original)
+            piweb.require_settings(fork.status, episode.authorized_model, episode.authorized_thinking)
+            generation = op.generation or op.result["forkGeneration"]
+            enabled = bool(op.generation)
+            if op.phase == "preparing":
+                latest = _result(stream, op, episode, original)
+                maintenance = (latest or {}).get("maintenance", {})
+                if maintenance.get("phase") != "ready" or maintenance.get("expectedGeneration") != op.result["forkGeneration"]:
+                    raise StreamsError("Owned maintenance preparation remains unconfirmed")
+                generation, enabled = maintenance.get("generation"), True
+            token, allowed = piweb.automatic_admission(fork.status, op.result["forkSessionId"], op.cwd, "recovery")
+            if token["generation"] != generation or allowed != enabled:
+                raise StreamsError("Newer fork stop/input superseded legacy continuation")
+            drive.request_resume(stream, op.session, legacy=legacy)
+            return [advance_locked(stream, op.session, op.episode, at, index=index, project=project)]
+        except (StreamsError, OSError) as exc:
+            return [{"session": legacy.session, "state": "pending", "detail": str(exc)}]
     results = []
+    processed = set()
     rows = sorted(load_threads(stream / "threads.tsv"), key=lambda row: row.role != "coordinator")
+    data = artifacts._read_tick_data(stream)
+    operations = [load(stream, sid) for sid in data.get("failure_recoveries", {})]
+    if not explicit and legacy is None:
+        for sid in dict.fromkeys([*data.get("failure_recoveries", {}), *data.get("failures", {})]):
+            row = next((row for row in rows if row.session == sid), None)
+            op, episode = load(stream, sid), failure.load(stream, sid)
+            retiring = op is not None and op.phase in {"retiring", "retired", "clearing"}
+            if row is None or not retiring and (row.status in {Status.done, Status.archived} or terminal_sessions.load(stream, sid, row.worktree) is not None):
+                continue
+            if op is not None and op.phase == "complete" or episode is None or episode.state != "parked" or episode.kind in {"usage-limit", "content-policy"} or episode.checkpoint is None or episode.authority is None and op is None:
+                continue
+            processed.add(sid)
+            try:
+                results.append(advance_locked(stream, sid, episode.id, at, index=index, project=project))
+            except (StreamsError, OSError) as exc:
+                results.append({"session": sid, "state": "pending", "detail": str(exc)})
+    if not explicit and legacy is None and not drive.load(stream).enabled:
+        return results
+    require_ratified(stream)
     for row in rows:
-        if row.status not in {Status.active, Status.waiting_quota, Status.parked}:
+        if row.session in processed or row.status not in {Status.active, Status.waiting_quota, Status.parked} or legacy is not None and (row.session != legacy.session or row.worktree != legacy.cwd):
             continue
-        operations = [load(stream, sid) for sid in artifacts._read_tick_data(stream).get("failure_recoveries", {})]
         if any(op is not None and op.fork == row.session and op.phase != "complete" for op in operations):
             continue
         try:
@@ -138,11 +207,16 @@ def resume_parked_locked(stream: Path, at: str, *, index: Path, project, operato
                 results.append({"session": row.session, "state": "terminal-preserved", "detail": terminal["state"]})
                 continue
             if row.role == "coordinator" and load(stream, row.session) is None and designated_coordinator(load_threads(stream / "threads.tsv")) != row:
-                raise StreamsError("Explicit resume preserves the designated coordinator")
+                raise StreamsError(f"{'Explicit' if explicit else 'Automatic'} resume preserves the designated coordinator")
             native = _native_session(row.session, Path(row.worktree))
+            if legacy is not None:
+                record = drive.load(stream)
+                token, allowed = piweb.automatic_admission(native.status, row.session, row.worktree, "recovery")
+                if record.enabled or record.stop_intent is not None or record.remote_state != "off-confirmed" or record.run_id != legacy.run_id or record.remote_generation != legacy.generation or allowed or token["generation"] != legacy.generation:
+                    raise StreamsError("Newer stop/input superseded exact legacy resume proof")
+                piweb.require_settings(native.status, row.model, row.thinking)
             piweb.register_stream_failure(row.session, row.worktree, stream, native.status)
             episode = failure.observe(stream, row.session, row.worktree, native.info, native.status, at, row.model, row.thinking)
-            explicit = operator_resume
             if episode is not None and episode.kind == "content-policy":
                 results.append({"session": row.session, "state": "policy-blocked", "detail": failure.POLICY_BLOCKER})
                 continue
@@ -151,29 +225,31 @@ def resume_parked_locked(stream: Path, at: str, *, index: Path, project, operato
                     piweb.require_settings(native.status, row.model, row.thinking)
                     drive.enable(stream, Coordinator(row, native))
                 continue
-            if explicit:
+            if explicit or legacy is not None:
                 branch = _branch(native, row.session, row.worktree)
                 failed = next((i for i, (entry, _) in enumerate(branch) if entry["id"] == episode.failure_entry), None)
-                if failed is None or any(entry.get("message", {}).get("role") == "user" for entry, _ in branch[failed+1:]) or episode.uncertain_jobs:
-                    raise StreamsError("Explicit resume preserves newer input and unresolved external effects")
+                if failed is None or any(entry.get("message", {}).get("role") == "user" for entry, _ in branch[failed+1:]) or episode.uncertain_jobs or legacy is not None and episode.cancelled:
+                    raise StreamsError("Parked resume preserves newer input, cancellation and unresolved external effects")
                 operation = load(stream, row.session)
                 if operation is None:
                     token, allowed = piweb.automatic_admission(native.status, row.session, row.worktree, "recovery")
-                    if allowed:
-                        raise StreamsError("Explicit parked resume requires disabled original admission")
+                    if allowed or legacy is not None and token["generation"] != legacy.generation:
+                        raise StreamsError("Parked resume requires the exact disabled original admission")
                     if episode.kind != "usage-limit" and native.status.get("failureBoundary", {}).get("parking") != {"generation": token["generation"], "owned": True}:
+                        piweb.require_settings(native.status, row.model, row.thinking)
                         piweb.resume_failure(row.session, row.worktree, {**native.status["failureBoundary"], "generation": token["generation"]})
                         native = _native_session(row.session, Path(row.worktree))
                         episode.authority, episode.continuation = None, None
-                    episode.cancelled = False
+                    if explicit:
+                        episode.cancelled = False
                     if episode.kind == "usage-limit":
                         episode.pause_owned, episode.pause_generation = True, token["generation"]
                     failure.save(stream, episode)
                     episode = failure.observe(stream, row.session, row.worktree, native.info, native.status, at, row.model, row.thinking)
                     if episode.kind != "usage-limit" and episode.authority is None:
-                        raise StreamsError("Explicit resume has no native good-prefix recovery ownership")
+                        raise StreamsError("Parked resume has no native good-prefix recovery ownership")
                 if row.role == "coordinator" or not drive.load(stream).enabled:
-                    drive.request_resume(stream, row.session)
+                    drive.request_resume(stream, row.session, legacy=legacy)
             if episode.kind == "usage-limit":
                 failure.step(stream, episode, native.status, at, native.info)
                 results.append({"session": row.session, "state": episode.state, "phase": episode.retry_state})

@@ -432,7 +432,7 @@ def cmd_resume(args: argparse.Namespace) -> int:
     for row in selected:
         stream = Path(row.path)
         with stream_lock(stream):
-            results.extend(failure_recovery.resume_parked_locked(stream, clock.stamp(clock.now()), index=index, project=project, operator_resume=True))
+            results.extend(failure_recovery.resume_parked_locked(stream, clock.stamp(clock.now()), index=index, project=project, intent=failure_recovery.ResumeIntent.OPERATOR))
     print(json.dumps(results, sort_keys=True))
     return 0
 

@@ -3,10 +3,24 @@ from __future__ import annotations
 import hashlib
 import uuid
 from dataclasses import asdict, dataclass
+from enum import Enum
 from pathlib import Path
 
 from engine import StreamsError, artifacts, delivery, piweb
-from engine.threads import Coordinator, require_ratified
+from engine.threads import Coordinator, Status, _native_session, designated_coordinator, load_threads, require_ratified, resolve_coordinator
+
+
+class StopIntent(str, Enum):
+    OPERATOR_OFF = "operator-off"
+
+
+@dataclass(frozen=True)
+class LegacyResume:
+    run_id: str
+    session: str
+    cwd: str
+    generation: str
+    recovery_id: str = ""
 
 
 @dataclass
@@ -19,6 +33,7 @@ class Drive:
     remote_state: str = "not-requested"
     remote_generation: str = ""
     resume_original: str = ""
+    stop_intent: StopIntent | None = None
 
 
 def load(stream_dir: Path) -> Drive:
@@ -31,6 +46,10 @@ def load(stream_dir: Path) -> Drive:
             raise ValueError("invalid explicit switch or transport identity")
         if record.remote_state not in ("not-requested", "on-unconfirmed", "on-confirmed", "off-unconfirmed", "off-confirmed") or not isinstance(record.remote_generation, str) or not isinstance(record.resume_original, str):
             raise ValueError("invalid remote drive confirmation")
+        if record.stop_intent is not None:
+            record.stop_intent = StopIntent(record.stop_intent)
+            if record.enabled or record.remote_state not in ("off-unconfirmed", "off-confirmed"):
+                raise ValueError("operator off contradicts drive confirmation")
         if record.desired is not None and (not isinstance(record.desired, dict) or set(record.desired) != {"goal", "body", "revision"} or not all(isinstance(item, str) for item in record.desired.values())):
             raise ValueError("invalid desired goal snapshot")
         return record
@@ -73,9 +92,93 @@ def enable(stream_dir: Path, resolved: Coordinator) -> dict:
     return save(stream_dir, record)
 
 
-def request_resume(stream_dir: Path, original: str) -> dict:
+def _legacy_candidate(record: Drive) -> bool:
+    return not record.enabled and record.stop_intent is None and record.remote_state == "off-confirmed" and bool(record.run_id and record.remote_generation) and not record.resume_original
+
+
+def reconcile_locked(stream_dir: Path) -> LegacyResume | None:
+    record = load(stream_dir)
+    if not _legacy_candidate(record):
+        return None
+    from engine import dcr, failure, failure_recovery, replacement, sessionlog, terminal_sessions
+    rows = load_threads(stream_dir / "threads.tsv")
+    live = [row for row in rows if row.status in {Status.active, Status.waiting_quota, Status.parked} and terminal_sessions.load(stream_dir, row.session, row.worktree) is None]
+    if not live:
+        return None
+    state = artifacts._read_stream_state_locked(stream_dir)
     require_ratified(stream_dir)
-    record = Drive(enabled=True, run_id=uuid.uuid4().hex, remote_state="on-unconfirmed", resume_original=original)
+    goal = artifacts.resolve_current_goal(state)
+    if not goal.strip() or failure.policy_blocks_goal(stream_dir, goal):
+        return None
+    intent = replacement.replacement_intent(stream_dir)
+    data = artifacts._read_tick_data(stream_dir)
+    if intent is not None and intent.phase != "complete":
+        raise StreamsError("Existing replacement owns admission; no legacy rearm")
+    designated = designated_coordinator(rows)
+    if designated not in live:
+        return None
+    pending = [failure_recovery.load(stream_dir, sid) for sid in data.get("failure_recoveries", {})]
+    pending = [op for op in pending if op.phase != "complete" and any(row.session == op.session and row.role == "coordinator" for row in rows)]
+    if pending:
+        owned = [(op, row) for op in pending for row in rows if row.session == op.session and row.role == "coordinator" and op.result is not None and op.result.get("state") == "forked" and op.result.get("generation") == record.remote_generation]
+        if len(owned) != 1:
+            raise StreamsError("Existing recovery has no exact legacy continuation generation")
+        op, row = owned[0]
+        if designated.session not in {op.session, op.result["forkSessionId"]}:
+            raise StreamsError("Existing recovery no longer owns the designated coordinator")
+        if op.phase not in {"retiring", "retired", "clearing"}:
+            if row not in live:
+                raise StreamsError("Terminal original preserves legacy recovery parking")
+            native = _native_session(row.session, Path(row.worktree))
+            token, allowed = piweb.automatic_admission(native.status, row.session, row.worktree, "recovery")
+            if allowed or token["generation"] != record.remote_generation:
+                raise StreamsError("Newer original stop/input superseded legacy recovery continuation")
+            piweb.require_settings(native.status, row.model, row.thinking)
+        return LegacyResume(record.run_id, row.session, row.worktree, record.remote_generation, op.id)
+    operation = dcr.load(stream_dir, designated.session)
+    if operation is not None and operation.phase not in {"complete", "superseded", "rotated"}:
+        raise StreamsError("Existing DCR owns admission; no legacy rearm")
+    resolved = resolve_coordinator(stream_dir, rows)
+    if resolved is None:
+        return None
+    sid, cwd, status = resolved.row.session, resolved.row.worktree, resolved.native.status
+    token, allowed = piweb.automatic_admission(status, sid, cwd, "recovery")
+    if allowed or token["generation"] != record.remote_generation:
+        raise StreamsError("Newer receiving stop/input superseded legacy drive healing")
+    piweb.require_settings(status, resolved.row.model, resolved.row.thinking)
+    piweb.require_control_goal(sid)
+    piweb.register_stream_failure(sid, cwd, stream_dir, status)
+    boundary = status.get("failureBoundary")
+    episode = failure.load(stream_dir, sid)
+    if episode is not None and (episode.cancelled or episode.uncertain_jobs or episode.kind == "content-policy"):
+        raise StreamsError("Cancellation, policy or uncertain effects preserve legacy parking")
+    if isinstance(boundary, dict) and boundary.get("state") == "parked":
+        return LegacyResume(record.run_id, sid, cwd, record.remote_generation)
+    if isinstance(boundary, dict) and boundary.get("state") != "watching" or episode is not None and episode.state != "recovered":
+        raise StreamsError("Unresolved failure owns legacy admission")
+    if any(item["state"] in {"sending", "uncertain"} or item.get("control", {}).get("state") in {"sending", "uncertain"} for item in delivery.receipts(stream_dir)) or any(value.get("replay") for value in data.get("sessions", {}).values()):
+        raise StreamsError("Uncertain delivery/replay preserves legacy admission")
+    if status.get("controlGoal", {}).get("state") in {"sending", "uncertain"}:
+        raise StreamsError("Uncertain native control owns legacy admission")
+    native_file = resolved.native.info.get("path")
+    if not isinstance(native_file, str) or sessionlog.failure_observation(Path(native_file), sid, cwd, status.get("rotationSafety", {}).get("entryId")) is not None:
+        raise StreamsError("Unclassified failure preserves legacy admission")
+    remote = piweb.set_automatic_admission(sid, True, expected_generation=record.remote_generation)
+    piweb.automatic_admission({"automaticAdmission": remote}, sid, cwd, "wake")
+    record.enabled, record.remote_state, record.remote_generation = True, "on-confirmed", str(remote["generation"])
+    save(stream_dir, record)
+    return None
+
+
+def request_resume(stream_dir: Path, original: str, *, legacy: LegacyResume | None = None) -> dict:
+    require_ratified(stream_dir)
+    if legacy is None:
+        record = Drive(enabled=True, run_id=uuid.uuid4().hex, remote_state="on-unconfirmed", resume_original=original)
+    else:
+        record = load(stream_dir)
+        if not _legacy_candidate(record) or record.run_id != legacy.run_id or record.remote_generation != legacy.generation or original != legacy.session:
+            raise StreamsError("Legacy resume no longer owns exact local drive intent")
+        record.enabled, record.remote_state, record.resume_original = True, "on-unconfirmed", original
     return save(stream_dir, record)
 
 
@@ -93,6 +196,7 @@ def confirm_resume(stream_dir: Path, original: str, sid: str, cwd: str, generati
 def pause_local(stream_dir: Path) -> dict:
     record = load(stream_dir)
     record.enabled, record.remote_state, record.remote_generation, record.resume_original = False, "off-unconfirmed", "", ""
+    record.stop_intent = StopIntent.OPERATOR_OFF
     return save(stream_dir, record)
 
 
