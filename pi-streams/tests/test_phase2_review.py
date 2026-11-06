@@ -166,12 +166,15 @@ class MissingLoadAckTests(CapacityFixture):
         intent = self.rotate("research")
         for method, path, _, body in self.routes:
             if method == "GET" and path == "/api/sessions/healthy/status":
+                body["conditionalAdmissionSupport"] = "generation-cas-v1"
                 body["rotationSafety"] = {"entryId": "e1", "callbacksKnown": True, "callbackInventory": "native-and-extension-v1", "nativeChildCallbacks": []}
         self.write_log("another", str(self.stream))
         self.routes[0][3].append({"id": "another", "cwd": str(self.stream), "path": self.log_path("another")})
         other = copy.deepcopy(self.successor_status)
         other["sessionId"] = "another"
         self.routes.append(("GET", "/api/sessions/another/status", 200, other))
+        for sid in ("healthy", "another"):
+            self.stub.automatic_admissions[sid] = {"sessionId": sid, "cwd": str(self.stream), "generation": "fixture-" + sid, "allowed": True, "durable": True}
         self.stub.set_routes(self.routes)
         denied = self.run_streams("replace", "etl", "--coordinator-session", "another", "--from", "healthy")
         self.assertNotEqual(denied.returncode, 0)
