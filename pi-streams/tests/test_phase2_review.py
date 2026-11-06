@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 
 import test_phase1_parity as parity
+import test_failure_recovery as recovery_cases
 from tick_support import TickCase, reply, user
 
 
@@ -161,9 +162,69 @@ class MissingLoadAckTests(CapacityFixture):
         self.assertFalse(any(item[0] == "POST" and item[1].startswith("/api/sessions/successor/") for item in self.stub.requests))
         self.assertNotIn("successor", self.state(self.stream).get("dcr_operations", {}))
 
+    def test_completed_worker_loader_error_does_not_abort_coordinator_observation(self):
+        intent = self.rotate("research")
+        handoff = self.stream / intent["handoff"]["path"]
+        handoff.write_text(handoff.read_text() + "changed evidence\n")
+        result = self.tick("2026-10-06T12:15:00Z")
+        self.assertEqual(result.returncode, 1, "load evidence failure must remain visible")
+        self.assertTrue(any(item[0] == "GET" and item[1] == "/api/sessions/healthy/status" for item in self.stub.requests), "a worker loader exception must not abort coordinator observation")
+        self.assertNotIn("successor", self.state(self.stream).get("dcr_operations", {}))
+
+    def test_terminal_failed_load_is_blocked_even_when_native_failure_parks_admission(self):
+        intent = self.rotate("research")
+        self.finish_without_ack(intent)
+        path = Path(self.log_path("successor"))
+        lines = path.read_text().splitlines()
+        failed = json.loads(lines[-1])
+        failed["message"].update(stopReason="error", errorMessage="Terminal model error in checkpoint load")
+        lines[-1] = json.dumps(failed)
+        path.write_text("\n".join(lines) + "\n")
+        self.stub.automatic_admissions["successor"].update(allowed=False, generation="native-failure-park")
+        self.successor_status["failureBoundary"] = {"sessionId": "successor", "cwd": str(self.cwd), "state": "parked", "failure": {"entryId": "e2"}}
+        self.advance()
+        load = self.state(self.stream)["coordinator_replacement"]["load"]
+        self.assertEqual(load["state"], "blocked")
+        self.assertEqual(load["assistantEntryId"], "e2")
+        self.assertEqual(load["assistantSha256"], hashlib.sha256(path.read_bytes().splitlines(keepends=True)[-1]).hexdigest())
+        self.assertFalse(self.stub.automatic_admissions["successor"]["allowed"])
+
     def test_pending_worker_load_does_not_starve_healthy_coordinator(self):
         self.rotate("research")
         self.stub.requests.clear()
         result = self.tick("2026-10-06T12:15:00Z")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(any(item[0] == "GET" and item[1] == "/api/sessions/healthy/status" for item in self.stub.requests), "P2 postpublication worker ownership is lane-local even before completion")
+
+
+class FailedLoadRecoveryFenceTests(TickCase):
+    fixture = recovery_cases.FailureRecoveryTests.fixture
+    seed = recovery_cases.FailureRecoveryTests.seed
+    digest = recovery_cases.FailureRecoveryTests.digest
+    body = recovery_cases.FailureRecoveryTests.body
+    append = recovery_cases.FailureRecoveryTests.append
+    fork_response = recovery_cases.FailureRecoveryTests.fork_response
+
+    def unloaded_failure(self):
+        self.fixture("research", model="gpt-6.1-sol")
+        data = self.state(self.stream)
+        data["coordinator_replacement_history"] = [{"id": "prior-load", "mode": "capacity", "target": "coi", "load": {"state": "blocked"}}]
+        (self.stream / "log/tick-state.json").write_text(json.dumps(data))
+        self.before = copy.deepcopy(self.state(self.stream))
+        self.stub.requests.clear()
+
+    def test_direct_failure_advance_cannot_bypass_unloaded_successor_fence(self):
+        self.unloaded_failure()
+        result = self.run_streams("failure", "advance", "etl", "--session", "coi", "--episode", self.episode["id"])
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("checkpoint load", result.stderr)
+        self.assertEqual(self.state(self.stream), self.before)
+        self.assertEqual(self.stub.requests, [])
+
+    def test_explicit_parked_resume_cannot_bypass_unloaded_successor_fence(self):
+        self.unloaded_failure()
+        result = self.run_streams("resume", "etl", "--all-parked")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)[0].get("state"), "load-blocked")
+        self.assertEqual(self.state(self.stream), self.before)
+        self.assertEqual(self.stub.requests, [])
