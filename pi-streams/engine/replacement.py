@@ -375,7 +375,7 @@ def _save_replacement(stream: Path, intent: ReplacementIntent) -> None:
 
 def _replacement_records(stream: Path) -> dict:
     data = artifacts._read_tick_data(stream)
-    return {key: data[key] for key in ("drive", "deliveries", "tick_delivery", "dcr_operations", "dcr_dumps", "failures", "failure_recoveries", "session_start", "state_log") if key in data}
+    return {key: data[key] for key in ("drive", "deliveries", "tick_delivery", "dcr_operations", "dcr_dumps", "dcr_historical_recoveries", "failures", "failure_recoveries", "session_start", "state_log") if key in data}
 
 
 def _replacement_inputs(stream: Path, sid: str) -> None:
@@ -473,8 +473,10 @@ def _capacity_handoff(stream: Path, intent: ReplacementIntent) -> None:
         return
     if not intent.handoff or not (stream / intent.handoff["path"]).exists():
         op = intent.records["dcr_operations"][intent.source]
-        synced = base64.b64decode(op["ready_source"], validate=True)
-        if hashlib.sha256(synced).hexdigest() != op["ready_revision"]:
+        dump = (intent.records["dcr_historical_recoveries"][intent.source]["dump"]
+                if intent.outcome.get("kind") == "historical-dump-v1" else op)
+        synced = base64.b64decode(dump["ready_source"], validate=True)
+        if hashlib.sha256(synced).hexdigest() != dump["ready_revision"]:
             raise StreamsError("capacity handoff lost its frozen SYNC STATE")
         proof = intent.archive["evidence"]
         checkpoint = sessionlog.read_record(Path(proof["archivePath"]), intent.source, intent.outcome["checkpoint_entry"], intent.outcome["checkpoint_sha256"], archived=True)
@@ -488,7 +490,7 @@ def _capacity_handoff(stream: Path, intent: ReplacementIntent) -> None:
             f"{prefix}-current-state.md": current.decode("utf-8"),
             f"{prefix}-evidence.json": json.dumps({
                 "id": intent.id, "source": intent.source, "target": intent.target, "stream": str(stream),
-                "checkpoint": {"operation": op["id"], "entryId": intent.outcome["checkpoint_entry"], "sha256": intent.outcome["checkpoint_sha256"], "record": json.loads(checkpoint.raw)},
+                "checkpoint": {"operation": dump["id"], "entryId": intent.outcome["checkpoint_entry"], "sha256": intent.outcome["checkpoint_sha256"], "record": json.loads(checkpoint.raw)},
                 "retainedWork": intent.references, "retainedInputDispositions": intent.records,
             }, indent=2, sort_keys=True) + "\n",
         }
@@ -498,7 +500,7 @@ def _capacity_handoff(stream: Path, intent: ReplacementIntent) -> None:
         facts = {
             "role": role, "cwd": intent.original["cwd"], "assignment": continuation.get("assignment", "Current STATE Goals within the coordinator role"),
             "id": intent.id, "source": intent.source, "target": intent.target, "stream": str(stream),
-            "checkpoint": {"operation": op["id"], "entryId": intent.outcome["checkpoint_entry"], "sha256": intent.outcome["checkpoint_sha256"]},
+            "checkpoint": {"operation": dump["id"], "entryId": intent.outcome["checkpoint_entry"], "sha256": intent.outcome["checkpoint_sha256"]},
             "archive": proof, "syncedState": references[f"{prefix}-synced-state.md"],
             "currentState": references[f"{prefix}-current-state.md"], "liveState": str(stream / "STATE.md"),
             "evidence": references[f"{prefix}-evidence.json"],
@@ -554,6 +556,8 @@ def _begin_replacement(stream: Path, source, target: str, *, outcome: dict | Non
     _resolved, original = _replacement_native(stream, source, listing)
     if outcome is not None and {key: original[key] for key in ("entryId", "generation", "allowed")} != outcome.get("retirement"):
         raise StreamsError("capacity source changed after its bound SYNC/receipt observation")
+    if outcome is not None and outcome.get("kind") == "historical-dump-v1" and original["sha256"] != outcome.get("native_sha256"):
+        raise StreamsError("historical recovery source bytes changed after dump selection")
     rows = load_threads(stream / "threads.tsv")
     if (source not in rows or source.status not in {Status.active, Status.waiting_quota}
         or source.role == "coordinator" and (designated_coordinator(rows) != source or Path(source.worktree).resolve() != stream)

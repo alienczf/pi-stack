@@ -65,6 +65,47 @@ class Operation:
     capacity: dict | None = None
 
 
+@dataclass
+class HistoricalRecovery:
+    id: str
+    session: str
+    stalled_operation: str
+    dump: dict
+    automatic: dict
+    retirement: dict
+    native_sha256: str
+    phase: str = "prepared"
+
+
+def historical_recovery(stream_dir: Path, sid: str) -> HistoricalRecovery | None:
+    raw = artifacts._read_tick_data(stream_dir).get("dcr_historical_recoveries", {}).get(sid)
+    if raw is None:
+        return None
+    try:
+        recovery = HistoricalRecovery(**raw)
+        dump = Operation(**recovery.dump)
+        saved_dump(dump)
+        op = load(stream_dir, sid)
+        if (not recovery.id or recovery.session != sid or recovery.phase not in {"prepared", "rotated"}
+            or op is None or recovery.stalled_operation != op.id or dump.id == op.id
+            or dump.session != sid or dump.cwd != op.cwd or recovery.automatic != op.automatic
+            or not dump.checkpoint_entry or not dump.checkpoint_sha256
+            or recovery.retirement.get("generation") != recovery.automatic["generation"]
+            or recovery.retirement.get("allowed") is not True
+            or not isinstance(recovery.retirement.get("entryId"), str) or not recovery.retirement["entryId"]
+            or not isinstance(recovery.native_sha256, str) or re.fullmatch(r"[a-f0-9]{64}", recovery.native_sha256) is None):
+            raise ValueError("historical dump, stalled SYNC or retirement identity changed")
+        return recovery
+    except (TypeError, ValueError, KeyError, AttributeError) as exc:
+        raise StreamsError(f"invalid historical dump recovery: {exc}") from exc
+
+
+def _save_historical(stream_dir: Path, recovery: HistoricalRecovery) -> None:
+    data = artifacts._read_tick_data(stream_dir)
+    data.setdefault("dcr_historical_recoveries", {})[recovery.session] = asdict(recovery)
+    artifacts._save_tick_data(stream_dir, data)
+
+
 def safe_context(native: dict, status: dict) -> int:
     tokens, target = native.get("tokensAfter"), native.get("targetTokens")
     model = status.get("model", {})
@@ -464,6 +505,67 @@ def rotate_capacity_locked(stream_dir: Path, resolved: Coordinator, op: Operatio
     return target
 
 
+def _historical_outcome(recovery: HistoricalRecovery) -> dict:
+    dump = recovery.dump
+    return {"kind": "historical-dump-v1", "recovery": recovery.id, "operation": recovery.stalled_operation,
+            "dump": dump["id"], "checkpoint_entry": dump["checkpoint_entry"], "checkpoint_sha256": dump["checkpoint_sha256"],
+            "generation": recovery.automatic["generation"], "retirement": recovery.retirement, "native_sha256": recovery.native_sha256}
+
+
+def _recover_historical(stream_dir: Path, resolved: Coordinator, op: Operation) -> bool:
+    from engine import replacement
+    recovery = historical_recovery(stream_dir, op.session)
+    if recovery is None:
+        raw = artifacts._read_tick_data(stream_dir).get("dcr_dumps", {}).get(op.session)
+        if raw is None or raw.get("id") == op.id or op.recovery_original:
+            return False
+        dump = Operation(**raw)
+        saved_dump(dump)
+        if dump.session != op.session or dump.cwd != op.cwd or not dump.checkpoint_entry or not dump.checkpoint_sha256:
+            raise StreamsError("Historical dump does not bind this native session/worktree")
+        native_sha256 = replacement._digest(Path(resolved.native.info["path"]))
+        source = replacement._healthy_source(resolved)
+        token, allowed = piweb.automatic_admission(resolved.native.status, op.session, op.cwd, "wake")
+        if not allowed or token != op.automatic:
+            raise StreamsError("Historical recovery was superseded by newer receiving input or stop")
+        branch = sessionlog.branch_records(Path(resolved.native.info["path"]), op.session, op.cwd, source["entryId"])
+        checkpoint = next(((at, entry, raw) for at, (entry, raw) in enumerate(branch) if entry["id"] == dump.checkpoint_entry), None)
+        if checkpoint is None or hashlib.sha256(checkpoint[2]).hexdigest() != dump.checkpoint_sha256:
+            raise StreamsError("Historical recovery lost its exact validated native dump checkpoint")
+        checkpoint_status = {**resolved.native.status, "rotationSafety": {**resolved.native.status["rotationSafety"], "entryId": dump.checkpoint_entry}}
+        if checkpoint[1].get("customType") == "pi-web.stream-failure":
+            checkpoint_status["failureBoundary"] = checkpoint[1].get("data")
+        saved = Coordinator(resolved.row, NativeSession(resolved.native.info, checkpoint_status))
+        if terminal_checkpoint(saved, f"DCR SYNC ready: {dump.id} {dump.ready_revision}") != (dump.checkpoint_entry, dump.checkpoint_sha256):
+            raise StreamsError("Historical recovery lost its validated SYNC acknowledgement")
+        users = []
+        for at, (entry, _) in enumerate(branch[checkpoint[0] + 1:], checkpoint[0] + 1):
+            message = entry.get("message", {})
+            content = message.get("content", [])
+            text = content if isinstance(content, str) else "\n".join(part.get("text", "") for part in content if isinstance(part, dict) and part.get("type") == "text")
+            if message.get("role") == "user" and text == op.sync_text:
+                users.append(at)
+        if len(users) != 1 or any(entry.get("message", {}).get("role") == "user" for entry, _ in branch[users[0] + 1:]):
+            return False
+        if not any(entry.get("message", {}).get("role") == "assistant" and entry["message"].get("stopReason") == "stop" for entry, _ in branch[users[0] + 1:]):
+            return False
+        retirement = {"entryId": source["entryId"], "generation": token["generation"], "allowed": allowed}
+        if replacement._digest(Path(resolved.native.info["path"])) != native_sha256:
+            raise StreamsError("Native history changed while selecting its historical dump")
+        recovery = HistoricalRecovery(uuid.uuid4().hex, op.session, op.id, raw, token, retirement, native_sha256)
+        _save_historical(stream_dir, recovery)
+    intent = replacement.replacement_intent(stream_dir)
+    outcome = _historical_outcome(recovery)
+    if intent is None or intent.phase == "complete" and intent.outcome != outcome:
+        intent = replacement._begin_replacement(stream_dir, resolved.row, "", outcome=outcome)
+    if intent.mode != "capacity" or intent.source != op.session or intent.outcome != outcome:
+        raise StreamsError("Another replacement owns the historical dump recovery")
+    replacement.advance_replacement_locked(stream_dir, intent)
+    recovery.phase = "rotated"
+    _save_historical(stream_dir, recovery)
+    return True
+
+
 def advance_capacity_replacement_locked(stream_dir: Path, *, session: str | None = None, operation: str | None = None) -> bool:
     from engine import replacement
     intent = replacement.replacement_intent(stream_dir)
@@ -475,6 +577,17 @@ def advance_capacity_replacement_locked(stream_dir: Path, *, session: str | None
     from engine.drive import is_paused
     if is_paused(stream_dir):
         return True
+    if intent.outcome.get("kind") == "historical-dump-v1":
+        recovery = historical_recovery(stream_dir, intent.source)
+        if recovery is None or _historical_outcome(recovery) != intent.outcome:
+            raise StreamsError("Historical replacement lost its separate recovery intent")
+        replacement.advance_replacement_locked(stream_dir, intent)
+        if recovery.phase != "rotated":
+            recovery.phase = "rotated"
+            _save_historical(stream_dir, recovery)
+        return (operation is not None or intent.phase != "complete"
+                or intent.original.get("thread", {}).get("role", "coordinator") == "coordinator"
+                and intent.load.get("state") not in {"observed", "stopped", "superseded"})
     if intent.phase == "complete" and op.phase == "rotated":
         target = replacement.advance_replacement_locked(stream_dir, intent)
         _finish_rotation(stream_dir, op, target)
@@ -611,6 +724,13 @@ def step(index: Path, project: Project, stream: str, stream_dir: Path, resolved:
             return True
         if op.phase in {"sync-sending", "sync-admitted"}:
             if not op.ready_revision:
+                if op.phase == "sync-admitted" and not op.recovery_original:
+                    try:
+                        if _recover_historical(stream_dir, resolved, op):
+                            return True
+                    except (StreamsError, OSError, ValueError, TypeError) as exc:
+                        replacement._save(stream_dir, "historical_dump_recovery_error", {"session": sid, "operation": op.id, "detail": str(exc)})
+                        return True
                 if op.recovery_original and status.get("failureSyncContinuationSupport") == "entry-bound-v1" and not any(status.get(key) for key in ("isStreaming", "isCompacting", "isBashRunning", "pendingMessageCount", "pendingAsk", "pendingDialogs")):
                     branch = native_branch(resolved)
                     entry, raw = branch[0]

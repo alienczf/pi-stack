@@ -71,13 +71,16 @@ function controlledStream(selected, context, options, sid, cwd) {
         const plan = title || summary ? {} : (plans.get(sid)?.shift() ?? {});
         const last = textOf(context.messages.findLast(m => m.role === 'user'));
         let text = plan.text ?? (summary ? '## Goal\nContinue only the current permitted goal in STATE.\n## Progress\nHistorical fixture exchanges were checked.\n## Next steps\nRead STATE and retain the bounded role.' : owned.has(sid) ? 'Permitted fixture work completed. The authorized overall outcome remains unfinished.' : 'The content-policy refusal applies to the original task. Only failure metadata was analyzed. Preserve evidence and keep the original task blocked.');
-        if (!title && !summary && !plan.error && last.includes('SYNC/DUMP for same-session DCR')) {
+        if (!title && !summary && !plan.error && plan.ready !== false && last.includes('SYNC/DUMP for same-session DCR')) {
             const operation = /SYNC\/DUMP for same-session DCR ([a-zA-Z0-9-]+)/.exec(last)?.[1];
             const streamRoot = findStream(cwd);
             const args = ['dcr', 'ready', streamRoot.split(sep).at(-1), '--home', process.env.CHAOS_INDEX, '--session', sid, '--operation', operation];
             journal({ effect: 'controlled-agent-dcr-ready', session: sid, args });
             const result = await execute(process.env.PI_STREAMS_BIN, args, { cwd, timeout: 30000 });
             text = JSON.parse(result.stdout).acknowledgement;
+        }
+        if (!title && !summary && process.env.CHAOS_LOAD_ACK === '1' && last.includes('Do not perform task effects or replay commands during this load.')) {
+            text = /Dump checkpoint loaded: [a-zA-Z0-9-]+/.exec(last)?.[0] ?? text;
         }
         call.result = { text, error: plan.error ?? null };
         const message = response(text, plan.error, context.messages.reduce((sum, message) => sum + estimateTokens(message), 0));

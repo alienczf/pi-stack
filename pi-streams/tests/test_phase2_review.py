@@ -6,11 +6,20 @@ import hashlib
 import json
 from pathlib import Path
 
-from test_phase1_parity import CapacityLoadParityTests
-from tick_support import reply, user
+import test_phase1_parity as parity
+from tick_support import TickCase, reply, user
 
 
-class HistoricalDumpTests(CapacityLoadParityTests):
+class CapacityFixture(TickCase):
+    fixture = parity.CapacityLoadParityTests.fixture
+    compact = parity.CapacityLoadParityTests.compact
+    archive = parity.CapacityLoadParityTests.archive
+    advance = parity.CapacityLoadParityTests.advance
+    rotate = parity.CapacityLoadParityTests.rotate
+    load_acknowledgement = parity.CapacityLoadParityTests.load_acknowledgement
+
+
+class HistoricalDumpTests(CapacityFixture):
     def later_sync(self, role="research"):
         self.fixture(role)
         self.native.update(state="resumed", compactionEntryId="compact-old", compactionSha256="a" * 64,
@@ -50,7 +59,7 @@ class HistoricalDumpTests(CapacityLoadParityTests):
         archive = self.tmp / "source-archive.jsonl"
         archive.write_bytes(Path(self.log_path("source")).read_bytes())
         self.source_info.update(archived=True, archivePath=str(archive), archivedAt="2026-10-06T12:11:00Z")
-        return 200, {"archived": True}
+        return 200, {"archived": True, "automaticAdmission": {**self.stub.automatic_admissions["source"], "allowed": False}}
 
     def test_later_idle_sync_uses_separately_bound_prior_dump(self):
         self.later_sync()
@@ -76,6 +85,39 @@ class HistoricalDumpTests(CapacityLoadParityTests):
         self.assertIn("healthy\tcoordinator", self.rows(self.stream))
         self.load_acknowledgement(intent)
 
+    def test_historical_recovery_reconciles_archive_without_replaying_retirement(self):
+        self.later_sync("coordinator")
+        calls = []
+
+        def lost_receipt(body):
+            calls.append(body)
+            self.archive(body)
+            return 503, {"error": "Labelled lost archive receipt after durable retirement"}
+
+        self.routes = [(method, path, code, lost_receipt if method == "POST" and path == "/api/sessions/source/archive" else body)
+                       for method, path, code, body in self.routes]
+        self.stub.set_routes(self.routes)
+        self.tick_ok()
+        self.assertEqual(self.state(self.stream)["coordinator_replacement"]["phase"], "archiving")
+        self.tick_ok()
+        self.assertEqual(self.state(self.stream)["coordinator_replacement"]["phase"], "complete")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual((self.stream / "STATE.md").read_bytes(), self.current)
+
+    def test_corrupt_historical_dump_cannot_retire_the_current_session(self):
+        self.later_sync()
+        for key in ("ready_revision", "checkpoint_sha256"):
+            with self.subTest(key=key):
+                data = self.state(self.stream)
+                data["dcr_dumps"]["source"] = {**self.dump, key: "0" * 64}
+                (self.stream / "log/tick-state.json").write_text(json.dumps(data))
+                self.tick_ok()
+                data = self.state(self.stream)
+                self.assertNotIn("coordinator_replacement", data)
+                self.assertEqual(data["dcr_operations"]["source"], self.op)
+                self.assertEqual((self.stream / "STATE.md").read_bytes(), self.current)
+                self.assertFalse(any(item[0] == "POST" and item[1].endswith("/archive") for item in self.stub.requests))
+
     def test_later_sync_busy_unknown_callbacks_and_pending_input_stay_fenced(self):
         self.later_sync()
         variants = [{"isStreaming": True}, {"pendingMessageCount": 1}, {"pendingAsk": {"askId": "retain"}},
@@ -91,7 +133,7 @@ class HistoricalDumpTests(CapacityLoadParityTests):
         self.assertEqual((self.stream / "STATE.md").read_bytes(), self.current)
 
 
-class MissingLoadAckTests(CapacityLoadParityTests):
+class MissingLoadAckTests(CapacityFixture):
     def finish_without_ack(self, intent):
         identity = intent["load"]["delivery"]
         control = self.stub.control_goals[identity]
@@ -109,6 +151,7 @@ class MissingLoadAckTests(CapacityLoadParityTests):
         self.assertEqual(blocked["state"], "blocked", "P2 a terminal load missing exact ack cannot remain pending")
         self.assertEqual((blocked["userEntryId"], blocked["assistantEntryId"]), ("e1", "e2"))
         self.assertEqual(blocked["assistantSha256"], hashlib.sha256(Path(self.log_path("successor")).read_bytes().splitlines(keepends=True)[-1]).hexdigest())
+        self.successor_status["contextUsage"] = {"tokens": 200000}
         self.stub.requests.clear()
         for _ in range(3):
             result = self.tick("2026-10-06T12:15:00Z")
