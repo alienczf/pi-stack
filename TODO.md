@@ -8,7 +8,7 @@
 - [x] 4. Verify on the same surface. The original repro now passes. "Inconclusive" or wrong-surface is not a pass. Flag it. Unit tests show branch behavior, not bug absence.
 - [x] 5. Stage the commits so the failing repro lands before the fix in git history. See the **tdd** skill for the failing-test-first cadence when the bug has a cheap local test path. Skip it when the test would be expensive, integration-heavy, or unclear.
   This is the canonical **sequence-verifiable-units** principle skill, the failing test first and the fix on top.
-- [ ] 6. Run **Opening a PR**.
+- [x] 6. Run **Opening a PR**.
 
 ## Goal and throughput checkpoint
 
@@ -41,7 +41,11 @@ The appropriate base is prime-stack at b250dc6f. It contains merged PR #55 fixes
 - [x] Commit failing behavior regressions before the fix.
 - [x] Implement the narrow owning-layer fix and verify replay, ambiguous identity, busy native owner, and unregistered-session fences.
 - [x] Independently rerun the CLI reproduction and affected suites.
-- [ ] Inspect the final diff and open an unmerged PR.
+- [x] Inspect the final diff and open an unmerged PR.
+
+### Delivery
+
+https://github.com/alienczf/pi-stack/pull/56 is open, ready and targets prime-stack. The published code head was verified against the exact remote branch. No merge occurred. The final documentation-only receipt records that delivery. The clean disposable baseline worktree was removed after its checks.
 
 ### Implementation and final verification
 
