@@ -193,8 +193,11 @@ async function copySessionFileToArchive(source, archivePath) {
     if (source === archivePath)
         return;
     await mkdir(dirname(archivePath), { recursive: true });
-    if (await pathExists(archivePath))
+    if (await pathExists(archivePath)) {
+        if (await pathExists(source) && !(await readFile(source)).equals(await readFile(archivePath)))
+            throw new Error("Existing archive bytes differ from the live source");
         return;
+    }
     await copyFile(source, archivePath);
 }
 async function removeActiveSessionFile(source, archivePath) {
