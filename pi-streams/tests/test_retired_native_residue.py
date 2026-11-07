@@ -183,6 +183,22 @@ class RetiredNativeResidueTests(TickCase):
         self.assertEqual(snapshot(self.stream), before)
         self.assertEqual(self.posts(), [])
 
+    def test_lost_reply_with_positive_native_archive_evidence_dispatches_without_replay(self):
+        self.adopt()
+        self.routes(archive_code=503, archive_reply={'error': 'Controlled lost archive reply'})
+        self.pending()
+        failed = self.tick('2026-11-03T00:01:00Z')
+        self.assertEqual(failed.returncode, 1, failed.stdout)
+        self.assertEqual(self.state(self.stream)['terminal_sessions']['retired']['state'], 'uncertain')
+        self.stub.archived_sessions.add('retired')
+        self.routes()
+        recovered = self.tick('2026-11-03T00:02:00Z')
+        self.assertEqual(recovered.returncode, 0, recovered.stderr)
+        self.assertEqual([path for path, _ in self.posts()], ['/api/sessions/successor/prompt'])
+        record = self.state(self.stream)['deliveries'][self.state(self.stream)['tick_delivery']]
+        self.assertEqual((record['session'], record['state']), ('successor', 'transport_accepted'))
+        self.assertFalse(any(path == '/api/sessions/retired/status' for _, path, _, _ in self.stub.requests))
+
     def test_confirmed_reply_without_native_archive_listing_does_not_enable_dispatch(self):
         self.adopt()
         self.stub.simulate_session_lifecycle = False

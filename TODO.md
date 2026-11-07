@@ -1,3 +1,60 @@
+# Archive/adopt retired-native residue
+
+## Bug fix playbook
+
+- [x] 1. Reproduce it yourself on the matching surface via the control skill (Non-negotiables), even when a debug or instrumentation protocol says to ask the user to reproduce. Ask the user only with a stated, specific reason the control surface cannot reach the target, and only after driving it as far as it goes. If it won't reproduce directly, synthesize the trigger, tighten conditions, or instrument until it fires.
+- [x] 2. Binary-search the cause. Form the candidate hypotheses, then rule them out until one survives. Seed them with `how` over the affected subsystem and the **why** skill for regression history. Each pass, take the split that cuts the most remaining problem space, get runtime evidence, eliminate. When program state is unclear, add instrumentation or logging and read it as the code runs. Don't guess. Drive a long or stubborn hunt with Cursor's `/loop` command. Confirm the surviving *mechanism* with runtime evidence before the step-3 architect/interrogate fan-out.
+- [x] 3. Plan the fix. If it crosses a function boundary, `architect` first. Delegate implementation to a subagent using your configured bug-fix model (default `grok-4.7-xhigh-fast`) with a specific scope.
+- [x] 4. Verify on the same surface. The original repro now passes. "Inconclusive" or wrong-surface is not a pass. Flag it. Unit tests show branch behavior, not bug absence.
+- [x] 5. Stage the commits so the failing repro lands before the fix in git history. See the **tdd** skill for the failing-test-first cadence when the bug has a cheap local test path. Skip it when the test would be expensive, integration-heavy, or unclear.
+  This is the canonical **sequence-verifiable-units** principle skill, the failing test first and the fix on top.
+- [ ] 6. Run **Opening a PR**.
+
+## Goal and throughput checkpoint
+
+ZF requests a PR on alienczf/pi-stack that fixes retired-native-residue after archive plus explicit adoption. Reported cases are tenv-2333-drive, archived coordinator 01a1a5d3-6cb8 and adopted successor 01a1a5f4-ae1f, and qslite-654-datapull. Work stays in /home/alphalab/.pi-stack. Do not merge or wait for human ratification. Do not repair production streams or deploy the checkout as part of this task.
+
+The starting revision is b250dc6f on prime-stack. Determine the appropriate PR base from repository ancestry. The parent owns this plan, independent CLI reproduction, final verification, and publication. One bounded child owns implementation after read-only design/history exploration. Concurrent advisors may read but never write the source tree. Evidence goes in a disposable /tmp directory. There is no installed control-cli skill, so use the actual bin/pi-streams and bin/pi-web-cli surfaces directly with disposable state.
+
+The initial data shapes are Thread, Status, NativeSession, Coordinator, and durable terminal-session dispositions. Preserve exact identity, cwd, ambiguity, busy-owner, and stop fences. Confirm the archive/native-listing mechanism before choosing a change. The lever is a rerunnable regression that exercises archive, adoption, status, and dispatch and proves negative safety cases.
+
+### Evidence checkpoint
+
+The live read-only tenv status reproduces the exact retired-native-residue blocker. qslite is explicitly drive-off and was not resumed. The parent CLI/HTTP fixture reproduces adoption exit 0 followed by tick exit 1. A disposable real PiSessionService/AgentSession reproduces the same failure with zero successor task calls. Its supported teardown archived both owned sessions, stopped the process and removed scratch. Evidence is under /tmp/pi-retired-residue, including repro-before.log and native-before-corrected.log. The first native probe had an unpersisted empty-successor setup error; the corrected probe persists the successor before adoption.
+
+The clean b250dc6f coordinator-identity baseline has four failures and one error. Keep those separate from new regressions. PR #51 established that native retirement must precede successor publication. Ordinary archival lacks checkpoint callback/effect/generation guards. Native listing alone can mark an archive whose runtime or file move is still unresolved. A parked native failure requires its own lifecycle analysis, not an automatic bypass. Source-control and GitHub review are available. Other external evidence categories are unavailable.
+
+The appropriate base is prime-stack at b250dc6f. It contains merged PR #55 fixes absent from main. Targeting main would add unrelated recovery work. This task branches from that exact prime-stack revision.
+
+### Architecture and exploration
+
+- [x] Ground.
+- [x] Sketch two structurally distinct alternatives.
+- [x] Agree. No human checkpoint requested.
+- [x] Implement.
+- [x] Scrap. skip: the chosen existing-disposition shape passed the native reproduction.
+
+### Verifiable units
+
+- [x] Reproduce and record the exact blocker in disposable state.
+- [x] Compare lifecycle reconciliation with resolver-side disposition filtering, informed by history.
+- [x] Commit failing behavior regressions before the fix.
+- [x] Implement the narrow owning-layer fix and verify replay, ambiguous identity, busy native owner, and unregistered-session fences.
+- [x] Independently rerun the CLI reproduction and affected suites.
+- [ ] Inspect the final diff and open an unmerged PR.
+
+### Implementation and final verification
+
+The child committed red-first CLI regressions at 48696b78 and the tick-owned reconciliation at 85787a47. The final choice keeps adoption registration-only and reconciles before dispatch rather than adding another replacement API or mutating status. Tick validates exact predecessor and successor identities, requests conditional checkpoint archive, and reruns the resolver. Existing terminal dispositions prevent uncertain replay. Archived registry rows retain their identity in status and tick even when a terminal disposition exists.
+
+Parent review confirmed the pre-existing native archive collision could discard newer source bytes. A separate red-first test at 5cc529e8 proves that defect. The parent added a native byte-comparison guard, retained all known overlay inputs, added the complete b250dc6f upgrade input and verified every postimage hash. No live native package was patched.
+
+The parent final focused command passed 69 tests with no skips. The committed native-service lever scripts/check-retired-native-residue.py passed against the disposable patched fixture. It archived the exact predecessor, retained the complete captured bytes, removed its live source, and dispatched once to the selected successor. Supported stream close, archive teardown, process stop and scratch removal all passed. The guarded overlay applied once and was a no-op on a second apply. The native installer sandbox passed both fresh and existing paths.
+
+Evidence is /tmp/pi-retired-residue/parent-final-focused.log, committed-native-green.log, archive-retention-red.log, archive-retention-green.log and parent-overlay.log. The broader nearby baseline has an additional status snapshot failure and status-tolerance error. Native rotation's two scenarios also fail unchanged on b250dc6f because its hand-built receiver lacks assertQuiescentCheckpoint. These failures were not repaired, and no full-suite pass is claimed. The deslop and control-cli skills are absent. Direct diff review found no new application comments or suppressions.
+
+The parked-failure lifecycle, live or unknown callback/effect owners, disabled stream intent and unresolved archive outcomes remain fences. This PR does not claim that tenv's parked historical session is safely retireable, that qslite was resumed, or that production rollout occurred.
+
 # PR #55 re-review recovery fixes
 
 ## Bug fix playbook
