@@ -393,7 +393,7 @@ def _one_stream(stream_id: str, stream_dir: Path) -> dict[str, object]:
     from engine.drive import is_paused
     paused = is_paused(stream_dir)
     terminal = {row.session for row in rows if terminal_sessions.load(stream_dir, row.session, row.worktree) is not None}
-    eligible = [row for row in rows if row.session not in terminal]
+    eligible = [row for row in rows if row.status is Status.archived or row.session not in terminal]
     blockers = []
     candidates = []
     try:
@@ -403,7 +403,7 @@ def _one_stream(stream_id: str, stream_dir: Path) -> dict[str, object]:
         if row is not None and Path(row.worktree).resolve() != stream_dir.resolve():
             raise
         coordinator = None if row is None else Coordinator(row, _native_session(row.session, stream_dir))
-        fresh = [item for item in load_threads(stream_dir / "threads.tsv") if terminal_sessions.load(stream_dir, item.session, item.worktree) is None]
+        fresh = [item for item in load_threads(stream_dir / "threads.tsv") if item.status is Status.archived or terminal_sessions.load(stream_dir, item.session, item.worktree) is None]
         if designated_coordinator(fresh) != row:
             raise StreamsError("coordinator designation changed during read-only observation")
         if isinstance(exc, UnregisteredCoordinatorCandidates):

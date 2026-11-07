@@ -21,7 +21,7 @@ from engine.project import (
     stream_lock,
 )
 from engine.subscriptions import SOURCES, Subscription, load_subscriptions
-from engine.threads import Coordinator, NativeSession, Status, Thread, _native_session, load_threads, resolve_coordinator, save_threads, transition
+from engine.threads import Coordinator, NativeSession, RetiredCoordinatorResidue, Status, Thread, _native_session, designated_coordinator, load_threads, resolve_coordinator, save_threads, transition
 
 WAKE_KINDS = frozenset({"idle", "ask", "context", "stale-steer", "outage", "recovered", "subscription", "claim"})
 QUEUE_FLAGS = {"steer": "steer", "followUp": "follow-up"}
@@ -264,9 +264,9 @@ class StreamTick:
                 except (StreamsError, OSError) as exc:
                     self.fail(f"rotation: {exc}")
             self.rows = load_threads(self.rows_path)
-            terminal_coordinators = {row.session for row in self.rows if row.role == "coordinator" and terminal_sessions.load(self.stream_dir, row.session, row.worktree) is not None}
+            terminal_coordinators = {row.session for row in self.rows if row.role == "coordinator" and row.status is not Status.archived and terminal_sessions.load(self.stream_dir, row.session, row.worktree) is not None}
             try:
-                self.coordinator_resolution = resolve_coordinator(self.stream_dir, [row for row in self.rows if row.session not in terminal_coordinators], listings=self.listings)
+                self.coordinator_resolution = self._reconcile_coordinator([row for row in self.rows if row.session not in terminal_coordinators])
             except piweb.TerminalSession as exc:
                 row = next(row for row in self.rows if row.session == exc.sid)
                 terminal_sessions.save(self.stream_dir, row.session, row.worktree, exc.state, str(exc))
@@ -300,6 +300,37 @@ class StreamTick:
         except (StreamsError, OSError) as exc:
             if str(exc) not in self.errors:
                 self.errors.append(str(exc))
+
+    def _reconcile_coordinator(self, rows: list[Thread]) -> Coordinator | None:
+        while True:
+            try:
+                return resolve_coordinator(self.stream_dir, rows, listings=self.listings)
+            except RetiredCoordinatorResidue as exc:
+                successor = designated_coordinator(rows)
+                if successor is None or successor.status is not Status.active:
+                    raise
+                retired = next(row for row in rows if row.session == exc.session)
+                if Path(retired.worktree).resolve() != self.stream_dir.resolve():
+                    raise StreamsError(f"retired coordinator {retired.session} registry cwd does not match {self.stream_dir}")
+                prior = terminal_sessions.load(self.stream_dir, retired.session, retired.worktree)
+                if prior is not None:
+                    raise StreamsError(f"Archive {retired.session} remains {prior['state']}; native residue is not retirement proof and must not be replayed")
+                listing = piweb.list_sessions(str(self.stream_dir))
+                _native_session(successor.session, self.stream_dir, listing)
+                try:
+                    native = _native_session(retired.session, self.stream_dir, listing)
+                except piweb.TerminalSession as terminal:
+                    raise StreamsError(str(terminal)) from terminal
+                replacement._replacement_inputs(self.stream_dir, retired.session)
+                replacement._idle(Coordinator(retired, native))
+                automatic, _allowed = piweb.automatic_admission(native.status, retired.session, retired.worktree, "wake")
+                entry = native.status["rotationSafety"].get("entryId")
+                if not isinstance(entry, str) or not entry:
+                    raise StreamsError("retired coordinator has no exact native checkpoint")
+                expected = {"sessionId": retired.session, "cwd": retired.worktree, "entryId": entry, "generation": automatic["generation"]}
+                outcome = terminal_sessions.archive(self.stream_dir, retired.session, retired.worktree, expected_idle=expected)
+                if outcome != "archived":
+                    raise StreamsError(f"Retired coordinator {retired.session} archive is {outcome}; no successor dispatch")
 
     def emit(self, kind: str, row: Thread | None = None, detail: str = "") -> None:
         event = Event(self.at, kind, row.session if row else "", row.role if row else "", detail)
