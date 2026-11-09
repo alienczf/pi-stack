@@ -184,7 +184,7 @@ def _verify_handoff(stream_dir: Path, record: Delivery) -> None:
             raise StreamsError("saved capacity continuation changed its exact handoff context")
 
 
-def prepare_locked(stream_dir: Path, identity: str, session: str, body: str, *, events: list[dict] | None = None, behavior: str | None = None, automatic_kind: str = "wake") -> dict:
+def prepare_locked(stream_dir: Path, identity: str, session: str, body: str, *, events: list[dict] | None = None, behavior: str | None = None, automatic_kind: str = "wake", expected_automatic: dict[str, str] | None = None) -> dict:
     if not identity.strip() or not session.strip() or not body.strip():
         raise StreamsError("delivery identity, destination and body are required")
     record = Delivery(identity, session, body, origin="steer" if events is None else "tick", behavior=behavior, events=events or [])
@@ -200,6 +200,8 @@ def prepare_locked(stream_dir: Path, identity: str, session: str, body: str, *, 
     if events is not None:
         status = _require_destination(stream_dir, record, session)
         record.automatic, _allowed = piweb.automatic_admission(status, session, str(stream_dir), automatic_kind)
+        if expected_automatic is not None and record.automatic != expected_automatic:
+            raise StreamsError("successor automatic admission changed before delivery preparation")
     _attach_handoff(stream_dir, record)
     if events is None:
         artifacts.append_log_locked(stream_dir, clock.stamp(clock.now()), f"Steer {identity}", f"Destination session: {session}\n{body}", request_id=f"delivery:{identity}")
@@ -252,18 +254,23 @@ def _control_receipt(record: Delivery, native: dict) -> None:
 
 
 def _require_destination(stream_dir: Path, record: Delivery, session: str) -> dict[str, object]:
-    from engine.threads import Status, _native_session, designated_coordinator, load_threads, resolve_coordinator
+    from engine.threads import Status, _native_session, designated_coordinator, inspect_coordinator, load_threads, resolve_coordinator
     from engine.replacement import successor_handoff
+    from engine import terminal_sessions
 
     rows = load_threads(stream_dir / "threads.tsv")
     if record.handoff is not None and record.handoff == successor_handoff(stream_dir, session):
         target = next((row for row in rows if row.session == session and row.status is Status.active), None)
         if target is not None and target.role != "coordinator" and session == record.session:
             return _native_session(session, Path(target.worktree)).status
-    row = designated_coordinator(rows)
-    if session != record.session or row is None or row.session != session:
+    eligible = [row for row in rows if row.status is Status.archived or terminal_sessions.load(stream_dir, row.session, row.worktree) is None]
+    row = designated_coordinator(eligible)
+    if session != record.session or row is None or row.session != session or row.status is not Status.active:
         raise StreamsError(f"delivery {record.id} destination is stale or does not match")
-    resolved = resolve_coordinator(stream_dir)
+    if record.origin in {"tick", "drive"}:
+        resolved = inspect_coordinator(stream_dir, eligible).coordinator
+    else:
+        resolved = resolve_coordinator(stream_dir, eligible)
     if resolved is None or resolved.row.session != session:
         raise StreamsError(f"delivery {record.id} destination changed before dispatch")
     return resolved.native.status
@@ -277,6 +284,12 @@ def send_locked(stream_dir: Path, identity: str) -> dict:
         return _save(stream_dir, record)
     if record.state != "prepared":
         return record.public()
+    if record.origin in {"tick", "drive"}:
+        from engine.drive import is_paused
+
+        if is_paused(stream_dir):
+            record.state, record.detail = "blocked", "Explicit drive-off prevents automatic dispatch."
+            return _save(stream_dir, record)
     status = _require_destination(stream_dir, record, record.session)
     if record.origin in ("tick", "drive"):
         artifacts._read_stream_state_locked(stream_dir)

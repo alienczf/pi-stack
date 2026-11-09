@@ -10,9 +10,9 @@ from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 
-from engine import StreamsError, artifacts, clock, delivery, failure, failure_recovery, piweb, sessionlog
+from engine import StreamsError, artifacts, clock, delivery, failure, failure_recovery, piweb, sessionlog, terminal_sessions
 from engine.project import Project, _sync_directory, _write, commit_repo, git, require_stream
-from engine.threads import Coordinator, Status, _canonical_stream, _native_session, _save_start, _start_record, _validated_handover, designated_coordinator, dump_threads, ensure_coordinator, load_threads, resolve_coordinator, save_threads, transition
+from engine.threads import Coordinator, Status, Thread, _canonical_stream, _native_session, _save_start, _start_record, _validated_handover, designated_coordinator, dump_threads, ensure_coordinator, load_threads, resolve_coordinator, save_threads, transition
 
 
 @contextmanager
@@ -411,6 +411,18 @@ def _replacement_native(stream: Path, row, listing: list[dict]) -> tuple[Coordin
         digest = hashlib.file_digest(handle, "sha256").hexdigest()
     branch = sessionlog.branch_records(Path(path), row.session, row.worktree, leaf)
     return resolved, {"sessionId": row.session, "cwd": row.worktree, "entryId": leaf, "generation": automatic["generation"], "allowed": allowed, "path": path, "sha256": digest, "leafSha256": hashlib.sha256(branch[-1][1]).hexdigest(), "model": row.model, "thinking": row.thinking, "rotationSafety": resolved.native.status["rotationSafety"], "thread": asdict(row) | {"status": row.status.value}}
+
+
+def reconcile_retired_coordinator_residue(stream: Path, row: Thread) -> str:
+    if row.role != "coordinator" or row.status is not Status.archived or Path(row.worktree).resolve() != stream.resolve():
+        raise StreamsError("retired coordinator identity does not match the registered stream")
+    prior = terminal_sessions.load(stream, row.session, row.worktree)
+    if prior is not None:
+        return prior["state"]
+    _replacement_inputs(stream, row.session)
+    _resolved, original = _replacement_native(stream, row, piweb.list_sessions(str(stream)))
+    expected = {key: original[key] for key in ("sessionId", "cwd", "entryId", "generation")}
+    return terminal_sessions.archive(stream, row.session, row.worktree, expected_idle=expected)
 
 
 def _replacement_target(stream: Path, sid: str, model: str, thinking: str, listing: list[dict]) -> dict:

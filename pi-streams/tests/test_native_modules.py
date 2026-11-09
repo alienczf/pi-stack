@@ -13,6 +13,9 @@ ROOT = Path(__file__).resolve().parents[2]
 
 @unittest.skipUnless(os.environ.get("PI_STACK_NATIVE_TEST_ROOT"), "set PI_STACK_NATIVE_TEST_ROOT to the patched disposable package")
 class NativeModuleTests(unittest.TestCase):
+    def test_actual_archive_retention(self):
+        self.run_native("archive-retention", 2)
+
     def test_actual_initial_control_modules(self):
         self.run_native("initial-control", 17)
 

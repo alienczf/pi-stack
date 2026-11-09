@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { access, copyFile, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { access, copyFile, mkdir, open, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { piWebDataDir } from "../../config.js";
 import { canonicalizeStoredCwd } from "../workingDirectory.js";
@@ -193,15 +193,61 @@ async function copySessionFileToArchive(source, archivePath) {
     if (source === archivePath)
         return;
     await mkdir(dirname(archivePath), { recursive: true });
-    if (await pathExists(archivePath))
+    if (await pathExists(archivePath)) {
+        if (await pathExists(source) && !(await sameFileBytes(source, archivePath)))
+            throw new Error("Existing archive bytes differ from the live source");
         return;
+    }
     await copyFile(source, archivePath);
+    if (!(await sameFileBytes(source, archivePath)))
+        throw new Error("Copied archive bytes differ from the live source");
 }
 async function removeActiveSessionFile(source, archivePath) {
     if (source === archivePath)
         return;
-    if (await pathExists(source))
+    if (await pathExists(source)) {
+        if (!(await sameFileBytes(source, archivePath)))
+            throw new Error("Archive bytes differ from the live source before source removal");
         await unlink(source);
+    }
+}
+async function sameFileBytes(firstPath, secondPath) {
+    const flags = constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0);
+    const first = await open(firstPath, flags);
+    let second;
+    try {
+        second = await open(secondPath, flags);
+    }
+    catch (error) {
+        await first.close();
+        throw error;
+    }
+    try {
+        const [beforeFirst, beforeSecond] = await Promise.all([first.stat(), second.stat()]);
+        if (!beforeFirst.isFile() || !beforeSecond.isFile() || beforeFirst.size !== beforeSecond.size)
+            return false;
+        const firstBuffer = Buffer.allocUnsafe(64 * 1024);
+        const secondBuffer = Buffer.allocUnsafe(64 * 1024);
+        let position = 0;
+        while (position < beforeFirst.size) {
+            const length = Math.min(firstBuffer.length, beforeFirst.size - position);
+            const [readFirst, readSecond] = await Promise.all([
+                first.read(firstBuffer, 0, length, position),
+                second.read(secondBuffer, 0, length, position),
+            ]);
+            if (readFirst.bytesRead !== length || readSecond.bytesRead !== length
+                || !firstBuffer.subarray(0, length).equals(secondBuffer.subarray(0, length)))
+                return false;
+            position += length;
+        }
+        const [afterFirst, afterSecond] = await Promise.all([first.stat(), second.stat()]);
+        return beforeFirst.size === afterFirst.size && beforeFirst.mtimeMs === afterFirst.mtimeMs
+            && beforeFirst.ctimeMs === afterFirst.ctimeMs && beforeSecond.size === afterSecond.size
+            && beforeSecond.mtimeMs === afterSecond.mtimeMs && beforeSecond.ctimeMs === afterSecond.ctimeMs;
+    }
+    finally {
+        await Promise.all([first.close(), second.close()]);
+    }
 }
 async function restoreSessionFile(archivePath, originalPath) {
     if (archivePath === originalPath)

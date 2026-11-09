@@ -21,7 +21,7 @@ from engine.project import (
     stream_lock,
 )
 from engine.subscriptions import SOURCES, Subscription, load_subscriptions
-from engine.threads import Coordinator, NativeSession, Status, Thread, _native_session, load_threads, resolve_coordinator, save_threads, transition
+from engine.threads import Coordinator, NativeSession, RetiredCoordinatorResidue, Status, Thread, _native_session, inspect_coordinator, load_threads, save_threads, transition
 
 WAKE_KINDS = frozenset({"idle", "ask", "context", "stale-steer", "outage", "recovered", "subscription", "claim"})
 QUEUE_FLAGS = {"steer": "steer", "followUp": "follow-up"}
@@ -210,6 +210,7 @@ class StreamTick:
         self.loaded = False
         self.errors: list[str] = []
         self.coordinator_resolution: Coordinator | None = None
+        self.dispatch_automatic: dict[str, str] | None = None
         self.dcr_owned = False
         self.drive_owned = False
         self.drive_enabled = False
@@ -257,9 +258,25 @@ class StreamTick:
                 except (StreamsError, OSError) as exc:
                     self.fail(f"rotation: {exc}")
             self.rows = load_threads(self.rows_path)
-            terminal_coordinators = {row.session for row in self.rows if row.role == "coordinator" and terminal_sessions.load(self.stream_dir, row.session, row.worktree) is not None}
+            terminal_coordinators = {row.session for row in self.rows if row.role == "coordinator" and row.status is not Status.archived and terminal_sessions.load(self.stream_dir, row.session, row.worktree) is not None}
             try:
-                self.coordinator_resolution = resolve_coordinator(self.stream_dir, [row for row in self.rows if row.session not in terminal_coordinators], listings=self.listings)
+                observation = inspect_coordinator(self.stream_dir, [row for row in self.rows if row.session not in terminal_coordinators], listings=self.listings)
+                self.coordinator_resolution = observation.coordinator
+                resolved = self.coordinator_resolution
+                if resolved is not None and resolved.row.status is Status.active:
+                    self.dispatch_automatic, allowed = piweb.automatic_admission(resolved.native.status, resolved.row.session, resolved.row.worktree, "wake")
+                else:
+                    allowed = False
+                    if observation.residues:
+                        raise RetiredCoordinatorResidue(observation.residues[0].session)
+                if observation.residues and allowed:
+                    for retired in observation.residues:
+                        try:
+                            outcome = replacement.reconcile_retired_coordinator_residue(self.stream_dir, retired)
+                        except (StreamsError, OSError) as exc:
+                            self.emit("native-residue", retired, f"cleanup deferred: {exc}; successor dispatch continues")
+                        else:
+                            self.emit("native-residue", retired, f"cleanup {outcome}; successor dispatch continues")
             except piweb.TerminalSession as exc:
                 row = next(row for row in self.rows if row.session == exc.sid)
                 terminal_sessions.save(self.stream_dir, row.session, row.worktree, exc.state, str(exc))
@@ -562,24 +579,31 @@ class StreamTick:
             return
         artifacts._read_stream_state_locked(self.stream_dir)
         text = "\n".join([f"pi-streams tick {self.at}:", *(event.line() for event in self.state.pending)])
-        sid, behavior = self.wake_target(coord)
+        sid, behavior, automatic = self.wake_target(coord)
         identity = delivery.new_identity()
-        delivery.prepare_locked(self.stream_dir, identity, sid, text, events=[asdict(event) for event in self.state.pending], behavior=behavior)
+        delivery.prepare_locked(self.stream_dir, identity, sid, text, events=[asdict(event) for event in self.state.pending], behavior=behavior, expected_automatic=automatic)
         delivery.send_locked(self.stream_dir, identity)
         self.state.rotating = False
 
-    def wake_target(self, coord: Thread | None) -> tuple[str, str | None]:
+    def wake_target(self, coord: Thread | None) -> tuple[str, str | None, dict[str, str]]:
+        if drive.is_paused(self.stream_dir):
+            raise StreamsError("Explicit drive-off prevents automatic dispatch")
         if coord is not None:
-            resolved = resolve_coordinator(self.stream_dir, self.rows)
-            if resolved is None or resolved.row.session != coord.session:
+            rows = load_threads(self.rows_path)
+            terminal = {row.session for row in rows if row.role == "coordinator" and row.status is not Status.archived and terminal_sessions.load(self.stream_dir, row.session, row.worktree) is not None}
+            observation = inspect_coordinator(self.stream_dir, [row for row in rows if row.session not in terminal])
+            resolved = observation.coordinator
+            if resolved is None or resolved.row.session != coord.session or resolved.row.status is not Status.active:
                 raise StreamsError("coordinator designation changed before dispatch")
             status = resolved.native.status
-            _automatic, allowed = piweb.automatic_admission(status, coord.session, coord.worktree, "wake")
+            automatic, allowed = piweb.automatic_admission(status, coord.session, coord.worktree, "wake")
+            if self.dispatch_automatic is not None and automatic != self.dispatch_automatic:
+                raise StreamsError("successor automatic admission changed during residue reconciliation")
             if not allowed:
-                return coord.session, None
+                return coord.session, None, automatic
             if status.get("isStreaming") is True or status.get("isCompacting") is True:
-                return coord.session, "follow-up"
-            return coord.session, None
+                return coord.session, "follow-up", automatic
+            return coord.session, None, automatic
         raise StreamsError("no designated coordinator; explicit new/adoption or rotation recovery is required")
 
     def archive_done(self) -> None:
