@@ -264,6 +264,25 @@ class RetiredNativeResidueTests(TickCase):
         self.assertEqual(ticked.returncode, 0, ticked.stderr)
         self.assertEqual(self.stub.requests, [])
 
+    def test_archive_receipt_conflicting_with_live_listing_remains_a_diagnostic(self):
+        self.adopt()
+        self.stub.simulate_session_lifecycle = False
+        self.routes()
+        self.add_pending_event()
+
+        ticked = self.tick("2026-11-03T00:01:00Z")
+
+        self.assertEqual(ticked.returncode, 0, ticked.stderr)
+        self.assertEqual([path for path, _ in self.posts()], [
+            "/api/sessions/retired/archive", "/api/sessions/successor/prompt",
+        ])
+        observed = self.run_streams("status", "etl", "--json")
+        self.assertEqual(observed.returncode, 0, observed.stderr)
+        entry, = json.loads(observed.stdout)["streams"]
+        self.assertEqual(entry["nativeReconciliations"][0]["disposition"], "archived")
+        self.assertIn("still live", entry["nativeReconciliations"][0]["detail"].lower())
+        self.assertNotIn("dispatchBlockers", entry)
+
     def test_unsafe_predecessor_skips_archive_without_blocking_successor(self):
         self.adopt()
         self.retired_status = {**self.retired_status, "isStreaming": True}
