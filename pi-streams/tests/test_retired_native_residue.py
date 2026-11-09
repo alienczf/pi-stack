@@ -377,6 +377,18 @@ class RetiredNativeResidueTests(TickCase):
         self.assertEqual(self.posts(), [])
         self.assertIn("unregistered coordinator candidate", ticked.stderr)
 
+    def test_duplicate_successor_identity_still_blocks_dispatch(self):
+        self.adopt()
+        self.infos.append(self.infos[1].copy())
+        self.routes()
+        self.add_pending_event()
+
+        ticked = self.tick("2026-11-03T00:01:00Z")
+
+        self.assertEqual(ticked.returncode, 1)
+        self.assertEqual(self.posts(), [])
+        self.assertIn("successor has no unique exact native identity", ticked.stderr)
+
     def test_ambiguous_retired_identity_does_not_block_exact_successor(self):
         self.adopt()
         self.infos.append(self.infos[0].copy())
@@ -387,3 +399,15 @@ class RetiredNativeResidueTests(TickCase):
 
         self.assertEqual(ticked.returncode, 0, ticked.stderr)
         self.assertEqual([path for path, _ in self.posts()], ["/api/sessions/successor/prompt"])
+
+    def test_ambiguous_successor_identity_blocks_before_retired_archive(self):
+        self.adopt()
+        self.infos.append(self.infos[1].copy())
+        self.routes()
+        self.add_pending_event()
+
+        ticked = self.tick("2026-11-03T00:01:00Z")
+
+        self.assertEqual(ticked.returncode, 1)
+        self.assertEqual(self.posts(), [])
+        self.assertIn("successor has no unique exact native identity", ticked.stderr)
