@@ -135,6 +135,37 @@ class RetiredNativeResidueTests(TickCase):
         self.assertEqual([path for path, _ in self.posts()], ["/api/sessions/successor/prompt"])
         self.assertEqual(self.state(self.stream)["terminal_sessions"]["retired"]["state"], "refused")
 
+    def test_native_archive_refusal_still_dispatches_and_is_not_replayed(self):
+        self.adopt()
+        self.add_pending_event()
+        self.routes(archive_code=409, archive_reply={"error": "Archive checkpoint was refused"})
+
+        ticked = self.tick("2026-11-03T00:01:00Z")
+
+        self.assertEqual(ticked.returncode, 0, ticked.stderr)
+        self.assertEqual([path for path, _ in self.posts()], [
+            "/api/sessions/retired/archive", "/api/sessions/successor/prompt",
+        ])
+        self.assertEqual(self.state(self.stream)["terminal_sessions"]["retired"]["state"], "refused")
+        self.apply_tick_delivery(self.stream)
+        self.stub.requests.clear()
+
+        again = self.tick("2026-11-03T00:02:00Z")
+
+        self.assertEqual(again.returncode, 0, again.stderr)
+        self.assertEqual(self.posts(), [])
+
+    def test_prior_sending_disposition_is_not_replayed_and_does_not_block_successor(self):
+        self.adopt()
+        self.add_pending_event()
+        self.seed_disposition("sending")
+
+        ticked = self.tick("2026-11-03T00:01:00Z")
+
+        self.assertEqual(ticked.returncode, 0, ticked.stderr)
+        self.assertEqual([path for path, _ in self.posts()], ["/api/sessions/successor/prompt"])
+        self.assertEqual(self.state(self.stream)["terminal_sessions"]["retired"]["state"], "sending")
+
     def test_saved_delivery_is_blocked_without_native_queries_after_drive_off(self):
         import os
         from unittest import mock
@@ -225,6 +256,46 @@ class RetiredNativeResidueTests(TickCase):
         self.assertEqual(posts[0][1]["expectedIdle"]["sessionId"], "retired")
         self.assertEqual(posts[1][1]["automaticAdmission"]["sessionId"], "successor")
         self.assertEqual(self.state(self.stream)["terminal_sessions"]["retired"]["state"], "archived")
+
+    def test_successor_generation_change_after_initial_selection_blocks_wake(self):
+        self.adopt()
+        self.add_pending_event()
+
+        def archive_and_change_successor(_body):
+            current = self.stub.automatic_admissions["successor"]
+            self.stub.automatic_admissions["successor"] = {**current, "generation": "changed-during-reconciliation"}
+            return 200, self.archive_reply
+
+        self.routes(archive_reply=archive_and_change_successor)
+
+        ticked = self.tick("2026-11-03T00:01:00Z")
+
+        self.assertEqual(ticked.returncode, 1)
+        self.assertEqual([path for path, _ in self.posts()], ["/api/sessions/retired/archive"])
+        self.assertIn("admission changed", ticked.stderr.lower())
+
+    def test_delivery_prepare_rejects_changed_saved_admission(self):
+        import os
+        from unittest import mock
+        from engine import StreamsError, delivery
+
+        self.adopt()
+        expected = {
+            "sessionId": "successor", "cwd": str(self.stream),
+            "generation": "fixture-successor", "kind": "wake",
+        }
+        current = self.stub.automatic_admissions["successor"]
+        self.stub.automatic_admissions["successor"] = {**current, "generation": "changed-before-prepare"}
+        event = [{"at": "2026-11-03T00:00:00Z", "kind": "subscription", "session": "", "role": "", "detail": "Saved successor event"}]
+
+        with mock.patch.dict(os.environ, self.env, clear=True):
+            with self.assertRaisesRegex(StreamsError, "admission changed before delivery preparation"):
+                delivery.prepare_locked(
+                    self.stream, "changed-prepare", "successor", "Saved successor event.",
+                    events=event, expected_automatic=expected,
+                )
+
+        self.assertEqual(self.posts(), [])
 
     def test_successor_generation_change_before_send_blocks_saved_delivery(self):
         self.adopt()
