@@ -253,10 +253,15 @@ class CoordinatorIdentityTests(EngineCase):
         self.assertEqual(self.table.read_bytes(), before)
         self.no_mutations()
 
-    def test_archived_registry_row_cannot_hide_a_still_live_predecessor(self):
+    def test_live_archived_predecessor_is_a_reconciliation_diagnostic(self):
         self.table.write_text(HEADER + self.row('old', state='archived') + self.row('current'))
         self.routes([self.info('old'), self.info()])
-        self.assertIn('old', self.status_diagnostic())
+        result = self.run_streams('status', 'etl', '--json')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        entry, = json.loads(result.stdout)['streams']
+        self.assertEqual(entry['coordinator']['session'], 'current')
+        self.assertEqual(entry['nativeReconciliations'][0]['session'], 'old')
+        self.assertNotIn('dispatchBlockers', entry)
         self.no_mutations()
 
     def test_archived_predecessor_and_designated_live_successor_resolve_one_id(self):
