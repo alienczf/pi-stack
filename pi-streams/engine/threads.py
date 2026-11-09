@@ -231,9 +231,9 @@ def _inspect_coordinator(stream_dir: Path, rows: list[Thread] | None = None, *, 
         item for item in rows
         if item.role == "coordinator" and item.status is Status.archived and item.session in retired_ids
     )
+    coordinator = None if row is None or residues and not inspect_residue_successor else Coordinator(row, _native_session(row.session, stream_dir, listing))
     if listings is not None:
         listings[str(stream_dir)] = {item['id']: item for item in listing if isinstance(item.get('id'), str)}
-    coordinator = None if row is None or residues and not inspect_residue_successor else Coordinator(row, _native_session(row.session, stream_dir, listing))
     return CoordinatorObservation(coordinator, residues)
 
 
