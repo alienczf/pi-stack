@@ -4,6 +4,12 @@
 
 A coordinator row can be marked archived while the native session service still lists the exact session as live. The strict coordinator resolver raises on that residue before returning an adopted successor. Cleanup belongs to the retired session. Dispatch authority belongs to the exact active successor and its current automatic-admission generation.
 
+## Alternatives and selection
+
+Candidate A used a shared read-only coordinator inspection and one safe archive attempt at the first enabled tick boundary. Later dispatch checks revalidated the exact successor and its saved admission. Candidate B added a dedicated reconciliation module and ran reconciliation at several dispatch boundaries. Both candidates scored 24 points. Candidate A won the tie because it kept ownership in the existing thread, replacement, terminal-session, and delivery modules without a new reconciliation module or persistent state.
+
+The implementation keeps Candidate A's shape and takes three safeguards from Candidate B. It carries the saved admission through delivery preparation and send, checks the raw listing before building the ID cache, and compares archive and source bytes just before source removal.
+
 ## Chosen design
 
 The engine shares one read-only coordinator inspection between strict lifecycle resolution and automatic dispatch. The inspection verifies registered identities and returns the active coordinator plus any registered archived rows that remain native-live. It checks the raw listing before building ID-keyed caches. `resolve_coordinator` remains strict for adoption, rotation, drive control, and other lifecycle callers.
