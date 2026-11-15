@@ -1,17 +1,20 @@
 #!/usr/bin/env bash
-# Install Tailscale binaries and OpenBSD netcat. Do not start a TUN/kernel daemon.
 set -euo pipefail
 
 log() { printf 'cloud-env: %s\n' "$*"; }
+
+mask_kernel_mode_tailscaled() {
+  if systemctl list-unit-files tailscaled.service >/dev/null 2>&1; then
+    sudo systemctl disable --now tailscaled.service >/dev/null 2>&1 || true
+    sudo systemctl mask tailscaled.service >/dev/null 2>&1 || true
+  fi
+}
 
 sudo apt-get update -qq
 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
   ca-certificates curl python3 netcat-openbsd openssh-client
 
-if systemctl list-unit-files tailscaled.service >/dev/null 2>&1; then
-  sudo systemctl disable --now tailscaled.service >/dev/null 2>&1 || true
-  sudo systemctl mask tailscaled.service >/dev/null 2>&1 || true
-fi
+mask_kernel_mode_tailscaled
 
 install_tailscale_binaries() {
   local arch tarball tmp dir

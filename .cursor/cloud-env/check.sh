@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# Prove userspace Tailscale and SSH to home-ws01. Do not invent a pass.
 set +x
 set -uo pipefail
 

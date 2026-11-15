@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# Bring up userspace Tailscale and SSH to home-ws01 through the SOCKS proxy.
 # Cursor start exports do not reach the agent shell, so SSH uses ProxyCommand.
 set +x
 set -euo pipefail
