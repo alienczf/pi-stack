@@ -1,0 +1,5 @@
+{
+  "name": "pi-stack",
+  "install": "bash .cursor/cloud-env/install.sh",
+  "start": "bash .cursor/cloud-env/start.sh"
+}
