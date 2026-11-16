@@ -64,6 +64,7 @@ class Operation:
     rebuilt_tokens: int = 0
     capacity: dict | None = None
     sync_continuation: str = ""
+    idle_polls: int = 0
 
 
 def safe_context(native: dict, status: dict) -> int:
@@ -89,7 +90,7 @@ def load(stream_dir: Path, sid: str) -> Operation | None:
         return None
     try:
         op = Operation(**{key: item for key, item in value.items() if key != "recovery_instructions"})
-        if op.session != sid or op.phase not in PHASES or not op.id or not Path(op.cwd).is_absolute() or op.automatic.get("sessionId") != sid or op.automatic.get("cwd") != op.cwd or op.automatic.get("kind") != "wake" or type(op.rebuilt_tokens) is not int or op.rebuilt_tokens < 0:
+        if op.session != sid or op.phase not in PHASES or not op.id or not Path(op.cwd).is_absolute() or op.automatic.get("sessionId") != sid or op.automatic.get("cwd") != op.cwd or op.automatic.get("kind") != "wake" or type(op.rebuilt_tokens) is not int or op.rebuilt_tokens < 0 or type(op.idle_polls) is not int or op.idle_polls < 0:
             raise ValueError("mismatched DCR owner or phase")
         if op.capacity is not None:
             outcome = CapacityOutcome(**op.capacity)
@@ -508,6 +509,19 @@ def advance_capacity_replacement_locked(stream_dir: Path, *, session: str | None
     return True
 
 
+def _wait_native(stream_dir: Path, op: Operation, status: dict, detail: str) -> bool:
+    if any(status.get(key) is True for key in ("isStreaming", "isCompacting", "isBashRunning")):
+        if op.idle_polls:
+            op.idle_polls = 0
+            save(stream_dir, op)
+        return True
+    op.idle_polls += 1
+    if op.idle_polls >= 2:
+        raise StreamsError(detail)
+    save(stream_dir, op)
+    return True
+
+
 def step(index: Path, project: Project, stream: str, stream_dir: Path, resolved: Coordinator | None) -> bool:
     if resolved is None or load_stream_config(stream_dir / "stream.toml").state_schema != STATE_SCHEMA:
         return False
@@ -594,9 +608,10 @@ def step(index: Path, project: Project, stream: str, stream_dir: Path, resolved:
     try:
         piweb.require_settings(status, resolved.row.model, resolved.row.thinking)
         if status.get("maintenanceSupport") != "checkpoint-input-v1" or status.get("potetoInvocationSupport") != "exact-goal-v1" or status.get("dcrEventSupport") != "phase-v1":
-            op.phase, op.detail = "blocked", "Native checkpoint, exact mode and idle-event capabilities are required."
+            op.phase, op.detail = "abandoned", "Optional native maintenance capabilities are unavailable; ordinary delivery continues."
             save(stream_dir, op)
-            return True
+            close_events(stream_dir, op)
+            return False
         if op.phase == "sync-prepared":
             if status.get("isCompacting") is True or status.get("isBashRunning") is True or status.get("pendingAsk") or status.get("pendingDialogs"):
                 return True
@@ -648,7 +663,7 @@ def step(index: Path, project: Project, stream: str, stream_dir: Path, resolved:
                 return True
             checkpoint = terminal_checkpoint(resolved, f"DCR SYNC ready: {op.id} {op.ready_revision}")
             if checkpoint is None:
-                return True
+                return _wait_native(stream_dir, op, status, "Idle SYNC has no terminal checkpoint; abandoned without replay")
             if not synced_state(stream_dir, op):
                 op.phase, op.detail = "superseded", "STATE changed after SYNC; no stale checkpoint was compacted."
                 save(stream_dir, op)
@@ -674,25 +689,25 @@ def step(index: Path, project: Project, stream: str, stream_dir: Path, resolved:
                 close_events(stream_dir, op)
                 return False
             if native["state"] in {"prepared", "compacting"}:
-                return True
+                return _wait_native(stream_dir, op, status, "Native maintenance metadata has no live runtime; abandoned without replay")
             if op.phase == "resume-sending":
                 receipt = native.get("resume")
                 if not isinstance(receipt, dict) or receipt.get("deliveryId") != f"{op.id}:resume" or receipt.get("text") != op.resume_text or receipt.get("potetoGoal") != op.resume_goal:
-                    return True
+                    return _wait_native(stream_dir, op, status, "Idle RESUME has no matching receipt; abandoned without replay")
                 op.phase = "resuming"
                 save(stream_dir, op)
             if op.phase == "resuming":
                 if native["state"] != "resumed":
-                    return True
+                    return _wait_native(stream_dir, op, status, "Idle RESUME did not complete; abandoned without replay")
                 if op.recovery_original:
                     op.observation = sessionlog.resume_observation(Path(resolved.native.info["path"]), sid, op.cwd, status.get("rotationSafety", {}).get("entryId"), op.id, op.automatic["generation"], op.compaction_entry, op.compaction_sha256, op.resume_text, op.resume_goal, native)
                     if op.observation is None:
-                        return True
+                        return _wait_native(stream_dir, op, status, "Idle recovery RESUME has no completion evidence; abandoned without replay")
                     completed = op.observation["assistantEntryId"]
                 else:
                     completed = completion_after(resolved, op.compaction_entry)
                     if completed is None:
-                        return True
+                        return _wait_native(stream_dir, op, status, "Idle RESUME has no assistant completion; abandoned without replay")
                 op.completed_leaf = completed
                 op.phase = "complete"
                 save(stream_dir, op)
@@ -702,7 +717,7 @@ def step(index: Path, project: Project, stream: str, stream_dir: Path, resolved:
                 raise StreamsError("Native RESUME exists without this driver's saved admission intent")
             proof = piweb.compaction_result(op.cwd, sid, op.id, original=op.recovery_original)
             if proof is None:
-                return True
+                return _wait_native(stream_dir, op, status, "Idle compaction has no result; abandoned without replay")
             op.rebuilt_tokens = safe_context(native, status)
             artifacts._rotate_log_locked(stream_dir)
             state = artifacts._read_stream_state_locked(stream_dir)

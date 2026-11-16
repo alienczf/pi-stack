@@ -373,9 +373,18 @@ class StreamTick:
     def check_subscriptions(self) -> None:
         if self.coordinator() is None:
             return
+        path = self.stream_dir / "subscriptions.tsv"
         try:
-            subs = load_subscriptions(self.stream_dir / "subscriptions.tsv")
-        except StreamsError as exc:
+            source = [artifacts._sha(path.read_bytes())]
+        except OSError:
+            source = ["unavailable"]
+        failed = self.state.subscriptions.get("$configuration")
+        if failed is not None and failed.watch == source and failed.fingerprint == "abandoned":
+            return
+        try:
+            subs = load_subscriptions(path)
+        except Exception as exc:
+            self.state.subscriptions = {"$configuration": Mark(source, "abandoned")}
             self.fail(str(exc))
             return
         marks: dict[str, Mark] = {}
@@ -387,15 +396,15 @@ class StreamTick:
         self.state.subscriptions = marks
 
     def check_subscription(self, sub: Subscription, old: Mark | None) -> Mark | None:
+        if old is not None and old.watch == sub.watch() and old.fingerprint == "abandoned":
+            return old
         source = SOURCES.get(sub.source)
         if source is None:
             self.fail(f"subscription {sub.id}: unknown source {sub.source}")
-            return None
-        if old is not None and old.watch == sub.watch() and old.fingerprint == "abandoned":
-            return old
+            return Mark(sub.watch(), "abandoned")
         try:
             reading = source(sub, self.stream_dir, self.now)
-        except StreamsError as exc:
+        except Exception as exc:
             self.fail(f"subscription {sub.id}: {exc}")
             return Mark(sub.watch(), "abandoned")
         if old is not None and old.watch == sub.watch() and old.fingerprint != reading.fingerprint:
@@ -663,7 +672,11 @@ class StreamTick:
                     transition(row, Status.archived)
                     self.rows_dirty = True
                 continue
-            listing = self.listing(row.worktree)
+            try:
+                listing = self.listing(row.worktree)
+            except Exception as exc:
+                terminal_sessions.save(self.stream_dir, row.session, row.worktree, "refused", f"Archive inspection abandoned before any archive request: {exc}")
+                continue
             info = listing.get(row.session)
             if info is not None and info.get("archived") is True:
                 terminal_sessions.save(self.stream_dir, row.session, row.worktree, "archived", "Exact native listing confirms archive.")
@@ -674,6 +687,9 @@ class StreamTick:
                 status = _native_session(row.session, Path(row.worktree), list(listing.values())).status
             except piweb.TerminalSession as exc:
                 terminal_sessions.save(self.stream_dir, row.session, row.worktree, exc.state, str(exc))
+                continue
+            except Exception as exc:
+                terminal_sessions.save(self.stream_dir, row.session, row.worktree, "refused", f"Archive status inspection abandoned before any archive request: {exc}")
                 continue
             if _working(status):
                 continue

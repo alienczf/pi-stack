@@ -580,15 +580,18 @@ def _load_checkpoint(stream: Path, intent: ReplacementIntent) -> None:
         intent.load = {"delivery": identity, "state": "superseded", "detail": record.detail}
         _save_replacement(stream, intent)
         return
-    if record.control is None or record.control.state != "ended":
-        return
     native = _native_session(intent.target, Path(intent.original["cwd"]))
     token, allowed = piweb.automatic_admission(native.status, intent.target, intent.original["cwd"], "recovery")
     if not allowed or token != record.automatic:
         intent.load = {"delivery": identity, "state": "stopped" if not allowed else "superseded", "detail": "Newer receiving control superseded checkpoint load; no replay."}
         _save_replacement(stream, intent)
         return
-    if any(native.status.get(key) for key in ("isStreaming", "isCompacting", "isBashRunning", "pendingAsk", "pendingDialogs")):
+    if any(native.status.get(key) is True for key in ("isStreaming", "isCompacting", "isBashRunning")):
+        return
+    if record.control is None or record.control.state != "ended":
+        polls = intent.load.get("idle_polls", 0) + 1
+        intent.load = {"delivery": identity, "state": "abandoned" if polls >= 2 else "pending", "idle_polls": polls, "detail": "Idle checkpoint load has no completed control receipt; no replay"}
+        _save_replacement(stream, intent)
         return
     branch = sessionlog.branch_records(Path(native.info["path"]), intent.target, intent.original["cwd"], native.status.get("rotationSafety", {}).get("entryId"))
     prefix = delivery._handoff_context(stream, intent.handoff)
@@ -600,11 +603,15 @@ def _load_checkpoint(stream: Path, intent: ReplacementIntent) -> None:
         if message.get("role") == "user" and text.startswith(prefix + '<skill name="poteto-mode"') and text.endswith('</skill>\n\n' + record.control.goal):
             users.append((at, entry, raw))
     if len(users) != 1:
+        intent.load = {"delivery": identity, "state": "abandoned", "detail": "Ended checkpoint load has no unique user evidence; no replay"}
+        _save_replacement(stream, intent)
         return
     at, user, user_raw = users[0]
     tail = branch[at + 1:]
     assistants = [(entry, raw) for entry, raw in tail if entry.get("message", {}).get("role") == "assistant"]
     if any(entry.get("message", {}).get("role") == "user" for entry, _ in tail) or not assistants:
+        intent.load = {"delivery": identity, "state": "abandoned", "detail": "Ended checkpoint load has superseded or missing assistant evidence; no replay"}
+        _save_replacement(stream, intent)
         return
     entry, raw = assistants[-1]
     message = entry["message"]
