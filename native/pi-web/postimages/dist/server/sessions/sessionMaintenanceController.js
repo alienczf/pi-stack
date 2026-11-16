@@ -213,8 +213,9 @@ export class SessionMaintenanceController {
         return true;
     }
     activateQueued(session) {
-        const operation = this.store.current(identity(session));
-        if (operation !== undefined && operation.compactionRetirement === undefined && operation.cancelledByStop !== true && ["complete", "superseded", "abandoned"].includes(operation.state) && operation.inputs.some(input => input.state === "queued") && !operation.inputs.some(input => input.state === "sending" || input.state === "uncertain"))
+        let operation = this.store.current(identity(session));
+        if (operation !== undefined && ["failed", "uncertain"].includes(operation.state)) operation = this.status(session, operation.id);
+        if (operation !== undefined && operation.compactionRetirement === undefined && operation.cancelledByStop !== true && ["complete", "superseded", "abandoned"].includes(operation.state) && operation.inputs.some(input => input.state === "queued"))
             this.background(session, this.drain(session, operation.id));
     }
     queue(session, text, kind, images, attachments, echo, deliveryId, potetoGoal) {
@@ -233,10 +234,8 @@ export class SessionMaintenanceController {
         }
         if ((operation.state === "prepared" || operation.state === "compacting") && owner === undefined && !session.isCompacting)
             operation = this.status(session, operation.id);
-        if (operation.state === "abandoned") return false;
         const unresolved = operation.inputs.some((input) => input.state === "queued" || input.state === "sending" || input.state === "uncertain");
-        if (unresolved && !this.draining.has(opKey) && (operation.state === "uncertain" || operation.state === "failed" || operation.state === "superseded"))
-            throw new AutomaticAdmissionRejected("Earlier maintenance input has an unresolved ordered prefix; retain new input pending reconciliation or an explicit stop/cancel");
+        if (operation.state === "abandoned" && !unresolved) return false;
         const control = this.controls.snapshot(ref);
         if (!control.allowed) {
             if (!unresolved && operation.state === "complete" && owner === undefined && !session.isCompacting) {
@@ -246,19 +245,17 @@ export class SessionMaintenanceController {
             if (unresolved || owner !== undefined || session.isCompacting)
                 throw new AutomaticAdmissionRejected("Automatic maintenance admission is disabled; input has not been accepted and must be retained pending reconciliation");
         }
-        if (!(["prepared", "compacting", "complete"].includes(operation.state) || this.draining.has(opKey)))
+        if (!(["prepared", "compacting", "complete"].includes(operation.state) || unresolved || this.draining.has(opKey)))
             return false;
         const id = deliveryId ?? randomUUID();
         const previous = operation.inputs.find((input) => input.id === id);
         if (previous !== undefined) {
             if (JSON.stringify([previous.text, previous.kind, previous.images, previous.attachments, previous.potetoGoal]) !== JSON.stringify([text, kind, images, attachments, potetoGoal]))
                 throw new AutomaticAdmissionRejected("Accepted maintenance input id changed intent");
-            if (previous.state === "queued" && control.durable)
+            if (previous.state === "queued")
                 this.store.update(ref, operation.id, (current) => { current.lastInputGeneration = control.generation; });
             return true;
         }
-        if (!control.durable)
-            throw new AutomaticAdmissionRejected("Maintenance input cannot be accepted without durable generation state");
         this.store.update(ref, operation.id, (current) => {
             if (current.compactionRetirement !== undefined) throw new AutomaticAdmissionRejected("Compaction retired before input admission; retain the new input without replay");
             current.inputSequence++;
@@ -449,18 +446,11 @@ export class SessionMaintenanceController {
                     return;
                 if (input.state !== "queued") {
                     this.abandon(session, id, "Interrupted input abandoned without replay; later proven queued input remains retained");
-                    return;
+                    continue;
                 }
                 const control = this.controls.snapshot(ref);
                 if (operation.cancelledByStop === true) return;
-                if (!control.durable || !control.allowed || control.generation !== operation.lastInputGeneration) {
-                    this.store.update(ref, id, current => {
-                        current.state = "abandoned";
-                        current.detail = "Receiving stop/input superseded unsent maintenance inputs; no replay";
-                        for (const item of current.inputs) if (item.state === "queued") item.state = "abandoned";
-                    });
-                    return;
-                }
+                if (!control.allowed) return;
                 if (session.isStreaming || session.isCompacting || session.isBashRunning || this.host.humanInputPending(session))
                     return;
                 this.store.update(ref, id, (current) => { const selected = current.inputs[input.sequence - 1]; if (selected !== undefined)

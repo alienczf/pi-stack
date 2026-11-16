@@ -321,6 +321,7 @@ export class PiSessionService {
         this.active = new Map();
         this.explicitInputFailures = new WeakSet();
         this.maintenanceInputFailures = new WeakSet();
+        this.maintenanceEchoFailures = new WeakSet();
         this.askNoticeFailures = new WeakSet();
         this.unreadObservationFailures = new WeakSet();
         this.statusPublicationFailures = new WeakSet();
@@ -437,8 +438,10 @@ export class PiSessionService {
                 const nativeText = expandPotetoInvocation(session, text, potetoGoal);
                 admittedText?.(nativeText);
                 this.publishActivity(session, "maintenance input admitted", "active");
-                if (echo)
-                    this.events.publish(session.sessionId, { type: "message.append", message: userMessage(text, images) });
+                if (echo && !this.maintenanceEchoFailures.has(session)) {
+                    try { this.events.publish(session.sessionId, { type: "message.append", message: userMessage(text, images) }); }
+                    catch { this.maintenanceEchoFailures.add(session); }
+                }
                 const options = potetoGoal === undefined ? buildPromptOptions(undefined, images) : { ...buildPromptOptions(undefined, images), expandPromptTemplates: false };
                 return this.runSessionEntryMutation(session, "admit maintenance input", () => session.prompt(nativeText, options));
             },
@@ -3400,25 +3403,22 @@ export class PiSessionService {
         }
         this.failureBoundaries.attach(session);
         active.unsubscribe = session.subscribe((event) => {
-            if (this.runtimeObserverFailures.has(session)) return;
-            try {
-            this.events.publish(session.sessionId, toClientEvent(event));
-            this.publishActivityForEvent(session, event);
             const eventType = getString(event, "type");
+            if (eventType === "agent_start" || eventType === "agent_end" || eventType === "compaction_end")
+                this.scheduleCompactionQueueDrain(session.sessionId);
             if (eventType === "agent_end")
                 this.abortRunScopedExtensionDialogs(session.sessionId);
-            if (eventType === "compaction_end")
-                this.scheduleCompactionQueueDrain(session.sessionId);
-            if (eventType === "agent_end" || eventType === "compaction_end")
-                this.streamsDcrEvents?.notify(session);
             if (eventType === "agent_end" || eventType === "compaction_end") {
+                this.streamsDcrEvents?.notify(session);
                 this.controlGoals?.notify(session);
                 this.reconcileQueuedMaintenance(session);
             }
-            if (eventType === "agent_start" || eventType === "agent_end")
-                this.scheduleCompactionQueueDrain(session.sessionId);
-            this.publishStatus(session);
-            this.updateSubsessionTracking(session);
+            if (this.runtimeObserverFailures.has(session)) return;
+            try {
+                this.events.publish(session.sessionId, toClientEvent(event));
+                this.publishActivityForEvent(session, event);
+                this.publishStatus(session);
+                this.updateSubsessionTracking(session);
             }
             catch { this.runtimeObserverFailures.add(session); }
         });
