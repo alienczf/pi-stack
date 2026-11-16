@@ -58,6 +58,7 @@ export class AutomaticAdmissionStore {
         this.writing = new Set();
         this.failed = new Set();
         this.denied = new Map();
+        this.readFailures = new Map();
     }
     snapshot(ref) {
         const { key, cwd } = identity(ref);
@@ -81,6 +82,8 @@ export class AutomaticAdmissionStore {
         return this.serial(ref, async () => {
             if (this.read(ref) !== undefined)
                 return this.snapshot(ref);
+            if (this.failed.has(identity(ref).key))
+                throw new AutomaticAdmissionRejected("Initial automatic admission absence is unproven");
             return this.publish(ref, true);
         });
     }
@@ -155,9 +158,21 @@ export class AutomaticAdmissionStore {
             return operation();
         });
     }
+    abandonExplicitInput(ref) {
+        const { key } = identity(ref);
+        this.failed.add(key);
+        return this.serial(ref, async () => {
+            const previous = this.records.get(key);
+            if (previous === undefined) return;
+            const controlGoal = previous.controlGoal;
+            const next = { ...previous, generation: randomUUID(), allowed: previous.allowed && !this.denied.has(key), ...(controlGoal?.state === "queued" ? { controlGoal: { ...controlGoal, state: "superseded", detail: "New human input superseded optional queued control" } } : {}) };
+            await this.persist(ref, next);
+        }).catch(() => undefined);
+    }
     explicitInput(ref) {
         return this.serial(ref, async () => {
             const { key } = identity(ref);
+            if (this.failed.has(key)) return this.snapshot(ref);
             const allowed = !this.failed.has(key) && !this.denied.has(key) && (this.read(ref)?.allowed ?? false);
             return this.publish(ref, allowed);
         });
@@ -238,11 +253,15 @@ export class AutomaticAdmissionStore {
         if (this.records.has(key))
             return this.records.get(key);
         const file = this.file(ref);
-        if (file === undefined)
+        if (file === undefined || this.readFailures.get(key) === "unavailable")
             return undefined;
         let descriptor;
+        let version;
         try {
-            if (!lstatSync(file).isFile())
+            const stat = lstatSync(file);
+            version = [stat.dev, stat.ino, stat.size, stat.mtimeMs, stat.ctimeMs].join(":");
+            if (this.readFailures.get(key) === version) return undefined;
+            if (!stat.isFile())
                 throw new Error("Automatic admission metadata is not a regular file");
             descriptor = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
             const before = fstatSync(descriptor);
@@ -260,12 +279,15 @@ export class AutomaticAdmissionStore {
                 throw new Error("Invalid automatic admission metadata");
             }
             const goal = data["controlGoal"];
-            const validGoal = goal !== undefined && validControlGoal(goal, ref);
+            let validGoal = false;
+            try { validGoal = goal !== undefined && validControlGoal(goal, ref); } catch {}
             const history = Array.isArray(data.abandonedControlGoals) ? data.abandonedControlGoals : [];
             if (goal !== undefined && !validGoal)
                 history.push({ disposition: "abandoned", detail: "Invalid saved control goal", original: goal });
             const record = { version: 1, sessionId: ref.id, cwd, generation: data["generation"], allowed: data["allowed"], abandonedControlGoals: history, ...(validGoal ? { controlGoal: goal } : {}), ...(data.retirementGeneration === data.generation ? { retirementGeneration: data.retirementGeneration, retirementInput: Array.isArray(data.retirementInput) ? data.retirementInput : [] } : {}) };
             this.records.set(key, record);
+            this.readFailures.delete(key);
+            this.failed.delete(key);
             return record;
         }
         catch (error) {
@@ -274,7 +296,8 @@ export class AutomaticAdmissionStore {
                 return undefined;
             }
             this.failed.add(key);
-            throw error;
+            this.readFailures.set(key, version ?? "unavailable");
+            return undefined;
         }
         finally {
             if (descriptor !== undefined)
@@ -284,6 +307,8 @@ export class AutomaticAdmissionStore {
     async publish(ref, allowed, ifAbsent = false) {
         const { cwd } = identity(ref);
         const previous = this.read(ref);
+        if (this.failed.has(identity(ref).key))
+            throw new AutomaticAdmissionRejected("Automatic admission metadata is unavailable; no authority is reconstructed");
         const controlGoal = previous?.controlGoal;
         const record = { version: 1, sessionId: ref.id, cwd, generation: randomUUID(), allowed, abandonedControlGoals: previous?.abandonedControlGoals ?? [], ...(controlGoal === undefined ? {} : { controlGoal }) };
         await this.persist(ref, record, ifAbsent);
@@ -341,7 +366,9 @@ export class AutomaticAdmissionStore {
             this.failed.delete(key);
         }
         catch (error) {
-            this.failed.add(key);
+            const previous = this.records.get(key);
+            if (previous?.generation !== record.generation || previous?.allowed !== record.allowed)
+                this.failed.add(key);
             throw error;
         }
         finally {

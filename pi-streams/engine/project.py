@@ -806,7 +806,7 @@ def _assert_operation_ready(stream: Path, path: Path) -> None:
         operation = json.loads(path.read_bytes())
     except (OSError, ValueError) as exc:
         raise StreamsError("unreadable migration journal; artifact operations are parked") from exc
-    if not isinstance(operation, dict) or operation.get("version") != 1 or operation.get("root") != str(stream.resolve()) or operation.get("phase") != "complete":
+    if not isinstance(operation, dict) or operation.get("version") != 1 or operation.get("root") != str(stream.resolve()) or operation.get("phase") not in {"complete", "abandoned"}:
         raise StreamsError("artifact migration is pending; resume the exact migration before other operations")
 
 

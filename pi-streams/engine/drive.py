@@ -240,7 +240,7 @@ def step(stream_dir: Path, resolved: Coordinator | None, stalled: bool, *, maint
         previous = delivery._get(stream_dir, record.current_delivery)
         if previous.control is None:
             raise StreamsError("drive delivery points to a non-control instruction")
-        if previous.session == resolved.row.session and previous.control.state != "superseded" and (previous.state not in ("prepared", "blocked") or previous.control.state in ("sending", "uncertain")):
+        if previous.session == resolved.row.session and previous.control.state != "superseded" and previous.state not in {"prepared", "blocked", "uncertain", "abandoned"}:
             try:
                 delivery.observe_control_locked(stream_dir, previous.id)
                 previous = delivery._get(stream_dir, previous.id)
@@ -262,15 +262,10 @@ def step(stream_dir: Path, resolved: Coordinator | None, stalled: bool, *, maint
             if not maintenance:
                 delivery.send_locked(stream_dir, previous.id)
             return True
-        if previous.state == "blocked" and same and previous.control.state != "ended":
-            if allowed and not maintenance and previous.control.state == "prepared":
-                previous.state, previous.detail = "prepared", ""
-                delivery._save(stream_dir, previous)
-                try:
-                    delivery.send_locked(stream_dir, previous.id)
-                except piweb.PromptRejected:
-                    pass
-            return True
+        if (previous.state in {"blocked", "uncertain", "abandoned"} or previous.control.state == "superseded") and previous.control.revision == revision and previous.session == resolved.row.session:
+            previous.state, previous.control.state = "abandoned", "superseded"
+            delivery._save(stream_dir, previous)
+            return False
         if not allowed:
             return True
     from engine import blocked_goals

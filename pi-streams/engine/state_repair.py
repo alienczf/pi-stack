@@ -135,6 +135,8 @@ def heal_sections_locked(stream: Path) -> None:
     journal = stream / 'log/state-sections-repair.json'
     if journal.exists() or journal.is_symlink():
         operation = json.loads(migration.regular_bytes(journal))
+        if isinstance(operation, dict) and operation.get('phase') == 'abandoned':
+            return
         if (not isinstance(operation, dict) or operation.get('version') != 1
                 or operation.get('root') != str(stream.resolve()) or operation.get('phase') != 'complete'):
             apply_locked(stream, None, sections=True)
@@ -146,6 +148,19 @@ def heal_sections_locked(stream: Path) -> None:
         apply_locked(stream, plan(stream, 0, target='sections', version=3), sections=True)
 
 
+def abandon_sections_locked(stream: Path, detail: str) -> None:
+    journal = stream / 'log/state-sections-repair.json'
+    if not journal.exists() or journal.is_symlink():
+        return
+    try:
+        operation = json.loads(migration.regular_bytes(journal))
+    except ValueError:
+        return
+    if isinstance(operation, dict) and operation.get('root') == str(stream.resolve()) and operation.get('phase') not in {'complete', 'abandoned'}:
+        operation.update(phase='abandoned', detail=detail)
+        _write(journal, json.dumps(operation, indent=2, sort_keys=True) + '\n')
+
+
 def apply_locked(stream: Path, document: dict | None, *, sections: bool = False) -> dict:
     if stream.is_symlink() or not (stream / '.git').is_dir() or (stream / '.git').is_symlink():
         raise StreamsError('Prefix repair requires its owned real stream repository')
@@ -154,6 +169,8 @@ def apply_locked(stream: Path, document: dict | None, *, sections: bool = False)
     if journal.parent.is_symlink():
         raise StreamsError('Prefix repair journal directory must be owned')
     operation = json.loads(migration.regular_bytes(journal)) if journal.exists() or journal.is_symlink() else None
+    if isinstance(operation, dict) and operation.get('root') == str(root) and operation.get('phase') == 'abandoned':
+        return {'id': operation.get('plan', {}).get('id', ''), 'changed': False, 'phase': 'abandoned', 'detail': operation.get('detail', '')}
     if sections and isinstance(operation, dict) and operation.get('phase') == 'complete' and document is not None and operation.get('plan') != document:
         apply_locked(root, None, sections=True)
         operation = None

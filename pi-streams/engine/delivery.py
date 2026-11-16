@@ -46,6 +46,19 @@ class Delivery:
 def _records(data: dict) -> dict[str, Delivery]:
     raw = data.get("deliveries", {})
     if not isinstance(raw, dict):
+        return {}
+    records = {}
+    for identity, value in raw.items():
+        try:
+            records.update(_decode_records({"deliveries": {identity: value}}))
+        except (StreamsError, TypeError, ValueError):
+            continue
+    return records
+
+
+def _decode_records(data: dict) -> dict[str, Delivery]:
+    raw = data.get("deliveries", {})
+    if not isinstance(raw, dict):
         raise StreamsError("invalid delivery records")
     records = {}
     try:
@@ -98,9 +111,12 @@ def _records(data: dict) -> dict[str, Delivery]:
 
 def _save(stream_dir: Path, record: Delivery, *, tick: bool = False) -> dict:
     data = artifacts._read_tick_data(stream_dir)
-    records = _records(data)
-    records[record.id] = record
-    data["deliveries"] = {identity: item.public() for identity, item in records.items()}
+    raw = data.get("deliveries", {})
+    if not isinstance(raw, dict):
+        data.setdefault("abandoned_deliveries", []).append(raw)
+        raw = {}
+    raw[record.id] = record.public()
+    data["deliveries"] = raw
     if tick:
         current = data.get("tick_delivery")
         if current is not None and current != record.id:
@@ -111,10 +127,10 @@ def _save(stream_dir: Path, record: Delivery, *, tick: bool = False) -> dict:
 
 
 def _get(stream_dir: Path, identity: str) -> Delivery:
-    records = _records(artifacts._read_tick_data(stream_dir))
-    if identity not in records:
-        raise StreamsError(f"delivery {identity} is unavailable")
-    return records[identity]
+    raw = artifacts._read_tick_data(stream_dir).get("deliveries", {})
+    if isinstance(raw, dict) and identity in raw:
+        return _decode_records({"deliveries": {identity: raw[identity]}})[identity]
+    raise StreamsError(f"delivery {identity} is unavailable")
 
 
 def receipts(stream_dir: Path) -> list[dict]:
@@ -188,14 +204,14 @@ def prepare_locked(stream_dir: Path, identity: str, session: str, body: str, *, 
     if not identity.strip() or not session.strip() or not body.strip():
         raise StreamsError("delivery identity, destination and body are required")
     record = Delivery(identity, session, body, origin="steer" if events is None else "tick", behavior=behavior, events=events or [])
-    records = _records(artifacts._read_tick_data(stream_dir))
-    if identity in records:
-        old = records[identity]
+    raw = artifacts._read_tick_data(stream_dir).get("deliveries", {})
+    if isinstance(raw, dict) and identity in raw:
+        old = _get(stream_dir, identity)
         if old.handoff is not None:
             record.handoff = old.handoff
             record.body = _handoff_context(stream_dir, old.handoff) + record.body
         if (old.session, old.body, old.origin, old.events, old.behavior) != (record.session, record.body, record.origin, record.events, record.behavior) or (old.automatic is not None and old.automatic["kind"] != automatic_kind):
-            raise StreamsError(f"delivery {identity} has changed intent")
+            raise piweb.PromptRejected(f"delivery {identity} has changed intent")
         return old.public()
     if events is not None:
         status = _require_destination(stream_dir, record, session)
@@ -204,7 +220,14 @@ def prepare_locked(stream_dir: Path, identity: str, session: str, body: str, *, 
             raise StreamsError("successor automatic admission changed before delivery preparation")
     _attach_handoff(stream_dir, record)
     if events is None:
-        artifacts.append_log_locked(stream_dir, clock.stamp(clock.now()), f"Steer {identity}", f"Destination session: {session}\n{body}", request_id=f"delivery:{identity}")
+        data = artifacts._read_tick_data(stream_dir)
+        if data.get("steer_log", {}).get("phase") != "abandoned":
+            try:
+                artifacts.append_log_locked(stream_dir, clock.stamp(clock.now()), f"Steer {identity}", f"Destination session: {session}\n{body}", request_id=f"delivery:{identity}")
+            except Exception as exc:
+                data = artifacts._read_tick_data(stream_dir)
+                data["steer_log"] = {"phase": "abandoned", "detail": str(exc)}
+                artifacts._save_tick_data(stream_dir, data)
     return _save(stream_dir, record, tick=events is not None)
 
 
@@ -241,9 +264,16 @@ def reconcile_queued_control_locked(stream_dir: Path, identity: str) -> dict:
     if record.control is None or record.control.state != "queued" or record.automatic is None:
         raise StreamsError("only a proven unadmitted queued goal can be explicitly reconciled")
     _verify_handoff(stream_dir, record)
-    response = piweb.control_goal(record.session, identity, record.control.run_id, record.control.sequence, record.body, record.control.goal, record.automatic)
-    _control_receipt(record, response)
-    record.control.state = response["state"]
+    record.state, record.control.state = "abandoned", "superseded"
+    record.detail = "Reserved queued control reconciliation; interrupted attempts are not replayed"
+    _save(stream_dir, record)
+    try:
+        response = piweb.control_goal(record.session, identity, record.control.run_id, record.control.sequence, record.body, record.control.goal, record.automatic)
+        _control_receipt(record, response)
+    except Exception as exc:
+        record.detail = str(exc)
+    else:
+        record.state, record.control.state = "transport_accepted", response["state"]
     return _save(stream_dir, record)
 
 
@@ -263,7 +293,7 @@ def _require_destination(stream_dir: Path, record: Delivery, session: str) -> di
         target = next((row for row in rows if row.session == session and row.status is Status.active), None)
         if target is not None and target.role != "coordinator" and session == record.session:
             return _native_session(session, Path(target.worktree)).status
-    eligible = [row for row in rows if row.status is Status.archived or terminal_sessions.load(stream_dir, row.session, row.worktree) is None]
+    eligible = rows if record.origin == "steer" else [row for row in rows if row.status is Status.archived or terminal_sessions.load(stream_dir, row.session, row.worktree) is None]
     row = designated_coordinator(eligible)
     if session != record.session or row is None or row.session != session or row.status is not Status.active:
         raise StreamsError(f"delivery {record.id} destination is stale or does not match")
@@ -305,7 +335,7 @@ def send_locked(stream_dir: Path, identity: str) -> dict:
             record.detail = "Automatic admission was disabled or superseded; the saved generation is not renewed."
             return _save(stream_dir, record)
     from engine import blocked_goals
-    if not blocked_goals.permit(stream_dir, record.control.goal if record.control else record.body):
+    if record.origin != "steer" and not blocked_goals.permit(stream_dir, record.control.goal if record.control else record.body):
         record.state, record.detail = "blocked", "Blocked-goal escalation suppresses identical prompts. Select a different authorized unit."
         return _save(stream_dir, record)
     if record.control is not None:
@@ -435,10 +465,13 @@ def finish_tick_locked(stream_dir: Path, pending: list[dict]) -> list[dict]:
     record = _get(stream_dir, identity)
     if record.origin != "tick":
         raise StreamsError("tick delivery points to a non-tick instruction")
-    if record.state != "applied":
+    if record.state in {"prepared", "sending"}:
         return pending
+    if record.state != "applied":
+        record.detail = "Retired event batch without claiming application. " + record.detail
+        _save(stream_dir, record)
     if pending[:len(record.events)] != record.events:
-        raise StreamsError("applied delivery does not match the original pending event prefix")
+        raise StreamsError("retired delivery does not match the original pending event prefix")
     data["pending"] = pending[len(record.events):]
     data.pop("tick_delivery")
     artifacts._save_tick_data(stream_dir, data)

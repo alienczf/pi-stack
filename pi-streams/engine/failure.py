@@ -133,7 +133,7 @@ def retry_ready(episode: Episode, now: str, generation: str, allowed: bool) -> b
     observed = clock.parse(episode.observed_at)
     if reset is None and observed is not None:
         reset = (consumed or observed) + timedelta(seconds=60)
-    return bool(episode.kind == "usage-limit" and episode.pause_owned and not episode.cancelled and not episode.uncertain_jobs
+    return bool(not episode.retry_reset and episode.retry_state != "abandoned" and episode.kind == "usage-limit" and episode.pause_owned and not episode.cancelled and not episode.uncertain_jobs
         and episode.saved_entry and episode.saved_sha256 and episode.pause_generation == generation and not allowed
         and reset is not None and current is not None and current >= reset and (consumed is None or reset > consumed))
 
@@ -282,15 +282,21 @@ def observe(stream_dir: Path, sid: str, cwd: str, native: dict, status: dict, at
         jobs.append({"id": "saved-unconfirmed-replay", "state": "unknown"})
     policy = classify(observation["provider"], observation["message"], at, tool_error=observation["toolError"])
     if previous is not None and previous.failure_entry == observation["entryId"] and previous.failure_sha256 == observation["sha256"]:
+        if previous.state == "abandoned":
+            return previous
         if policy.kind != previous.kind:
             previous.authority = None
             previous.continuation = None
         previous.kind, previous.code, previous.label, previous.provider = policy.kind, policy.code, policy.label, policy.provider
         previous.uncertain_jobs = jobs
         save(stream_dir, previous)
-        if previous.kind != "usage-limit" and previous.authority is None:
-            _admit_recovery(stream_dir, previous, Path(path), leaf, boundary, status)
-        _publish_marker(stream_dir, previous, checkpoint)
+        try:
+            if previous.kind != "usage-limit" and previous.authority is None:
+                _admit_recovery(stream_dir, previous, Path(path), leaf, boundary, status)
+            _publish_marker(stream_dir, previous, checkpoint)
+        except Exception as exc:
+            previous.state, previous.detail = "abandoned", str(exc)
+            save(stream_dir, previous)
         return previous
     prior = previous
     if previous is not None and previous.state == "recovered":
@@ -318,10 +324,13 @@ def observe(stream_dir: Path, sid: str, cwd: str, native: dict, status: dict, at
     else:
         episode.pause_owned = False
         episode.detail = "Already disabled or stopped; no automatic reset trial may rearm this epoch."
-    if episode.kind != "usage-limit":
-        _admit_recovery(stream_dir, episode, Path(path), leaf, boundary, status)
+    try:
+        if episode.kind != "usage-limit":
+            _admit_recovery(stream_dir, episode, Path(path), leaf, boundary, status)
+        _publish_marker(stream_dir, episode, checkpoint)
+    except Exception as exc:
+        episode.state, episode.detail = "abandoned", str(exc)
     save(stream_dir, episode)
-    _publish_marker(stream_dir, episode, checkpoint)
     artifacts.append_log_locked(stream_dir, at, f"Failure {episode.id}", f"Observed {episode.label} for exact session {sid}. Code: {episode.code}. Native failure entry: {episode.failure_entry} SHA-256 {episode.failure_sha256}. Saved input: {episode.saved_entry or 'unknown'}. Reset: {episode.reset_at or 'unknown'}. Task effects remain parked; no environment, rule, skill, memory or provider remedy is authorized.", request_id=f"failure:{episode.id}:{episode.failure_entry}")
     return episode
 
@@ -401,20 +410,22 @@ def step(stream_dir: Path, episode: Episode, status: dict, at: str, native_info:
 
     if is_paused(stream_dir):
         return True
-    if episode.state == "recovered":
+    if episode.state in {"recovered", "abandoned"} or episode.retry_state in {"abandoned", "failed", "superseded", "uncertain", "rearming"}:
         return False
+    if episode.kind != "usage-limit":
+        return episode.kind == "content-policy" or bool(episode.uncertain_jobs) or any(status.get(key) for key in ("isStreaming", "isCompacting", "isBashRunning", "pendingMessageCount"))
     if episode.retry_state in {"rearming", "sending", "retained", "uncertain"}:
         if episode.retry_state in {"sending", "retained"}:
             try:
                 native = piweb.control_goal_status(episode.session, episode.cwd, episode.retry_id)
             except StreamsError as exc:
-                episode.retry_state, episode.detail = "uncertain", str(exc)
+                episode.retry_state, episode.detail = "abandoned", str(exc)
                 save(stream_dir, episode)
-                return True
+                return False
             if not trial_receipt_matches(episode, native):
-                episode.retry_state, episode.detail = "uncertain", "Recovery receiver changed the exact saved trial identity/body/generation."
+                episode.retry_state, episode.detail = "abandoned", "Recovery receiver changed the exact saved trial identity/body/generation."
                 save(stream_dir, episode)
-                return True
+                return False
             if native["state"] == "uncertain":
                 episode.retry_state = "uncertain"
             elif native["state"] == "superseded":
@@ -426,6 +437,8 @@ def step(stream_dir: Path, episode: Episode, status: dict, at: str, native_info:
                 if sessionlog.successful_control_completion(Path(native_info["path"]), episode.session, episode.cwd, leaf, prefix, episode.retry_goal):
                     episode.state, episode.retry_state = "recovered", "ended"
                     artifacts.append_log_locked(stream_dir, at, f"Usage reconciliation {episode.id}", f"The exact saved usage-reset reconciliation {episode.retry_id} completed a native assistant turn. This is continuation evidence, not product completion. No provider/model change or uncertain-job replay was authorized.", request_id=f"failure-recovered:{episode.id}")
+                else:
+                    episode.retry_state = "abandoned"
             else:
                 episode.retry_state = "retained"
             save(stream_dir, episode)
@@ -441,8 +454,11 @@ def step(stream_dir: Path, episode: Episode, status: dict, at: str, native_info:
         save(stream_dir, episode)
         return True
     piweb.require_settings(status, episode.authorized_model, episode.authorized_thinking)
+    episode.retry_state = "abandoned"
+    episode.detail = "Reserved one usage readiness trial; failed or interrupted checks are not replayed"
+    save(stream_dir, episode)
     if not piweb.recovery_readiness(episode.session, episode.cwd, status, episode.kind):
-        return True
+        return False
     artifacts._rotate_log_locked(stream_dir)
     goal = artifacts.resolve_current_goal(artifacts._read_stream_state_locked(stream_dir))
     prefix = (f"Usage-reset reconciliation for failure episode {episode.id}. The interrupted owned native input is {episode.saved_entry} SHA-256 {episode.saved_sha256}. "

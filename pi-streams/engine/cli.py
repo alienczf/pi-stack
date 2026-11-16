@@ -5,7 +5,7 @@ import json
 import sys
 from pathlib import Path
 
-from engine import StreamsError, artifacts, clock, dcr, delivery, drive, failure, failure_recovery, migration, relay, replacement, state_repair
+from engine import StreamsError, artifacts, clock, dcr, delivery, drive, failure, failure_recovery, migration, piweb, relay, replacement, state_repair
 from engine.doctor import run_doctor
 from engine.project import (
     STATE_SCHEMA,
@@ -372,13 +372,22 @@ def cmd_delivery(args: argparse.Namespace) -> int:
     index = resolve_index(args.home)
     with index_lock(index):
         project = resolve_project(index)
-        stream_dir = require_stream(index, project.info.name, args.stream)
+        stream_dir = require_stream(index, project.info.name, args.stream, allow_migration=args.delivery_cmd == "send")
         with stream_lock(stream_dir):
             if args.delivery_cmd == "list":
                 result = delivery.receipts(stream_dir)
             elif args.delivery_cmd == "send":
-                delivery.prepare_locked(stream_dir, args.delivery_id, args.session, _state_body(args.body_file), behavior=args.behavior)
-                result = delivery.send_locked(stream_dir, args.delivery_id)
+                body = _state_body(args.body_file)
+                delivery._require_destination(stream_dir, delivery.Delivery(args.delivery_id, args.session, body), args.session)
+                try:
+                    delivery.prepare_locked(stream_dir, args.delivery_id, args.session, body, behavior=args.behavior)
+                except Exception as exc:
+                    if isinstance(exc, piweb.PromptRejected):
+                        raise
+                    print(f"Optional delivery bookkeeping abandoned: {exc}", file=sys.stderr)
+                    result = piweb.prompt(args.session, body, args.behavior, delivery_id=args.delivery_id)
+                else:
+                    result = delivery.send_locked(stream_dir, args.delivery_id)
             else:
                 result = delivery.acknowledge_locked(stream_dir, args.delivery_id, args.session, args.state, args.detail, evidence=args.evidence)
     print(json.dumps(result, sort_keys=True))

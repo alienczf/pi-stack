@@ -197,6 +197,19 @@ def _healthy_source(resolved) -> dict:
 
 
 def rotate_locked(index: Path, project: Project, stream_id: str) -> str:
+    stream = require_stream(index, project.info.name, stream_id)
+    try:
+        return _rotate_locked(index, project, stream_id)
+    except Exception as exc:
+        data = artifacts._read_tick_data(stream)
+        operation = data.get("coordinator_rotation", {})
+        operation.update(phase="abandoned", detail=str(exc))
+        data["coordinator_rotation"] = operation
+        artifacts._save_tick_data(stream, data)
+        raise
+
+
+def _rotate_locked(index: Path, project: Project, stream_id: str) -> str:
     from engine.threads import abandon_start
 
     stream = require_stream(index, project.info.name, stream_id)
@@ -213,8 +226,8 @@ def rotate_locked(index: Path, project: Project, stream_id: str) -> str:
                 if row.session == operation["source"] and row.status is not Status.archived:
                     transition(row, Status.archived)
             save_threads(stream / "threads.tsv", rows)
-        elif receipt.get("allowed") is False:
-            raise StreamsError("Newer stop or unfinished live retirement preserves the predecessor")
+        else:
+            raise StreamsError("Unconfirmed retirement abandoned without another archive request; predecessor is preserved")
     if isinstance(operation, dict) and operation.get("phase") == "complete" and source is not None and source.session == operation.get("target"):
         completed = clock.parse(operation.get("completed_at", ""))
         if completed is not None and (clock.now() - completed).total_seconds() < 2:
@@ -324,7 +337,7 @@ def replacement_intent(stream: Path) -> ReplacementIntent | None:
             or intent.original.get("sessionId") != intent.source or not isinstance(intent.original.get("cwd"), str) or not Path(intent.original["cwd"]).is_absolute()
             or type(intent.original.get("allowed")) is not bool
             or not all(isinstance(intent.original.get(key), str) and intent.original[key] for key in ("generation", "entryId", "path", "sha256", "leafSha256", "model", "thinking"))
-            or intent.phase not in {"prepared", "spawning", "created", "archiving", "archived", "complete"}
+            or intent.phase not in {"prepared", "spawning", "created", "archiving", "archived", "complete", "abandoned"}
             or (intent.mode == "adopt" or intent.phase == "complete") and not intent.target):
             raise ValueError("invalid replacement identity or phase")
         return intent
@@ -367,9 +380,13 @@ def reconcile_retired_coordinator_residue(stream: Path, row: Thread) -> str:
     prior = terminal_sessions.load(stream, row.session, row.worktree)
     if prior is not None:
         return prior["state"]
-    _replacement_inputs(stream, row.session)
-    _resolved, original = _replacement_native(stream, row, piweb.list_sessions(str(stream)))
-    expected = {key: original[key] for key in ("sessionId", "cwd", "entryId", "generation")}
+    try:
+        _replacement_inputs(stream, row.session)
+        _resolved, original = _replacement_native(stream, row, piweb.list_sessions(str(stream)))
+        expected = {key: original[key] for key in ("sessionId", "cwd", "entryId", "generation")}
+    except Exception as exc:
+        terminal_sessions.save(stream, row.session, row.worktree, "refused", f"Optional residue inspection abandoned: {exc}")
+        return "refused"
     return terminal_sessions.archive(stream, row.session, row.worktree, expected_idle=expected)
 
 
@@ -536,7 +553,7 @@ def _begin_replacement(stream: Path, source, target: str, *, outcome: dict | Non
 
 
 def _load_checkpoint(stream: Path, intent: ReplacementIntent) -> None:
-    if intent.mode != "capacity" or intent.load.get("state") in {"observed", "stopped", "superseded"}:
+    if intent.mode != "capacity" or intent.load.get("state") in {"observed", "stopped", "superseded", "abandoned"}:
         return
     identity = f"capacity:{intent.id}:load"
     acknowledgement = f"Dump checkpoint loaded: {intent.id}"
@@ -555,8 +572,8 @@ def _load_checkpoint(stream: Path, intent: ReplacementIntent) -> None:
     elif record.state == "transport_accepted":
         delivery.observe_control_locked(stream, identity)
     record = delivery._get(stream, identity)
-    if record.state == "blocked":
-        intent.load = {"delivery": identity, "state": "stopped", "detail": record.detail}
+    if record.state in {"blocked", "uncertain", "abandoned"}:
+        intent.load = {"delivery": identity, "state": "abandoned", "detail": record.detail}
         _save_replacement(stream, intent)
         return
     if record.control is not None and record.control.state == "superseded":
@@ -592,15 +609,31 @@ def _load_checkpoint(stream: Path, intent: ReplacementIntent) -> None:
     entry, raw = assistants[-1]
     message = entry["message"]
     if message.get("stopReason") != "stop" or any(item.get("message", {}).get("stopReason") in {"error", "aborted", "length"} for item, _ in assistants):
+        intent.load = {"delivery": identity, "state": "abandoned", "detail": "Dump load ended without a successful acknowledgement; no replay"}
+        _save_replacement(stream, intent)
         return
     text = "\n".join(part.get("text", "") for part in message.get("content", []) if isinstance(part, dict) and part.get("type") == "text")
     if acknowledgement not in text.splitlines():
+        intent.load = {"delivery": identity, "state": "abandoned", "detail": "Dump load ended without its literal acknowledgement; no replay"}
+        _save_replacement(stream, intent)
         return
     intent.load = {"delivery": identity, "state": "observed", "userEntryId": user["id"], "userSha256": hashlib.sha256(user_raw).hexdigest(), "assistantEntryId": entry["id"], "assistantSha256": hashlib.sha256(raw).hexdigest(), "generation": token["generation"]}
     _save_replacement(stream, intent)
 
 
 def advance_replacement_locked(stream: Path, intent: ReplacementIntent) -> str:
+    if intent.phase == "abandoned":
+        raise StreamsError("Replacement was abandoned without effect replay")
+    try:
+        return _advance_replacement_locked(stream, intent)
+    except Exception as exc:
+        intent.phase = "abandoned"
+        intent.load = {**intent.load, "state": "abandoned", "detail": str(exc)}
+        _save_replacement(stream, intent)
+        raise
+
+
+def _advance_replacement_locked(stream: Path, intent: ReplacementIntent) -> str:
     if intent.phase == "complete":
         rows = load_threads(stream / "threads.tsv")
         row = next((row for row in rows if row.session == intent.target), None)

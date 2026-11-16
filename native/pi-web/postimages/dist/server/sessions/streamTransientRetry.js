@@ -259,6 +259,7 @@ export class StreamTransientRetry {
         this.cancelled = cancelled;
         this.boundary = boundary;
         this.active = undefined;
+        this.abandoned = false;
     }
     get delayMs() { return this.watching() ? 5000 : undefined; }
     identity() {
@@ -267,6 +268,7 @@ export class StreamTransientRetry {
         return { provider: this.session.model?.provider, model: this.session.model?.id, thinking: this.session.thinkingLevel, generation: state.generation };
     }
     eligible(message) {
+        if (this.abandoned) return false;
         if (!this.watching()) return true;
         if (usage(message) || /usage.?limit/i.test(message.errorMessage ?? "") || !isRetryableAssistantError(message) || isContextOverflow(message, this.session.model?.contextWindow ?? 0)) return false;
         try {
@@ -275,15 +277,28 @@ export class StreamTransientRetry {
         } catch { return false; }
     }
     save(data) {
-        this.session.sessionManager.appendCustomEntry(RETRY_TYPE, structuredClone(data));
-        this.branch(this.session);
-        this.active = data.state === "pending" ? data : undefined;
+        if (this.abandoned) return;
+        try {
+            this.session.sessionManager.appendCustomEntry(RETRY_TYPE, structuredClone(data));
+            this.branch(this.session);
+            this.active = data.state === "pending" ? data : undefined;
+        }
+        catch { this.abandoned = true; this.active = undefined; }
     }
     reconcile() {
+        if (this.abandoned) return;
+        try {
         for (const data of retryDispositions(this.branch(this.session), this.session.sessionId, this.session.sessionManager.getCwd()).values())
             if (data.state === "pending") this.save({ ...data, state: "uncertain", detail: "The live retry owner was lost; no inference is replayed" });
+        }
+        catch { this.abandoned = true; this.active = undefined; }
     }
     async messageEnded(message, entryId) {
+        if (this.abandoned) return;
+        try { await this.recordMessageEnded(message, entryId); }
+        catch { this.abandoned = true; this.active = undefined; }
+    }
+    async recordMessageEnded(message, entryId) {
         if (!this.watching()) return;
         const branch = this.branch(this.session);
         if (message.role === "user") {
@@ -309,6 +324,7 @@ export class StreamTransientRetry {
         }
     }
     async yieldToInput() {
+        if (this.abandoned || this.active === undefined) return false;
         const control = this.control.snapshot({ id: this.session.sessionId, cwd: this.session.sessionManager.getCwd() });
         if (this.active && control.durable && control.allowed && (this.session.pendingMessageCount || control.generation !== this.active.identity.generation)) {
             this.save({ ...this.active, state: "cancelled", reason: "new-input", detail: "Newer accepted input owns continuation; failed inference is not replayed" });
@@ -329,6 +345,7 @@ export class StreamTransientRetry {
             throw new AutomaticAdmissionRejected("Retry superseded by stop, input, settings or unresolved effects");
     }
     async beforeAttempt() {
+        if (this.abandoned) return false;
         if (!this.watching()) return true;
         try {
             this.assertAttempt();

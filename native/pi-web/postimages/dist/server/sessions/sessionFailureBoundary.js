@@ -319,7 +319,13 @@ export class SessionFailureBoundaries {
     assertAdmission(session) {
         assertIntactSession(session);
         const record = this.records.get(session);
-        if (record !== undefined && (record.state !== "watching" || record.recovery !== undefined && this.permitsRelease?.(session, record.recovery.id, record.recovery.originalSessionId) !== true))
+        if (record !== undefined && (
+            record.failure?.kind === "content-policy"
+            || record.enrollment?.mode === "permitted-analysis-v1"
+            || record.failure !== undefined && unresolvedEffects(persistedBranch(session), record)
+            || record.recovery !== undefined && (this.recoveryScopes.get(session)?.count ?? 0) > 0
+                && this.permitsRelease?.(session, record.recovery.id, record.recovery.originalSessionId) !== true
+        ))
             throw new AutomaticAdmissionRejected("Stream failure is parked; only its engine-owned good-prefix recovery may replace the original");
     }
     assertInternalAdmission(session) {
@@ -378,7 +384,7 @@ export class SessionFailureBoundaries {
                 continue;
             const data = entry["data"];
             if (!boundary(data, session))
-                throw new AutomaticAdmissionRejected("Invalid persisted stream failure boundary");
+                continue;
             this.records.set(session, structuredClone(data));
         }
         const diagnostics = session.sessionManager.getSessionFileDiagnostics?.() ?? [];
@@ -440,11 +446,7 @@ export class SessionFailureBoundaries {
             }
             catch (error) {
                 this.records.set(session, { ...previous, state: "uncertain", detail: error instanceof Error ? error.message : "Registration durability is unconfirmed" });
-                try {
-                    await this.control?.setAllowed({ id: session.sessionId, cwd: session.sessionManager.getCwd() }, false);
-                }
-                catch { /* The runtime guard remains denied. */ }
-                throw new AutomaticAdmissionRejected("Failure registration durability is uncertain; no task is admitted");
+                throw new Error("Optional failure registration abandoned after its persistence failure");
             }
             return structuredClone(previous);
         }
@@ -471,11 +473,7 @@ export class SessionFailureBoundaries {
                 persistedBranch(session);
             }
             catch { /* Failed durability is retained, never converted into confirmed registration. */ }
-            try {
-                await this.control?.setAllowed({ id: session.sessionId, cwd: session.sessionManager.getCwd() }, false);
-            }
-            catch { /* Runtime admission remains fenced if stop publication also fails. */ }
-            throw new AutomaticAdmissionRejected("Failure registration durability is uncertain; no first task is admitted");
+            throw new Error("Optional failure registration abandoned after its persistence failure");
         }
     }
     async resume(session, expected) {
@@ -613,11 +611,7 @@ export class SessionFailureBoundaries {
             }
         }
         catch (error) {
-            this.records.set(session, { ...previous, state: "uncertain", detail: error instanceof Error ? error.message : "Failure checkpoint persistence is unconfirmed" });
-            try {
-                await this.control?.setAllowed({ id: session.sessionId, cwd: session.sessionManager.getCwd() }, false);
-            }
-            catch { /* In-memory boundary still refuses all new task admissions. */ }
+            this.records.set(session, { ...(this.records.get(session) ?? previous), state: "uncertain", detail: error instanceof Error ? error.message : "Failure checkpoint persistence is unconfirmed" });
         }
         finally {
             this.pending.delete(session);

@@ -158,10 +158,9 @@ def replace_current_objective(state: StreamState, objective: str) -> bytes:
 
 
 def update_current_objective(stream_dir: Path, objective: str) -> bool:
-    from engine.state_repair import heal_sections_locked
     with stream_lock(stream_dir):
         assert_artifacts_ready(stream_dir)
-        heal_sections_locked(stream_dir)
+        _heal_sections_once_locked(stream_dir)
         path = stream_dir / "STATE.md"
         if path.is_symlink():
             raise StreamsError("refusing a STATE.md symlink")
@@ -311,20 +310,62 @@ def _checked_state(source: bytes, book: LogBook) -> StreamState:
     return state
 
 
+def _heal_sections_once_locked(stream_dir: Path) -> None:
+    from engine.state_repair import abandon_sections_locked, heal_sections_locked
+    from engine.migration import regular_bytes
+    data = _read_tick_data(stream_dir)
+    path = stream_dir / "STATE.md"
+    journal = stream_dir / "log/state-sections-repair.json"
+    def repair_source() -> str:
+        saved = regular_bytes(journal) if journal.is_file() and not journal.is_symlink() else b""
+        if saved:
+            try:
+                complete = json.loads(saved).get("phase") == "complete"
+            except (ValueError, AttributeError):
+                complete = False
+            if not complete:
+                return _sha(saved)
+        return _sha(regular_bytes(path) + b"\0" + saved)
+    source = repair_source()
+    attempt = data.get("section_heal", {})
+    if not isinstance(attempt, dict):
+        data["section_heal"] = {"source": source, "phase": "abandoned", "original": attempt, "detail": "Invalid auxiliary heal record retained without replay"}
+        _save_tick_data(stream_dir, data)
+        return
+    if attempt.get("phase") != "abandoned" or attempt.get("source") != source:
+        data["section_heal"] = {"source": source, "phase": "abandoned", "detail": "Reserved automatic section heal; interrupted attempts are not replayed"}
+        _save_tick_data(stream_dir, data)
+        try:
+            heal_sections_locked(stream_dir)
+        except Exception as exc:
+            try:
+                abandon_sections_locked(stream_dir, str(exc))
+            except Exception:
+                pass
+            data = _read_tick_data(stream_dir)
+            data["section_heal"] = {"source": repair_source(), "phase": "abandoned", "detail": str(exc)}
+            _save_tick_data(stream_dir, data)
+        else:
+            data = _read_tick_data(stream_dir)
+            data["section_heal"] = {"source": repair_source(), "phase": "complete"}
+            _save_tick_data(stream_dir, data)
+
+
 def _read_stream_state_locked(stream_dir: Path) -> StreamState:
-    from engine.state_repair import heal_sections_locked
-    assert_artifacts_ready(stream_dir)
     if load_stream_config(stream_dir / "stream.toml").state_schema != STATE_SCHEMA:
         raise StreamsError("canonical STATE schema required; explicit migration is needed")
-    heal_sections_locked(stream_dir)
+    _heal_sections_once_locked(stream_dir)
     path = stream_dir / "STATE.md"
     if path.is_symlink():
         raise StreamsError("refusing a STATE.md symlink")
     data = _read_tick_data(stream_dir)
     raw = data.get("state_log")
-    book = _book(raw) if raw is not None else LogBook()
-    if raw is not None and raw.get("pending") is not None:
-        raise StreamsError("artifact operation pending; reconcile through its canonical operation or tick")
+    try:
+        book = _book(raw) if raw is not None else LogBook()
+        if raw is not None and raw.get("pending") is not None:
+            return parse_state(path.read_bytes())
+    except StreamsError:
+        return parse_state(path.read_bytes())
     try:
         return _checked_state(path.read_bytes(), book)
     except OSError as exc:
@@ -482,11 +523,10 @@ def _recover_log_locked(stream_dir: Path, data: dict) -> tuple[LogBook, StreamSt
 
 
 def _open_log_locked(stream_dir: Path) -> tuple[dict, LogBook, StreamState]:
-    from engine.state_repair import heal_sections_locked
     assert_artifacts_ready(stream_dir)
     if load_stream_config(stream_dir / "stream.toml").state_schema != STATE_SCHEMA:
         raise StreamsError("canonical STATE schema required; explicit migration is needed")
-    heal_sections_locked(stream_dir)
+    _heal_sections_once_locked(stream_dir)
     data = _read_tick_data(stream_dir)
     if "state_log" not in data:
         state = parse_state((stream_dir / "STATE.md").read_bytes())

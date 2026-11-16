@@ -217,7 +217,6 @@ def _native_session(session_id: str, cwd: Path, listing: list[dict[str, object]]
 
 
 def _inspect_coordinator(stream_dir: Path, rows: list[Thread] | None = None, *, listings: dict | None = None, inspect_residue_successor: bool = True) -> CoordinatorObservation:
-    assert_artifacts_ready(stream_dir)
     rows = load_threads(stream_dir / "threads.tsv") if rows is None else rows
     row = designated_coordinator(rows)
     if row is not None and Path(row.worktree).resolve() != stream_dir.resolve():
@@ -296,10 +295,9 @@ def discard_failed_start(stream_dir: Path, session_id: str) -> None:
     if start is not None and start.session == session_id:
         try:
             removed = piweb.discard_empty(session_id, start.creation_token)
-        except StreamsError:
+        except Exception:
             removed = False
-        if removed:
-            abandon_start(stream_dir, "Failed empty opening reservation removed")
+        abandon_start(stream_dir, "Failed opening abandoned without replay" + ("; empty reservation removed" if removed else "; original reservation retained"))
 
 
 def _send_start(stream_dir: Path, session_id: str, prompt: str, *, replacement: dict | None = None) -> None:
@@ -308,12 +306,7 @@ def _send_start(stream_dir: Path, session_id: str, prompt: str, *, replacement: 
         raise StreamsError("saved session start is not ready for opening")
     start.phase = "sending"
     _save_start(stream_dir, start)
-    try:
-        piweb.prompt(session_id, prompt, **({"replacement": replacement} if replacement is not None else {}))
-    except piweb.PromptRejected:
-        start.phase = "created"
-        _save_start(stream_dir, start)
-        raise
+    piweb.prompt(session_id, prompt, **({"replacement": replacement} if replacement is not None else {}))
     _accept_start(stream_dir, session_id)
 
 
@@ -381,6 +374,10 @@ def _resume_or_spawn(cwd: Path, rows: list[Thread], stream_dir: Path, role: str,
             continue
         if any(status.get(key) is True for key in ("isStreaming", "isCompacting", "isBashRunning")):
             raise StreamsError(f"Live runtime {candidate['id']} owns work in {cwd}; use an isolated unit")
+    if operation != "new":
+        abandoned = artifacts._read_tick_data(stream_dir).get("abandoned_session_starts", [])
+        if any(item.get("operation") == operation and item.get("cwd") == str(cwd) and item.get("role") == role for item in abandoned):
+            raise StreamsError("Automatic opening was abandoned; unchanged owner cannot spawn again")
     creation_token = uuid.uuid4().hex
     sid = piweb.spawn(str(cwd), creation_token=creation_token)
     _save_start(stream_dir, SessionStart(sid, str(cwd), role, digest, operation=operation, creation_token=creation_token))
@@ -427,9 +424,12 @@ def ensure_coordinator(project: Project, stream_dir: Path, *, opening_prompt: st
     if needs_opening:
         try:
             configured = piweb.configure_session(sid, project.coordinator.model, project.coordinator.thinking)
-            piweb.register_stream_failure(sid, str(stream_dir), stream_dir, configured, starting=True, role="coordinator", assignment=prompt)
+            try:
+                piweb.register_stream_failure(sid, str(stream_dir), stream_dir, configured, starting=True, role="coordinator", assignment=prompt)
+            except Exception:
+                pass
             _send_start(stream_dir, sid, prompt, replacement=replacement)
-        except StreamsError:
+        except Exception:
             discard_failed_start(stream_dir, sid)
             raise
     rows.append(_thread_row(sid, "coordinator", "", stream_dir, "", "", project.coordinator.model, project.coordinator.thinking))
@@ -757,9 +757,12 @@ def spawn_thread(
         try:
             configured = piweb.configure_session(sid, model_name, thinking_level)
             brief = render_brief(session_id=sid, stream=stream_id, stream_dir=str(stream_dir), role=role, repo=repo.name, worktree=str(worktree), branch=branch_name, base=sha, note=note)
-            piweb.register_stream_failure(sid, str(worktree), stream_dir, configured, starting=True, role=role, assignment=brief)
+            try:
+                piweb.register_stream_failure(sid, str(worktree), stream_dir, configured, starting=True, role=role, assignment=brief)
+            except Exception:
+                pass
             _send_start(stream_dir, sid, brief)
-        except StreamsError:
+        except Exception:
             discard_failed_start(stream_dir, sid)
             raise
     _append_thread(

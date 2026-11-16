@@ -235,12 +235,38 @@ def _maintenance_result(data: dict, sid: str, identity: str, cwd: str) -> dict:
     native_cwd = result.get("cwd")
     if not isinstance(native_cwd, str) or Path(native_cwd).resolve() != Path(cwd).resolve():
         raise StreamsError("maintenance receiver returned a mismatched native cwd")
-    if result.get("state") not in ("prepared", "compacting", "complete", "failed", "uncertain", "superseded", "resuming", "resumed") or type(result.get("inputSequence")) is not int or result["inputSequence"] < 0 or not isinstance(result.get("inputs"), list) or len(result["inputs"]) != result["inputSequence"]:
+    if result.get("state") not in ("prepared", "compacting", "complete", "failed", "uncertain", "superseded", "resuming", "resumed", "abandoned") or type(result.get("inputSequence")) is not int or result["inputSequence"] < 0 or not isinstance(result.get("inputs"), list) or len(result["inputs"]) != result["inputSequence"]:
         raise StreamsError("maintenance receiver returned malformed phase/input state")
     return result
 
 
 def register_stream_failure(sid: str, cwd: str, stream_dir: Path, status: dict, *, starting: bool = False, role: str = "", assignment: str = "") -> None:
+    from engine import artifacts
+    try:
+        data = artifacts._read_tick_data(stream_dir)
+        records = data.setdefault("failure_registration", {})
+        if sid in records:
+            return
+        records[sid] = {"phase": "abandoned", "detail": "Reserved optional registration; no replay"}
+        artifacts._save_tick_data(stream_dir, data)
+        _register_stream_failure(sid, cwd, stream_dir, status, starting=starting, role=role, assignment=assignment)
+    except Exception as exc:
+        try:
+            data = artifacts._read_tick_data(stream_dir)
+            data.setdefault("failure_registration", {})[sid] = {"phase": "abandoned", "detail": str(exc)}
+            artifacts._save_tick_data(stream_dir, data)
+        except Exception:
+            pass
+    else:
+        data = artifacts._read_tick_data(stream_dir)
+        data["failure_registration"][sid] = {"phase": "complete"}
+        try:
+            artifacts._save_tick_data(stream_dir, data)
+        except Exception:
+            pass
+
+
+def _register_stream_failure(sid: str, cwd: str, stream_dir: Path, status: dict, *, starting: bool = False, role: str = "", assignment: str = "") -> None:
     if status.get("failureBoundarySupport") != "persisted-turn-v1":
         return
     result = status.get("failureBoundary")

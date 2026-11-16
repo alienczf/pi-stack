@@ -21,7 +21,10 @@ def save(stream: Path, sid: str, cwd: str, state: str, detail: str) -> None:
     data.setdefault('terminal_sessions', {})[sid] = {'cwd': cwd, 'state': state, 'detail': detail}
     artifacts._save_tick_data(stream, data)
     if state != 'sending':
-        artifacts.append_log_locked(stream, clock.stamp(clock.now()), 'Terminal session reconciliation', f'Session {sid}. Disposition {state}. {detail} Registry and handover evidence are retained.', request_id=f'terminal:{sid}:{state}:{hashlib.sha256(detail.encode()).hexdigest()}')
+        try:
+            artifacts.append_log_locked(stream, clock.stamp(clock.now()), 'Terminal session reconciliation', f'Session {sid}. Disposition {state}. {detail} Registry and handover evidence are retained.', request_id=f'terminal:{sid}:{state}:{hashlib.sha256(detail.encode()).hexdigest()}')
+        except Exception:
+            pass
 
 
 def archive(stream: Path, sid: str, cwd: str, *, explicit: bool = False, expected_idle: dict[str, str] | None = None) -> str:

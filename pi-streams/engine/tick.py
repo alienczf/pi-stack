@@ -13,6 +13,7 @@ from engine.project import (
     StreamRow,
     _write as write_atomic,
     commit_repo,
+    git,
     index_lock,
     load_projects,
     load_stream_config,
@@ -225,7 +226,7 @@ class StreamTick:
             self.state = load_state(self.state_path)
             self.loaded = True
             self.rows = load_threads(self.rows_path)
-            legacy = drive.reconcile_locked(self.stream_dir)
+            legacy = None
             if drive.is_paused(self.stream_dir) and legacy is None:
                 return
             if self.rows and all(row.status in {Status.done, Status.archived} for row in self.rows):
@@ -235,12 +236,20 @@ class StreamTick:
             self.drive_enabled = drive.load(self.stream_dir).enabled
             self.automatic_paused = drive.is_paused(self.stream_dir)
             intent = replacement.replacement_intent(self.stream_dir)
-            if dcr.advance_capacity_replacement_locked(self.stream_dir) or intent is not None and intent.phase != "complete":
+            if dcr.advance_capacity_replacement_locked(self.stream_dir) or intent is not None and intent.phase not in {"complete", "abandoned"}:
                 return
-            results = failure_recovery.resume_parked_locked(
-                self.stream_dir, self.at, index=self.index, project=self.project,
-                intent=legacy or failure_recovery.ResumeIntent.CONTINUE_OWNED,
-            )
+            results = []
+            data = artifacts._read_tick_data(self.stream_dir)
+            if data.get("recovery_poll", {}).get("phase") != "abandoned":
+                try:
+                    results = failure_recovery.resume_parked_locked(
+                        self.stream_dir, self.at, index=self.index, project=self.project,
+                        intent=failure_recovery.ResumeIntent.CONTINUE_OWNED,
+                    )
+                except Exception as exc:
+                    data = artifacts._read_tick_data(self.stream_dir)
+                    data["recovery_poll"] = {"phase": "abandoned", "detail": str(exc)}
+                    artifacts._save_tick_data(self.stream_dir, data)
             for result in results:
                 if result.get("state") == "pending":
                     sid = result["session"]
@@ -252,10 +261,13 @@ class StreamTick:
                 self.flush()
                 return
             rotation = artifacts._read_tick_data(self.stream_dir).get("coordinator_rotation")
-            if not self.automatic_paused and isinstance(rotation, dict) and rotation.get("phase") != "complete":
+            if not self.automatic_paused and isinstance(rotation, dict) and rotation.get("phase") not in {"complete", "abandoned"}:
                 try:
                     replacement.rotate_locked(self.index, self.project, self.stream)
-                except (StreamsError, OSError) as exc:
+                except Exception as exc:
+                    data = artifacts._read_tick_data(self.stream_dir)
+                    data["coordinator_rotation"].update(phase="abandoned", detail=str(exc))
+                    artifacts._save_tick_data(self.stream_dir, data)
                     self.fail(f"rotation: {exc}")
             self.rows = load_threads(self.rows_path)
             terminal_coordinators = {row.session for row in self.rows if row.role == "coordinator" and row.status is not Status.archived and terminal_sessions.load(self.stream_dir, row.session, row.worktree) is not None}
@@ -299,18 +311,32 @@ class StreamTick:
                 if not unknown:
                     self.failure_owned = self.observe_failure(resolved.row, resolved.native.info, resolved.native.status)
             if not self.automatic_paused and not self.failure_owned and not unknown:
-                self.dcr_owned = dcr.step(self.index, self.project, self.stream, self.stream_dir, self.coordinator_resolution)
+                data = artifacts._read_tick_data(self.stream_dir)
+                if data.get("dcr_poll", {}).get("phase") != "abandoned":
+                    try:
+                        self.dcr_owned = dcr.step(self.index, self.project, self.stream, self.stream_dir, self.coordinator_resolution)
+                    except Exception as exc:
+                        data = artifacts._read_tick_data(self.stream_dir)
+                        data["dcr_poll"] = {"phase": "abandoned", "detail": str(exc)}
+                        artifacts._save_tick_data(self.stream_dir, data)
                 intent = replacement.replacement_intent(self.stream_dir)
-                if load_threads(self.rows_path) != self.rows or intent is not None and intent.phase != "complete":
+                if load_threads(self.rows_path) != self.rows or intent is not None and intent.phase not in {"complete", "abandoned"}:
                     return
             self.drive_owned = drive.step(self.stream_dir, self.coordinator_resolution, self.stalled, maintenance=self.dcr_owned or self.failure_owned)
-            self.check_claims()
-            self.observe()
-            intent = replacement.replacement_intent(self.stream_dir)
-            if intent is not None and intent.phase != "complete":
-                return
-            self.check_subscriptions()
-            self.flush()
+            data = artifacts._read_tick_data(self.stream_dir)
+            if data.get("tick_observation", {}).get("phase") != "abandoned":
+                try:
+                    self.check_claims()
+                    self.observe()
+                    self.check_subscriptions()
+                except Exception as exc:
+                    data = artifacts._read_tick_data(self.stream_dir)
+                    data["tick_observation"] = {"phase": "abandoned", "detail": str(exc)}
+                    artifacts._save_tick_data(self.stream_dir, data)
+            try:
+                self.flush()
+            except Exception as exc:
+                self.errors.append(str(exc))
             self.wake()
             self.archive_done()
         except (StreamsError, OSError) as exc:
@@ -365,11 +391,13 @@ class StreamTick:
         if source is None:
             self.fail(f"subscription {sub.id}: unknown source {sub.source}")
             return None
+        if old is not None and old.watch == sub.watch() and old.fingerprint == "abandoned":
+            return old
         try:
             reading = source(sub, self.stream_dir, self.now)
         except StreamsError as exc:
             self.fail(f"subscription {sub.id}: {exc}")
-            return old
+            return Mark(sub.watch(), "abandoned")
         if old is not None and old.watch == sub.watch() and old.fingerprint != reading.fingerprint:
             head = f"{sub.id}: {sub.action}" if sub.action else sub.id
             self.emit("subscription", detail="\n".join([head, *reading.detail]))
@@ -403,11 +431,23 @@ class StreamTick:
     def observe_failure(self, row: Thread, native: dict, status: dict) -> bool:
         for sid in artifacts._read_tick_data(self.stream_dir).get("failure_recoveries", {}):
             operation = failure_recovery.load(self.stream_dir, sid)
-            if operation is not None and operation.phase not in {"complete", "rotated"} and operation.fork == row.session:
+            if operation is not None and operation.phase not in failure_recovery.TERMINAL and operation.fork == row.session:
                 self.typed_failures.add(row.session)
                 return True
-        piweb.register_stream_failure(row.session, row.worktree, self.stream_dir, status)
-        episode = failure.observe(self.stream_dir, row.session, row.worktree, native, status, self.at, row.model, row.thinking)
+        data = artifacts._read_tick_data(self.stream_dir)
+        observations = data.setdefault("failure_observation", {})
+        checkpoint = status.get("rotationSafety", {}).get("entryId")
+        previous = observations.get(row.session, {})
+        if previous.get("phase") == "abandoned" and previous.get("checkpoint") == checkpoint:
+            return False
+        try:
+            piweb.register_stream_failure(row.session, row.worktree, self.stream_dir, status)
+            episode = failure.observe(self.stream_dir, row.session, row.worktree, native, status, self.at, row.model, row.thinking)
+        except Exception as exc:
+            data = artifacts._read_tick_data(self.stream_dir)
+            data.setdefault("failure_observation", {})[row.session] = {"checkpoint": checkpoint, "phase": "abandoned", "detail": str(exc)}
+            artifacts._save_tick_data(self.stream_dir, data)
+            return False
         if status.get("streamRetrySupport") == "entry-bound-v1" and isinstance(status.get("streamRetry"), dict) and status["streamRetry"].get("state") == "pending":
             self.typed_failures.add(row.session)
             return True
@@ -443,7 +483,7 @@ class StreamTick:
         self.state.sessions = {sid: seen for sid, seen in self.state.sessions.items() if sid in observed}
         coord = self.coordinator()
         self.state.outages = [sid for sid in self.state.outages if coord is not None and sid == coord.session]
-        if coord is not None and coord.session not in self.typed_failures:
+        if coord is not None and coord.session not in self.typed_failures and not self.drive_owned:
             try:
                 self.check_outage(coord)
             except (StreamsError, OSError) as exc:
@@ -542,10 +582,8 @@ class StreamTick:
         for text in stale:
             self.emit("stale-steer", row, text)
         new.replay = [[text, "steer" if text in stale else QUEUE_FLAGS[kind]] for text, kind in queued]
+        new.replay = []
         self.flush()
-        # queue/clear drops every queued message, not only the stale ones.
-        piweb.queue_clear(row.session)
-        self.replay(row, new, Counter())
         for text in stale:
             new.queued[text] = self.at
 
@@ -558,8 +596,9 @@ class StreamTick:
             if waiting[text] > 0:
                 waiting[text] -= 1
             else:
-                piweb.prompt(row.session, text, behavior)
-                sent = True
+                identity = delivery.new_identity()
+                record = delivery.Delivery(identity, row.session, text, behavior=behavior, state="abandoned", detail="Interrupted queue transfer retained without replay; actual native queue remains authoritative")
+                delivery._save(self.stream_dir, record)
             del seen.replay[0]
             self.flush()
         return sent
@@ -575,13 +614,11 @@ class StreamTick:
             return
         current = delivery.current_tick(self.stream_dir)
         if current is not None:
-            if current["state"] == "applied":
-                remaining = delivery.finish_tick_locked(self.stream_dir, [asdict(event) for event in self.state.pending])
-                self.state.pending = [Event(**event) for event in remaining]
-            else:
-                if current["state"] in ("prepared", "sending"):
-                    delivery.send_locked(self.stream_dir, current["id"])
+            if current["state"] in {"prepared", "sending"}:
+                delivery.send_locked(self.stream_dir, current["id"])
                 return
+            remaining = delivery.finish_tick_locked(self.stream_dir, [asdict(event) for event in self.state.pending])
+            self.state.pending = [Event(**event) for event in remaining]
         coord = self.coordinator()
         if not self.state.pending or (coord is None and not self.state.rotating):
             return
@@ -716,7 +753,15 @@ def tick_index(index: Path, now: datetime) -> bool:
                     bindings = [current for current in load_stream_rows(index) if current.id == row.id and current.project == row.project]
                     if len(bindings) != 1 or Path(bindings[0].path).resolve() != repo.resolve():
                         raise StreamsError("registered stream binding changed; refusing an unknown writer target")
-                    history = artifacts._rotate_log_locked(repo)
+                    history = []
+                    data = artifacts._read_tick_data(repo)
+                    if data.get("log_rotation", {}).get("phase") != "abandoned":
+                        try:
+                            history = artifacts._rotate_log_locked(repo)
+                        except Exception as exc:
+                            data = artifacts._read_tick_data(repo)
+                            data["log_rotation"] = {"phase": "abandoned", "detail": str(exc)}
+                            artifacts._save_tick_data(repo, data)
                     project = projects.get(row.project)
                     if project is None:
                         raise StreamsError(f"stream {row.id} names missing project {row.project}")
@@ -729,18 +774,26 @@ def tick_index(index: Path, now: datetime) -> bool:
                     if counts:
                         counted = "\t".join(f"{kind}={counts[kind]}" for kind in sorted(counts))
                         print(f"{row.path}\t{counted}", flush=True)
-                    try:
-                        commit_repo(repo, "pi-streams tick", paths=tuple(history))
-                        if history:
-                            artifacts._acknowledge_history_locked(repo)
-                    except (StreamsError, OSError) as exc:
-                        health.errors.append(str(exc))
-                        print(f"{row.path}: {exc}", file=sys.stderr, flush=True)
-                    try:
-                        push_repo(repo, load_stream_config(repo / "stream.toml").remote)
-                    except (StreamsError, OSError) as exc:
-                        health.errors.append(str(exc))
-                        print(f"{row.path}: {exc}", file=sys.stderr, flush=True)
+                    data = artifacts._read_tick_data(repo)
+                    head = git(repo, "rev-parse", "HEAD").strip()
+                    publication = data.get("publication", {})
+                    if publication.get("phase") != "abandoned" or publication.get("head") != head:
+                        data["publication"] = {"head": head, "phase": "abandoned", "detail": "Reserved optional publication; interrupted attempts are not replayed"}
+                        artifacts._save_tick_data(repo, data)
+                        try:
+                            commit_repo(repo, "pi-streams tick", paths=tuple(history))
+                            if history:
+                                artifacts._acknowledge_history_locked(repo)
+                            push_repo(repo, load_stream_config(repo / "stream.toml").remote)
+                        except Exception as exc:
+                            data = artifacts._read_tick_data(repo)
+                            data["publication"] = {"head": git(repo, "rev-parse", "HEAD").strip(), "phase": "abandoned", "detail": str(exc)}
+                            artifacts._save_tick_data(repo, data)
+                            health.errors.append(str(exc))
+                        else:
+                            data = artifacts._read_tick_data(repo)
+                            data["publication"] = {"phase": "complete"}
+                            artifacts._save_tick_data(repo, data)
             except (StreamsError, OSError) as exc:
                 health.errors.append(str(exc))
                 print(f"{row.path}: {exc}", file=sys.stderr, flush=True)

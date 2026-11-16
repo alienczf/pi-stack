@@ -5,8 +5,8 @@ import { spawnSync } from "node:child_process";
 import { piWebDataDir } from "../../config.js";
 import { canonicalizeStoredCwd } from "../workingDirectory.js";
 import { validFailureRetirement } from "./sessionFailureRetirement.js";
-const STATES = new Set(["prepared", "compacting", "complete", "failed", "uncertain", "superseded", "resuming", "resumed"]);
-const INPUT_STATES = new Set(["queued", "sending", "admitted", "uncertain", "cancelled"]);
+const STATES = new Set(["prepared", "compacting", "complete", "failed", "uncertain", "superseded", "resuming", "resumed", "abandoned"]);
+const INPUT_STATES = new Set(["queued", "sending", "admitted", "uncertain", "cancelled", "abandoned"]);
 function record(value) {
     return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -52,6 +52,7 @@ export class SessionMaintenanceStore {
     constructor(directory) {
         this.directory = directory;
         this.pendingInputs = new Map();
+        this.readFailures = new Map();
     }
     location(ref) { return this.file(ref); }
     pending(ref) {
@@ -75,7 +76,7 @@ export class SessionMaintenanceStore {
         }
         catch (error) {
             this.pendingInputs.delete(file);
-            throw error;
+            return [];
         }
     }
     pendingVersion(file) {
@@ -140,7 +141,8 @@ export class SessionMaintenanceStore {
             return previous;
         }
         const active = this.current(ref);
-        if (active !== undefined && (!(active.state === "resumed" || active.state === "superseded") || active.inputs.some((input) => input.state !== "admitted" && input.state !== "cancelled")))
+        if (this.readFailures.has(this.file(ref))) throw new Error("Unavailable maintenance metadata is not proof of an absent operation");
+        if (active !== undefined && (!["resumed", "superseded", "abandoned"].includes(active.state) || active.inputs.some((input) => !["admitted", "cancelled", "abandoned"].includes(input.state))))
             throw new Error("Prior maintenance is unresolved; retain its operation and input");
         const data = this.read(ref) ?? { version: 1, sessionId: ref.id, cwd: canonicalizeStoredCwd(ref.cwd), current: operation.id, operations: {} };
         data.current = operation.id;
@@ -170,6 +172,7 @@ export class SessionMaintenanceStore {
     read(ref) {
         const identity = { id: ref.id, cwd: canonicalizeStoredCwd(ref.cwd) };
         const file = this.file(identity);
+        if (this.readFailures.get(file) === "unavailable") return undefined;
         try {
             if (!lstatSync(this.directory).isDirectory() || lstatSync(this.directory).isSymbolicLink())
                 throw new Error("Maintenance directory must be real and owned");
@@ -178,11 +181,16 @@ export class SessionMaintenanceStore {
         catch (error) {
             if (error instanceof Error && "code" in error && error.code === "ENOENT")
                 return undefined;
-            throw error;
+            this.readFailures.set(file, "unavailable");
+            return undefined;
         }
         let descriptor;
+        let version;
         try {
-            if (!lstatSync(file).isFile())
+            const stat = lstatSync(file, { bigint: true });
+            version = fileVersion(stat);
+            if (this.readFailures.get(file) === version) return undefined;
+            if (!stat.isFile())
                 throw new Error("Maintenance metadata is not a regular file");
             descriptor = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
             if (!fstatSync(descriptor).isFile())
@@ -198,7 +206,12 @@ export class SessionMaintenanceStore {
                     throw new Error("Invalid maintenance operation or input metadata");
                 return [id, operation];
             }));
+            this.readFailures.delete(file);
             return { version: 1, sessionId: ref.id, cwd: identity.cwd, current: value["current"], operations };
+        }
+        catch {
+            if (version !== undefined) this.readFailures.set(file, version);
+            return undefined;
         }
         finally {
             if (descriptor !== undefined)

@@ -12,6 +12,8 @@ from engine import StreamsError, artifacts, dcr, delivery, drive, failure, piweb
 from engine.project import _write
 from engine.threads import Coordinator, Status, _native_session, designated_coordinator, dump_threads, load_threads
 
+TERMINAL = {"complete", "rotated", "fork-refused", "cancelled", "uncertain", "abandoned"}
+
 
 @dataclass
 class Recovery:
@@ -48,7 +50,7 @@ def load(stream: Path, sid: str) -> Recovery | None:
         return None
     try:
         op = Recovery(**value)
-        if op.session != sid or not op.id or not Path(op.cwd).is_absolute() or op.phase not in {"fork-refused", "fork-sending", "forked", "binding", "bound", "preparing", "dcr", "observed", "retiring", "retired", "clearing", "complete", "loading", "rotated", "cancelled", "uncertain"} or not isinstance(op.request, dict):
+        if op.session != sid or not op.id or not Path(op.cwd).is_absolute() or op.phase not in {"fork-refused", "fork-sending", "forked", "binding", "bound", "preparing", "dcr", "observed", "retiring", "retired", "clearing", "complete", "loading", "rotated", "cancelled", "uncertain", "abandoned"} or not isinstance(op.request, dict):
             raise ValueError("Recovery identity/phase changed")
         return op
     except (TypeError, ValueError) as exc:
@@ -187,7 +189,7 @@ def resume_parked_locked(stream: Path, at: str, *, index: Path, project, intent:
             retiring = op is not None and op.phase in {"retiring", "retired", "clearing"}
             if row is None or not retiring and (row.status in {Status.done, Status.archived} or terminal_sessions.load(stream, sid, row.worktree) is not None):
                 continue
-            if op is not None and op.phase == "complete" or episode is None or episode.state != "parked" or episode.kind in {"usage-limit", "content-policy"} or episode.checkpoint is None or episode.authority is None and op is None:
+            if op is not None and op.phase in TERMINAL or episode is None or episode.state != "parked" or episode.kind in {"usage-limit", "content-policy"} or episode.checkpoint is None or episode.authority is None and op is None:
                 continue
             processed.add(sid)
             try:
@@ -200,7 +202,7 @@ def resume_parked_locked(stream: Path, at: str, *, index: Path, project, intent:
     for row in rows:
         if row.session in processed or row.status not in {Status.active, Status.waiting_quota, Status.parked} or legacy is not None and (row.session != legacy.session or row.worktree != legacy.cwd):
             continue
-        if any(op is not None and op.fork == row.session and op.phase != "complete" for op in operations):
+        if any(op is not None and op.fork == row.session and op.phase not in TERMINAL for op in operations):
             continue
         try:
             terminal = terminal_sessions.load(stream, row.session, row.worktree)
@@ -262,6 +264,26 @@ def resume_parked_locked(stream: Path, at: str, *, index: Path, project, intent:
 
 
 def advance_locked(stream: Path, sid: str, episode_id: str, at: str, *, index: Path | None = None, project=None) -> dict:
+    saved = load(stream, sid)
+    if saved is not None and saved.phase in TERMINAL:
+        return asdict(saved)
+    episode = failure.load(stream, sid)
+    if episode is not None and episode.state == "abandoned":
+        return {"session": sid, "state": "abandoned", "detail": episode.detail}
+    try:
+        return _advance_locked(stream, sid, episode_id, at, index=index, project=project)
+    except Exception as exc:
+        saved = load(stream, sid)
+        if saved is not None:
+            saved.phase, saved.detail = "abandoned", str(exc)
+            save(stream, saved)
+        elif episode is not None and episode.kind != "content-policy":
+            episode.state, episode.detail = "abandoned", str(exc)
+            failure.save(stream, episode)
+        raise
+
+
+def _advance_locked(stream: Path, sid: str, episode_id: str, at: str, *, index: Path | None = None, project=None) -> dict:
     artifacts._read_stream_state_locked(stream)
     episode = failure.load(stream, sid)
     if episode is not None and episode.kind == "content-policy":
@@ -319,7 +341,7 @@ def advance_locked(stream: Path, sid: str, episode_id: str, at: str, *, index: P
             expected_generation = result["generation"]
     if allowed or token["generation"] != expected_generation:
         raise StreamsError("Newer original stop/input superseded recovery")
-    if op is None or op.phase == "fork-refused":
+    if op is None:
         from engine.replacement import _idle
         _idle(Coordinator(row, native))
         if row.status not in (Status.active, Status.waiting_quota, Status.parked):
@@ -582,9 +604,14 @@ def _retire(stream: Path, op: Recovery, episode: failure.Episode) -> None:
     if op.retirement is None:
         if op.phase != "retiring" or op.retirement_request != {"id": op.id, "forkSessionId": op.fork}:
             raise StreamsError("Retirement has no immutable saved native request")
+        op.phase = "abandoned"
+        op.detail = "Reserved one retirement request; an interrupted outcome is not replayed"
+        save(stream, op)
         receipt = piweb.retire_failure(op.session, op.cwd, op.retirement_request)
+        op.retirement = receipt
+        save(stream, op)
         _retirement_cache(op, episode, receipt)
-        op.retirement, op.phase = receipt, "retired"
+        op.phase = "retired"
         save(stream, op)
     native = _retirement_cache(op, episode, op.retirement)
     _released(stream, op, episode, native)
@@ -705,6 +732,9 @@ def _advance_dcr(stream: Path, op: Recovery, episode: failure.Episode, row, orig
         if current.phase == "rotated":
             transferred = load(stream, op.session)
             op.phase, op.detail, op.replacement = transferred.phase, transferred.detail, transferred.replacement
+        elif current.phase == "abandoned":
+            op.phase, op.detail = "abandoned", current.detail
+            save(stream, op)
         elif current.phase == "complete" and current.observation is not None:
             op.observation, op.phase = current.observation, "observed"
             save(stream, op)

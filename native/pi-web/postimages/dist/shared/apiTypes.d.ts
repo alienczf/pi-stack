@@ -913,7 +913,7 @@ export interface MaintenanceInput {
     echoUserMessage: boolean;
     generation: string;
     potetoGoal?: string;
-    state: "queued" | "sending" | "admitted" | "uncertain" | "cancelled";
+    state: "queued" | "sending" | "admitted" | "uncertain" | "cancelled" | "abandoned";
 }
 export interface SessionResumeObservation {
     kind: "assistant-stop";
@@ -975,7 +975,7 @@ export interface SessionMaintenance {
     entryId: string;
     generation: string;
     instructions: string;
-    state: "prepared" | "compacting" | "complete" | "failed" | "uncertain" | "superseded" | "resuming" | "resumed";
+    state: "prepared" | "compacting" | "complete" | "failed" | "uncertain" | "superseded" | "resuming" | "resumed" | "abandoned";
     inputSequence: number;
     lastInputGeneration: string;
     inputs: MaintenanceInput[];

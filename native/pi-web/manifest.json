@@ -43,13 +43,13 @@
     {
       "path": "dist/server/sessions/piSessionService.js",
       "before": "6dffb11184022a43dfa3238284ab828679e47ca65c618178617766bee667a3ab",
-      "after": "b9cb6603fa2746e30c27ac610cb5484716122fca01609503efba0364eadccea7",
+      "after": "f1ce495a41ce54f297010ded124c424852295c151561364416fe60e0db38c7a4",
       "contentFile": "pi-web/postimages/dist/server/sessions/piSessionService.js"
     },
     {
       "path": "dist/server/sessions/sessionFailureBoundary.js",
       "before": "895fcd375f8575e5783531febf7f8a52957c7952bcb27e373a6eb3b4b4e6a134",
-      "after": "ca395eefefb8f9f33be4a09f67b65e4fa9b72bcf81d3c99c94a530d8b3d15a65",
+      "after": "15ecd2512e77484f0352faaf7e833945207bfa2dea68ac734eced5c8026e2b77",
       "contentFile": "pi-web/postimages/dist/server/sessions/sessionFailureBoundary.js"
     },
     {
@@ -67,7 +67,7 @@
     {
       "path": "dist/server/sessions/sessionMaintenanceController.js",
       "before": "c94c2efc27e6371498af4512ff441cb59db830ebc434f6407cb51170847e6164",
-      "after": "b3fcf432503636e86461786aad172e56392d39e6761a060bd75b5486fb2da996",
+      "after": "395ab5d1c317876637a388e23455646cea8942090525cb9fe6b823b70336b8da",
       "contentFile": "pi-web/postimages/dist/server/sessions/sessionMaintenanceController.js"
     },
     {
@@ -79,13 +79,13 @@
     {
       "path": "dist/server/sessions/streamTransientRetry.js",
       "before": null,
-      "after": "5a93fd696632cfcdbddff6b9c5fe365076788d6d839c7fca8dd85dfb3ff1f5d7",
+      "after": "57e2b6044d9eddbd55d83059bb18aa2dcd0a3c45e8d69a04c2f91fa3724d13fa",
       "contentFile": "pi-web/postimages/dist/server/sessions/streamTransientRetry.js"
     },
     {
       "path": "dist/shared/apiTypes.d.ts",
       "before": "e158e31dd561bd0b528fd922dd68812eb6d57e0a0e68b1438d8853102e1159ac",
-      "after": "3764fa131167987c73224bd4947389b211cd18d1fb1c2d2a32fe851dfbe20798",
+      "after": "cce67b25c0d74d8b86dcf0bc2493928e6db45521f0673d7df3dd6da214085811",
       "contentFile": "pi-web/postimages/dist/shared/apiTypes.d.ts"
     },
     {
@@ -151,7 +151,7 @@
     {
       "path": "dist/server/sessions/automaticAdmissionStore.js",
       "before": "09378e1dd8fe338a836cb69375c10140ebc81c0ffe3d04de36ce77b040a05017",
-      "after": "7cad182d966233167e56b8ba5f716527817f13d688bf1fc1ed371222bb1e4d24",
+      "after": "0ffdfba3499abc8c8d93268f40a533bad28b91d2c3ad6d42e2f85ce08d8f7846",
       "contentFile": "pi-web/postimages/dist/server/sessions/automaticAdmissionStore.js"
     },
     {
@@ -199,8 +199,20 @@
     {
       "path": "dist/server/sessions/sessionMaintenanceStore.js",
       "before": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6",
-      "after": "a7d0b2861f0aada64548cec91c7a81572c3d4d115bee54600a7474b90285ec9b",
+      "after": "789f352fa20d528fe7f26a19994a782d5e89f0db37a78c1c9bde9eaa5dc63e5b",
       "contentFile": "pi-web/postimages/dist/server/sessions/sessionMaintenanceStore.js"
+    },
+    {
+      "path": "dist/server/sessions/sessionControlGoal.js",
+      "before": "86f61217d74eca6ace4f8889f336ba7d47360842b194954a89fa543e5e1558dc",
+      "after": "ac95bec1a7841213f3c2d4b5d4424f3c3bdcf1be80e6bd9132a7ee75702ba3ad",
+      "contentFile": "pi-web/postimages/dist/server/sessions/sessionControlGoal.js"
+    },
+    {
+      "path": "dist/server/sessions/streamsDcrEvents.js",
+      "before": "6bc6532838064ac5a3f307f60cf5e56329d7ce37e89cfd7c2387a99f9e1a7ef0",
+      "after": "240e1266e09614d1e9072415a180f5cf09be235ab4829e80dbea5cbed4b9e3ba",
+      "contentFile": "pi-web/postimages/dist/server/sessions/streamsDcrEvents.js"
     }
   ],
   "inputs": [
@@ -233,7 +245,9 @@
       "dist/server/sessions/sessionArchiveStore.js": "57cd44edef67a2ef47c198cf6e12afcd1b71b47c74361e226771aa0e88a9fbac",
       "dist/server/sessions/recoveryArchiveCompletion.js": null,
       "dist/server/sessions/piSessionManagerGateway.js": "70d05d6ff68e5e4bd83595011cc6d5b6bb8a8b66cd7d6db6fdf675328e0b1cb9",
-      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6"
+      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6",
+      "dist/server/sessions/sessionControlGoal.js": "86f61217d74eca6ace4f8889f336ba7d47360842b194954a89fa543e5e1558dc",
+      "dist/server/sessions/streamsDcrEvents.js": "6bc6532838064ac5a3f307f60cf5e56329d7ce37e89cfd7c2387a99f9e1a7ef0"
     },
     {
       "dist/server/sessiond/sessionServiceDependencies.js": "cf63c645e288ef8791212cb62e1442786dd000ddf142c016b1a054d0784cafe6",
@@ -264,7 +278,9 @@
       "dist/server/sessions/sessionArchiveStore.js": "57cd44edef67a2ef47c198cf6e12afcd1b71b47c74361e226771aa0e88a9fbac",
       "dist/server/sessions/recoveryArchiveCompletion.js": null,
       "dist/server/sessions/piSessionManagerGateway.js": "70d05d6ff68e5e4bd83595011cc6d5b6bb8a8b66cd7d6db6fdf675328e0b1cb9",
-      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6"
+      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6",
+      "dist/server/sessions/sessionControlGoal.js": "86f61217d74eca6ace4f8889f336ba7d47360842b194954a89fa543e5e1558dc",
+      "dist/server/sessions/streamsDcrEvents.js": "6bc6532838064ac5a3f307f60cf5e56329d7ce37e89cfd7c2387a99f9e1a7ef0"
     },
     {
       "dist/server/sessiond/sessionServiceDependencies.js": "cf63c645e288ef8791212cb62e1442786dd000ddf142c016b1a054d0784cafe6",
@@ -295,7 +311,9 @@
       "dist/server/sessions/sessionArchiveStore.js": "57cd44edef67a2ef47c198cf6e12afcd1b71b47c74361e226771aa0e88a9fbac",
       "dist/server/sessions/recoveryArchiveCompletion.js": null,
       "dist/server/sessions/piSessionManagerGateway.js": "70d05d6ff68e5e4bd83595011cc6d5b6bb8a8b66cd7d6db6fdf675328e0b1cb9",
-      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6"
+      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6",
+      "dist/server/sessions/sessionControlGoal.js": "86f61217d74eca6ace4f8889f336ba7d47360842b194954a89fa543e5e1558dc",
+      "dist/server/sessions/streamsDcrEvents.js": "6bc6532838064ac5a3f307f60cf5e56329d7ce37e89cfd7c2387a99f9e1a7ef0"
     },
     {
       "dist/server/sessiond/sessionServiceDependencies.js": "cf63c645e288ef8791212cb62e1442786dd000ddf142c016b1a054d0784cafe6",
@@ -326,7 +344,9 @@
       "dist/server/sessions/sessionArchiveStore.js": "57cd44edef67a2ef47c198cf6e12afcd1b71b47c74361e226771aa0e88a9fbac",
       "dist/server/sessions/recoveryArchiveCompletion.js": null,
       "dist/server/sessions/piSessionManagerGateway.js": "70d05d6ff68e5e4bd83595011cc6d5b6bb8a8b66cd7d6db6fdf675328e0b1cb9",
-      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6"
+      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6",
+      "dist/server/sessions/sessionControlGoal.js": "86f61217d74eca6ace4f8889f336ba7d47360842b194954a89fa543e5e1558dc",
+      "dist/server/sessions/streamsDcrEvents.js": "6bc6532838064ac5a3f307f60cf5e56329d7ce37e89cfd7c2387a99f9e1a7ef0"
     },
     {
       "dist/server/sessiond/sessionServiceDependencies.js": "b230917f9ad16c8ab7b554727be4fbef927999bc3b7720d58875d7c03caa3e40",
@@ -357,7 +377,9 @@
       "dist/server/sessions/sessionArchiveStore.js": "57cd44edef67a2ef47c198cf6e12afcd1b71b47c74361e226771aa0e88a9fbac",
       "dist/server/sessions/recoveryArchiveCompletion.js": null,
       "dist/server/sessions/piSessionManagerGateway.js": "70d05d6ff68e5e4bd83595011cc6d5b6bb8a8b66cd7d6db6fdf675328e0b1cb9",
-      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6"
+      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6",
+      "dist/server/sessions/sessionControlGoal.js": "86f61217d74eca6ace4f8889f336ba7d47360842b194954a89fa543e5e1558dc",
+      "dist/server/sessions/streamsDcrEvents.js": "6bc6532838064ac5a3f307f60cf5e56329d7ce37e89cfd7c2387a99f9e1a7ef0"
     },
     {
       "dist/server/sessiond/sessionServiceDependencies.js": "b230917f9ad16c8ab7b554727be4fbef927999bc3b7720d58875d7c03caa3e40",
@@ -388,7 +410,9 @@
       "dist/server/sessions/sessionArchiveStore.js": "57cd44edef67a2ef47c198cf6e12afcd1b71b47c74361e226771aa0e88a9fbac",
       "dist/server/sessions/recoveryArchiveCompletion.js": null,
       "dist/server/sessions/piSessionManagerGateway.js": "70d05d6ff68e5e4bd83595011cc6d5b6bb8a8b66cd7d6db6fdf675328e0b1cb9",
-      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6"
+      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6",
+      "dist/server/sessions/sessionControlGoal.js": "86f61217d74eca6ace4f8889f336ba7d47360842b194954a89fa543e5e1558dc",
+      "dist/server/sessions/streamsDcrEvents.js": "6bc6532838064ac5a3f307f60cf5e56329d7ce37e89cfd7c2387a99f9e1a7ef0"
     },
     {
       "dist/server/sessiond/sessionServiceDependencies.js": "b230917f9ad16c8ab7b554727be4fbef927999bc3b7720d58875d7c03caa3e40",
@@ -419,7 +443,9 @@
       "dist/server/sessions/sessionArchiveStore.js": "57cd44edef67a2ef47c198cf6e12afcd1b71b47c74361e226771aa0e88a9fbac",
       "dist/server/sessions/recoveryArchiveCompletion.js": null,
       "dist/server/sessions/piSessionManagerGateway.js": "70d05d6ff68e5e4bd83595011cc6d5b6bb8a8b66cd7d6db6fdf675328e0b1cb9",
-      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6"
+      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6",
+      "dist/server/sessions/sessionControlGoal.js": "86f61217d74eca6ace4f8889f336ba7d47360842b194954a89fa543e5e1558dc",
+      "dist/server/sessions/streamsDcrEvents.js": "6bc6532838064ac5a3f307f60cf5e56329d7ce37e89cfd7c2387a99f9e1a7ef0"
     },
     {
       "dist/server/sessiond/sessionServiceDependencies.js": "b230917f9ad16c8ab7b554727be4fbef927999bc3b7720d58875d7c03caa3e40",
@@ -450,7 +476,9 @@
       "dist/server/sessions/sessionArchiveStore.js": "57cd44edef67a2ef47c198cf6e12afcd1b71b47c74361e226771aa0e88a9fbac",
       "dist/server/sessions/recoveryArchiveCompletion.js": null,
       "dist/server/sessions/piSessionManagerGateway.js": "70d05d6ff68e5e4bd83595011cc6d5b6bb8a8b66cd7d6db6fdf675328e0b1cb9",
-      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6"
+      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6",
+      "dist/server/sessions/sessionControlGoal.js": "86f61217d74eca6ace4f8889f336ba7d47360842b194954a89fa543e5e1558dc",
+      "dist/server/sessions/streamsDcrEvents.js": "6bc6532838064ac5a3f307f60cf5e56329d7ce37e89cfd7c2387a99f9e1a7ef0"
     },
     {
       "dist/server/sessiond/sessionServiceDependencies.js": "b230917f9ad16c8ab7b554727be4fbef927999bc3b7720d58875d7c03caa3e40",
@@ -481,7 +509,9 @@
       "dist/server/sessions/sessionArchiveStore.js": "57cd44edef67a2ef47c198cf6e12afcd1b71b47c74361e226771aa0e88a9fbac",
       "dist/server/sessions/recoveryArchiveCompletion.js": null,
       "dist/server/sessions/piSessionManagerGateway.js": "70d05d6ff68e5e4bd83595011cc6d5b6bb8a8b66cd7d6db6fdf675328e0b1cb9",
-      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6"
+      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6",
+      "dist/server/sessions/sessionControlGoal.js": "86f61217d74eca6ace4f8889f336ba7d47360842b194954a89fa543e5e1558dc",
+      "dist/server/sessions/streamsDcrEvents.js": "6bc6532838064ac5a3f307f60cf5e56329d7ce37e89cfd7c2387a99f9e1a7ef0"
     },
     {
       "dist/server/sessiond/sessionServiceDependencies.js": "b230917f9ad16c8ab7b554727be4fbef927999bc3b7720d58875d7c03caa3e40",
@@ -512,7 +542,9 @@
       "dist/server/sessions/sessionArchiveStore.js": "57cd44edef67a2ef47c198cf6e12afcd1b71b47c74361e226771aa0e88a9fbac",
       "dist/server/sessions/recoveryArchiveCompletion.js": null,
       "dist/server/sessions/piSessionManagerGateway.js": "70d05d6ff68e5e4bd83595011cc6d5b6bb8a8b66cd7d6db6fdf675328e0b1cb9",
-      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6"
+      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6",
+      "dist/server/sessions/sessionControlGoal.js": "86f61217d74eca6ace4f8889f336ba7d47360842b194954a89fa543e5e1558dc",
+      "dist/server/sessions/streamsDcrEvents.js": "6bc6532838064ac5a3f307f60cf5e56329d7ce37e89cfd7c2387a99f9e1a7ef0"
     },
     {
       "dist/server/sessiond/sessionServiceDependencies.js": "b230917f9ad16c8ab7b554727be4fbef927999bc3b7720d58875d7c03caa3e40",
@@ -543,7 +575,9 @@
       "dist/server/sessions/sessionArchiveStore.js": "57cd44edef67a2ef47c198cf6e12afcd1b71b47c74361e226771aa0e88a9fbac",
       "dist/server/sessions/recoveryArchiveCompletion.js": null,
       "dist/server/sessions/piSessionManagerGateway.js": "70d05d6ff68e5e4bd83595011cc6d5b6bb8a8b66cd7d6db6fdf675328e0b1cb9",
-      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6"
+      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6",
+      "dist/server/sessions/sessionControlGoal.js": "86f61217d74eca6ace4f8889f336ba7d47360842b194954a89fa543e5e1558dc",
+      "dist/server/sessions/streamsDcrEvents.js": "6bc6532838064ac5a3f307f60cf5e56329d7ce37e89cfd7c2387a99f9e1a7ef0"
     },
     {
       "dist/server/sessiond/sessionServiceDependencies.js": "b230917f9ad16c8ab7b554727be4fbef927999bc3b7720d58875d7c03caa3e40",
@@ -574,7 +608,9 @@
       "dist/server/sessions/sessionArchiveStore.js": "57cd44edef67a2ef47c198cf6e12afcd1b71b47c74361e226771aa0e88a9fbac",
       "dist/server/sessions/recoveryArchiveCompletion.js": null,
       "dist/server/sessions/piSessionManagerGateway.js": "70d05d6ff68e5e4bd83595011cc6d5b6bb8a8b66cd7d6db6fdf675328e0b1cb9",
-      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6"
+      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6",
+      "dist/server/sessions/sessionControlGoal.js": "86f61217d74eca6ace4f8889f336ba7d47360842b194954a89fa543e5e1558dc",
+      "dist/server/sessions/streamsDcrEvents.js": "6bc6532838064ac5a3f307f60cf5e56329d7ce37e89cfd7c2387a99f9e1a7ef0"
     },
     {
       "dist/server/sessiond/sessionServiceDependencies.js": "b230917f9ad16c8ab7b554727be4fbef927999bc3b7720d58875d7c03caa3e40",
@@ -605,7 +641,9 @@
       "dist/server/sessions/sessionArchiveStore.js": "57cd44edef67a2ef47c198cf6e12afcd1b71b47c74361e226771aa0e88a9fbac",
       "dist/server/sessions/recoveryArchiveCompletion.js": null,
       "dist/server/sessions/piSessionManagerGateway.js": "70d05d6ff68e5e4bd83595011cc6d5b6bb8a8b66cd7d6db6fdf675328e0b1cb9",
-      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6"
+      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6",
+      "dist/server/sessions/sessionControlGoal.js": "86f61217d74eca6ace4f8889f336ba7d47360842b194954a89fa543e5e1558dc",
+      "dist/server/sessions/streamsDcrEvents.js": "6bc6532838064ac5a3f307f60cf5e56329d7ce37e89cfd7c2387a99f9e1a7ef0"
     },
     {
       "dist/server/sessiond/sessionServiceDependencies.js": "b230917f9ad16c8ab7b554727be4fbef927999bc3b7720d58875d7c03caa3e40",
@@ -636,7 +674,9 @@
       "dist/server/sessions/sessionArchiveStore.js": "57cd44edef67a2ef47c198cf6e12afcd1b71b47c74361e226771aa0e88a9fbac",
       "dist/server/sessions/recoveryArchiveCompletion.js": null,
       "dist/server/sessions/piSessionManagerGateway.js": "70d05d6ff68e5e4bd83595011cc6d5b6bb8a8b66cd7d6db6fdf675328e0b1cb9",
-      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6"
+      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6",
+      "dist/server/sessions/sessionControlGoal.js": "86f61217d74eca6ace4f8889f336ba7d47360842b194954a89fa543e5e1558dc",
+      "dist/server/sessions/streamsDcrEvents.js": "6bc6532838064ac5a3f307f60cf5e56329d7ce37e89cfd7c2387a99f9e1a7ef0"
     },
     {
       "dist/server/sessiond/sessionServiceDependencies.js": "b230917f9ad16c8ab7b554727be4fbef927999bc3b7720d58875d7c03caa3e40",
@@ -667,7 +707,9 @@
       "dist/server/sessions/sessionArchiveStore.js": "57cd44edef67a2ef47c198cf6e12afcd1b71b47c74361e226771aa0e88a9fbac",
       "dist/server/sessions/recoveryArchiveCompletion.js": null,
       "dist/server/sessions/piSessionManagerGateway.js": "70d05d6ff68e5e4bd83595011cc6d5b6bb8a8b66cd7d6db6fdf675328e0b1cb9",
-      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6"
+      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6",
+      "dist/server/sessions/sessionControlGoal.js": "86f61217d74eca6ace4f8889f336ba7d47360842b194954a89fa543e5e1558dc",
+      "dist/server/sessions/streamsDcrEvents.js": "6bc6532838064ac5a3f307f60cf5e56329d7ce37e89cfd7c2387a99f9e1a7ef0"
     },
     {
       "dist/server/sessiond/sessionServiceDependencies.js": "b230917f9ad16c8ab7b554727be4fbef927999bc3b7720d58875d7c03caa3e40",
@@ -698,7 +740,9 @@
       "dist/server/sessions/sessionArchiveStore.js": "57cd44edef67a2ef47c198cf6e12afcd1b71b47c74361e226771aa0e88a9fbac",
       "dist/server/sessions/recoveryArchiveCompletion.js": null,
       "dist/server/sessions/piSessionManagerGateway.js": "70d05d6ff68e5e4bd83595011cc6d5b6bb8a8b66cd7d6db6fdf675328e0b1cb9",
-      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6"
+      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6",
+      "dist/server/sessions/sessionControlGoal.js": "86f61217d74eca6ace4f8889f336ba7d47360842b194954a89fa543e5e1558dc",
+      "dist/server/sessions/streamsDcrEvents.js": "6bc6532838064ac5a3f307f60cf5e56329d7ce37e89cfd7c2387a99f9e1a7ef0"
     },
     {
       "dist/server/sessiond/sessionServiceDependencies.js": "b230917f9ad16c8ab7b554727be4fbef927999bc3b7720d58875d7c03caa3e40",
@@ -729,7 +773,9 @@
       "dist/server/sessions/sessionArchiveStore.js": "57cd44edef67a2ef47c198cf6e12afcd1b71b47c74361e226771aa0e88a9fbac",
       "dist/server/sessions/recoveryArchiveCompletion.js": null,
       "dist/server/sessions/piSessionManagerGateway.js": "70d05d6ff68e5e4bd83595011cc6d5b6bb8a8b66cd7d6db6fdf675328e0b1cb9",
-      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6"
+      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6",
+      "dist/server/sessions/sessionControlGoal.js": "86f61217d74eca6ace4f8889f336ba7d47360842b194954a89fa543e5e1558dc",
+      "dist/server/sessions/streamsDcrEvents.js": "6bc6532838064ac5a3f307f60cf5e56329d7ce37e89cfd7c2387a99f9e1a7ef0"
     },
     {
       "dist/server/sessiond/sessionServiceDependencies.js": "b230917f9ad16c8ab7b554727be4fbef927999bc3b7720d58875d7c03caa3e40",
@@ -760,7 +806,9 @@
       "dist/server/sessions/sessionArchiveStore.js": "57cd44edef67a2ef47c198cf6e12afcd1b71b47c74361e226771aa0e88a9fbac",
       "dist/server/sessions/recoveryArchiveCompletion.js": null,
       "dist/server/sessions/piSessionManagerGateway.js": "70d05d6ff68e5e4bd83595011cc6d5b6bb8a8b66cd7d6db6fdf675328e0b1cb9",
-      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6"
+      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6",
+      "dist/server/sessions/sessionControlGoal.js": "86f61217d74eca6ace4f8889f336ba7d47360842b194954a89fa543e5e1558dc",
+      "dist/server/sessions/streamsDcrEvents.js": "6bc6532838064ac5a3f307f60cf5e56329d7ce37e89cfd7c2387a99f9e1a7ef0"
     },
     {
       "dist/server/sessiond/sessionServiceDependencies.js": "b230917f9ad16c8ab7b554727be4fbef927999bc3b7720d58875d7c03caa3e40",
@@ -791,7 +839,9 @@
       "dist/server/sessions/sessionArchiveStore.js": "57cd44edef67a2ef47c198cf6e12afcd1b71b47c74361e226771aa0e88a9fbac",
       "dist/server/sessions/recoveryArchiveCompletion.js": null,
       "dist/server/sessions/piSessionManagerGateway.js": "70d05d6ff68e5e4bd83595011cc6d5b6bb8a8b66cd7d6db6fdf675328e0b1cb9",
-      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6"
+      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6",
+      "dist/server/sessions/sessionControlGoal.js": "86f61217d74eca6ace4f8889f336ba7d47360842b194954a89fa543e5e1558dc",
+      "dist/server/sessions/streamsDcrEvents.js": "6bc6532838064ac5a3f307f60cf5e56329d7ce37e89cfd7c2387a99f9e1a7ef0"
     },
     {
       "dist/server/sessiond/sessionServiceDependencies.js": "b230917f9ad16c8ab7b554727be4fbef927999bc3b7720d58875d7c03caa3e40",
@@ -822,7 +872,9 @@
       "dist/server/sessions/sessionArchiveStore.js": "57cd44edef67a2ef47c198cf6e12afcd1b71b47c74361e226771aa0e88a9fbac",
       "dist/server/sessions/recoveryArchiveCompletion.js": null,
       "dist/server/sessions/piSessionManagerGateway.js": "70d05d6ff68e5e4bd83595011cc6d5b6bb8a8b66cd7d6db6fdf675328e0b1cb9",
-      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6"
+      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6",
+      "dist/server/sessions/sessionControlGoal.js": "86f61217d74eca6ace4f8889f336ba7d47360842b194954a89fa543e5e1558dc",
+      "dist/server/sessions/streamsDcrEvents.js": "6bc6532838064ac5a3f307f60cf5e56329d7ce37e89cfd7c2387a99f9e1a7ef0"
     },
     {
       "dist/server/sessiond/sessionServiceDependencies.js": "b230917f9ad16c8ab7b554727be4fbef927999bc3b7720d58875d7c03caa3e40",
@@ -853,7 +905,9 @@
       "dist/server/sessions/sessionArchiveStore.js": "57cd44edef67a2ef47c198cf6e12afcd1b71b47c74361e226771aa0e88a9fbac",
       "dist/server/sessions/recoveryArchiveCompletion.js": null,
       "dist/server/sessions/piSessionManagerGateway.js": "70d05d6ff68e5e4bd83595011cc6d5b6bb8a8b66cd7d6db6fdf675328e0b1cb9",
-      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6"
+      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6",
+      "dist/server/sessions/sessionControlGoal.js": "86f61217d74eca6ace4f8889f336ba7d47360842b194954a89fa543e5e1558dc",
+      "dist/server/sessions/streamsDcrEvents.js": "6bc6532838064ac5a3f307f60cf5e56329d7ce37e89cfd7c2387a99f9e1a7ef0"
     },
     {
       "dist/server/sessiond/sessionServiceDependencies.js": "b230917f9ad16c8ab7b554727be4fbef927999bc3b7720d58875d7c03caa3e40",
@@ -884,7 +938,9 @@
       "dist/server/sessions/sessionArchiveStore.js": "57cd44edef67a2ef47c198cf6e12afcd1b71b47c74361e226771aa0e88a9fbac",
       "dist/server/sessions/recoveryArchiveCompletion.js": null,
       "dist/server/sessions/piSessionManagerGateway.js": "70d05d6ff68e5e4bd83595011cc6d5b6bb8a8b66cd7d6db6fdf675328e0b1cb9",
-      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6"
+      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6",
+      "dist/server/sessions/sessionControlGoal.js": "86f61217d74eca6ace4f8889f336ba7d47360842b194954a89fa543e5e1558dc",
+      "dist/server/sessions/streamsDcrEvents.js": "6bc6532838064ac5a3f307f60cf5e56329d7ce37e89cfd7c2387a99f9e1a7ef0"
     },
     {
       "dist/server/sessiond/sessionServiceDependencies.js": "b230917f9ad16c8ab7b554727be4fbef927999bc3b7720d58875d7c03caa3e40",
@@ -915,7 +971,9 @@
       "dist/server/sessions/sessionArchiveStore.js": "57cd44edef67a2ef47c198cf6e12afcd1b71b47c74361e226771aa0e88a9fbac",
       "dist/server/sessions/recoveryArchiveCompletion.js": null,
       "dist/server/sessions/piSessionManagerGateway.js": "70d05d6ff68e5e4bd83595011cc6d5b6bb8a8b66cd7d6db6fdf675328e0b1cb9",
-      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6"
+      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6",
+      "dist/server/sessions/sessionControlGoal.js": "86f61217d74eca6ace4f8889f336ba7d47360842b194954a89fa543e5e1558dc",
+      "dist/server/sessions/streamsDcrEvents.js": "6bc6532838064ac5a3f307f60cf5e56329d7ce37e89cfd7c2387a99f9e1a7ef0"
     },
     {
       "dist/server/sessiond/sessionServiceDependencies.js": "b230917f9ad16c8ab7b554727be4fbef927999bc3b7720d58875d7c03caa3e40",
@@ -946,7 +1004,9 @@
       "dist/server/sessions/sessionArchiveStore.js": "57cd44edef67a2ef47c198cf6e12afcd1b71b47c74361e226771aa0e88a9fbac",
       "dist/server/sessions/recoveryArchiveCompletion.js": null,
       "dist/server/sessions/piSessionManagerGateway.js": "70d05d6ff68e5e4bd83595011cc6d5b6bb8a8b66cd7d6db6fdf675328e0b1cb9",
-      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6"
+      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6",
+      "dist/server/sessions/sessionControlGoal.js": "86f61217d74eca6ace4f8889f336ba7d47360842b194954a89fa543e5e1558dc",
+      "dist/server/sessions/streamsDcrEvents.js": "6bc6532838064ac5a3f307f60cf5e56329d7ce37e89cfd7c2387a99f9e1a7ef0"
     },
     {
       "dist/server/sessiond/sessionServiceDependencies.js": "b230917f9ad16c8ab7b554727be4fbef927999bc3b7720d58875d7c03caa3e40",
@@ -977,7 +1037,9 @@
       "dist/server/sessions/sessionArchiveStore.js": "57cd44edef67a2ef47c198cf6e12afcd1b71b47c74361e226771aa0e88a9fbac",
       "dist/server/sessions/recoveryArchiveCompletion.js": null,
       "dist/server/sessions/piSessionManagerGateway.js": "70d05d6ff68e5e4bd83595011cc6d5b6bb8a8b66cd7d6db6fdf675328e0b1cb9",
-      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6"
+      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6",
+      "dist/server/sessions/sessionControlGoal.js": "86f61217d74eca6ace4f8889f336ba7d47360842b194954a89fa543e5e1558dc",
+      "dist/server/sessions/streamsDcrEvents.js": "6bc6532838064ac5a3f307f60cf5e56329d7ce37e89cfd7c2387a99f9e1a7ef0"
     },
     {
       "dist/server/sessiond/sessionServiceDependencies.js": "b230917f9ad16c8ab7b554727be4fbef927999bc3b7720d58875d7c03caa3e40",
@@ -1008,7 +1070,9 @@
       "dist/server/sessions/sessionArchiveStore.js": "57cd44edef67a2ef47c198cf6e12afcd1b71b47c74361e226771aa0e88a9fbac",
       "dist/server/sessions/recoveryArchiveCompletion.js": null,
       "dist/server/sessions/piSessionManagerGateway.js": "70d05d6ff68e5e4bd83595011cc6d5b6bb8a8b66cd7d6db6fdf675328e0b1cb9",
-      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6"
+      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6",
+      "dist/server/sessions/sessionControlGoal.js": "86f61217d74eca6ace4f8889f336ba7d47360842b194954a89fa543e5e1558dc",
+      "dist/server/sessions/streamsDcrEvents.js": "6bc6532838064ac5a3f307f60cf5e56329d7ce37e89cfd7c2387a99f9e1a7ef0"
     },
     {
       "dist/server/sessiond/sessionServiceDependencies.js": "b230917f9ad16c8ab7b554727be4fbef927999bc3b7720d58875d7c03caa3e40",
@@ -1039,7 +1103,9 @@
       "dist/server/sessions/sessionArchiveStore.js": "57cd44edef67a2ef47c198cf6e12afcd1b71b47c74361e226771aa0e88a9fbac",
       "dist/server/sessions/recoveryArchiveCompletion.js": null,
       "dist/server/sessions/piSessionManagerGateway.js": "70d05d6ff68e5e4bd83595011cc6d5b6bb8a8b66cd7d6db6fdf675328e0b1cb9",
-      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6"
+      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6",
+      "dist/server/sessions/sessionControlGoal.js": "86f61217d74eca6ace4f8889f336ba7d47360842b194954a89fa543e5e1558dc",
+      "dist/server/sessions/streamsDcrEvents.js": "6bc6532838064ac5a3f307f60cf5e56329d7ce37e89cfd7c2387a99f9e1a7ef0"
     },
     {
       "dist/server/sessiond/sessionServiceDependencies.js": "b230917f9ad16c8ab7b554727be4fbef927999bc3b7720d58875d7c03caa3e40",
@@ -1070,7 +1136,9 @@
       "dist/server/sessions/sessionArchiveStore.js": "57cd44edef67a2ef47c198cf6e12afcd1b71b47c74361e226771aa0e88a9fbac",
       "dist/server/sessions/recoveryArchiveCompletion.js": null,
       "dist/server/sessions/piSessionManagerGateway.js": "70d05d6ff68e5e4bd83595011cc6d5b6bb8a8b66cd7d6db6fdf675328e0b1cb9",
-      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6"
+      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6",
+      "dist/server/sessions/sessionControlGoal.js": "86f61217d74eca6ace4f8889f336ba7d47360842b194954a89fa543e5e1558dc",
+      "dist/server/sessions/streamsDcrEvents.js": "6bc6532838064ac5a3f307f60cf5e56329d7ce37e89cfd7c2387a99f9e1a7ef0"
     },
     {
       "dist/server/sessiond/sessionServiceDependencies.js": "b230917f9ad16c8ab7b554727be4fbef927999bc3b7720d58875d7c03caa3e40",
@@ -1101,7 +1169,9 @@
       "dist/server/sessions/sessionArchiveStore.js": "57cd44edef67a2ef47c198cf6e12afcd1b71b47c74361e226771aa0e88a9fbac",
       "dist/server/sessions/recoveryArchiveCompletion.js": null,
       "dist/server/sessions/piSessionManagerGateway.js": "70d05d6ff68e5e4bd83595011cc6d5b6bb8a8b66cd7d6db6fdf675328e0b1cb9",
-      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6"
+      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6",
+      "dist/server/sessions/sessionControlGoal.js": "86f61217d74eca6ace4f8889f336ba7d47360842b194954a89fa543e5e1558dc",
+      "dist/server/sessions/streamsDcrEvents.js": "6bc6532838064ac5a3f307f60cf5e56329d7ce37e89cfd7c2387a99f9e1a7ef0"
     },
     {
       "dist/server/sessiond/sessionServiceDependencies.js": "b230917f9ad16c8ab7b554727be4fbef927999bc3b7720d58875d7c03caa3e40",
@@ -1132,7 +1202,9 @@
       "dist/server/sessions/sessionArchiveStore.js": "57cd44edef67a2ef47c198cf6e12afcd1b71b47c74361e226771aa0e88a9fbac",
       "dist/server/sessions/recoveryArchiveCompletion.js": null,
       "dist/server/sessions/piSessionManagerGateway.js": "70d05d6ff68e5e4bd83595011cc6d5b6bb8a8b66cd7d6db6fdf675328e0b1cb9",
-      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6"
+      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6",
+      "dist/server/sessions/sessionControlGoal.js": "86f61217d74eca6ace4f8889f336ba7d47360842b194954a89fa543e5e1558dc",
+      "dist/server/sessions/streamsDcrEvents.js": "6bc6532838064ac5a3f307f60cf5e56329d7ce37e89cfd7c2387a99f9e1a7ef0"
     },
     {
       "dist/server/sessiond/sessionServiceDependencies.js": "b230917f9ad16c8ab7b554727be4fbef927999bc3b7720d58875d7c03caa3e40",
@@ -1163,7 +1235,9 @@
       "dist/server/sessions/sessionArchiveStore.js": "57cd44edef67a2ef47c198cf6e12afcd1b71b47c74361e226771aa0e88a9fbac",
       "dist/server/sessions/recoveryArchiveCompletion.js": null,
       "dist/server/sessions/piSessionManagerGateway.js": "70d05d6ff68e5e4bd83595011cc6d5b6bb8a8b66cd7d6db6fdf675328e0b1cb9",
-      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6"
+      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6",
+      "dist/server/sessions/sessionControlGoal.js": "86f61217d74eca6ace4f8889f336ba7d47360842b194954a89fa543e5e1558dc",
+      "dist/server/sessions/streamsDcrEvents.js": "6bc6532838064ac5a3f307f60cf5e56329d7ce37e89cfd7c2387a99f9e1a7ef0"
     },
     {
       "dist/server/sessiond/sessionServiceDependencies.js": "b230917f9ad16c8ab7b554727be4fbef927999bc3b7720d58875d7c03caa3e40",
@@ -1194,7 +1268,9 @@
       "dist/server/sessions/sessionArchiveStore.js": "57cd44edef67a2ef47c198cf6e12afcd1b71b47c74361e226771aa0e88a9fbac",
       "dist/server/sessions/recoveryArchiveCompletion.js": null,
       "dist/server/sessions/piSessionManagerGateway.js": "70d05d6ff68e5e4bd83595011cc6d5b6bb8a8b66cd7d6db6fdf675328e0b1cb9",
-      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6"
+      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6",
+      "dist/server/sessions/sessionControlGoal.js": "86f61217d74eca6ace4f8889f336ba7d47360842b194954a89fa543e5e1558dc",
+      "dist/server/sessions/streamsDcrEvents.js": "6bc6532838064ac5a3f307f60cf5e56329d7ce37e89cfd7c2387a99f9e1a7ef0"
     },
     {
       "dist/server/sessiond/sessionServiceDependencies.js": "b230917f9ad16c8ab7b554727be4fbef927999bc3b7720d58875d7c03caa3e40",
@@ -1225,7 +1301,9 @@
       "dist/server/sessions/sessionArchiveStore.js": "57cd44edef67a2ef47c198cf6e12afcd1b71b47c74361e226771aa0e88a9fbac",
       "dist/server/sessions/recoveryArchiveCompletion.js": null,
       "dist/server/sessions/piSessionManagerGateway.js": "70d05d6ff68e5e4bd83595011cc6d5b6bb8a8b66cd7d6db6fdf675328e0b1cb9",
-      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6"
+      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6",
+      "dist/server/sessions/sessionControlGoal.js": "86f61217d74eca6ace4f8889f336ba7d47360842b194954a89fa543e5e1558dc",
+      "dist/server/sessions/streamsDcrEvents.js": "6bc6532838064ac5a3f307f60cf5e56329d7ce37e89cfd7c2387a99f9e1a7ef0"
     },
     {
       "dist/server/sessiond/sessionServiceDependencies.js": "b230917f9ad16c8ab7b554727be4fbef927999bc3b7720d58875d7c03caa3e40",
@@ -1256,7 +1334,9 @@
       "dist/server/sessions/sessionArchiveStore.js": "57cd44edef67a2ef47c198cf6e12afcd1b71b47c74361e226771aa0e88a9fbac",
       "dist/server/sessions/recoveryArchiveCompletion.js": null,
       "dist/server/sessions/piSessionManagerGateway.js": "70d05d6ff68e5e4bd83595011cc6d5b6bb8a8b66cd7d6db6fdf675328e0b1cb9",
-      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6"
+      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6",
+      "dist/server/sessions/sessionControlGoal.js": "86f61217d74eca6ace4f8889f336ba7d47360842b194954a89fa543e5e1558dc",
+      "dist/server/sessions/streamsDcrEvents.js": "6bc6532838064ac5a3f307f60cf5e56329d7ce37e89cfd7c2387a99f9e1a7ef0"
     },
     {
       "dist/server/sessiond/sessionServiceDependencies.js": "b230917f9ad16c8ab7b554727be4fbef927999bc3b7720d58875d7c03caa3e40",
@@ -1287,7 +1367,9 @@
       "dist/server/sessions/sessionArchiveStore.js": "e1ffb1149067b9b58c67e00de2ab60e222f82930aeea62cabf4c0ddab54b1889",
       "dist/server/sessions/recoveryArchiveCompletion.js": "f2ed8cdbb6bb1694692aa77ab339cb35c60f24dd422f40a47750ed5db4547037",
       "dist/server/sessions/piSessionManagerGateway.js": "70d05d6ff68e5e4bd83595011cc6d5b6bb8a8b66cd7d6db6fdf675328e0b1cb9",
-      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6"
+      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6",
+      "dist/server/sessions/sessionControlGoal.js": "86f61217d74eca6ace4f8889f336ba7d47360842b194954a89fa543e5e1558dc",
+      "dist/server/sessions/streamsDcrEvents.js": "6bc6532838064ac5a3f307f60cf5e56329d7ce37e89cfd7c2387a99f9e1a7ef0"
     },
     {
       "dist/server/sessiond/sessionServiceDependencies.js": "b230917f9ad16c8ab7b554727be4fbef927999bc3b7720d58875d7c03caa3e40",
@@ -1318,7 +1400,9 @@
       "dist/server/sessions/sessionArchiveStore.js": "e1ffb1149067b9b58c67e00de2ab60e222f82930aeea62cabf4c0ddab54b1889",
       "dist/server/sessions/recoveryArchiveCompletion.js": "f14c1675152841c3f6879facfa2382e97c1d8f67c454773162a00153249cb896",
       "dist/server/sessions/piSessionManagerGateway.js": "70d05d6ff68e5e4bd83595011cc6d5b6bb8a8b66cd7d6db6fdf675328e0b1cb9",
-      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6"
+      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6",
+      "dist/server/sessions/sessionControlGoal.js": "86f61217d74eca6ace4f8889f336ba7d47360842b194954a89fa543e5e1558dc",
+      "dist/server/sessions/streamsDcrEvents.js": "6bc6532838064ac5a3f307f60cf5e56329d7ce37e89cfd7c2387a99f9e1a7ef0"
     },
     {
       "dist/server/sessiond/sessionServiceDependencies.js": "b230917f9ad16c8ab7b554727be4fbef927999bc3b7720d58875d7c03caa3e40",
@@ -1349,7 +1433,9 @@
       "dist/server/sessions/sessionArchiveStore.js": "e1ffb1149067b9b58c67e00de2ab60e222f82930aeea62cabf4c0ddab54b1889",
       "dist/server/sessions/recoveryArchiveCompletion.js": "f14c1675152841c3f6879facfa2382e97c1d8f67c454773162a00153249cb896",
       "dist/server/sessions/piSessionManagerGateway.js": "00ea7a9fb5929853cbcdff5dd5d03527030067cd66084e458f609eaae772a3a9",
-      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6"
+      "dist/server/sessions/sessionMaintenanceStore.js": "138667a353d2010fceb3fd888eb4017135b24a97a66d3bfae353531359636fb6",
+      "dist/server/sessions/sessionControlGoal.js": "86f61217d74eca6ace4f8889f336ba7d47360842b194954a89fa543e5e1558dc",
+      "dist/server/sessions/streamsDcrEvents.js": "6bc6532838064ac5a3f307f60cf5e56329d7ce37e89cfd7c2387a99f9e1a7ef0"
     },
     {
       "dist/server/sessiond/sessionServiceDependencies.js": "b230917f9ad16c8ab7b554727be4fbef927999bc3b7720d58875d7c03caa3e40",
@@ -1380,7 +1466,9 @@
       "dist/server/sessions/sessionArchiveStore.js": "e1ffb1149067b9b58c67e00de2ab60e222f82930aeea62cabf4c0ddab54b1889",
       "dist/server/sessions/recoveryArchiveCompletion.js": "f14c1675152841c3f6879facfa2382e97c1d8f67c454773162a00153249cb896",
       "dist/server/sessions/piSessionManagerGateway.js": "00ea7a9fb5929853cbcdff5dd5d03527030067cd66084e458f609eaae772a3a9",
-      "dist/server/sessions/sessionMaintenanceStore.js": "f6b305273db0f74c19a07f0d74f4326f251b23207014fcd62847dc3d8cb65829"
+      "dist/server/sessions/sessionMaintenanceStore.js": "f6b305273db0f74c19a07f0d74f4326f251b23207014fcd62847dc3d8cb65829",
+      "dist/server/sessions/sessionControlGoal.js": "86f61217d74eca6ace4f8889f336ba7d47360842b194954a89fa543e5e1558dc",
+      "dist/server/sessions/streamsDcrEvents.js": "6bc6532838064ac5a3f307f60cf5e56329d7ce37e89cfd7c2387a99f9e1a7ef0"
     },
     {
       "dist/server/sessiond/sessionServiceDependencies.js": "b230917f9ad16c8ab7b554727be4fbef927999bc3b7720d58875d7c03caa3e40",
@@ -1411,7 +1499,9 @@
       "dist/server/sessions/sessionArchiveStore.js": "e1ffb1149067b9b58c67e00de2ab60e222f82930aeea62cabf4c0ddab54b1889",
       "dist/server/sessions/recoveryArchiveCompletion.js": "f14c1675152841c3f6879facfa2382e97c1d8f67c454773162a00153249cb896",
       "dist/server/sessions/piSessionManagerGateway.js": "00ea7a9fb5929853cbcdff5dd5d03527030067cd66084e458f609eaae772a3a9",
-      "dist/server/sessions/sessionMaintenanceStore.js": "a7d0b2861f0aada64548cec91c7a81572c3d4d115bee54600a7474b90285ec9b"
+      "dist/server/sessions/sessionMaintenanceStore.js": "a7d0b2861f0aada64548cec91c7a81572c3d4d115bee54600a7474b90285ec9b",
+      "dist/server/sessions/sessionControlGoal.js": "86f61217d74eca6ace4f8889f336ba7d47360842b194954a89fa543e5e1558dc",
+      "dist/server/sessions/streamsDcrEvents.js": "6bc6532838064ac5a3f307f60cf5e56329d7ce37e89cfd7c2387a99f9e1a7ef0"
     },
     {
       "dist/server/sessiond/sessionServiceDependencies.js": "b230917f9ad16c8ab7b554727be4fbef927999bc3b7720d58875d7c03caa3e40",
@@ -1442,7 +1532,9 @@
       "dist/server/sessions/sessionArchiveStore.js": "8d35bfc9efe7a03fc933d6258f548e50302f2fa8d03b44ec847f87a27ab3c8c6",
       "dist/server/sessions/recoveryArchiveCompletion.js": "f14c1675152841c3f6879facfa2382e97c1d8f67c454773162a00153249cb896",
       "dist/server/sessions/piSessionManagerGateway.js": "00ea7a9fb5929853cbcdff5dd5d03527030067cd66084e458f609eaae772a3a9",
-      "dist/server/sessions/sessionMaintenanceStore.js": "a7d0b2861f0aada64548cec91c7a81572c3d4d115bee54600a7474b90285ec9b"
+      "dist/server/sessions/sessionMaintenanceStore.js": "a7d0b2861f0aada64548cec91c7a81572c3d4d115bee54600a7474b90285ec9b",
+      "dist/server/sessions/sessionControlGoal.js": "86f61217d74eca6ace4f8889f336ba7d47360842b194954a89fa543e5e1558dc",
+      "dist/server/sessions/streamsDcrEvents.js": "6bc6532838064ac5a3f307f60cf5e56329d7ce37e89cfd7c2387a99f9e1a7ef0"
     },
     {
       "dist/server/sessiond/sessionServiceDependencies.js": "b230917f9ad16c8ab7b554727be4fbef927999bc3b7720d58875d7c03caa3e40",
@@ -1473,7 +1565,9 @@
       "dist/server/sessions/sessionArchiveStore.js": "8d35bfc9efe7a03fc933d6258f548e50302f2fa8d03b44ec847f87a27ab3c8c6",
       "dist/server/sessions/recoveryArchiveCompletion.js": "f14c1675152841c3f6879facfa2382e97c1d8f67c454773162a00153249cb896",
       "dist/server/sessions/piSessionManagerGateway.js": "00ea7a9fb5929853cbcdff5dd5d03527030067cd66084e458f609eaae772a3a9",
-      "dist/server/sessions/sessionMaintenanceStore.js": "a7d0b2861f0aada64548cec91c7a81572c3d4d115bee54600a7474b90285ec9b"
+      "dist/server/sessions/sessionMaintenanceStore.js": "a7d0b2861f0aada64548cec91c7a81572c3d4d115bee54600a7474b90285ec9b",
+      "dist/server/sessions/sessionControlGoal.js": "86f61217d74eca6ace4f8889f336ba7d47360842b194954a89fa543e5e1558dc",
+      "dist/server/sessions/streamsDcrEvents.js": "6bc6532838064ac5a3f307f60cf5e56329d7ce37e89cfd7c2387a99f9e1a7ef0"
     },
     {
       "dist/server/sessiond/sessionServiceDependencies.js": "b230917f9ad16c8ab7b554727be4fbef927999bc3b7720d58875d7c03caa3e40",
@@ -1504,7 +1598,42 @@
       "dist/server/sessions/sessionArchiveStore.js": "8d35bfc9efe7a03fc933d6258f548e50302f2fa8d03b44ec847f87a27ab3c8c6",
       "dist/server/sessions/recoveryArchiveCompletion.js": "f14c1675152841c3f6879facfa2382e97c1d8f67c454773162a00153249cb896",
       "dist/server/sessions/piSessionManagerGateway.js": "00ea7a9fb5929853cbcdff5dd5d03527030067cd66084e458f609eaae772a3a9",
-      "dist/server/sessions/sessionMaintenanceStore.js": "a7d0b2861f0aada64548cec91c7a81572c3d4d115bee54600a7474b90285ec9b"
+      "dist/server/sessions/sessionMaintenanceStore.js": "a7d0b2861f0aada64548cec91c7a81572c3d4d115bee54600a7474b90285ec9b",
+      "dist/server/sessions/sessionControlGoal.js": "86f61217d74eca6ace4f8889f336ba7d47360842b194954a89fa543e5e1558dc",
+      "dist/server/sessions/streamsDcrEvents.js": "6bc6532838064ac5a3f307f60cf5e56329d7ce37e89cfd7c2387a99f9e1a7ef0"
+    },
+    {
+      "dist/server/sessiond/sessionServiceDependencies.js": "b230917f9ad16c8ab7b554727be4fbef927999bc3b7720d58875d7c03caa3e40",
+      "dist/server/sessions/extensionCallbackOwnership.js": "4db86c9f54ce0c6b62fe24faf91f222e822ea6f31cc295d613066720ef713a47",
+      "dist/server/sessions/piSessionService.js": "b9cb6603fa2746e30c27ac610cb5484716122fca01609503efba0364eadccea7",
+      "dist/server/sessions/sessionFailureBoundary.js": "ca395eefefb8f9f33be4a09f67b65e4fa9b72bcf81d3c99c94a530d8b3d15a65",
+      "dist/server/sessions/sessionFailureRecovery.js": "566bbbe1426e7c90c6716dd6640ebd83e389cad72e9a1c1e5534c1af5ae39e64",
+      "dist/server/sessions/sessionFailureRetirement.js": "072acb5375690965ac6d64986051a071dbce5bf7e1222face39889c032b92a2a",
+      "dist/server/sessions/sessionMaintenanceController.js": "b3fcf432503636e86461786aad172e56392d39e6761a060bd75b5486fb2da996",
+      "dist/server/sessions/sessionRoutes.js": "8ff5dc1cc3534ad633b8c4bed6a9c32b8b344af22c125ee46a985c1fca1ed34a",
+      "dist/server/sessions/streamTransientRetry.js": "5a93fd696632cfcdbddff6b9c5fe365076788d6d839c7fca8dd85dfb3ff1f5d7",
+      "dist/shared/apiTypes.d.ts": "3764fa131167987c73224bd4947389b211cd18d1fb1c2d2a32fe851dfbe20798",
+      "dist/shared/apiTypes.js": "07fac1e02b09c8703b6f8e4681324eda7c0e1da36eafc0d3d18a5873b85f9c58",
+      "dist/shared/capabilities.js": "de7dc0e1274a382dd27b26e4cc7e1410b83cba0ac477ba6b1b9d43ad3cc9c10f",
+      "node_modules/@earendil-works/pi-ai/dist/utils/retry.d.ts": "754a374582c439c53a8f19d449877ea1e7643a0542587d0dc19ce005fc9f669a",
+      "node_modules/@earendil-works/pi-ai/dist/utils/retry.js": "f9da58e19e17df4d4f7caef5fbc09210d46e74cf34de7dc88b5bf4ca62f19528",
+      "node_modules/@earendil-works/pi-coding-agent/dist/core/agent-session.d.ts": "4194b60bf66b411996695e1857c87dcb37b77df2a77b1a81630dffb313e5b2c5",
+      "node_modules/@earendil-works/pi-coding-agent/dist/core/agent-session.js": "d28f96940ab471af98a7b5f8d4ec7125294781daaee235bc99e6073076233d3b",
+      "node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/loader.js": "00ac0fb6269bb166337c46f1864a87026024f8224c766e3e7d2772fa74dc59d5",
+      "node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/types.d.ts": "d285a4531d952ed7ec3b10c621af8771b645e00f108a5db9294d5ec9d43cda8f",
+      "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/utils/retry.d.ts": "754a374582c439c53a8f19d449877ea1e7643a0542587d0dc19ce005fc9f669a",
+      "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/utils/retry.js": "f9da58e19e17df4d4f7caef5fbc09210d46e74cf34de7dc88b5bf4ca62f19528",
+      "dist/server/sessions/automaticAdmissionStore.js": "7cad182d966233167e56b8ba5f716527817f13d688bf1fc1ed371222bb1e4d24",
+      "dist/server/sessions/cleanPolicyAnalysis.js": "b175f366c75042de6dafc33f063b909c5f40b8ae87558d9eb35dd3a6d21b59f8",
+      "node_modules/@earendil-works/pi-coding-agent/dist/core/session-manager.js": "161d5ceb8d87f33592895e9f505720c9e6040311ab4acdd6abc59b6412fdc4a2",
+      "node_modules/@earendil-works/pi-coding-agent/dist/core/session-manager.d.ts": "358ae5f35e18833cc3fdda82f43c2e67df9c1bb1a5390bb24e92bc22baac06da",
+      "dist/server/sessions/sessionMaintenanceEvidence.js": "9d6535b47f9dc83bf1f0a28aa0e3cf386104d957e45e7e53e862a6a1a7c213d5",
+      "dist/server/sessions/sessionArchiveStore.js": "8d35bfc9efe7a03fc933d6258f548e50302f2fa8d03b44ec847f87a27ab3c8c6",
+      "dist/server/sessions/recoveryArchiveCompletion.js": "f14c1675152841c3f6879facfa2382e97c1d8f67c454773162a00153249cb896",
+      "dist/server/sessions/piSessionManagerGateway.js": "00ea7a9fb5929853cbcdff5dd5d03527030067cd66084e458f609eaae772a3a9",
+      "dist/server/sessions/sessionMaintenanceStore.js": "a7d0b2861f0aada64548cec91c7a81572c3d4d115bee54600a7474b90285ec9b",
+      "dist/server/sessions/sessionControlGoal.js": "86f61217d74eca6ace4f8889f336ba7d47360842b194954a89fa543e5e1558dc",
+      "dist/server/sessions/streamsDcrEvents.js": "6bc6532838064ac5a3f307f60cf5e56329d7ce37e89cfd7c2387a99f9e1a7ef0"
     }
   ]
 }

@@ -63,6 +63,7 @@ class Operation:
     continuation: dict | None = None
     rebuilt_tokens: int = 0
     capacity: dict | None = None
+    sync_continuation: str = ""
 
 
 def safe_context(native: dict, status: dict) -> int:
@@ -300,7 +301,7 @@ def prepare(index: Path, stream: str, stream_dir: Path, resolved: Coordinator, i
     previous = load(stream_dir, resolved.row.session)
     if previous is not None and previous.checkpoint_entry and previous.checkpoint_sha256:
         retain_dump(stream_dir, previous)
-    if previous is not None and (original or previous.phase not in {"complete", "superseded"}):
+    if previous is not None and (original or previous.phase not in TERMINAL):
         if previous.id != identity or previous.recovery_original != original or previous.automatic != token or previous.continuation != continuation:
             raise StreamsError("Another DCR operation owns the returned fork")
         return previous
@@ -368,7 +369,7 @@ def capacity_outcome(op: Operation, native: dict, status: dict) -> CapacityOutco
         or native.get("id") != op.id or native.get("sessionId") != op.session or native.get("cwd") != op.cwd
         or native.get("instructions") != op.compact_instructions):
         return None
-    if native.get("state") not in {"failed", "superseded", "complete"}:
+    if native.get("state") != "complete":
         return None
     target = native.get("targetTokens")
     model = status.get("model", {})
@@ -378,7 +379,7 @@ def capacity_outcome(op: Operation, native: dict, status: dict) -> CapacityOutco
     budget = {"provider": model.get("provider"), "model": model.get("id"), "contextWindow": capacity, "targetTokens": int(capacity * 0.8)}
     if not (target == THRESHOLD and native.get("contextBudget") is None) and (native.get("contextBudget") != budget or target != budget["targetTokens"]):
         return None
-    known = native.get("state") in {"failed", "superseded"} and bool(native.get("detail"))
+    known = False
     if native.get("state") == "complete":
         known = False
         if (not isinstance(native.get("compactionEntryId"), str) or not native["compactionEntryId"]
@@ -481,6 +482,12 @@ def advance_capacity_replacement_locked(stream_dir: Path, *, session: str | None
     intent = replacement.replacement_intent(stream_dir)
     if intent is None or intent.mode != "capacity" or session is not None and intent.source != session:
         return False
+    if intent.phase == "abandoned":
+        op = load(stream_dir, intent.source)
+        if op is not None and op.phase not in TERMINAL:
+            op.phase, op.detail = "abandoned", "Replacement failed; no automatic replay"
+            save(stream_dir, op)
+        return False
     op = load(stream_dir, intent.source)
     if op is None or operation is not None and op.id != operation:
         return False
@@ -488,12 +495,12 @@ def advance_capacity_replacement_locked(stream_dir: Path, *, session: str | None
     if is_paused(stream_dir):
         return True
     if intent.phase == "complete" and op.phase == "rotated":
-        if intent.load.get("state") in {"observed", "stopped", "superseded"}:
+        if intent.load.get("state") in {"observed", "stopped", "superseded", "abandoned"}:
             _finish_rotation(stream_dir, op, intent.target)
             return operation is not None
         target = replacement.advance_replacement_locked(stream_dir, intent)
         _finish_rotation(stream_dir, op, target)
-        return operation is not None or intent.load.get("state") not in {"observed", "stopped", "superseded"}
+        return operation is not None or intent.load.get("state") not in {"observed", "stopped", "superseded", "abandoned"}
     if op.phase != "rotation-pending" or op.capacity != intent.outcome:
         raise StreamsError("Capacity replacement lost its exact DCR owner/receipt")
     target = replacement.advance_replacement_locked(stream_dir, intent)
@@ -516,9 +523,7 @@ def step(index: Path, project: Project, stream: str, stream_dir: Path, resolved:
         return True
     token, allowed = piweb.automatic_admission(status, sid, resolved.row.worktree, "wake")
     if op is not None and op.phase == "abandoned":
-        if token == op.automatic:
-            return False
-        op = None
+        return status.get("isCompacting") is True
     if op is not None and op.phase == "blocked":
         if status.get("isCompacting") is True:
             return True
@@ -532,6 +537,15 @@ def step(index: Path, project: Project, stream: str, stream_dir: Path, resolved:
         native = None
         try:
             native = piweb.maintenance_status(op.cwd, sid, op.id, original=op.recovery_original)
+            if native.get("state") in {"failed", "uncertain", "abandoned"}:
+                op.phase, op.detail = "abandoned", native.get("detail", "Failed native compaction abandoned without replay")
+                save(stream_dir, op)
+                close_events(stream_dir, op)
+                if allowed and not op.recovery_original and native.get("compactionRetirement", {}).get("writerFenced") is True:
+                    from engine import replacement
+                    replacement.rotate_locked(index, project, stream)
+                    return True
+                return status.get("isCompacting") is True
             outcome = capacity_outcome(op, native, status)
             if outcome is not None:
                 rotate_capacity_locked(stream_dir, resolved, op, outcome)
@@ -553,11 +567,11 @@ def step(index: Path, project: Project, stream: str, stream_dir: Path, resolved:
             native = piweb.maintenance_status(op.cwd, sid, op.id, original=op.recovery_original)
             if native.get("generation") != op.automatic["generation"] or native.get("entryId") != op.checkpoint_entry:
                 raise StreamsError("Changed-control DCR disposition has no matching saved checkpoint/generation")
-            if native["state"] in {"failed", "uncertain"} and native.get("cancelledByStop") is not True:
-                op.phase, op.detail = "blocked", f"Native DCR {native['state']}: {native.get('detail', 'unconfirmed failure')}"
+            if native["state"] in {"failed", "uncertain", "abandoned"} and native.get("cancelledByStop") is not True:
+                op.phase, op.detail = "abandoned", f"Native DCR {native['state']}: {native.get('detail', 'unconfirmed failure')}"
                 save(stream_dir, op)
                 close_events(stream_dir, op)
-                return True
+                return status.get("isCompacting") is True
         op.phase, op.detail = "superseded", "Newer native input or stop superseded this maintenance generation."
         save(stream_dir, op)
         close_events(stream_dir, op)
@@ -603,10 +617,13 @@ def step(index: Path, project: Project, stream: str, stream_dir: Path, resolved:
                 if op.recovery_original and status.get("failureSyncContinuationSupport") == "entry-bound-v1" and not any(status.get(key) for key in ("isStreaming", "isCompacting", "isBashRunning", "pendingMessageCount", "pendingAsk", "pendingDialogs")):
                     branch = native_branch(resolved)
                     entry, raw = branch[0]
-                    if entry.get("message", {}).get("role") == "assistant" and entry["message"].get("stopReason") == "aborted":
+                    if not op.sync_continuation and entry.get("message", {}).get("role") == "assistant" and entry["message"].get("stopReason") == "aborted":
                         expected = {"entryId": entry["id"], "sha256": hashlib.sha256(raw).hexdigest()}
                         model = status.get("model", {})
                         identity = {"provider": model.get("provider"), "model": model.get("id"), "thinking": resolved.row.thinking}
+                        op.sync_continuation = entry["id"]
+                        op.phase, op.detail = "abandoned", "Reserved one SYNC continuation; no automatic replay"
+                        save(stream_dir, op)
                         try:
                             receipt = piweb.failure_maintenance(op.recovery_original, op.cwd, {"id": op.id, "action": "continue-sync", "expected": expected, "identity": identity})
                             sync = receipt["operation"].get("maintenance", {}).get("sync", {})
@@ -615,10 +632,19 @@ def step(index: Path, project: Project, stream: str, stream_dir: Path, resolved:
                             for continued in sync.get("continuations", []):
                                 if continued.get("checkpoint") == expected and (continued.get("operationId") != op.id or continued.get("originalSessionId") != op.recovery_original or continued.get("sessionId") != sid or continued.get("identity") != identity or continued.get("generation") != op.automatic["generation"] or continued.get("originalGeneration") != receipt["operation"].get("generation") or continued.get("state") not in {"sending", "ended", "uncertain"}):
                                     raise StreamsError("Recovery continuation changed its frozen checkpoint/identity/generations")
-                            op.detail = "Recovery SYNC continuation is uncertain; no redispatch" if any(item.get("state") == "uncertain" for item in sync.get("continuations", [])) else ""
+                            if any(item.get("state") == "uncertain" for item in sync.get("continuations", [])):
+                                op.detail = "Recovery SYNC continuation is uncertain; no redispatch"
+                            else:
+                                op.phase, op.detail = "sync-admitted", ""
                         except (StreamsError, OSError) as exc:
                             op.detail = str(exc)
                         save(stream_dir, op)
+                        return op.phase != "abandoned"
+                if not any(status.get(key) for key in ("isStreaming", "isCompacting", "isBashRunning", "pendingMessageCount", "pendingAsk", "pendingDialogs")):
+                    op.phase, op.detail = "abandoned", op.detail or "SYNC ended without its ready acknowledgement; no replay"
+                    save(stream_dir, op)
+                    close_events(stream_dir, op)
+                    return False
                 return True
             checkpoint = terminal_checkpoint(resolved, f"DCR SYNC ready: {op.id} {op.ready_revision}")
             if checkpoint is None:
@@ -640,7 +666,7 @@ def step(index: Path, project: Project, stream: str, stream_dir: Path, resolved:
             native = piweb.maintenance_status(op.cwd, sid, op.id, original=op.recovery_original)
             if native.get("generation") != op.automatic["generation"] or native.get("entryId") != op.checkpoint_entry:
                 raise StreamsError("Native DCR receipt changed its saved checkpoint/generation")
-            if native["state"] in {"failed", "uncertain"}:
+            if native["state"] in {"failed", "uncertain", "abandoned"}:
                 raise StreamsError(f"Native DCR {native['state']}: {native.get('detail', '')}")
             if native["state"] == "superseded" or native["inputSequence"]:
                 op.phase, op.detail = "superseded", "Accepted newer maintenance input is retained by the native inbox; old RESUME is invalid."
@@ -693,8 +719,7 @@ def step(index: Path, project: Project, stream: str, stream_dir: Path, resolved:
         save(stream_dir, op)
         close_events(stream_dir, op)
     except (StreamsError, OSError, ValueError) as exc:
-        op.detail = str(exc)
-        if op.phase not in {"sync-sending", "compact-sending", "resume-sending"}:
-            op.phase = "blocked"
+        op.phase, op.detail = "abandoned", str(exc)
         save(stream_dir, op)
-    return op.phase not in {"complete", "superseded", "abandoned"}
+        close_events(stream_dir, op)
+    return status.get("isCompacting") is True or op.phase not in TERMINAL

@@ -39,7 +39,7 @@ import { SessionMaintenanceStore } from "./sessionMaintenanceStore.js";
 import { expandPotetoInvocation, supportsPotetoInvocation } from "./potetoInvocation.js";
 import { StreamsDcrEvents } from "./streamsDcrEvents.js";
 import { SessionControlGoalController } from "./sessionControlGoal.js";
-import { assertFailureLifecycleFile, assertGoalNotBlocked, persistedFailureBranch, SessionFailureBoundaries } from "./sessionFailureBoundary.js";
+import { assertFailureLifecycleFile, persistedFailureBranch, SessionFailureBoundaries } from "./sessionFailureBoundary.js";
 import { SessionFailureRecoveries } from "./sessionFailureRecovery.js";
 import { retirementSource, SessionFailureRetirements } from "./sessionFailureRetirement.js";
 import { CleanPolicyAnalyses } from "./cleanPolicyAnalysis.js";
@@ -319,6 +319,17 @@ export class PiSessionService {
     constructor(events, deps) {
         this.events = events;
         this.active = new Map();
+        this.explicitInputFailures = new WeakSet();
+        this.maintenanceInputFailures = new WeakSet();
+        this.askNoticeFailures = new WeakSet();
+        this.unreadObservationFailures = new WeakSet();
+        this.statusPublicationFailures = new WeakSet();
+        this.activityPublicationFailures = new WeakSet();
+        this.runtimeObserverFailures = new WeakSet();
+        this.maintenanceObservationFailures = new WeakSet();
+        this.unreadPublicationAttempts = 0;
+        this.askPublicationFailures = new Set();
+        this.dialogPublicationFailures = new Set();
         this.pendingSessionOpens = new Map();
         /**
          * Sessions whose extension binding is still in flight. A `session_start`
@@ -837,7 +848,7 @@ export class PiSessionService {
         if (this.automaticAdmissionStore !== undefined) {
             if (!this.pendingAskStore.validateSubmission(session.sessionId, askId, submission))
                 return this.closeAsk(session, { status: "stale" });
-            await this.automaticAdmissionStore.explicitInput({ id: session.sessionId, cwd: session.sessionManager.getCwd() });
+            await this.recordExplicitInput(session);
             this.assertTreeNavigationInactive(session, "answer questions");
         }
         return this.closeAsk(session, this.pendingAskStore.submit(session.sessionId, askId, submission));
@@ -875,7 +886,9 @@ export class PiSessionService {
         return { result: "closed", outcome, sessionStatus: this.statusFromSession(session) };
     }
     publishAskClosed(sessionId, outcome) {
-        this.events.publish(sessionId, { type: "ask.closed", askId: outcome.askId, reason: outcome.reason });
+        if (this.askPublicationFailures.has(outcome.askId)) return;
+        try { this.events.publish(sessionId, { type: "ask.closed", askId: outcome.askId, reason: outcome.reason }); }
+        catch { this.askPublicationFailures.add(outcome.askId); }
     }
     /**
      * Void the session's open ask because the user sent a chat message instead of
@@ -903,7 +916,7 @@ export class PiSessionService {
         if (this.automaticAdmissionStore !== undefined) {
             if (!this.pendingExtensionDialogStore.validateAnswer(session.sessionId, dialogId, value))
                 return { result: "stale", sessionStatus: this.statusFromSession(session) };
-            await this.automaticAdmissionStore.explicitInput({ id: session.sessionId, cwd: session.sessionManager.getCwd() });
+            await this.recordExplicitInput(session);
         }
         const result = this.pendingExtensionDialogStore.answer(session.sessionId, dialogId, value);
         if (result.status === "stale")
@@ -1018,12 +1031,16 @@ export class PiSessionService {
             this.publishStatusForSessionId(sessionId);
     }
     publishDialogClosed(sessionId, outcome) {
-        this.events.publish(sessionId, {
-            type: "dialog.closed",
-            dialogId: outcome.dialogId,
-            reason: outcome.reason,
-            ...(outcome.answer === undefined ? {} : { answer: outcome.answer }),
-        });
+        if (this.dialogPublicationFailures.has(outcome.dialogId)) return;
+        try {
+            this.events.publish(sessionId, {
+                type: "dialog.closed",
+                dialogId: outcome.dialogId,
+                reason: outcome.reason,
+                ...(outcome.answer === undefined ? {} : { answer: outcome.answer }),
+            });
+        }
+        catch { this.dialogPublicationFailures.add(outcome.dialogId); }
     }
     /**
      * Publish status for a session known only by id, as the ask tools are: they
@@ -1376,11 +1393,14 @@ export class PiSessionService {
         return this.statusFromSession(session);
     }
     reconcileQueuedMaintenance(session) {
-        if (session.sessionManager.getSessionFileDiagnostics?.().length)
-            return;
-        const boundary = this.failureBoundaries.snapshot(session);
-        if (boundary === undefined || boundary.state === "watching")
-            this.maintenance?.activateQueued(session);
+        if (this.maintenanceObservationFailures.has(session)) return;
+        try {
+            if (session.sessionManager.getSessionFileDiagnostics?.().length) return;
+            const boundary = this.failureBoundaries.snapshot(session);
+            if (boundary === undefined || boundary.state === "watching")
+                this.maintenance?.activateQueued(session);
+        }
+        catch { this.maintenanceObservationFailures.add(session); }
     }
     /**
      * Join-time snapshot of the in-flight assistant stream. The `seq` watermark and
@@ -1528,30 +1548,31 @@ export class PiSessionService {
             this.automaticAdmissionStore?.assertCurrent({ id: automatic.sessionId, cwd: automatic.cwd }, automatic);
         const session = await this.getOrOpen(lookup);
         const sessionRef = { id: session.sessionId, cwd: canonicalizeStoredCwd(session.sessionManager.getCwd()) };
-        assertGoalNotBlocked(session, potetoGoal ?? promptText);
+        session.sessionManager.assertMaintenanceWritable?.();
         if (potetoGoal !== undefined)
             expandPotetoInvocation(session, promptText, potetoGoal);
         this.assertTreeNavigationInactive(session, "send a prompt");
         if (this.isTreeExclusiveOperationActive(session))
             throw new AutomaticAdmissionRejected("Session replacement or lifecycle operation is active; retain the input for retry");
-        const isQueued = session.isStreaming || session.isCompacting;
-        if (options?.deliveryId === undefined && isQueued && images.length === 0 && this.hasQueuedMessageText(session, promptText)) {
-            this.publishActivity(session, "duplicate queued message ignored", "active");
-            this.publishStatus(session);
-            return;
-        }
         if (automatic === undefined) {
-            if (options?.deliveryId !== undefined && this.maintenance?.hasInput(session, promptText, requestedBehavior ?? "followUp", images, parsedAttachments, options.deliveryId, potetoGoal) === true)
-                return;
-            await this.automaticAdmissionStore?.explicitInput(sessionRef);
-            if (this.maintenance?.queue(session, promptText, requestedBehavior ?? "followUp", images, parsedAttachments, echoUserMessage, options?.deliveryId, potetoGoal) === true) {
-                await this.voidOpenAskForUserMessage(session);
-                this.maintenance.activateQueued(session);
-                return;
+            await this.recordExplicitInput(session);
+            if (!this.maintenanceInputFailures.has(session)) {
+                try {
+                    if (options?.deliveryId !== undefined && this.maintenance?.hasInput(session, promptText, requestedBehavior ?? "followUp", images, parsedAttachments, options.deliveryId, potetoGoal) === true)
+                        return;
+                    if (this.maintenance?.queue(session, promptText, requestedBehavior ?? "followUp", images, parsedAttachments, echoUserMessage, options?.deliveryId, potetoGoal) === true) {
+                        await this.voidAskNotice(session);
+                        this.reconcileQueuedMaintenance(session);
+                        return;
+                    }
+                }
+                catch (error) {
+                    if (error instanceof AutomaticAdmissionRejected) throw error;
+                    this.maintenanceInputFailures.add(session);
+                    try { this.logger.info({ sessionId: session.sessionId, error: String(error) }, "maintenance input bookkeeping abandoned"); } catch {}
+                }
             }
-            if (session.isCompacting && this.maintenance !== undefined)
-                throw new AutomaticAdmissionRejected("Unowned compaction cannot durably accept input; retain it for explicit reconciliation");
-            await this.voidOpenAskForUserMessage(session);
+            await this.voidAskNotice(session);
         }
         else {
             this.automaticAdmissionStore?.assertCurrent(sessionRef, automatic);
@@ -1564,11 +1585,8 @@ export class PiSessionService {
             this.automaticAdmissionStore?.assertCurrent(sessionRef, automatic);
         if (automatic !== undefined && this.maintenance?.blocksAutomatic(session) === true)
             throw new AutomaticAdmissionRejected("A maintenance operation owns automatic admission; use its exact RESUME checkpoint");
-        if (automatic !== undefined && this.controlGoals?.pending(session) === true)
-            throw new AutomaticAdmissionRejected("Current-goal control owns automatic admission; retain the exact outstanding intent");
-        if (session.isCompacting && this.maintenance !== undefined)
-            throw new AutomaticAdmissionRejected("Unowned compaction cannot durably accept input; retain it for explicit reconciliation");
-        this.maybeGenerateSessionName(session, promptText);
+        try { this.maybeGenerateSessionName(session, promptText); }
+        catch { /* Naming never owns task transport. */ }
         const behavior = session.isStreaming || session.isCompacting ? requestedBehavior ?? "followUp" : undefined;
         if (session.isCompacting) {
             this.enqueuePromptDuringCompaction(session, promptText, behavior ?? "followUp", images, echoUserMessage, potetoGoal);
@@ -1576,18 +1594,46 @@ export class PiSessionService {
         }
         const active = this.active.get(session.sessionId);
         if (active !== undefined) active.creationToken = undefined;
-        void this.submitPrompt(session, promptText, behavior, images, echoUserMessage, potetoGoal);
+        await new Promise((resolve, reject) => {
+            void this.submitPrompt(session, promptText, behavior, images, echoUserMessage, potetoGoal, admitted => {
+                if (admitted) resolve();
+                else reject(new Error("Native prompt preflight rejected the input"));
+            }).catch(reject);
+        });
     }
-    submitPrompt(session, text, behavior, images = [], echoUserMessage = true, potetoGoal) {
+    async recordExplicitInput(session) {
+        const ref = { id: session.sessionId, cwd: session.sessionManager.getCwd() };
+        if (this.explicitInputFailures.has(session)) {
+            await this.automaticAdmissionStore?.abandonExplicitInput(ref);
+            return;
+        }
+        try { await this.automaticAdmissionStore?.explicitInput(ref); }
+        catch (error) {
+            this.explicitInputFailures.add(session);
+            try { this.logger.info({ sessionId: session.sessionId, error: String(error) }, "explicit input bookkeeping abandoned"); } catch {}
+            await this.automaticAdmissionStore?.abandonExplicitInput(ref);
+        }
+    }
+    async voidAskNotice(session) {
+        if (this.askNoticeFailures.has(session)) return;
+        try { await this.voidOpenAskForUserMessage(session); }
+        catch { this.askNoticeFailures.add(session); }
+    }
+    submitPrompt(session, text, behavior, images = [], echoUserMessage = true, potetoGoal, preflightResult) {
         const nativeText = expandPotetoInvocation(session, text, potetoGoal);
         this.publishActivity(session, behavior === "steer" ? "steering queued" : behavior === "followUp" ? "message queued" : "prompt accepted", "active");
-        if (behavior === undefined && echoUserMessage)
-            this.events.publish(session.sessionId, { type: "message.append", message: userMessage(text, images) });
-        const promptOptions = potetoGoal === undefined ? buildPromptOptions(behavior, images) : { ...buildPromptOptions(behavior, images), expandPromptTemplates: false };
+        if (behavior === undefined && echoUserMessage) {
+            try { this.events.publish(session.sessionId, { type: "message.append", message: userMessage(text, images) }); }
+            catch { /* Native admission does not depend on its UI echo. */ }
+        }
+        const promptOptions = { ...buildPromptOptions(behavior, images), ...(potetoGoal === undefined ? {} : { expandPromptTemplates: false }), preflightResult };
         const promptPromise = this.runSessionEntryMutation(session, "send a prompt", () => session.prompt(nativeText, promptOptions)).catch((error) => {
             const message = error instanceof Error ? error.message : String(error);
+            preflightResult?.(false);
             this.publishActivity(session, "error", "error", message);
-            this.events.publish(session.sessionId, { type: "session.error", message });
+            try { this.events.publish(session.sessionId, { type: "session.error", message }); }
+            catch { /* The native result is authoritative. */ }
+            if (preflightResult !== undefined) throw error;
         });
         void promptPromise;
         return promptPromise;
@@ -1877,8 +1923,6 @@ export class PiSessionService {
         if (!isRecord(request) || typeof request["text"] !== "string")
             throw new AutomaticAdmissionRejected("Control goal requires its exact invocation text");
         expandPotetoInvocation(session, request["text"], request["potetoGoal"]);
-        if (this.automaticAdmissionStore?.controlGoal({ id: session.sessionId, cwd: session.sessionManager.getCwd() })?.id !== request["id"])
-            assertGoalNotBlocked(session, request["potetoGoal"] ?? request["text"]);
         return this.controlGoals.submit(session, request);
     }
     async controlGoalStatus(ref, id) {
@@ -2157,8 +2201,13 @@ export class PiSessionService {
                     throw new AutomaticAdmissionRejected("Newer stop or input superseded retirement");
             }, true);
             const pendingInput = queuedMessagesFromSession(session, this.compactionQueuedMessages(sessionId));
-            if (pendingInput.length > 0)
-                session.sessionManager.appendCustomEntry("pi-web.rotation-input", { messages: pendingInput });
+            if (pendingInput.length > 0) {
+                try { session.sessionManager.appendCustomEntry("pi-web.rotation-input", { messages: pendingInput }); }
+                catch (error) {
+                    const maintenance = this.maintenance?.store.current(ref);
+                    if (maintenance?.compactionRetirement?.writerFenced !== true) throw error;
+                }
+            }
             teardownStarted = true;
             await this.closeActive(sessionId);
             const current = this.automaticAdmissionStore.snapshot(ref);
@@ -3056,8 +3105,10 @@ export class PiSessionService {
         if (notificationGeneration !== undefined)
             this.notificationGenerationBySession.set(runtime.session, notificationGeneration);
         try {
-            if (options.startupIntent === "create")
-                await this.automaticAdmissionStore?.initialize({ id: runtime.session.sessionId, cwd: runtime.session.sessionManager.getCwd() });
+            if (options.startupIntent === "create") {
+                try { await this.automaticAdmissionStore?.initialize({ id: runtime.session.sessionId, cwd: runtime.session.sessionManager.getCwd() }); }
+                catch { this.explicitInputFailures.add(runtime.session); }
+            }
             if (options.creationProvenance === "tracked-subsession") {
                 await this.publishUnreadMutations(this.unreadStore.excludeSession(runtime.session.sessionId, canonicalizeStoredCwd(runtime.session.sessionManager.getCwd())));
             }
@@ -3242,10 +3293,14 @@ export class PiSessionService {
         await this.publishUnreadMutations(mutations);
     }
     observeUnreadActivityState(session) {
-        const mutations = this.unreadStore.observeActivityState(session.sessionId, canonicalizeStoredCwd(session.sessionManager.getCwd()), this.hasActiveWork(session));
-        if (mutations.length === 0)
-            return;
-        void this.publishUnreadMutations(mutations).catch(() => undefined);
+        if (this.unreadObservationFailures.has(session)) return;
+        try {
+            const mutations = this.unreadStore.observeActivityState(session.sessionId, canonicalizeStoredCwd(session.sessionManager.getCwd()), this.hasActiveWork(session));
+            if (mutations.length === 0)
+                return;
+            void this.publishUnreadMutations(mutations).catch(() => undefined);
+        }
+        catch { this.unreadObservationFailures.add(session); }
     }
     publishUnreadMutations(mutations) {
         this.enqueueUnreadMutations(mutations);
@@ -3259,6 +3314,7 @@ export class PiSessionService {
         return this.ensureUnreadPublication();
     }
     ensureUnreadPublication() {
+        if (this.unreadPublicationAttempts >= 3 && this.pendingUnreadMutations.length === 0) return Promise.resolve();
         const existing = this.unreadPublication;
         if (existing !== undefined)
             return existing;
@@ -3271,7 +3327,7 @@ export class PiSessionService {
             if (this.unreadPublication === publication)
                 this.unreadPublication = undefined;
             this.unreadPublicationFailure = error;
-            this.logger.info({ error: error instanceof Error ? error.message : String(error) }, "failed to publish durable session unread mutations");
+            try { this.logger.info({ error: error instanceof Error ? error.message : String(error) }, "failed to publish durable session unread mutations"); } catch {}
             this.scheduleUnreadPublicationRetry();
         });
         return publication;
@@ -3298,6 +3354,7 @@ export class PiSessionService {
         }
     }
     enqueueUnreadMutations(mutations) {
+        if (this.pendingUnreadMutations.length === 0 && mutations.length > 0) this.unreadPublicationAttempts = 0;
         this.pendingUnreadMutations.push(...mutations);
         this.trimPendingUnreadMutations();
     }
@@ -3311,6 +3368,11 @@ export class PiSessionService {
             this.pendingUnreadMutations.splice(0, excess);
     }
     scheduleUnreadPublicationRetry() {
+        if (++this.unreadPublicationAttempts >= 3) {
+            this.pendingUnreadMutations.splice(0);
+            this.unreadPublicationFlushRequested = false;
+            return;
+        }
         if (this.unreadPublicationStopped || this.unreadPublicationRetryTimer !== undefined)
             return;
         const delay = this.unreadPublicationRetryDelayMs;
@@ -3338,6 +3400,8 @@ export class PiSessionService {
         }
         this.failureBoundaries.attach(session);
         active.unsubscribe = session.subscribe((event) => {
+            if (this.runtimeObserverFailures.has(session)) return;
+            try {
             this.events.publish(session.sessionId, toClientEvent(event));
             this.publishActivityForEvent(session, event);
             const eventType = getString(event, "type");
@@ -3355,6 +3419,8 @@ export class PiSessionService {
                 this.scheduleCompactionQueueDrain(session.sessionId);
             this.publishStatus(session);
             this.updateSubsessionTracking(session);
+            }
+            catch { this.runtimeObserverFailures.add(session); }
         });
         this.active.set(session.sessionId, active);
         this.streamsDcrEvents?.restore(session);
@@ -3548,7 +3614,7 @@ export class PiSessionService {
         return "active";
     }
     hasActiveWork(session) {
-        return this.hasRuntimeWork(session) || this.controlGoals?.pending(session) === true;
+        return this.hasRuntimeWork(session);
     }
     hasRuntimeWork(session) {
         return this.treeNavigations.has(session)
@@ -3751,22 +3817,30 @@ export class PiSessionService {
         this.events.publishGlobal(startupToken === undefined ? { type: "session.startup", activity } : { type: "session.startup", startupToken, activity });
     }
     publishActivity(session, label, phase, detail) {
-        const at = new Date().toISOString();
-        const stored = detail === undefined ? { phase, label, at } : { phase, label, detail, at };
-        this.activities.set(session.sessionId, stored);
-        const activity = detail === undefined ? { sessionId: session.sessionId, phase, label, at } : { sessionId: session.sessionId, phase, label, detail, at };
-        this.workspaceActivity?.applySessionActivity(session.sessionManager.getCwd(), activity);
-        this.events.publish(session.sessionId, { type: "activity.update", activity });
-        this.events.publishGlobal({ type: "activity.update", activity });
-        this.observeUnreadActivityState(session);
+        if (this.activityPublicationFailures.has(session)) return;
+        try {
+            const at = new Date().toISOString();
+            const stored = detail === undefined ? { phase, label, at } : { phase, label, detail, at };
+            this.activities.set(session.sessionId, stored);
+            const activity = detail === undefined ? { sessionId: session.sessionId, phase, label, at } : { sessionId: session.sessionId, phase, label, detail, at };
+            this.workspaceActivity?.applySessionActivity(session.sessionManager.getCwd(), activity);
+            this.events.publish(session.sessionId, { type: "activity.update", activity });
+            this.events.publishGlobal({ type: "activity.update", activity });
+            this.observeUnreadActivityState(session);
+        }
+        catch { this.activityPublicationFailures.add(session); }
     }
     publishStatus(session) {
-        const status = this.statusFromSession(session);
-        this.clearStaleActiveActivity(session);
-        this.workspaceActivity?.applySessionStatus(session.sessionManager.getCwd(), status);
-        this.events.publish(session.sessionId, { type: "status.update", status });
-        this.events.publishGlobal({ type: "status.update", status });
-        this.observeUnreadActivityState(session);
+        if (this.statusPublicationFailures.has(session)) return;
+        try {
+            const status = this.statusFromSession(session);
+            this.clearStaleActiveActivity(session);
+            this.workspaceActivity?.applySessionStatus(session.sessionManager.getCwd(), status);
+            this.events.publish(session.sessionId, { type: "status.update", status });
+            this.events.publishGlobal({ type: "status.update", status });
+            this.observeUnreadActivityState(session);
+        }
+        catch { this.statusPublicationFailures.add(session); }
     }
     clearStaleActiveActivity(session) {
         const current = this.activities.get(session.sessionId);
