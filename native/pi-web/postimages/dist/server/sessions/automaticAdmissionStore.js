@@ -135,6 +135,22 @@ export class AutomaticAdmissionStore {
             return this.publish(ref, false);
         });
     }
+    markRetired(ref, generation) {
+        return this.serial(ref, async () => {
+            const data = this.read(ref);
+            if (data?.generation !== generation || data.allowed !== false)
+                throw new AutomaticAdmissionRejected("Newer receiving control superseded retirement");
+            await this.persist(ref, { ...data, retirementGeneration: generation });
+        });
+    }
+    withRetirement(ref, generation, operation) {
+        return this.serial(ref, async () => {
+            const data = this.read(ref);
+            if (data?.generation !== generation || data.allowed !== false || data.retirementGeneration !== generation)
+                throw new AutomaticAdmissionRejected("Newer stop or input superseded successor admission");
+            return operation();
+        });
+    }
     explicitInput(ref) {
         return this.serial(ref, async () => {
             const { key } = identity(ref);
@@ -155,7 +171,7 @@ export class AutomaticAdmissionStore {
             if (data === undefined)
                 throw new AutomaticAdmissionRejected("Durable automatic control is unavailable");
             const history = data.abandonedControlGoals ?? [];
-            if (history.some(item => item.id === goal.id))
+            if (history.some(item => item?.id === goal.id))
                 throw new AutomaticAdmissionRejected("Abandoned control goal cannot be replayed");
             const previous = data.controlGoal;
             if (previous !== undefined) {
@@ -240,9 +256,11 @@ export class AutomaticAdmissionStore {
                 throw new Error("Invalid automatic admission metadata");
             }
             const goal = data["controlGoal"];
-            if (goal !== undefined && !validControlGoal(goal, ref))
-                throw new Error("Invalid control goal metadata");
-            const record = { version: 1, sessionId: ref.id, cwd, generation: data["generation"], allowed: data["allowed"], abandonedControlGoals: Array.isArray(data.abandonedControlGoals) ? data.abandonedControlGoals : [], ...(goal === undefined ? {} : { controlGoal: goal }) };
+            const validGoal = goal !== undefined && validControlGoal(goal, ref);
+            const history = Array.isArray(data.abandonedControlGoals) ? data.abandonedControlGoals : [];
+            if (goal !== undefined && !validGoal)
+                history.push({ disposition: "abandoned", detail: "Invalid saved control goal", original: goal });
+            const record = { version: 1, sessionId: ref.id, cwd, generation: data["generation"], allowed: data["allowed"], abandonedControlGoals: history, ...(validGoal ? { controlGoal: goal } : {}), ...(data.retirementGeneration === data.generation ? { retirementGeneration: data.retirementGeneration } : {}) };
             this.records.set(key, record);
             return record;
         }

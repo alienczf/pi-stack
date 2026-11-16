@@ -1486,6 +1486,22 @@ export class PiSessionService {
         return commands.sort((a, b) => a.name.localeCompare(b.name));
     }
     async prompt(ref, text, streamingBehavior, attachments, options) {
+        if (options?.replacementAdmission !== undefined) {
+            const source = parseAutomaticAdmission({ ...options.replacementAdmission, kind: "wake" });
+            if (source === undefined || source.sessionId === sessionIdFromLookup(ref))
+                throw new AutomaticAdmissionRejected("Replacement must name its distinct retired predecessor");
+            const target = await this.getOrOpen(ref);
+            if (!cwdPathsEqual(source.cwd, target.sessionManager.getCwd()))
+                throw new AutomaticAdmissionRejected("Replacement predecessor has a different worktree");
+            return this.automaticAdmissionStore.withRetirement({ id: source.sessionId, cwd: source.cwd }, source.generation, () => {
+                for (const active of new Set(this.active.values())) {
+                    const other = active.runtime.session;
+                    if (other !== target && cwdPathsEqual(other.sessionManager.getCwd(), source.cwd) && this.hasRuntimeWork(other))
+                        throw new AutomaticAdmissionRejected("Another live runtime owns this replacement worktree");
+                }
+                return this.prompt(ref, text, streamingBehavior, attachments, { ...options, replacementAdmission: undefined });
+            });
+        }
         const promptText = requirePromptText(text);
         const potetoGoal = options?.potetoGoal;
         if (potetoGoal !== undefined && typeof potetoGoal !== "string")
@@ -2115,20 +2131,31 @@ export class PiSessionService {
             throw new AutomaticAdmissionRejected("Pending human input must be answered before replacement");
         const ref = { id: sessionId, cwd: session.sessionManager.getCwd() };
         this.automaticAdmissionStore.assertCurrent(ref, { ...expected, kind: "wake" });
+        const loaded = this.activeRuntimeForSession(session)?.services?.resourceLoader.getExtensions();
+        if (callbackInventory(loaded).owners.some(owner => owner.kind === "active"))
+            throw new AutomaticAdmissionRejected("A live extension callback must finish or be cancelled");
         this.treeExclusiveSessionOperationCounts.set(sessionId, 1);
         let retainFence = false;
+        let frozen;
+        let teardownStarted = false;
         try {
             const archiveInput = await this.archiveInputForSession(session);
-            const frozen = await this.automaticAdmissionStore.pauseAtGeneration(ref, expected.generation);
+            frozen = await this.automaticAdmissionStore.pauseAtGeneration(ref, expected.generation);
             await prepareCallbackDrops(this.activeRuntimeForSession(session)?.services?.resourceLoader.getExtensions(), () => {
                 const current = this.automaticAdmissionStore.snapshot(ref);
                 if (current.generation !== frozen.generation)
                     throw new AutomaticAdmissionRejected("Newer stop or input superseded retirement");
             }, true);
+            const pendingInput = queuedMessagesFromSession(session, this.compactionQueuedMessages(sessionId));
+            if (pendingInput.length > 0)
+                session.sessionManager.appendCustomEntry("pi-web.rotation-input", { messages: pendingInput });
+            teardownStarted = true;
             await this.closeActive(sessionId);
             const current = this.automaticAdmissionStore.snapshot(ref);
             if (current.generation !== frozen.generation)
                 throw new AutomaticAdmissionRejected("Newer stop or input superseded retirement");
+            await this.automaticAdmissionStore.markRetired(ref, frozen.generation);
+            frozen = { ...frozen, pendingInput };
             try {
                 await this.archiveStore.archive(archiveInput);
                 await this.forgetUnreadSessions([archiveInput]);
@@ -2139,6 +2166,13 @@ export class PiSessionService {
                 return { ...frozen, retired: true, retentionWarning };
             }
             return { ...frozen, retired: true };
+        } catch (error) {
+            if (teardownStarted) {
+                retainFence = true;
+            } else if (frozen !== undefined && this.automaticAdmissionStore.snapshot(ref).generation === frozen.generation) {
+                await this.automaticAdmissionStore.setAllowedAtGeneration(ref, true, frozen.generation);
+            }
+            throw error;
         } finally {
             if (!retainFence) decrementMapCount(this.treeExclusiveSessionOperationCounts, sessionId);
         }
@@ -2434,9 +2468,10 @@ export class PiSessionService {
         const target = await this.automaticControlIdentity(ref);
         if (target === undefined)
             throw new Error("Session not found");
-        await this.assertWritable(target, !allowed);
-        if (allowed)
+        if (allowed) {
+            await this.assertWritable(target);
             this.failureBoundaries.assertAdmission(await this.getOrOpen(target));
+        }
         if (expectedGeneration !== undefined && (typeof expectedGeneration !== "string" || expectedGeneration === ""))
             throw new AutomaticAdmissionRejected("Conditional control requires its exact saved generation");
         const state = initializeIfAbsent === true

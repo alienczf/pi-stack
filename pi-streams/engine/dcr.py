@@ -263,8 +263,11 @@ def completion_after(resolved: Coordinator, compaction: str) -> str | None:
 
 
 def close_events(stream_dir: Path, op: Operation) -> None:
-    receipt = piweb.close_dcr_events(op.session, op.cwd, op.id, original=op.recovery_original)
-    op.completed_leaf = receipt.get("entryId") or op.completed_leaf
+    try:
+        receipt = piweb.close_dcr_events(op.session, op.cwd, op.id, original=op.recovery_original)
+        op.completed_leaf = receipt.get("entryId") or op.completed_leaf
+    except StreamsError as exc:
+        op.detail += "; event subscription cleanup is unconfirmed: " + str(exc)
     save(stream_dir, op)
 
 
@@ -512,9 +515,20 @@ def step(index: Path, project: Project, stream: str, stream_dir: Path, resolved:
         save(stream_dir, op)
         return True
     token, allowed = piweb.automatic_admission(status, sid, resolved.row.worktree, "wake")
+    if op is not None and op.phase == "abandoned":
+        if token == op.automatic:
+            return False
+        op = None
+    if op is not None and op.phase == "blocked":
+        if status.get("isCompacting") is True:
+            return True
+        op.phase, op.detail = "abandoned", "Abandoned blocked maintenance without replay. " + op.detail
+        save(stream_dir, op)
+        close_events(stream_dir, op)
+        return False
     if op is not None and op.phase == "rotated":
         return True
-    if op is not None and op.phase in {"blocked", "compact-sending", "compacting", "rotation-pending"} and op.checkpoint_entry:
+    if op is not None and op.phase in {"compact-sending", "compacting", "rotation-pending"} and op.checkpoint_entry:
         native = None
         try:
             native = piweb.maintenance_status(op.cwd, sid, op.id, original=op.recovery_original)
@@ -531,45 +545,9 @@ def step(index: Path, project: Project, stream: str, stream_dir: Path, resolved:
                 replacement._save(stream_dir, "coordinator_replacement_error", {"replacement": intent.id, "detail": str(exc)})
             else:
                 reason = native.get("detail", "") if isinstance(native, dict) else ""
-                op.phase, op.detail = "blocked", (reason + "; " if reason else "") + str(exc)
+                op.phase, op.detail = ("compacting" if status.get("isCompacting") is True else "abandoned"), (reason + "; " if reason else "") + str(exc)
                 save(stream_dir, op)
-            return True
-    if op is not None and op.phase == "blocked" and op.detail == "Native RESUME contains an assistant error":
-        native = piweb.maintenance_status(op.cwd, sid, op.id, original=op.recovery_original)
-        resume = native.get("resume")
-        if (native.get("state") != "resumed" or native.get("generation") != op.automatic["generation"]
-            or native.get("entryId") != op.checkpoint_entry or native.get("compactionEntryId") != op.compaction_entry
-            or native.get("compactionSha256") != op.compaction_sha256 or native.get("inputs") or native.get("inputSequence")
-            or not isinstance(resume, dict) or resume.get("state") != "admitted"
-            or resume.get("deliveryId") != f"{op.id}:resume" or resume.get("text") != op.resume_text
-            or resume.get("potetoGoal") != op.resume_goal):
-            return True
-        op.phase, op.detail = "resuming", "Reconciled exact admitted RESUME; no redispatch."
-        save(stream_dir, op)
-    if op is not None and op.phase == "blocked":
-        legacy_gate = "below 150000 tokens" in op.detail and not op.resume_text and op.checkpoint_entry
-        if not legacy_gate:
-            op.phase, op.detail = "abandoned", "Abandoned blocked maintenance without replay. " + op.detail
-            save(stream_dir, op)
-            close_events(stream_dir, op)
-            return False
-        native = piweb.maintenance_status(op.cwd, sid, op.id, original=op.recovery_original)
-        if native.get("generation") != op.automatic["generation"] or native.get("entryId") != op.checkpoint_entry:
-            raise StreamsError("Legacy DCR reconciliation changed its exact checkpoint/generation")
-        if native.get("resume") is not None or native.get("inputs") or native.get("inputSequence"):
-            return True
-        if native.get("state") == "superseded":
-            op.phase, op.detail = "superseded", "Dead legacy context-gate ownership was reconciled without replay; current admission remains authoritative."
-            save(stream_dir, op)
-            close_events(stream_dir, op)
-            return False
-        if native.get("state") != "complete" or not allowed or token != op.automatic:
-            return True
-        safe_context(native, status)
-        if piweb.compaction_result(op.cwd, sid, op.id, original=op.recovery_original) is None:
-            return True
-        op.phase, op.detail = "compacting", "Reconciled exact completed compaction after the legacy context gate."
-        save(stream_dir, op)
+            return status.get("isCompacting") is True
     if op is not None and op.phase not in TERMINAL and (not allowed or token != op.automatic):
         if op.phase in {"compact-sending", "compacting", "resume-sending", "resuming"}:
             native = piweb.maintenance_status(op.cwd, sid, op.id, original=op.recovery_original)
@@ -719,4 +697,4 @@ def step(index: Path, project: Project, stream: str, stream_dir: Path, resolved:
         if op.phase not in {"sync-sending", "compact-sending", "resume-sending"}:
             op.phase = "blocked"
         save(stream_dir, op)
-    return op.phase not in {"complete", "superseded"}
+    return op.phase not in {"complete", "superseded", "abandoned"}

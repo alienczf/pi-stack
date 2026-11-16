@@ -239,16 +239,26 @@ def rotate_locked(index: Path, project: Project, stream_id: str) -> str:
         operation["phase"] = "archived"
         _save(stream, "coordinator_rotation", operation)
     project = replace(project, coordinator=replace(project.coordinator, model=operation["model"], thinking=operation["thinking"]))
-    abandon_start(stream, "Rotation supersedes old opening without replay")
+    from engine import drive
+    if drive.load(stream).stop_intent == drive.StopIntent.OPERATOR_OFF:
+        raise StreamsError("Explicit local stop preserves the stream")
+    start = _start_record(stream)
+    if start is not None and start.operation != operation["owner"]:
+        abandon_start(stream, "Rotation supersedes an unrelated old opening without replay")
     prompt = _pickup(stream)
-    if operation.get("source"):
+    predecessor = next((row for row in rows if row.session == operation.get("source")), None)
+    if predecessor is not None:
         try:
-            handover = _validated_handover(stream, next(row for row in rows if row.session == operation["source"]))
+            handover = _validated_handover(stream, predecessor)
         except StreamsError:
             handover = ""
         if handover:
             prompt += "\nRead retained predecessor handover " + str(stream / handover)
-    target = ensure_coordinator(project, stream, opening_prompt=prompt, operation=operation["owner"])
+    retirement = operation.get("retirement", {}).get("automaticAdmission")
+    pending = retirement.get("pendingInput", []) if isinstance(retirement, dict) else []
+    if pending:
+        prompt += "\nRetained accepted input from the predecessor, in queue order. Apply it within current Goals and Rules.\n" + json.dumps(pending, ensure_ascii=False)
+    target = ensure_coordinator(project, stream, opening_prompt=prompt, operation=operation["owner"], replacement=retirement)
     operation.update({"phase": "complete", "target": target, "completed_at": clock.stamp(clock.now())})
     _save(stream, "coordinator_rotation", operation)
     _save_start(stream, None)

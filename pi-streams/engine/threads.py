@@ -184,14 +184,10 @@ def save_threads(path: Path, rows: list[Thread]) -> None:
 
 def designated_coordinator(rows: list[Thread]) -> Thread | None:
     active = [row for row in rows if row.role == "coordinator" and row.status is Status.active]
-    if len(active) > 1:
-        raise StreamsError("multiple active coordinator designations; explicit reconciliation required")
     if active:
-        return active[0]
+        return active[-1]
     parked = [row for row in rows if row.role == "coordinator" and row.status in {Status.parked, Status.waiting_quota}]
-    if len(parked) > 1:
-        raise StreamsError("multiple parked coordinator designations; explicit reconciliation required")
-    return parked[0] if parked else None
+    return parked[-1] if parked else None
 
 
 def _native_session(session_id: str, cwd: Path, listing: list[dict[str, object]] | None = None) -> NativeSession:
@@ -240,6 +236,15 @@ def _inspect_coordinator(stream_dir: Path, rows: list[Thread] | None = None, *, 
         if item.role == "coordinator" and item.status is Status.archived and item.session in retired_ids
     )
     coordinator = None if row is None else Coordinator(row, _native_session(row.session, stream_dir, listing))
+    for candidate in listing:
+        if candidate.get("archived") is True or not candidate.get("id") or row is not None and candidate["id"] == row.session:
+            continue
+        try:
+            observed = piweb.session_status(candidate["id"], timeout=2)
+        except StreamsError:
+            continue
+        if any(observed.get(key) is True for key in ("isStreaming", "isCompacting", "isBashRunning")):
+            raise StreamsError(f"Live runtime {candidate['id']} owns the coordinator worktree")
     if listings is not None:
         listings[str(stream_dir)] = {item['id']: item for item in listing if isinstance(item.get('id'), str)}
     return CoordinatorObservation(coordinator, residues)
@@ -266,7 +271,15 @@ def _start_record(stream_dir: Path) -> SessionStart | None:
             raise ValueError("unknown start phase")
         return start
     except (TypeError, ValueError) as exc:
-        raise StreamsError(f"invalid saved session start: {exc}") from exc
+        data = artifacts._read_tick_data(stream_dir)
+        history = data.get("abandoned_session_starts")
+        if not isinstance(history, list):
+            history = []
+        history.append({"original": raw, "disposition": "abandoned", "reason": f"Invalid saved opening: {exc}"})
+        data["abandoned_session_starts"] = history
+        data.pop("session_start", None)
+        artifacts._save_tick_data(stream_dir, data)
+        return None
 
 
 def _save_start(stream_dir: Path, start: SessionStart | None) -> None:
@@ -289,14 +302,14 @@ def discard_failed_start(stream_dir: Path, session_id: str) -> None:
             abandon_start(stream_dir, "Failed empty opening reservation removed")
 
 
-def _send_start(stream_dir: Path, session_id: str, prompt: str) -> None:
+def _send_start(stream_dir: Path, session_id: str, prompt: str, *, replacement: dict | None = None) -> None:
     start = _start_record(stream_dir)
     if start is None or start.session != session_id or start.phase != "created":
         raise StreamsError("saved session start is not ready for opening")
     start.phase = "sending"
     _save_start(stream_dir, start)
     try:
-        piweb.prompt(session_id, prompt)
+        piweb.prompt(session_id, prompt, **({"replacement": replacement} if replacement is not None else {}))
     except piweb.PromptRejected:
         start.phase = "created"
         _save_start(stream_dir, start)
@@ -325,7 +338,7 @@ def abandon_start(stream_dir: Path, reason: str) -> None:
 def _resume_or_spawn(cwd: Path, rows: list[Thread], stream_dir: Path, role: str, intent: list[str], operation: str = "new") -> tuple[str, bool]:
     digest = hashlib.sha256(json.dumps(intent, ensure_ascii=False).encode()).hexdigest()
     start = _start_record(stream_dir)
-    if start is not None and (start.cwd, start.role, start.intent, start.operation) != (str(cwd), role, digest, operation):
+    if start is not None and (start.cwd, start.role, start.intent, start.operation) != (str(cwd), role, digest, operation) and not (role == "coordinator" and (start.cwd, start.role, start.operation) == (str(cwd), role, operation)):
         if start.cwd == str(cwd):
             try:
                 status = piweb.session_status(start.session)
@@ -336,15 +349,34 @@ def _resume_or_spawn(cwd: Path, rows: list[Thread], stream_dir: Path, role: str,
         abandon_start(stream_dir, "Distinct authorized unit; old opening is not replayed or adopted")
         start = None
     if start is not None:
-        if start.phase == "sending":
-            raise StreamsError(f"opening acceptance for {start.session} is uncertain; refusing replay")
         native = _native_session(start.session, cwd)
-        if start.phase == "accepted":
+        admitted = native.status.get("messageCount", native.info.get("messageCount", 0)) > 0 or any(native.status.get(key) is True for key in ("isStreaming", "isCompacting", "isBashRunning")) or native.status.get("pendingMessageCount", 0) > 0
+        if start.phase == "sending" and admitted:
+            abandon_start(stream_dir, "Retained the admitted successor identity; abandoned its uncertain transport without replay")
             return start.session, False
+        if start.phase == "sending":
+            abandon_start(stream_dir, "Abandoned unadmitted opening without replay")
+            start = None
+        elif start.phase == "accepted":
+            return start.session, False
+    if start is not None:
         busy = any(native.status.get(key) is True for key in ("isStreaming", "isCompacting", "isBashRunning"))
         if native.info.get("messageCount") != 0 or busy or native.status.get("pendingMessageCount", 0) != 0:
             raise StreamsError(f"opening acceptance for {start.session} is uncertain; refusing replay")
         return start.session, True
+    try:
+        candidates = piweb.list_sessions(str(cwd), timeout=2)
+    except StreamsError:
+        candidates = []
+    for candidate in candidates:
+        if candidate.get("archived") is True or not candidate.get("id"):
+            continue
+        try:
+            status = piweb.session_status(candidate["id"], timeout=2)
+        except StreamsError:
+            continue
+        if any(status.get(key) is True for key in ("isStreaming", "isCompacting", "isBashRunning")):
+            raise StreamsError(f"Live runtime {candidate['id']} owns work in {cwd}; use an isolated unit")
     creation_token = uuid.uuid4().hex
     sid = piweb.spawn(str(cwd), creation_token=creation_token)
     _save_start(stream_dir, SessionStart(sid, str(cwd), role, digest, operation=operation, creation_token=creation_token))
@@ -371,7 +403,7 @@ def _adopt_coordinator(project: Project, stream_dir: Path, rows: list[Thread], s
     return session_id
 
 
-def ensure_coordinator(project: Project, stream_dir: Path, *, opening_prompt: str | None = None, coordinator_session: str | None = None, operation: str = "new") -> str:
+def ensure_coordinator(project: Project, stream_dir: Path, *, opening_prompt: str | None = None, coordinator_session: str | None = None, operation: str = "new", replacement: dict | None = None) -> str:
     stream_dir = stream_dir.resolve()
     path = stream_dir / "threads.tsv"
     rows = load_threads(path)
@@ -392,7 +424,7 @@ def ensure_coordinator(project: Project, stream_dir: Path, *, opening_prompt: st
         try:
             configured = piweb.configure_session(sid, project.coordinator.model, project.coordinator.thinking)
             piweb.register_stream_failure(sid, str(stream_dir), stream_dir, configured, starting=True, role="coordinator", assignment=prompt)
-            _send_start(stream_dir, sid, prompt)
+            _send_start(stream_dir, sid, prompt, replacement=replacement)
         except StreamsError:
             discard_failed_start(stream_dir, sid)
             raise
@@ -525,12 +557,14 @@ def format_status(report: dict[str, object]) -> str:
                 tokens = usage.get("tokens") if isinstance(usage, dict) else None
                 if tokens is None:
                     tokens = "-"
-                streaming = "yes" if coord["isStreaming"] else "no"
+                streaming = "unknown" if coord["isStreaming"] is None else "yes" if coord["isStreaming"] else "no"
                 lines.append(
                     f"{stream['id']}\t{coord['session']}\tstreaming={streaming}\t"
                     f"tokens={tokens}\tmodel={coord['model']}\tthinking={coord['thinkingLevel']}\t"
                     f"cost={coord['cost']}\tthreads={counted}\tshare={share_text}"
                 )
+        for warning in stream.get("warnings", []):
+            lines.append(f"{stream['id']}\tobservation={warning['state']}\tsource={warning['source']}\t{warning['detail']}")
         for reconciliation in stream.get("nativeReconciliations", []):
             lines.append(f"{stream['id']}\treconciliation={reconciliation['kind']}\tsession={reconciliation['session']}\tdisposition={reconciliation['disposition']}\t{reconciliation['detail']}")
         for blocker in stream.get("dispatchBlockers", []):

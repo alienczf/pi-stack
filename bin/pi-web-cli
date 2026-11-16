@@ -62,10 +62,12 @@ def cmd_spawn(cwd: str, creation_token: str | None = None) -> int:
     return out({"ok": ok, "status": code, "session": data}, ok)
 
 
-def cmd_prompt(sid: str, text: str, streaming: str | None = None, delivery_id: str | None = None, automatic: dict | None = None, poteto_goal: str | None = None) -> int:
+def cmd_prompt(sid: str, text: str, streaming: str | None = None, delivery_id: str | None = None, automatic: dict | None = None, poteto_goal: str | None = None, replacement: dict | None = None) -> int:
     body = {"text": text} if streaming is None else {"text": text, "streamingBehavior": streaming}
     if poteto_goal is not None:
         body["potetoGoal"] = poteto_goal
+    if replacement is not None:
+        body["replacementAdmission"] = replacement
     if delivery_id is not None:
         body["deliveryId"] = delivery_id
     if automatic is not None:
@@ -239,6 +241,7 @@ def main(argv: list[str]) -> int:
     pr.add_argument("text", nargs="?")
     pr.add_argument("--delivery-id", help="caller-persisted correlation identity; acceptance is not application")
     pr.add_argument("--automatic-admission", help="caller-persisted exact session/cwd/generation/kind JSON; never renewed by this CLI")
+    pr.add_argument("--replacement-admission", help="retired predecessor session/cwd/generation JSON")
     pr.add_argument("--poteto", action="store_true", help="stdin JSON carries exact text/goal for recipient-loaded poteto invocation")
     behavior = pr.add_mutually_exclusive_group()
     behavior.add_argument("--steer", action="store_true")
@@ -380,7 +383,11 @@ def main(argv: list[str]) -> int:
                 return out({"ok": False, "error": "automatic admission must be a JSON object"}, False)
             if not isinstance(automatic, dict):
                 return out({"ok": False, "error": "automatic admission must be a JSON object"}, False)
-        return cmd_prompt(args.sid, text, streaming, args.delivery_id, automatic, poteto_goal)
+        try:
+            replacement = None if args.replacement_admission is None else _json_object(args.replacement_admission, "replacement admission")
+        except UsageError as exc:
+            return out({"ok": False, "error": str(exc)}, False)
+        return cmd_prompt(args.sid, text, streaming, args.delivery_id, automatic, poteto_goal, replacement)
     if args.cmd == "status":
         return cmd_status(args.sid)
     if args.cmd == "commands":

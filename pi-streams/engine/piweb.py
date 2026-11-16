@@ -164,13 +164,15 @@ def set_automatic_admission(sid: str, allowed: bool, *, expected_generation: str
     return result
 
 
-def prompt(sid: str, text: str, behavior: str | None = None, *, delivery_id: str | None = None, automatic: dict[str, str] | None = None, poteto_goal: str | None = None) -> dict[str, object]:
+def prompt(sid: str, text: str, behavior: str | None = None, *, delivery_id: str | None = None, automatic: dict[str, str] | None = None, poteto_goal: str | None = None, replacement: dict | None = None) -> dict[str, object]:
     # On argv, a text that starts with a dash would parse as a flag.
     flags = [] if behavior is None else [f"--{behavior}"]
     if delivery_id is not None:
         flags += ["--delivery-id", delivery_id]
     if automatic is not None:
         flags += ["--automatic-admission", json.dumps(automatic, ensure_ascii=False)]
+    if replacement is not None:
+        flags += ["--replacement-admission", json.dumps(replacement, ensure_ascii=False)]
     payload = text
     if poteto_goal is not None:
         require_poteto(sid)
@@ -333,7 +335,7 @@ def watch_dcr_events(sid: str, cwd: str, identity: str, index: Path, stream: str
 
 
 def close_dcr_events(sid: str, cwd: str, identity: str, *, original: str = "") -> dict:
-    data = {"result": failure_maintenance(original, cwd, {"id": identity, "action": "close"}).get("events")} if original else call(["maintenance-events", sid, identity, "--cwd", cwd, "--close"])
+    data = {"result": failure_maintenance(original, cwd, {"id": identity, "action": "close"}).get("events")} if original else call(["maintenance-events", sid, identity, "--cwd", cwd, "--close"], timeout=2)
     result = data.get("result")
     if not isinstance(result, dict) or result.get("id") != identity or result.get("closed") is not True:
         raise StreamsError("native DCR event close is unconfirmed")
@@ -356,7 +358,7 @@ def compact_at_checkpoint(sid: str, identity: str, expected: dict[str, str], ins
 
 
 def maintenance_status(cwd: str, sid: str, identity: str, *, original: str = "") -> dict:
-    data = {"result": failure_maintenance(original, cwd, {"id": identity, "action": "maintenance-status"}).get("maintenance")} if original else call(["maintenance", sid, identity, "--cwd", cwd])
+    data = {"result": failure_maintenance(original, cwd, {"id": identity, "action": "maintenance-status"}).get("maintenance")} if original else call(["maintenance", sid, identity, "--cwd", cwd], timeout=2)
     return _maintenance_result(data, sid, identity, cwd)
 
 

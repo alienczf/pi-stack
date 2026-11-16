@@ -241,11 +241,9 @@ export function registerSessionRoutes(app, sessions, eventHub, prefix = "") {
             const deliveryId = body["deliveryId"];
             const automaticAdmission = body["automaticAdmission"];
             const potetoGoal = body["potetoGoal"];
+            const replacementAdmission = body["replacementAdmission"];
             if (deliveryId === undefined && automaticAdmission === undefined) {
-                if (potetoGoal === undefined)
-                    await sessions.prompt(sessionLookupFromBody(request.params.sessionId, body), body["text"], body["streamingBehavior"], body["attachments"]);
-                else
-                    await sessions.prompt(sessionLookupFromBody(request.params.sessionId, body), body["text"], body["streamingBehavior"], body["attachments"], { potetoGoal });
+                await sessions.prompt(sessionLookupFromBody(request.params.sessionId, body), body["text"], body["streamingBehavior"], body["attachments"], { ...(potetoGoal === undefined ? {} : { potetoGoal }), ...(replacementAdmission === undefined ? {} : { replacementAdmission }) });
                 return { accepted: true };
             }
             if (typeof deliveryId !== "string" || deliveryId.trim() === "")
