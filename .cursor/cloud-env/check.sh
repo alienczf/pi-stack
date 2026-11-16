@@ -33,7 +33,7 @@ step_status() {
   if [[ "$state" == Running ]]; then
     ok "tailscale status is connected (BackendState=Running)"
   else
-    bad "tailscale status is not connected (BackendState=${state:-unknown}; pending TS_AUTHKEY?)"
+    bad "tailscale status is not connected (BackendState=${state:-unknown}; pending TS_AUTHID or TS_AUTHKEY?)"
   fi
 }
 

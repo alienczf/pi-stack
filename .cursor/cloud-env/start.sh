@@ -21,6 +21,7 @@ STATE_DIR=/var/lib/tailscale
 HOSTNAME_FILE="${HOME}/.local/state/cursor-cloud-env/hostname"
 MARKER_BEGIN="# BEGIN cursor-cloud-env"
 MARKER_END="# END cursor-cloud-env"
+TAILSCALE_TAG=tag:cursorcloud
 
 find_nc() {
   local candidate
@@ -106,6 +107,78 @@ ensure_hostname() {
   tr -d '\n' <"$HOSTNAME_FILE"
 }
 
+mint_oauth_authkey() {
+  set +x
+  python3 - "$TAILSCALE_TAG" <<'PY'
+import json, os, sys, urllib.error, urllib.parse, urllib.request
+
+def redact(text):
+    import re
+    return re.sub(r"tskey-[^\s\"']+", "[redacted]", text)
+
+tag = sys.argv[1]
+client_id = os.environ.get("TS_AUTHID", "")
+client_secret = os.environ.get("TS_AUTHKEY", "").split("?", 1)[0]
+if not client_id or not client_secret:
+    sys.exit(1)
+
+try:
+    req = urllib.request.Request(
+        "https://api.tailscale.com/api/v2/oauth/token",
+        data=urllib.parse.urlencode(
+            {"client_id": client_id, "client_secret": client_secret}
+        ).encode(),
+        method="POST",
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        token = json.load(resp).get("access_token", "")
+    if not token:
+        print("cloud-env: OAuth token response had no access_token", file=sys.stderr)
+        sys.exit(1)
+    body = json.dumps(
+        {
+            "capabilities": {
+                "devices": {
+                    "create": {
+                        "reusable": False,
+                        "ephemeral": True,
+                        "preauthorized": True,
+                        "tags": [tag],
+                    }
+                }
+            },
+            "expirySeconds": 3600,
+            "description": "cursor-cloud-agent",
+        }
+    ).encode()
+    req = urllib.request.Request(
+        "https://api.tailscale.com/api/v2/tailnet/-/keys",
+        data=body,
+        method="POST",
+        headers={
+            "Authorization": "Bearer " + token,
+            "Content-Type": "application/json",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        key = json.load(resp).get("key", "")
+    if not key:
+        print("cloud-env: auth key response had no key", file=sys.stderr)
+        sys.exit(1)
+    sys.stdout.write(key)
+except urllib.error.HTTPError as e:
+    err = e.read().decode("utf-8", "replace")
+    print("cloud-env: Tailscale API HTTP %s" % e.code, file=sys.stderr)
+    print(redact(err), file=sys.stderr)
+    sys.exit(1)
+except Exception as e:
+    print("cloud-env: failed to mint auth key", file=sys.stderr)
+    print(redact(str(e)), file=sys.stderr)
+    sys.exit(1)
+PY
+}
+
 ensure_tailscale_up() {
   set +x
   local state
@@ -114,11 +187,16 @@ ensure_tailscale_up() {
     return 0
   fi
   if [[ -z "${TS_AUTHKEY:-}" ]]; then
-    log "TS_AUTHKEY is unset; skip tailscale up (add it in Cursor Secrets)"
+    log "TS_AUTHKEY is unset; skip tailscale up (add the OAuth client secret in Cursor Secrets)"
+    return 0
+  fi
+  if [[ "${TS_AUTHKEY}" == tskey-client-* && -z "${TS_AUTHID:-}" ]]; then
+    log "TS_AUTHID is unset; skip tailscale up (add the OAuth client ID in Cursor Secrets)"
     return 0
   fi
 
   export TS_AUTHKEY
+  export TS_AUTHID="${TS_AUTHID:-}"
   local hn
   local -a up_args
   hn=$(ensure_hostname)
@@ -129,7 +207,16 @@ ensure_tailscale_up() {
     --reset
   )
   if [[ "${TS_AUTHKEY}" == tskey-client-* ]]; then
-    up_args+=(--advertise-tags=tag:cursor)
+    local minted
+    minted=$(mint_oauth_authkey) || {
+      log "failed to mint an auth key from TS_AUTHID and TS_AUTHKEY"
+      return 0
+    }
+    if [[ -z "$minted" ]]; then
+      log "failed to mint an auth key from TS_AUTHID and TS_AUTHKEY"
+      return 0
+    fi
+    export TS_AUTHKEY="$minted"
   fi
 
   local tmp
