@@ -237,7 +237,7 @@ export class SessionMaintenanceController {
         const unresolved = operation.inputs.some((input) => input.state === "queued" || input.state === "sending" || input.state === "uncertain");
         if (operation.state === "abandoned" && !unresolved) return false;
         const control = this.controls.snapshot(ref);
-        if (!control.allowed) {
+        if (!this.controls.receivingAllowed(ref)) {
             if (!unresolved && operation.state === "complete" && owner === undefined && !session.isCompacting) {
                 this.store.update(ref, operation.id, (current) => { current.state = "superseded"; current.detail = "Fresh explicit input superseded the empty completed maintenance while automatic admission remained off"; });
                 return false;
@@ -269,7 +269,7 @@ export class SessionMaintenanceController {
     }
     reconcile(session, id) {
         const operation = this.status(session, id);
-        if (operation.inputs.some((input) => input.state === "queued") && !this.controls.snapshot(identity(session)).allowed)
+        if (operation.inputs.some((input) => input.state === "queued") && !this.controls.receivingAllowed(identity(session)))
             throw new AutomaticAdmissionRejected("Automatic maintenance admission is disabled; accepted input is retained pending explicit reconciliation or stop/cancel");
         if (operation.compactionRetirement === undefined && ["complete", "superseded", "abandoned"].includes(operation.state) && operation.inputs.some((input) => input.state === "queued"))
             this.background(session, this.drain(session, id));
@@ -448,9 +448,7 @@ export class SessionMaintenanceController {
                     this.abandon(session, id, "Interrupted input abandoned without replay; later proven queued input remains retained");
                     continue;
                 }
-                const control = this.controls.snapshot(ref);
-                if (operation.cancelledByStop === true) return;
-                if (!control.allowed) return;
+                if (operation.cancelledByStop === true || !this.controls.receivingAllowed(ref)) return;
                 if (session.isStreaming || session.isCompacting || session.isBashRunning || this.host.humanInputPending(session))
                     return;
                 this.store.update(ref, id, (current) => { const selected = current.inputs[input.sequence - 1]; if (selected !== undefined)

@@ -66,6 +66,10 @@ export class AutomaticAdmissionStore {
         const durable = record !== undefined && this.directory !== undefined && !this.writing.has(key) && !this.failed.has(key);
         return { sessionId: ref.id, cwd, generation: record?.generation ?? "unarmed", allowed: durable && !this.denied.has(key) && record.allowed, durable };
     }
+    receivingAllowed(ref) {
+        const { key } = identity(ref);
+        return !this.denied.has(key) && this.read(ref)?.allowed === true;
+    }
     assertSettled(ref) {
         if (this.operations.has(identity(ref).key))
             throw new AutomaticAdmissionRejected("Receiving control mutation is pending; preserve recovery originals");

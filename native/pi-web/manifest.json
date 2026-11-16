@@ -67,7 +67,7 @@
     {
       "path": "dist/server/sessions/sessionMaintenanceController.js",
       "before": "c94c2efc27e6371498af4512ff441cb59db830ebc434f6407cb51170847e6164",
-      "after": "98b2fd4086d7799f8a98f0ec82d43a65f2595668d9dbcdbe7b10644d792dbee1",
+      "after": "b314e79501cb4753820c8e4da0a434a6b38f8473d6f98a5b86640bebfd69677e",
       "contentFile": "pi-web/postimages/dist/server/sessions/sessionMaintenanceController.js"
     },
     {
@@ -151,7 +151,7 @@
     {
       "path": "dist/server/sessions/automaticAdmissionStore.js",
       "before": "09378e1dd8fe338a836cb69375c10140ebc81c0ffe3d04de36ce77b040a05017",
-      "after": "0ffdfba3499abc8c8d93268f40a533bad28b91d2c3ad6d42e2f85ce08d8f7846",
+      "after": "19c72429dd59bdbc3a11da8f6a2ab6323ae6b4fed442a854c22b5b5baa69b9d8",
       "contentFile": "pi-web/postimages/dist/server/sessions/automaticAdmissionStore.js"
     },
     {
@@ -1643,6 +1643,39 @@
       "dist/server/sessions/sessionFailureRecovery.js": "566bbbe1426e7c90c6716dd6640ebd83e389cad72e9a1c1e5534c1af5ae39e64",
       "dist/server/sessions/sessionFailureRetirement.js": "072acb5375690965ac6d64986051a071dbce5bf7e1222face39889c032b92a2a",
       "dist/server/sessions/sessionMaintenanceController.js": "395ab5d1c317876637a388e23455646cea8942090525cb9fe6b823b70336b8da",
+      "dist/server/sessions/sessionRoutes.js": "8ff5dc1cc3534ad633b8c4bed6a9c32b8b344af22c125ee46a985c1fca1ed34a",
+      "dist/server/sessions/streamTransientRetry.js": "57e2b6044d9eddbd55d83059bb18aa2dcd0a3c45e8d69a04c2f91fa3724d13fa",
+      "dist/shared/apiTypes.d.ts": "cce67b25c0d74d8b86dcf0bc2493928e6db45521f0673d7df3dd6da214085811",
+      "dist/shared/apiTypes.js": "07fac1e02b09c8703b6f8e4681324eda7c0e1da36eafc0d3d18a5873b85f9c58",
+      "dist/shared/capabilities.js": "de7dc0e1274a382dd27b26e4cc7e1410b83cba0ac477ba6b1b9d43ad3cc9c10f",
+      "node_modules/@earendil-works/pi-ai/dist/utils/retry.d.ts": "754a374582c439c53a8f19d449877ea1e7643a0542587d0dc19ce005fc9f669a",
+      "node_modules/@earendil-works/pi-ai/dist/utils/retry.js": "f9da58e19e17df4d4f7caef5fbc09210d46e74cf34de7dc88b5bf4ca62f19528",
+      "node_modules/@earendil-works/pi-coding-agent/dist/core/agent-session.d.ts": "4194b60bf66b411996695e1857c87dcb37b77df2a77b1a81630dffb313e5b2c5",
+      "node_modules/@earendil-works/pi-coding-agent/dist/core/agent-session.js": "d28f96940ab471af98a7b5f8d4ec7125294781daaee235bc99e6073076233d3b",
+      "node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/loader.js": "00ac0fb6269bb166337c46f1864a87026024f8224c766e3e7d2772fa74dc59d5",
+      "node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/types.d.ts": "d285a4531d952ed7ec3b10c621af8771b645e00f108a5db9294d5ec9d43cda8f",
+      "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/utils/retry.d.ts": "754a374582c439c53a8f19d449877ea1e7643a0542587d0dc19ce005fc9f669a",
+      "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/utils/retry.js": "f9da58e19e17df4d4f7caef5fbc09210d46e74cf34de7dc88b5bf4ca62f19528",
+      "dist/server/sessions/automaticAdmissionStore.js": "0ffdfba3499abc8c8d93268f40a533bad28b91d2c3ad6d42e2f85ce08d8f7846",
+      "dist/server/sessions/cleanPolicyAnalysis.js": "b175f366c75042de6dafc33f063b909c5f40b8ae87558d9eb35dd3a6d21b59f8",
+      "node_modules/@earendil-works/pi-coding-agent/dist/core/session-manager.js": "161d5ceb8d87f33592895e9f505720c9e6040311ab4acdd6abc59b6412fdc4a2",
+      "node_modules/@earendil-works/pi-coding-agent/dist/core/session-manager.d.ts": "358ae5f35e18833cc3fdda82f43c2e67df9c1bb1a5390bb24e92bc22baac06da",
+      "dist/server/sessions/sessionMaintenanceEvidence.js": "9d6535b47f9dc83bf1f0a28aa0e3cf386104d957e45e7e53e862a6a1a7c213d5",
+      "dist/server/sessions/sessionArchiveStore.js": "8d35bfc9efe7a03fc933d6258f548e50302f2fa8d03b44ec847f87a27ab3c8c6",
+      "dist/server/sessions/recoveryArchiveCompletion.js": "f14c1675152841c3f6879facfa2382e97c1d8f67c454773162a00153249cb896",
+      "dist/server/sessions/piSessionManagerGateway.js": "00ea7a9fb5929853cbcdff5dd5d03527030067cd66084e458f609eaae772a3a9",
+      "dist/server/sessions/sessionMaintenanceStore.js": "789f352fa20d528fe7f26a19994a782d5e89f0db37a78c1c9bde9eaa5dc63e5b",
+      "dist/server/sessions/sessionControlGoal.js": "ac95bec1a7841213f3c2d4b5d4424f3c3bdcf1be80e6bd9132a7ee75702ba3ad",
+      "dist/server/sessions/streamsDcrEvents.js": "240e1266e09614d1e9072415a180f5cf09be235ab4829e80dbea5cbed4b9e3ba"
+    },
+    {
+      "dist/server/sessiond/sessionServiceDependencies.js": "b230917f9ad16c8ab7b554727be4fbef927999bc3b7720d58875d7c03caa3e40",
+      "dist/server/sessions/extensionCallbackOwnership.js": "4db86c9f54ce0c6b62fe24faf91f222e822ea6f31cc295d613066720ef713a47",
+      "dist/server/sessions/piSessionService.js": "c3271a06c4b04ca59facfb43e2650cfc417ef77cad826891c43a8b2480d6b803",
+      "dist/server/sessions/sessionFailureBoundary.js": "15ecd2512e77484f0352faaf7e833945207bfa2dea68ac734eced5c8026e2b77",
+      "dist/server/sessions/sessionFailureRecovery.js": "566bbbe1426e7c90c6716dd6640ebd83e389cad72e9a1c1e5534c1af5ae39e64",
+      "dist/server/sessions/sessionFailureRetirement.js": "072acb5375690965ac6d64986051a071dbce5bf7e1222face39889c032b92a2a",
+      "dist/server/sessions/sessionMaintenanceController.js": "98b2fd4086d7799f8a98f0ec82d43a65f2595668d9dbcdbe7b10644d792dbee1",
       "dist/server/sessions/sessionRoutes.js": "8ff5dc1cc3534ad633b8c4bed6a9c32b8b344af22c125ee46a985c1fca1ed34a",
       "dist/server/sessions/streamTransientRetry.js": "57e2b6044d9eddbd55d83059bb18aa2dcd0a3c45e8d69a04c2f91fa3724d13fa",
       "dist/shared/apiTypes.d.ts": "cce67b25c0d74d8b86dcf0bc2493928e6db45521f0673d7df3dd6da214085811",
