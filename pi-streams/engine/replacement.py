@@ -12,7 +12,7 @@ from pathlib import Path
 
 from engine import StreamsError, artifacts, clock, delivery, failure, failure_recovery, piweb, sessionlog, terminal_sessions
 from engine.project import Project, _sync_directory, _write, commit_repo, git, require_stream
-from engine.threads import Coordinator, Status, Thread, _canonical_stream, _native_session, _save_start, _start_record, _validated_handover, designated_coordinator, dump_threads, ensure_coordinator, load_threads, resolve_coordinator, save_threads, transition
+from engine.threads import Coordinator, Status, Thread, _canonical_stream, _native_session, _save_start, _start_record, _validated_handover, designated_coordinator, dump_threads, ensure_coordinator, load_threads, reconcile_start, resolve_coordinator, save_threads, transition
 
 
 @contextmanager
@@ -208,6 +208,7 @@ def _healthy_source(resolved) -> dict:
 def rotate_locked(index: Path, project: Project, stream_id: str) -> str:
     stream = require_stream(index, project.info.name, stream_id)
     artifacts._read_stream_state_locked(stream)
+    reconcile_start(stream, supersede=True)
     data = artifacts._read_tick_data(stream)
     checkpoint = data.get("coordinator_checkpoint")
     operation = data.get("coordinator_rotation")
@@ -379,6 +380,7 @@ def _replacement_records(stream: Path) -> dict:
 
 
 def _replacement_inputs(stream: Path, sid: str) -> None:
+    reconcile_start(stream, supersede=True)
     if _start_record(stream) is not None:
         raise StreamsError("saved opening ownership must settle before replacement")
     rotation = artifacts._read_tick_data(stream).get("coordinator_rotation")
@@ -758,6 +760,7 @@ def replace_locked(index: Path, project: Project, stream_id: str, target: str, *
     stream = require_stream(index, project.info.name, stream_id).resolve()
     if not _canonical_stream(stream):
         raise StreamsError("explicit replacement requires canonical STATE without migration or healing")
+    reconcile_start(stream, supersede=True)
     data = artifacts._read_tick_data(stream)
     book = data.get("state_log")
     if book is not None and book.get("pending") is not None:

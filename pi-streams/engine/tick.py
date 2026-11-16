@@ -21,7 +21,7 @@ from engine.project import (
     stream_lock,
 )
 from engine.subscriptions import SOURCES, Subscription, load_subscriptions
-from engine.threads import Coordinator, NativeSession, RetiredCoordinatorResidue, Status, Thread, _native_session, inspect_coordinator, load_threads, save_threads, transition
+from engine.threads import Coordinator, NativeSession, RetiredCoordinatorResidue, Status, Thread, _native_session, inspect_coordinator, load_threads, reconcile_start, save_threads, transition
 
 WAKE_KINDS = frozenset({"idle", "ask", "context", "stale-steer", "outage", "recovered", "subscription", "claim"})
 QUEUE_FLAGS = {"steer": "steer", "followUp": "follow-up"}
@@ -225,6 +225,7 @@ class StreamTick:
             self.state = load_state(self.state_path)
             self.loaded = True
             self.rows = load_threads(self.rows_path)
+            reconcile_start(self.stream_dir)
             legacy = drive.reconcile_locked(self.stream_dir)
             if drive.is_paused(self.stream_dir) and legacy is None:
                 return

@@ -272,6 +272,42 @@ def _save_start(stream_dir: Path, start: SessionStart | None) -> None:
     artifacts._save_tick_data(stream_dir, data)
 
 
+def reconcile_start(stream_dir: Path, *, supersede: bool = False) -> str:
+    start = _start_record(stream_dir)
+    if start is None:
+        return "absent"
+    rows = load_threads(stream_dir / "threads.tsv")
+    registered = next((row for row in rows if row.session == start.session and row.role == start.role and row.worktree == start.cwd), None)
+    rotation = artifacts._read_tick_data(stream_dir).get("coordinator_rotation")
+    owned = (isinstance(rotation, dict) and rotation.get("phase") == "archived"
+             and start.operation == rotation.get("owner"))
+    reason = None
+    if not owned and registered is not None and (start.role == "coordinator" or start.phase == "accepted"):
+        reason = "registered"
+    elif not owned and start.role == "coordinator" and (supersede or designated_coordinator(rows) is not None):
+        reason = "superseded"
+    elif start.role == "coordinator":
+        try:
+            listing = piweb.list_sessions(start.cwd)
+        except (StreamsError, OSError):
+            return "deferred"
+        matches = [item for item in listing if item.get("id") == start.session]
+        if not matches:
+            reason = "missing"
+        elif (len(matches) == 1 and matches[0].get("archived") is True
+                and matches[0].get("cwd") == start.cwd):
+            reason = "archived"
+    if reason is None:
+        return "owned" if owned else "pending"
+    data = artifacts._read_tick_data(stream_dir)
+    if _start_record(stream_dir) != start:
+        raise StreamsError("saved session start changed during reconciliation")
+    data.setdefault("session_start_residues", []).append({"start": data["session_start"], "disposition": reason})
+    data.pop("session_start", None)
+    artifacts._save_tick_data(stream_dir, data)
+    return reason
+
+
 def _send_start(stream_dir: Path, session_id: str, prompt: str) -> None:
     start = _start_record(stream_dir)
     if start is None or start.session != session_id or start.phase != "created":
@@ -297,6 +333,7 @@ def _accept_start(stream_dir: Path, session_id: str) -> None:
 
 def _resume_or_spawn(cwd: Path, rows: list[Thread], stream_dir: Path, role: str, intent: list[str], operation: str = "new") -> tuple[str, bool]:
     digest = hashlib.sha256(json.dumps(intent, ensure_ascii=False).encode()).hexdigest()
+    reconcile_start(stream_dir, supersede=role != "coordinator")
     start = _start_record(stream_dir)
     if start is not None:
         if (start.cwd, start.role, start.intent, start.operation) != (str(cwd), role, digest, operation):
@@ -347,6 +384,7 @@ def ensure_coordinator(project: Project, stream_dir: Path, *, opening_prompt: st
     stream_dir = stream_dir.resolve()
     path = stream_dir / "threads.tsv"
     rows = load_threads(path)
+    reconcile_start(stream_dir, supersede=coordinator_session is not None)
     if coordinator_session is not None:
         return _adopt_coordinator(project, stream_dir, rows, coordinator_session)
     if designated_coordinator(rows) is not None:
@@ -722,6 +760,7 @@ def spawn_thread(
     _outside_repos(worktree, project)
     rows_path = stream_dir / "threads.tsv"
     rows = load_threads(rows_path)
+    reconcile_start(stream_dir, supersede=True)
     if worktree.exists():
         pointer = worktree / ".stream"
         marker = pointer.read_text(encoding="utf-8").strip() if pointer.is_file() else ""
