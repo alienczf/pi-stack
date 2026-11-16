@@ -221,6 +221,7 @@ VERBS: dict[str, tuple[str, str, tuple[str, ...], VerbBuilder]] = {
     "abort": ("POST", "abort", (), lambda _args: {}),
     "queue-clear": ("POST", "queue/clear", (), lambda _args: {}),
     "archive": ("POST", "archive", (), _archive_body),
+    "retirement": ("GET", "retirement", (), lambda _args: None),
     "messages": ("GET", "messages", (), lambda _args: None),
     "model": ("POST", "model", ("model",), _model_body),
     "thinking-level": ("POST", "thinking-level", ("level",), lambda args: {"level": args.level}),

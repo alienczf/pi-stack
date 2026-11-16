@@ -118,6 +118,13 @@ def spawn(cwd: str, *, creation_token: str | None = None) -> str:
     return str(session["id"])
 
 
+def retirement_status(sid: str) -> dict:
+    result = call(["retirement", sid], timeout=2).get("result")
+    if not isinstance(result, dict) or result.get("sessionId") != sid:
+        raise StreamsError("Native retirement identity is unavailable")
+    return result
+
+
 def discard_empty(sid: str, creation_token: str) -> bool:
     return call(["discard-empty", sid, creation_token]).get("result", {}).get("removed") is True
 

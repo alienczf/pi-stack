@@ -567,6 +567,13 @@ export function registerSessionRoutes(app, sessions, eventHub, prefix = "") {
             return reply.code(mutationErrorStatus(error)).send({ error: errorMessage(error) });
         }
     });
+    app.get(`${prefix}/sessions/:sessionId/retirement`, async (request, reply) => {
+        try {
+            return await sessions.retirementStatus(sessionLookupFromQuery(request.params.sessionId, request.query));
+        } catch (error) {
+            return reply.code(mutationErrorStatus(error)).send({ error: errorMessage(error) });
+        }
+    });
     app.post(`${prefix}/sessions/:sessionId/archive`, async (request, reply) => {
         try {
             const body = optionalRecord(request.body);

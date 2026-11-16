@@ -135,12 +135,16 @@ export class AutomaticAdmissionStore {
             return this.publish(ref, false);
         });
     }
-    markRetired(ref, generation) {
+    retirementSnapshot(ref) {
+        const data = this.read(ref);
+        return { ...this.snapshot(ref), retired: data !== undefined && data.retirementGeneration === data.generation, pendingInput: data?.retirementInput ?? [] };
+    }
+    markRetired(ref, generation, pendingInput = []) {
         return this.serial(ref, async () => {
             const data = this.read(ref);
             if (data?.generation !== generation || data.allowed !== false)
                 throw new AutomaticAdmissionRejected("Newer receiving control superseded retirement");
-            await this.persist(ref, { ...data, retirementGeneration: generation });
+            await this.persist(ref, { ...data, retirementGeneration: generation, retirementInput: pendingInput });
         });
     }
     withRetirement(ref, generation, operation) {
@@ -260,7 +264,7 @@ export class AutomaticAdmissionStore {
             const history = Array.isArray(data.abandonedControlGoals) ? data.abandonedControlGoals : [];
             if (goal !== undefined && !validGoal)
                 history.push({ disposition: "abandoned", detail: "Invalid saved control goal", original: goal });
-            const record = { version: 1, sessionId: ref.id, cwd, generation: data["generation"], allowed: data["allowed"], abandonedControlGoals: history, ...(validGoal ? { controlGoal: goal } : {}), ...(data.retirementGeneration === data.generation ? { retirementGeneration: data.retirementGeneration } : {}) };
+            const record = { version: 1, sessionId: ref.id, cwd, generation: data["generation"], allowed: data["allowed"], abandonedControlGoals: history, ...(validGoal ? { controlGoal: goal } : {}), ...(data.retirementGeneration === data.generation ? { retirementGeneration: data.retirementGeneration, retirementInput: Array.isArray(data.retirementInput) ? data.retirementInput : [] } : {}) };
             this.records.set(key, record);
             return record;
         }

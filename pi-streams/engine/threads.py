@@ -355,6 +355,10 @@ def _resume_or_spawn(cwd: Path, rows: list[Thread], stream_dir: Path, role: str,
             abandon_start(stream_dir, "Retained the admitted successor identity; abandoned its uncertain transport without replay")
             return start.session, False
         if start.phase == "sending":
+            try:
+                piweb.discard_empty(start.session, start.creation_token)
+            except StreamsError:
+                pass
             abandon_start(stream_dir, "Abandoned unadmitted opening without replay")
             start = None
         elif start.phase == "accepted":

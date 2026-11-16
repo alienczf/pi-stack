@@ -2123,6 +2123,12 @@ export class PiSessionService {
         });
         return frozen;
     }
+    async retirementStatus(ref) {
+        const target = await this.automaticControlIdentity(ref);
+        if (target === undefined)
+            throw new Error("Session not found");
+        return this.automaticAdmissionStore.retirementSnapshot(target);
+    }
     async retireForReplacement(session, expected) {
         const sessionId = session.sessionId;
         if (this.isTreeExclusiveOperationActive(session))
@@ -2130,7 +2136,11 @@ export class PiSessionService {
         if (this.pendingAskStore.pendingAsk(sessionId) !== undefined || this.pendingExtensionDialogStore.pendingDialogs(sessionId).length > 0)
             throw new AutomaticAdmissionRejected("Pending human input must be answered before replacement");
         const ref = { id: sessionId, cwd: session.sessionManager.getCwd() };
-        this.automaticAdmissionStore.assertCurrent(ref, { ...expected, kind: "wake" });
+        const control = this.automaticAdmissionStore.snapshot(ref);
+        const boundary = this.failureBoundaries.snapshot(session);
+        const failurePause = boundary?.state === "parked" && boundary.parking?.owned === true && boundary.parking.generation === control.generation && boundary.failure?.kind !== "content-policy";
+        if (!control.durable || control.generation !== expected.generation || !control.allowed && !failurePause)
+            throw new AutomaticAdmissionRejected("Explicit stop preserves the predecessor");
         const loaded = this.activeRuntimeForSession(session)?.services?.resourceLoader.getExtensions();
         if (callbackInventory(loaded).owners.some(owner => owner.kind === "active"))
             throw new AutomaticAdmissionRejected("A live extension callback must finish or be cancelled");
@@ -2154,7 +2164,7 @@ export class PiSessionService {
             const current = this.automaticAdmissionStore.snapshot(ref);
             if (current.generation !== frozen.generation)
                 throw new AutomaticAdmissionRejected("Newer stop or input superseded retirement");
-            await this.automaticAdmissionStore.markRetired(ref, frozen.generation);
+            await this.automaticAdmissionStore.markRetired(ref, frozen.generation, pendingInput);
             frozen = { ...frozen, pendingInput };
             try {
                 await this.archiveStore.archive(archiveInput);
@@ -2170,7 +2180,7 @@ export class PiSessionService {
             if (teardownStarted) {
                 retainFence = true;
             } else if (frozen !== undefined && this.automaticAdmissionStore.snapshot(ref).generation === frozen.generation) {
-                await this.automaticAdmissionStore.setAllowedAtGeneration(ref, true, frozen.generation);
+                await this.automaticAdmissionStore.setAllowedAtGeneration(ref, control.allowed, frozen.generation);
             }
             throw error;
         } finally {

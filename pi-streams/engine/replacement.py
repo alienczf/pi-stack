@@ -204,11 +204,31 @@ def rotate_locked(index: Path, project: Project, stream_id: str) -> str:
     data = artifacts._read_tick_data(stream)
     operation = data.get("coordinator_rotation")
     source = designated_coordinator(rows)
+    if isinstance(operation, dict) and operation.get("phase") == "archiving" and isinstance(operation.get("source"), str):
+        receipt = piweb.retirement_status(operation["source"])
+        if receipt.get("retired") is True and receipt.get("durable") is True:
+            operation.update({"retirement": {"automaticAdmission": receipt}, "phase": "archived"})
+            _save(stream, "coordinator_rotation", operation)
+            for row in rows:
+                if row.session == operation["source"] and row.status is not Status.archived:
+                    transition(row, Status.archived)
+            save_threads(stream / "threads.tsv", rows)
+        elif receipt.get("allowed") is False:
+            raise StreamsError("Newer stop or unfinished live retirement preserves the predecessor")
     if isinstance(operation, dict) and operation.get("phase") == "complete" and source is not None and source.session == operation.get("target"):
         completed = clock.parse(operation.get("completed_at", ""))
         if completed is not None and (clock.now() - completed).total_seconds() < 2:
             return source.session
     if not isinstance(operation, dict) or operation.get("phase") != "archived":
+        for row in rows:
+            if row.role != "coordinator":
+                continue
+            episode = failure.load(stream, row.session)
+            recovery = failure_recovery.load(stream, row.session)
+            if episode is not None and episode.state == "parked" and (recovery is None or recovery.phase != "complete"):
+                result = failure_recovery.advance_locked(stream, row.session, episode.id, clock.stamp(clock.now()), index=index, project=project)
+                if result.get("fork"):
+                    return result["fork"]
         if source is not None:
             try:
                 native = _native_session(source.session, stream)
@@ -225,7 +245,9 @@ def rotate_locked(index: Path, project: Project, stream_id: str) -> str:
             if source is None:
                 return rotate_locked(index, project, stream_id)
             token, allowed = piweb.automatic_admission(native.status, source.session, str(stream), "wake")
-            if not allowed:
+            boundary = native.status.get("failureBoundary") or {}
+            failure_pause = boundary.get("parking") == {"generation": token["generation"], "owned": True} and boundary.get("failure", {}).get("kind") != "content-policy"
+            if not allowed and not failure_pause:
                 raise StreamsError("Explicit stop preserves the coordinator")
             entry = native.status.get("rotationSafety", {}).get("entryId") or source.session
             operation = {"source": source.session, "owner": "rotation:" + uuid.uuid4().hex, "phase": "archiving", "model": source.model, "thinking": source.thinking}
