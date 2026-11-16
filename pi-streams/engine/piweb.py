@@ -11,7 +11,7 @@ from engine import StreamsError, repo_root, sessionlog
 from engine.project import default_pi_web_url
 
 
-def _run(args: list[str], stdin: str | None = None) -> subprocess.CompletedProcess[str]:
+def _run(args: list[str], stdin: str | None = None, *, timeout: float = 30) -> subprocess.CompletedProcess[str]:
     # project.toml's pi_web_url is the address a browser opens, which may be a
     # tunnel. The engine runs beside pi-web, so it follows pi-web's own config.
     env = os.environ.copy()
@@ -25,7 +25,7 @@ def _run(args: list[str], stdin: str | None = None) -> subprocess.CompletedProce
             encoding="utf-8",
             env=env,
             check=False,
-            timeout=30,
+            timeout=timeout,
         )
     except subprocess.TimeoutExpired as exc:
         raise StreamsError(f"pi-web receiving boundary timed out for {args[0]}") from exc
@@ -51,8 +51,8 @@ class RecoveryRefused(StreamsError):
         self.receipt = receipt
 
 
-def call(args: list[str], stdin: str | None = None) -> dict[str, object]:
-    proc = _run(args, stdin)
+def call(args: list[str], stdin: str | None = None, *, timeout: float = 30) -> dict[str, object]:
+    proc = _run(args, stdin, timeout=timeout)
     try:
         data = json.loads(proc.stdout) if proc.stdout.strip() else {}
     except json.JSONDecodeError as exc:
@@ -78,8 +78,8 @@ def call(args: list[str], stdin: str | None = None) -> dict[str, object]:
     return data
 
 
-def list_sessions(cwd: str) -> list[dict[str, object]]:
-    data = call(["list", "--cwd", cwd])
+def list_sessions(cwd: str, *, timeout: float = 30) -> list[dict[str, object]]:
+    data = call(["list", "--cwd", cwd], timeout=timeout)
     sessions = data.get("sessions")
     if not isinstance(sessions, list):
         raise StreamsError("pi-web-cli list returned no session list")
@@ -106,8 +106,9 @@ def read_evidence(cwd: str, session_id: str, entry_id: str, expected_sha256: str
     return sessionlog.read_record(Path(raw_path), session_id, entry_id, expected_sha256, archived=archived)
 
 
-def spawn(cwd: str) -> str:
-    data = call(["spawn", cwd])
+def spawn(cwd: str, *, creation_token: str | None = None) -> str:
+    flags = [] if creation_token is None else ["--creation-token", creation_token]
+    data = call(["spawn", cwd, *flags])
     session = data.get("session")
     if not isinstance(session, dict) or not isinstance(session.get("id"), str) or not session["id"]:
         raise StreamsError("pi-web-cli spawn returned no session id")
@@ -115,6 +116,10 @@ def spawn(cwd: str) -> str:
     if not isinstance(returned_cwd, str) or Path(returned_cwd).resolve() != Path(cwd).resolve():
         raise StreamsError("spawn identity has no matching native cwd")
     return str(session["id"])
+
+
+def discard_empty(sid: str, creation_token: str) -> bool:
+    return call(["discard-empty", sid, creation_token]).get("result", {}).get("removed") is True
 
 
 def set_model(sid: str, model: str) -> None:
@@ -125,8 +130,8 @@ def set_thinking(sid: str, level: str) -> None:
     call(["thinking-level", sid, level])
 
 
-def session_status(sid: str) -> dict[str, object]:
-    data = call(["status", sid])
+def session_status(sid: str, *, timeout: float = 30) -> dict[str, object]:
+    data = call(["status", sid], timeout=timeout)
     session = data.get("session")
     if not isinstance(session, dict):
         raise StreamsError("pi-web-cli status returned no session")
@@ -311,15 +316,12 @@ def _control_goal_result(data: dict, sid: str, cwd: str, identity: str) -> dict:
 def control_goal(sid: str, identity: str, run_id: str, sequence: int, text: str, goal: str, automatic: dict[str, str] | None) -> dict:
     if automatic is None or automatic.get("kind") not in ("wake", "recovery") or automatic.get("sessionId") != sid:
         raise StreamsError("current-goal control requires its saved receiving generation")
-    status = require_control_goal(sid)
-    if automatic["kind"] == "recovery" and (status.get("recoveryControlSupport") != "question-safe-v1" or status.get("conditionalAdmissionSupport") != "generation-cas-v1"):
-        raise StreamsError("question-safe conditional recovery control is unavailable")
     data = call(["control-goal", sid, identity, "--run-id", run_id, "--sequence", str(sequence), "--automatic-admission", json.dumps(automatic)], stdin=_poteto_payload(text, goal))
     return _control_goal_result(data, sid, automatic["cwd"], identity)
 
 
 def control_goal_status(sid: str, cwd: str, identity: str) -> dict:
-    return _control_goal_result(call(["control-goal", sid, identity, "--cwd", cwd, "--status"]), sid, cwd, identity)
+    return _control_goal_result(call(["control-goal", sid, identity, "--cwd", cwd, "--status"], timeout=2), sid, cwd, identity)
 
 
 def watch_dcr_events(sid: str, cwd: str, identity: str, index: Path, stream: str, generation: str, *, original: str = "") -> dict:
@@ -401,7 +403,7 @@ def archive(sid: str, *, expected_idle: dict[str, str] | None = None) -> dict[st
     flags = [] if expected_idle is None else ["--expected-idle", json.dumps(expected_idle, ensure_ascii=False)]
     data = call(["archive", sid, *flags])
     result = data.get("result")
-    if not isinstance(result, dict) or (expected_idle is not None and result.get("archived") is not True):
+    if not isinstance(result, dict) or (expected_idle is not None and result.get("archived") is not True and not (expected_idle.get("stopBusy") is True and result.get("retired") is True)):
         raise StreamsError("archive publication is unconfirmed")
     if expected_idle is not None:
         frozen = result.get("automaticAdmission")

@@ -19,7 +19,7 @@ COMPACT_INSTRUCTIONS = (
     "Retain pending ordered human input and uncertain external jobs without retrying them. "
     "Do not invent a RESUME prompt, continuation budget, task ledger or environment remedy."
 )
-TERMINAL = frozenset({"complete", "superseded", "blocked", "rotated"})
+TERMINAL = frozenset({"complete", "superseded", "blocked", "rotated", "abandoned"})
 PHASES = TERMINAL | {"sync-prepared", "sync-sending", "sync-admitted", "compact-sending", "compacting", "resume-sending", "resuming", "rotation-pending"}
 
 
@@ -157,7 +157,7 @@ def ready(stream_dir: Path, index: Path, stream: str, resolved: Coordinator, ide
 
 
 def synced_state(stream_dir: Path, op: Operation) -> bool:
-    before = artifacts.parse_state(base64.b64decode(op.ready_source, validate=True))
+    before = snapshot_state(op)
     current = artifacts._read_stream_state_locked(stream_dir)
     if before.source[:before.log.body.start] != current.source[:current.log.body.start]:
         return False
@@ -315,15 +315,24 @@ def prepare(index: Path, stream: str, stream_dir: Path, resolved: Coordinator, i
     return op
 
 
-def saved_dump(op: Operation) -> bytes:
+def snapshot_state(op: Operation) -> artifacts.StreamState:
     try:
         source = base64.b64decode(op.ready_source, validate=True)
     except (ValueError, TypeError) as exc:
         raise StreamsError("Dump rotation requires an intact saved STATE checkpoint") from exc
     if not source or hashlib.sha256(source).hexdigest() != op.ready_revision:
         raise StreamsError("Dump rotation requires an intact saved STATE checkpoint")
-    artifacts.parse_state(source)
-    return source
+    try:
+        entries = [artifacts.LogEntry(**value) for value in op.ready_entries]
+        book = artifacts._book({"version": 1, "next_occurrence": max((entry.occurrence for entry in entries), default=0) + 1,
+                                "entries": op.ready_entries, "receipts": {}, "pending_history": []})
+        return artifacts._checked_state(source, book)
+    except (TypeError, ValueError, KeyError) as exc:
+        raise StreamsError("Invalid saved STATE Log bounds") from exc
+
+
+def saved_dump(op: Operation) -> bytes:
+    return snapshot_state(op).source
 
 
 def retain_dump(stream_dir: Path, op: Operation) -> None:
@@ -540,7 +549,10 @@ def step(index: Path, project: Project, stream: str, stream_dir: Path, resolved:
     if op is not None and op.phase == "blocked":
         legacy_gate = "below 150000 tokens" in op.detail and not op.resume_text and op.checkpoint_entry
         if not legacy_gate:
-            return True
+            op.phase, op.detail = "abandoned", "Abandoned blocked maintenance without replay. " + op.detail
+            save(stream_dir, op)
+            close_events(stream_dir, op)
+            return False
         native = piweb.maintenance_status(op.cwd, sid, op.id, original=op.recovery_original)
         if native.get("generation") != op.automatic["generation"] or native.get("entryId") != op.checkpoint_entry:
             raise StreamsError("Legacy DCR reconciliation changed its exact checkpoint/generation")

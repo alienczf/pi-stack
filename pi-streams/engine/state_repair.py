@@ -74,6 +74,13 @@ def _sections_candidate(raw: bytes, before: dict | None) -> bytes:
         headings = artifacts._headings(raw[:len(raw) - size])
         top = [heading for heading in headings if heading.level == 2]
         names = [heading.name for heading in top]
+        if (len(set(names)) == len(names) and all(names) and all(names.count(name) == 1 for name in ('Goals', 'Rules', 'Log'))
+                and not raw[:top[0].span.start].strip() and (size == 0 or names[-1] == 'Log')):
+            bodies = {heading.name: raw[heading.span.start:top[index + 1].span.start if index + 1 < len(top) else len(raw)] for index, heading in enumerate(top)}
+            ordered = ['Goals', 'Rules', *[name for name in names if name not in {'Goals', 'Rules', 'Log'}], 'Log']
+            candidate = b''.join(bodies[name] for name in ordered)
+            artifacts._checked_state(candidate, book)
+            return candidate
         if (b'\0' in raw or size > len(raw) or any(names.count(name) != 1 for name in ('Goals', 'Rules', 'Log'))
                 or names[:2] != ['Goals', 'Rules'] or names[-1] != 'Log'
                 or raw[:top[0].span.start].strip() or len(set(names)) == len(names) and all(names)):

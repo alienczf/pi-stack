@@ -53,8 +53,11 @@ def cmd_list(cwd: str | None) -> int:
     return out({"ok": ok, "status": code, "sessions": data}, ok)
 
 
-def cmd_spawn(cwd: str) -> int:
-    code, data = req("POST", "/api/sessions", {"cwd": cwd})
+def cmd_spawn(cwd: str, creation_token: str | None = None) -> int:
+    body = {"cwd": cwd}
+    if creation_token is not None:
+        body["startupToken"] = creation_token
+    code, data = req("POST", "/api/sessions", body)
     ok = code in (200, 201) and isinstance(data, dict) and "id" in data
     return out({"ok": ok, "status": code, "session": data}, ok)
 
@@ -211,6 +214,7 @@ def _answer_body(args: argparse.Namespace) -> dict[str, object]:
 
 VerbBuilder = Callable[[argparse.Namespace], dict | None]
 VERBS: dict[str, tuple[str, str, tuple[str, ...], VerbBuilder]] = {
+    "discard-empty": ("POST", "discard-empty", ("creation_token",), lambda args: {"creationToken": args.creation_token}),
     "stop": ("POST", "stop", (), lambda _args: {}),
     "abort": ("POST", "abort", (), lambda _args: {}),
     "queue-clear": ("POST", "queue/clear", (), lambda _args: {}),
@@ -229,6 +233,7 @@ def main(argv: list[str]) -> int:
     ls.add_argument("--cwd", required=True, help="PI WEB requires cwd; global roster is pi-intercom-cli list")
     sp = sub.add_parser("spawn")
     sp.add_argument("cwd")
+    sp.add_argument("--creation-token")
     pr = sub.add_parser("prompt")
     pr.add_argument("sid")
     pr.add_argument("text", nargs="?")
@@ -358,7 +363,7 @@ def main(argv: list[str]) -> int:
     if args.cmd == "list":
         return cmd_list(args.cwd)
     if args.cmd == "spawn":
-        return cmd_spawn(args.cwd)
+        return cmd_spawn(args.cwd, args.creation_token)
     if args.cmd == "prompt":
         try:
             text, poteto_goal = _invocation_input(args)

@@ -154,6 +154,9 @@ export class AutomaticAdmissionStore {
             const data = this.read(ref);
             if (data === undefined)
                 throw new AutomaticAdmissionRejected("Durable automatic control is unavailable");
+            const history = data.abandonedControlGoals ?? [];
+            if (history.some(item => item.id === goal.id))
+                throw new AutomaticAdmissionRejected("Abandoned control goal cannot be replayed");
             const previous = data.controlGoal;
             if (previous !== undefined) {
                 if (previous.id === goal.id) {
@@ -162,12 +165,12 @@ export class AutomaticAdmissionStore {
                         throw new AutomaticAdmissionRejected("Control goal identity changed intent");
                     return structuredClone(previous);
                 }
-                if (previous.state === "sending" || previous.state === "uncertain")
-                    throw new AutomaticAdmissionRejected("Earlier control goal admission is unresolved; retain the current goal without replay");
-                if (previous.automaticAdmission.generation === goal.automaticAdmission.generation && (previous.runId !== goal.runId || goal.sequence <= previous.sequence))
+                if (previous.automaticAdmission.generation === goal.automaticAdmission.generation && previous.runId === goal.runId && goal.sequence <= previous.sequence)
                     throw new AutomaticAdmissionRejected("Older or changed control transport sequence is superseded");
             }
-            await this.persist(ref, { ...data, controlGoal: structuredClone(goal) });
+            if (previous !== undefined)
+                history.push({ ...previous, disposition: "abandoned", abandonedAt: new Date().toISOString(), detail: "Distinct control unit superseded old transport metadata without replay" });
+            await this.persist(ref, { ...data, abandonedControlGoals: history, controlGoal: structuredClone(goal) });
             return structuredClone(goal);
         });
     }
@@ -239,7 +242,7 @@ export class AutomaticAdmissionStore {
             const goal = data["controlGoal"];
             if (goal !== undefined && !validControlGoal(goal, ref))
                 throw new Error("Invalid control goal metadata");
-            const record = { version: 1, sessionId: ref.id, cwd, generation: data["generation"], allowed: data["allowed"], ...(goal === undefined ? {} : { controlGoal: goal }) };
+            const record = { version: 1, sessionId: ref.id, cwd, generation: data["generation"], allowed: data["allowed"], abandonedControlGoals: Array.isArray(data.abandonedControlGoals) ? data.abandonedControlGoals : [], ...(goal === undefined ? {} : { controlGoal: goal }) };
             this.records.set(key, record);
             return record;
         }
@@ -258,8 +261,9 @@ export class AutomaticAdmissionStore {
     }
     async publish(ref, allowed, ifAbsent = false) {
         const { cwd } = identity(ref);
-        const controlGoal = this.read(ref)?.controlGoal;
-        const record = { version: 1, sessionId: ref.id, cwd, generation: randomUUID(), allowed, ...(controlGoal === undefined ? {} : { controlGoal }) };
+        const previous = this.read(ref);
+        const controlGoal = previous?.controlGoal;
+        const record = { version: 1, sessionId: ref.id, cwd, generation: randomUUID(), allowed, abandonedControlGoals: previous?.abandonedControlGoals ?? [], ...(controlGoal === undefined ? {} : { controlGoal }) };
         await this.persist(ref, record, ifAbsent);
         return this.snapshot(ref);
     }

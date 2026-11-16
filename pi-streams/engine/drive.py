@@ -227,8 +227,14 @@ def step(stream_dir: Path, resolved: Coordinator | None, stalled: bool, *, maint
     revision = hashlib.sha256(goal.encode("utf-8")).hexdigest()
     record.desired = {"goal": goal, "body": "/poteto-mode " + goal, "revision": revision}
     save(stream_dir, record)
-    piweb.require_settings(resolved.native.status, resolved.row.model, resolved.row.thinking)
-    token, allowed = piweb.automatic_admission(resolved.native.status, resolved.row.session, resolved.row.worktree, "wake")
+    if resolved.native.status.get("observationUnavailable"):
+        if record.remote_state != "on-confirmed" or not record.remote_generation:
+            return True
+        token = {"sessionId": resolved.row.session, "cwd": resolved.row.worktree, "generation": record.remote_generation, "kind": "wake"}
+        allowed = True
+    else:
+        piweb.require_settings(resolved.native.status, resolved.row.model, resolved.row.thinking)
+        token, allowed = piweb.automatic_admission(resolved.native.status, resolved.row.session, resolved.row.worktree, "wake")
     previous = None
     if record.current_delivery:
         previous = delivery._get(stream_dir, record.current_delivery)
@@ -243,9 +249,10 @@ def step(stream_dir: Path, resolved: Coordinator | None, stalled: bool, *, maint
                     previous.state, previous.detail = "uncertain", str(exc)
                 previous.control.state = "uncertain"
                 delivery._save(stream_dir, previous)
-                return True
         if previous.control.state in ("sending", "uncertain") or previous.state in ("sending", "uncertain"):
-            return True
+            previous.state, previous.control.state = "abandoned", "superseded"
+            previous.detail = "Abandoned uncertain transport without replay; native runtime admission serializes the next unit."
+            delivery._save(stream_dir, previous)
         same = previous.session == resolved.row.session and previous.control.revision == revision and previous.automatic == {**token, "kind": "recovery" if previous.handoff is not None else "wake"}
         if previous.control.state == "queued" and same:
             if allowed and not maintenance:

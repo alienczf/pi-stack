@@ -283,22 +283,32 @@ class StreamTick:
                 if exc.state == "archived":
                     transition(row, Status.archived)
                     self.rows_dirty = True
+            except StreamsError as exc:
+                if "timed out" not in str(exc):
+                    raise
+                from engine.threads import designated_coordinator
+                row = designated_coordinator(self.rows)
+                if row is not None:
+                    self.coordinator_resolution = Coordinator(row, NativeSession({"id": row.session, "cwd": row.worktree}, {"observationUnavailable": True}))
+                self.emit("native-observation", detail="Coordinator observer timed out; receiving admission remains authoritative")
+            unknown = self.coordinator_resolution is not None and self.coordinator_resolution.native.status.get("observationUnavailable")
             if self.coordinator_resolution is not None:
                 resolved = self.coordinator_resolution
                 self.listings.setdefault(resolved.row.worktree, {resolved.row.session: resolved.native.info})
                 self.stalled = drive.is_stalled(resolved.native.status)
-                self.failure_owned = self.observe_failure(resolved.row, resolved.native.info, resolved.native.status)
-            if not self.automatic_paused and not self.failure_owned:
+                if not unknown:
+                    self.failure_owned = self.observe_failure(resolved.row, resolved.native.info, resolved.native.status)
+            if not self.automatic_paused and not self.failure_owned and not unknown:
                 self.dcr_owned = dcr.step(self.index, self.project, self.stream, self.stream_dir, self.coordinator_resolution)
                 intent = replacement.replacement_intent(self.stream_dir)
                 if load_threads(self.rows_path) != self.rows or intent is not None and intent.phase != "complete":
                     return
+            self.drive_owned = drive.step(self.stream_dir, self.coordinator_resolution, self.stalled, maintenance=self.dcr_owned or self.failure_owned)
             self.check_claims()
             self.observe()
             intent = replacement.replacement_intent(self.stream_dir)
             if intent is not None and intent.phase != "complete":
                 return
-            self.drive_owned = drive.step(self.stream_dir, self.coordinator_resolution, self.stalled, maintenance=self.dcr_owned or self.failure_owned)
             self.check_subscriptions()
             self.flush()
             self.wake()

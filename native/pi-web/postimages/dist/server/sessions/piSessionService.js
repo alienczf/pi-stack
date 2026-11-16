@@ -1,7 +1,7 @@
 import { statSync, statfsSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, writeFile, unlink } from "node:fs/promises";
 import { createAgentSessionFromServices, createAgentSessionRuntime, createAgentSessionServices, createEditToolDefinition, defineTool, readStoredCredential, SessionManager, } from "@earendil-works/pi-coding-agent";
 import { projectBrowserMessage } from "../browserMessageProjection.js";
 import { pageMessagesAtSafeBoundary } from "./messagePaging.js";
@@ -129,7 +129,7 @@ function parseExpectedIdleCheckpoint(value) {
     if (typeof sessionId !== "string" || !sessionId || typeof cwd !== "string" || !cwd || typeof entryId !== "string" || !entryId || typeof generation !== "string" || !generation) {
         throw new Error("expectedIdle requires exact session, cwd, entry and generation");
     }
-    return { sessionId, cwd: canonicalizeStoredCwd(cwd), entryId, generation };
+    return { sessionId, cwd: canonicalizeStoredCwd(cwd), entryId, generation, stopBusy: value.stopBusy === true };
 }
 function parsePromptStreamingBehavior(value) {
     if (value === undefined)
@@ -624,6 +624,11 @@ export class PiSessionService {
             this.publishNotificationMutations(this.notificationStore.clearSession(record.sessionId, "archive-reconcile"));
         }
         const unarchivedSessions = sessions.filter((session) => !archivedById.has(session.id)).map(clientSessionFromListEntry);
+        for (const active of new Set(this.active.values())) {
+            const session = active.runtime.session;
+            if (cwdPathsEqual(session.sessionManager.getCwd(), cwd) && !sessionsById.has(session.sessionId) && !archivedById.has(session.sessionId))
+                unarchivedSessions.push({ ...archiveInputFromActiveSession(session), id: session.sessionId, persisted: sessionFileExists(session.sessionFile) });
+        }
         const reconcilableSessionIds = this.reconcilableSessionIds(cwd, unarchivedSessions.map((session) => session.id), archivedById);
         this.workspaceActivity?.reconcileSessionActivity(cwd, reconcilableSessionIds);
         await this.publishUnreadMutations(this.unreadStore.reconcileCwd(canonicalizeStoredCwd(cwd), reconcilableSessionIds));
@@ -700,7 +705,9 @@ export class PiSessionService {
             ...(options.creationProvenance === undefined ? {} : { creationProvenance: options.creationProvenance }),
         });
         const { session } = active.runtime;
+        active.creationToken = options.startupToken ?? randomUUID();
         const created = {
+            creationToken: active.creationToken,
             id: session.sessionId,
             path: session.sessionFile ?? "",
             cwd,
@@ -730,7 +737,12 @@ export class PiSessionService {
         if (!decision.allowed)
             throw spawnTargetError(decision);
         const created = await this.start(decision.cwd, input.model === undefined ? {} : { initialModel: input.model });
-        await this.prompt(created.id, input.prompt);
+        try {
+            await this.prompt(created.id, input.prompt);
+        } catch (error) {
+            await this.discardUnadmittedEmpty(created.id, created.creationToken);
+            throw error;
+        }
         this.logger.info({ spawningCwd: input.spawningCwd, sessionId: created.id, cwd: decision.cwd, promptLength: input.prompt.length }, "spawn_session started a new session");
         return { sessionId: created.id, cwd: decision.cwd };
     }
@@ -759,12 +771,35 @@ export class PiSessionService {
             ...(parentSessionFile === undefined ? {} : { parentSessionFile }),
             cwd: decision.cwd,
         };
-        await this.registerVerifiedSubsession(link);
-        this.persistSubsessionLink(link);
-        this.persistSubsessionChildMarker(input.parentSessionId, created.id);
-        await this.prompt(created.id, input.prompt);
+        try {
+            await this.registerVerifiedSubsession(link);
+            await this.prompt(created.id, input.prompt);
+            this.persistSubsessionLink(link);
+            this.persistSubsessionChildMarker(input.parentSessionId, created.id);
+        } catch (error) {
+            await this.discardUnadmittedEmpty(created.id, created.creationToken);
+            throw error;
+        }
         this.logger.info({ parentSessionId: input.parentSessionId, sessionId: created.id, cwd: decision.cwd, promptLength: input.prompt.length }, "spawn_subsession started a tracked child session");
         return { sessionId: created.id, cwd: decision.cwd };
+    }
+    async discardUnadmittedEmpty(sessionId, creationToken) {
+        const active = this.active.get(sessionId);
+        if (active === undefined || !creationToken || active.creationToken !== creationToken)
+            return { removed: false };
+        const session = active.runtime.session;
+        if (session.messages.length !== 0 || this.hasActiveWork(session) || this.pendingMessageCount(session) !== 0 || this.pendingAskStore.pendingAsk(sessionId) !== undefined || this.pendingExtensionDialogStore.pendingDialogs(sessionId).length > 0)
+            return { removed: false };
+        await this.runTreeExclusiveOperation([{ sessionId, session }], "Session has admitted work", async () => {
+            if (active.creationToken !== creationToken || session.messages.length !== 0 || this.pendingMessageCount(session) !== 0)
+                throw new Error("Session was adopted before rollback");
+            await this.closeActive(sessionId);
+            this.unregisterSubsession(sessionId);
+            if (sessionFileExists(session.sessionFile))
+                await unlink(session.sessionFile);
+            this.events.publishGlobal({ type: "session.deleted", sessionId });
+        });
+        return { removed: true };
     }
     /**
      * Register the question set an agent wants the user to answer as the session's
@@ -1523,6 +1558,8 @@ export class PiSessionService {
             this.enqueuePromptDuringCompaction(session, promptText, behavior ?? "followUp", images, echoUserMessage, potetoGoal);
             return;
         }
+        const active = this.active.get(session.sessionId);
+        if (active !== undefined) active.creationToken = undefined;
         void this.submitPrompt(session, promptText, behavior, images, echoUserMessage, potetoGoal);
     }
     submitPrompt(session, text, behavior, images = [], echoUserMessage = true, potetoGoal) {
@@ -2036,6 +2073,8 @@ export class PiSessionService {
             ref = { id: expected.sessionId, cwd: expected.cwd };
         }
         const session = await this.getOrOpen(ref);
+        if (expected?.stopBusy)
+            return this.retireForReplacement(session, expected);
         const maintenance = this.maintenance?.store.current({ id: session.sessionId, cwd: session.sessionManager.getCwd() });
         const branch = expected === undefined ? [] : persistedFailureBranch(session);
         const checkpointAt = branch.findIndex(item => item.value.id === maintenance?.entryId);
@@ -2053,7 +2092,7 @@ export class PiSessionService {
             if (expected !== undefined) {
                 if (this.automaticAdmissionStore === undefined)
                     throw new AutomaticAdmissionRejected("Durable replacement checkpoint capability is unavailable");
-                await prepareCallbackDrops(this.activeRuntimeForSession(session)?.services?.resourceLoader.getExtensions());
+                await prepareCallbackDrops(this.activeRuntimeForSession(session)?.services?.resourceLoader.getExtensions(), () => {}, true);
                 this.assertReplacementCheckpoint(session, expected.entryId);
                 frozen = await this.automaticAdmissionStore.pauseAtGeneration({ id: session.sessionId, cwd: session.sessionManager.getCwd() }, expected.generation);
                 this.assertReplacementCheckpoint(session, expected.entryId);
@@ -2067,6 +2106,42 @@ export class PiSessionService {
             await this.forgetUnreadSessions([archiveInput]);
         });
         return frozen;
+    }
+    async retireForReplacement(session, expected) {
+        const sessionId = session.sessionId;
+        if (this.isTreeExclusiveOperationActive(session))
+            throw new AutomaticAdmissionRejected("Replacement already owns this runtime");
+        if (this.pendingAskStore.pendingAsk(sessionId) !== undefined || this.pendingExtensionDialogStore.pendingDialogs(sessionId).length > 0)
+            throw new AutomaticAdmissionRejected("Pending human input must be answered before replacement");
+        const ref = { id: sessionId, cwd: session.sessionManager.getCwd() };
+        this.automaticAdmissionStore.assertCurrent(ref, { ...expected, kind: "wake" });
+        this.treeExclusiveSessionOperationCounts.set(sessionId, 1);
+        let retainFence = false;
+        try {
+            const archiveInput = await this.archiveInputForSession(session);
+            const frozen = await this.automaticAdmissionStore.pauseAtGeneration(ref, expected.generation);
+            await prepareCallbackDrops(this.activeRuntimeForSession(session)?.services?.resourceLoader.getExtensions(), () => {
+                const current = this.automaticAdmissionStore.snapshot(ref);
+                if (current.generation !== frozen.generation)
+                    throw new AutomaticAdmissionRejected("Newer stop or input superseded retirement");
+            }, true);
+            await this.closeActive(sessionId);
+            const current = this.automaticAdmissionStore.snapshot(ref);
+            if (current.generation !== frozen.generation)
+                throw new AutomaticAdmissionRejected("Newer stop or input superseded retirement");
+            try {
+                await this.archiveStore.archive(archiveInput);
+                await this.forgetUnreadSessions([archiveInput]);
+            } catch (error) {
+                retainFence = true;
+                const retentionWarning = errorMessage(error);
+                this.logger.info({ sessionId, error: retentionWarning }, "Retired runtime retained without archive copy");
+                return { ...frozen, retired: true, retentionWarning };
+            }
+            return { ...frozen, retired: true };
+        } finally {
+            if (!retainFence) decrementMapCount(this.treeExclusiveSessionOperationCounts, sessionId);
+        }
     }
     rotationSafety(session) {
         const entries = session.sessionManager.getEntries?.();
@@ -2085,8 +2160,7 @@ export class PiSessionService {
     }
     assertReplacementCheckpoint(session, entryId) {
         this.assertQuiescentCheckpoint(session, entryId);
-        if (unresolvedEffects(persistedFailureBranch(session), this.failureBoundaries.snapshot(session)))
-            throw new AutomaticAdmissionRejected("Replacement retains unresolved external effects; no replay or retirement");
+
     }
     assertRecoveryContinuationCheckpoint(session, entryId) {
         this.assertQuiescentCheckpoint(session, entryId);
@@ -2100,7 +2174,7 @@ export class PiSessionService {
         if (!this.isCurrentActiveSession(session) || this.isSessionEntryMutationActive(session) || sessionHasActiveWork(session, this.compactionQueuedMessages(session.sessionId).length)) {
             throw new AutomaticAdmissionRejected("Stop current session activity before replacement");
         }
-        if (safety.entryId !== entryId || !safety.callbacksKnown || safety.nativeChildCallbacks.length > 0 || this.pendingAskStore.pendingAsk(session.sessionId) !== undefined || this.pendingExtensionDialogStore.pendingDialogs(session.sessionId).length > 0) {
+        if (safety.entryId !== entryId || safety.callbackOwners.some(owner => owner.kind === "active") || this.pendingAskStore.pendingAsk(session.sessionId) !== undefined || this.pendingExtensionDialogStore.pendingDialogs(session.sessionId).length > 0) {
             throw new AutomaticAdmissionRejected("Replacement checkpoint is stale or has unresolved native input/callback ownership");
         }
     }
@@ -2729,7 +2803,6 @@ export class PiSessionService {
         // Promises inside the dying runtime: settle them rather than dropping them.
         this.endSessionExtensionDialogs(sessionId);
         this.streamsDcrEvents?.forget(active.runtime.session);
-        this.active.delete(sessionId);
         this.activities.delete(sessionId);
         this.workspaceActivity?.removeSession(sessionId, active.runtime.session.sessionManager.getCwd());
         this.clearAuthLossWarningsForSession(sessionId);
@@ -2742,12 +2815,16 @@ export class PiSessionService {
         clearSessionQueue(active.runtime.session);
         active.unsubscribe();
         active.runtime.setRebindSession(undefined);
-        try {
-            await this.abortSessionOperations(active.runtime.session);
+        await this.abortSessionOperations(active.runtime.session);
+        const deadline = Date.now() + 5000;
+        const session = active.runtime.session;
+        while (session.isStreaming || session.isCompacting || session.isBashRunning || this.isSessionEntryMutationActive(session)) {
+            if (Date.now() >= deadline)
+                throw new Error("Runtime teardown did not drain its live work; replacement remains fenced");
+            await new Promise(resolve => setTimeout(resolve, 10));
         }
-        finally {
-            await active.runtime.dispose();
-        }
+        await active.runtime.dispose();
+        this.active.delete(sessionId);
     }
     async abortSessionOperations(session) {
         const errors = [];
@@ -2764,6 +2841,7 @@ export class PiSessionService {
             errors.push(error);
         }
         try {
+            session.abortBash?.();
             await session.abort();
         }
         catch (error) {
@@ -2775,6 +2853,8 @@ export class PiSessionService {
             throw errors[0];
     }
     async assertWritable(ref, allowFailureRecovery = false) {
+        if (this.isTreeExclusiveSessionIdentityActive(sessionIdFromLookup(ref)))
+            throw new AutomaticAdmissionRejected("Session retirement owns dispatch");
         if (await this.getArchived(ref) !== undefined)
             throw new Error("Archived sessions are read-only. Restore the session to continue.");
         const active = this.activeForLookup(ref);

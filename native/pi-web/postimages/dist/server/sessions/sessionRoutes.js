@@ -31,6 +31,14 @@ export function registerSessionRoutes(app, sessions, eventHub, prefix = "") {
             return reply.code(400).send({ error: errorMessage(error) });
         }
     });
+    app.post(`${prefix}/sessions/:sessionId/discard-empty`, async (request, reply) => {
+        try {
+            const body = requireRecord(request.body);
+            return await sessions.discardUnadmittedEmpty(request.params.sessionId, requireNonEmptyString(body, "creationToken"));
+        } catch (error) {
+            return reply.code(400).send({ error: errorMessage(error) });
+        }
+    });
     app.get(`${prefix}/sessions/notifications`, async (_request, reply) => {
         try {
             return await sessions.notificationCatalog();
@@ -572,7 +580,7 @@ export function registerSessionRoutes(app, sessions, eventHub, prefix = "") {
             if (sessions.archiveAtCheckpoint === undefined)
                 throw new AutomaticAdmissionRejected("Replacement checkpoint capability is unavailable");
             const frozen = await sessions.archiveAtCheckpoint(ref, body["expectedIdle"]);
-            return { archived: true, automaticAdmission: frozen };
+            return { archived: frozen.retentionWarning === undefined, retired: frozen.retired === true, ...(frozen.retentionWarning === undefined ? {} : { retentionWarning: frozen.retentionWarning }), automaticAdmission: frozen };
         }
         catch (error) {
             return reply.code(mutationErrorStatus(error)).send({ error: errorMessage(error) });

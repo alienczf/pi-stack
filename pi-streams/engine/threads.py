@@ -4,6 +4,7 @@ import enum
 import hashlib
 import json
 import re
+import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -104,6 +105,7 @@ class SessionStart:
     intent: str
     phase: str = "created"
     operation: str = "new"
+    creation_token: str = "legacy-unowned"
 
 
 def utc_now() -> str:
@@ -193,10 +195,18 @@ def designated_coordinator(rows: list[Thread]) -> Thread | None:
 
 
 def _native_session(session_id: str, cwd: Path, listing: list[dict[str, object]] | None = None) -> NativeSession:
-    items = piweb.list_sessions(str(cwd)) if listing is None else listing
+    try:
+        items = piweb.list_sessions(str(cwd), timeout=2) if listing is None else listing
+    except StreamsError:
+        items = []
     matches = [item for item in items if item.get("id") == session_id]
     if not matches:
-        raise piweb.TerminalSession(session_id, "missing", f"session {session_id} has no unique exact native identity for cwd {cwd}")
+        status = piweb.session_status(session_id, timeout=2)
+        piweb.require_identity(status, session_id)
+        native_cwd = status.get("automaticAdmission", {}).get("cwd")
+        if native_cwd is not None and Path(native_cwd).resolve() != cwd.resolve():
+            raise StreamsError("native admission cwd does not match the registered destination")
+        return NativeSession({"id": session_id, "cwd": str(cwd), "path": status.get("sessionFile")}, status)
     if len(matches) != 1:
         raise StreamsError(f"session {session_id} has no unique exact native identity for cwd {cwd}")
     info = matches[0]
@@ -205,7 +215,7 @@ def _native_session(session_id: str, cwd: Path, listing: list[dict[str, object]]
         raise StreamsError(f"session {session_id} native cwd does not match {cwd}")
     if info.get("archived") is True:
         raise piweb.TerminalSession(session_id, "archived", f"session {session_id} is archived; refusing to reopen it through status")
-    status = piweb.session_status(session_id)
+    status = piweb.session_status(session_id, timeout=2)
     piweb.require_identity(status, session_id)
     return NativeSession(info, status)
 
@@ -216,22 +226,20 @@ def _inspect_coordinator(stream_dir: Path, rows: list[Thread] | None = None, *, 
     row = designated_coordinator(rows)
     if row is not None and Path(row.worktree).resolve() != stream_dir.resolve():
         raise StreamsError(f"coordinator {row.session} registry cwd does not match {stream_dir}")
-    listing = piweb.list_sessions(str(stream_dir))
+    listing = piweb.list_sessions(str(stream_dir), timeout=2)
     known = {item.session for item in rows if item.role == "coordinator"}
     unregistered = [
         item for item in listing
         if item.get("archived") is not True and item.get("id") not in known
         and (not isinstance(item.get("cwd"), str) or Path(item["cwd"]).resolve() == stream_dir.resolve())
     ]
-    if unregistered:
-        raise UnregisteredCoordinatorCandidates(unregistered)
     retired = {row.session for row in rows if row.role == "coordinator" and row.status is Status.archived}
     retired_ids = {item.get("id") for item in listing if item.get("archived") is not True and item.get("id") in retired}
     residues = tuple(
         item for item in rows
         if item.role == "coordinator" and item.status is Status.archived and item.session in retired_ids
     )
-    coordinator = None if row is None or residues and not inspect_residue_successor else Coordinator(row, _native_session(row.session, stream_dir, listing))
+    coordinator = None if row is None else Coordinator(row, _native_session(row.session, stream_dir, listing))
     if listings is not None:
         listings[str(stream_dir)] = {item['id']: item for item in listing if isinstance(item.get('id'), str)}
     return CoordinatorObservation(coordinator, residues)
@@ -243,8 +251,6 @@ def inspect_coordinator(stream_dir: Path, rows: list[Thread] | None = None, *, l
 
 def resolve_coordinator(stream_dir: Path, rows: list[Thread] | None = None, *, listings: dict | None = None) -> Coordinator | None:
     observed = _inspect_coordinator(stream_dir, rows, listings=listings, inspect_residue_successor=False)
-    if observed.residues:
-        raise RetiredCoordinatorResidue(observed.residues[0].session)
     return observed.coordinator
 
 
@@ -272,6 +278,17 @@ def _save_start(stream_dir: Path, start: SessionStart | None) -> None:
     artifacts._save_tick_data(stream_dir, data)
 
 
+def discard_failed_start(stream_dir: Path, session_id: str) -> None:
+    start = _start_record(stream_dir)
+    if start is not None and start.session == session_id:
+        try:
+            removed = piweb.discard_empty(session_id, start.creation_token)
+        except StreamsError:
+            removed = False
+        if removed:
+            abandon_start(stream_dir, "Failed empty opening reservation removed")
+
+
 def _send_start(stream_dir: Path, session_id: str, prompt: str) -> None:
     start = _start_record(stream_dir)
     if start is None or start.session != session_id or start.phase != "created":
@@ -295,12 +312,30 @@ def _accept_start(stream_dir: Path, session_id: str) -> None:
     _save_start(stream_dir, start)
 
 
+def abandon_start(stream_dir: Path, reason: str) -> None:
+    start = _start_record(stream_dir)
+    if start is None:
+        return
+    data = artifacts._read_tick_data(stream_dir)
+    data.setdefault("abandoned_session_starts", []).append({**asdict(start), "disposition": "abandoned", "reason": reason})
+    data.pop("session_start", None)
+    artifacts._save_tick_data(stream_dir, data)
+
+
 def _resume_or_spawn(cwd: Path, rows: list[Thread], stream_dir: Path, role: str, intent: list[str], operation: str = "new") -> tuple[str, bool]:
     digest = hashlib.sha256(json.dumps(intent, ensure_ascii=False).encode()).hexdigest()
     start = _start_record(stream_dir)
+    if start is not None and (start.cwd, start.role, start.intent, start.operation) != (str(cwd), role, digest, operation):
+        if start.cwd == str(cwd):
+            try:
+                status = piweb.session_status(start.session)
+            except StreamsError:
+                status = {}
+            if any(status.get(key) is True for key in ("isStreaming", "isCompacting", "isBashRunning")):
+                raise StreamsError(f"Live runtime {start.session} is writing in {cwd}; use an isolated unit")
+        abandon_start(stream_dir, "Distinct authorized unit; old opening is not replayed or adopted")
+        start = None
     if start is not None:
-        if (start.cwd, start.role, start.intent, start.operation) != (str(cwd), role, digest, operation):
-            raise StreamsError("another or changed session start is pending; refusing uncertain adoption")
         if start.phase == "sending":
             raise StreamsError(f"opening acceptance for {start.session} is uncertain; refusing replay")
         native = _native_session(start.session, cwd)
@@ -310,24 +345,17 @@ def _resume_or_spawn(cwd: Path, rows: list[Thread], stream_dir: Path, role: str,
         if native.info.get("messageCount") != 0 or busy or native.status.get("pendingMessageCount", 0) != 0:
             raise StreamsError(f"opening acceptance for {start.session} is uncertain; refusing replay")
         return start.session, True
-    listing = piweb.list_sessions(str(cwd))
-    known = {row.session for row in rows}
-    if any(item.get("archived") is not True and item.get("id") not in known for item in listing):
-        raise StreamsError("unregistered native session; use explicit adoption, not directory-based recovery")
-    sid = piweb.spawn(str(cwd))
-    _save_start(stream_dir, SessionStart(sid, str(cwd), role, digest, operation=operation))
+    creation_token = uuid.uuid4().hex
+    sid = piweb.spawn(str(cwd), creation_token=creation_token)
+    _save_start(stream_dir, SessionStart(sid, str(cwd), role, digest, operation=operation, creation_token=creation_token))
     return sid, True
 
 
 def _adopt_coordinator(project: Project, stream_dir: Path, rows: list[Thread], session_id: str) -> str:
-    if _start_record(stream_dir) is not None:
-        raise StreamsError("a saved session start is pending; reconcile it before explicit adoption")
+    abandon_start(stream_dir, "Explicit coordinator adoption supersedes saved opening")
     listing = piweb.list_sessions(str(stream_dir))
     selected = _native_session(session_id, stream_dir, listing)
     piweb.require_settings(selected.status, project.coordinator.model, project.coordinator.thinking)
-    known = {row.session for row in rows if row.role == "coordinator"} | {session_id}
-    if any(item.get("archived") is not True and item.get("id") not in known for item in listing):
-        raise StreamsError("unregistered coordinator candidates remain ambiguous")
     for row in rows:
         if row.session == session_id:
             if row.role == "coordinator" and row.status is Status.active:
@@ -354,16 +382,20 @@ def ensure_coordinator(project: Project, stream_dir: Path, *, opening_prompt: st
         start = _start_record(stream_dir)
         if start is not None:
             if start.session != resolved.row.session or start.phase != "accepted" or start.operation != operation:
-                raise StreamsError("registry and saved session start disagree")
+                abandon_start(stream_dir, "Registered coordinator supersedes old opening")
             if operation == "new":
                 _save_start(stream_dir, None)
         return resolved.row.session
     prompt = KICKOFF if opening_prompt is None else opening_prompt
     sid, needs_opening = _resume_or_spawn(stream_dir, rows, stream_dir, "coordinator", [project.coordinator.model, project.coordinator.thinking, prompt], operation)
     if needs_opening:
-        configured = piweb.configure_session(sid, project.coordinator.model, project.coordinator.thinking)
-        piweb.register_stream_failure(sid, str(stream_dir), stream_dir, configured, starting=True, role="coordinator", assignment=prompt)
-        _send_start(stream_dir, sid, prompt)
+        try:
+            configured = piweb.configure_session(sid, project.coordinator.model, project.coordinator.thinking)
+            piweb.register_stream_failure(sid, str(stream_dir), stream_dir, configured, starting=True, role="coordinator", assignment=prompt)
+            _send_start(stream_dir, sid, prompt)
+        except StreamsError:
+            discard_failed_start(stream_dir, sid)
+            raise
     rows.append(_thread_row(sid, "coordinator", "", stream_dir, "", "", project.coordinator.model, project.coordinator.thinking))
     save_threads(path, rows)
     if operation == "new":
@@ -402,104 +434,37 @@ def _canonical_stream(stream_dir: Path) -> bool:
 
 
 def _one_stream(stream_id: str, stream_dir: Path) -> dict[str, object]:
-    canonical = _canonical_stream(stream_dir)
-    if canonical:
-        artifacts.read_stream_state(stream_dir)
-    else:
-        (stream_dir / "STREAM.md").read_text(encoding="utf-8")
     rows = load_threads(stream_dir / "threads.tsv")
     counts = {name: 0 for name in ("active", "waiting_quota", "done", "archived")}
-    from engine import terminal_sessions
-    from engine.drive import is_paused
-    paused = is_paused(stream_dir)
-    terminal = {row.session for row in rows if terminal_sessions.load(stream_dir, row.session, row.worktree) is not None}
-    eligible = [row for row in rows if row.status is Status.archived or row.session not in terminal]
-    blockers = []
-    candidates = []
-    residues: tuple[Thread, ...] = ()
-    try:
-        observation = None if paused else inspect_coordinator(stream_dir, eligible)
-        coordinator = None if observation is None else observation.coordinator
-        residues = () if observation is None else observation.residues
-    except UnregisteredCoordinatorCandidates as exc:
-        row = designated_coordinator(eligible)
-        if row is not None and Path(row.worktree).resolve() != stream_dir.resolve():
-            raise
-        coordinator = None if row is None else Coordinator(row, _native_session(row.session, stream_dir))
-        fresh = [item for item in load_threads(stream_dir / "threads.tsv") if item.status is Status.archived or terminal_sessions.load(stream_dir, item.session, item.worktree) is None]
-        if designated_coordinator(fresh) != row:
-            raise StreamsError("coordinator designation changed during read-only observation")
-        candidates = list(exc.candidates)
-        blockers = [{"kind": "unregistered-coordinator-candidate", **item, "message": str(exc)} for item in candidates]
-    if not paused and not blockers and coordinator is None and not any(row.role == "coordinator" and (row.status in {Status.done, Status.archived} or row.session in terminal) for row in rows):
-        raise StreamsError(f"stream {stream_id} has no designated active coordinator")
-    threads: list[Thread] = []
     for row in rows:
-        if row.role == "coordinator":
-            continue
-        counts[row.status.value] = counts.get(row.status.value, 0) + 1
-        threads.append(row)
-    session = coordinator.native.status if coordinator is not None else {}
-    coord_state = _coordinator_state(coordinator.row.session, session) if coordinator is not None else None
-    coord_cost = _as_cost(session.get("cost")) if coordinator is not None else 0
-    # pi-web opens a runtime to answer status for an idle session, so finished
-    # threads are counted but not queried.
-    thread_cost: int | float = 0
-    for row in threads:
-        if paused or blockers or row.status not in (Status.active, Status.waiting_quota) or row.session in terminal:
-            continue
-        session = piweb.session_status(row.session)
-        thread_cost += _as_cost(session.get("cost"))
-    share = None if thread_cost == 0 else coord_cost / thread_cost
-    result = {
+        if row.role != "coordinator":
+            counts[row.status.value] = counts.get(row.status.value, 0) + 1
+    coordinator = designated_coordinator(rows)
+    warnings = []
+    roster = []
+    try:
+        roster = piweb.list_sessions(str(stream_dir), timeout=2)
+    except StreamsError as exc:
+        warnings.append({"source": "native-roster", "state": "unknown", "detail": str(exc)})
+    from engine import dcr, delivery, failure
+    saved = {}
+    for name, observe in (("maintenance", dcr.receipts), ("deliveries", delivery.receipts), ("failures", failure.receipts)):
+        try:
+            saved[name] = observe(stream_dir)
+        except StreamsError as exc:
+            warnings.append({"source": name, "state": "unknown", "detail": str(exc)})
+    return {
+        **saved,
         "id": stream_id,
-        "coordinator": coord_state,
+        "path": str(stream_dir),
+        "coordinator": None if coordinator is None else {"session": coordinator.session, "model": coordinator.model, "thinkingLevel": coordinator.thinking, "cost": None, "isStreaming": None, "contextUsage": {"tokens": None}},
         "threads": counts,
-        "coordinatorCostShare": share,
+        "threadSessions": [{"session": row.session, "role": row.role, "worktree": row.worktree, "status": row.status.value} for row in rows if row.role != "coordinator"],
+        "coordinatorCostShare": None,
+        "nativeObservation": "non-opening-roster; not dispatch readiness",
+        "nativeSessions": roster,
+        "warnings": warnings,
     }
-    if residues:
-        reconciliations = []
-        for row in residues:
-            prior = terminal_sessions.load(stream_dir, row.session, row.worktree)
-            detail = "Native cleanup has not been confirmed." if prior is None else prior["detail"]
-            if prior is not None and prior["state"] == "archived":
-                detail = "The native session is still live after its archive receipt."
-            reconciliations.append({
-                "kind": "retired-native-residue",
-                "session": row.session,
-                "disposition": "pending" if prior is None else prior["state"],
-                "detail": detail,
-            })
-        result["nativeReconciliations"] = reconciliations
-    if blockers:
-        result["nativeObservation"] = "registered-coordinator-only; not dispatch readiness"
-        result["dispatchBlockers"] = blockers
-    if candidates:
-        result["coordinatorCandidates"] = candidates
-    if paused:
-        result["nativeObservation"] = "not-queried-explicit-drive-off"
-        result["coordinatorRegistration"] = [{"session": row.session, "worktree": row.worktree, "status": row.status.value} for row in rows if row.role == "coordinator"]
-    from engine.delivery import receipts
-
-    deliveries = receipts(stream_dir)
-    if deliveries:
-        result["deliveries"] = deliveries
-    from engine.dcr import receipts as dcr_receipts
-
-    maintenance = dcr_receipts(stream_dir)
-    if maintenance:
-        result["maintenance"] = maintenance
-    from engine.failure import receipts as failure_receipts
-    parked = failure_receipts(stream_dir)
-    if parked:
-        result["failures"] = parked
-    if canonical:
-        result["path"] = str(stream_dir)
-        result["threadSessions"] = [
-            {"session": row.session, "role": row.role, "worktree": row.worktree, "status": row.status.value}
-            for row in threads
-        ]
-    return result
 
 
 def status_report(index: Path, stream_id: str | None) -> dict[str, object]:
@@ -722,6 +687,10 @@ def spawn_thread(
     _outside_repos(worktree, project)
     rows_path = stream_dir / "threads.tsv"
     rows = load_threads(rows_path)
+    if not worktree.exists() and any(row.worktree == str(worktree) for row in rows):
+        suffix = uuid.uuid4().hex[:12]
+        worktree = worktree.with_name(worktree.name + "-" + suffix)
+        branch_name += "-" + suffix
     if worktree.exists():
         pointer = worktree / ".stream"
         marker = pointer.read_text(encoding="utf-8").strip() if pointer.is_file() else ""
@@ -734,7 +703,7 @@ def spawn_thread(
                 start = _start_record(stream_dir)
                 if start is not None:
                     if start.session != row.session or start.phase != "accepted":
-                        raise StreamsError("worker registry and saved session start disagree")
+                        abandon_start(stream_dir, "Registered worker supersedes old opening")
                     _save_start(stream_dir, None)
                 return row.session
         branch_name = git(worktree, "branch", "--show-current").strip()
@@ -747,10 +716,14 @@ def spawn_thread(
         ensure_stream_exclude(worktree)
     sid, needs_brief = _resume_or_spawn(worktree, rows, stream_dir, role, [repo.name, branch_name, sha, model_name, thinking_level, note])
     if needs_brief:
-        configured = piweb.configure_session(sid, model_name, thinking_level)
-        brief = render_brief(session_id=sid, stream=stream_id, stream_dir=str(stream_dir), role=role, repo=repo.name, worktree=str(worktree), branch=branch_name, base=sha, note=note)
-        piweb.register_stream_failure(sid, str(worktree), stream_dir, configured, starting=True, role=role, assignment=brief)
-        _send_start(stream_dir, sid, brief)
+        try:
+            configured = piweb.configure_session(sid, model_name, thinking_level)
+            brief = render_brief(session_id=sid, stream=stream_id, stream_dir=str(stream_dir), role=role, repo=repo.name, worktree=str(worktree), branch=branch_name, base=sha, note=note)
+            piweb.register_stream_failure(sid, str(worktree), stream_dir, configured, starting=True, role=role, assignment=brief)
+            _send_start(stream_dir, sid, brief)
+        except StreamsError:
+            discard_failed_start(stream_dir, sid)
+            raise
     _append_thread(
         rows_path,
         _thread_row(sid, role, repo.name, worktree, branch_name, sha, model_name, thinking_level),

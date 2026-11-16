@@ -30,10 +30,11 @@ export function callbackInventory(loaded) {
     return { known: unproven.length === 0, owners, unproven };
 }
 
-export async function prepareCallbackDrops(loaded, guard = () => {}) {
+export async function prepareCallbackDrops(loaded, guard = () => {}, advisory = false) {
     guard();
     const before = callbackInventory(loaded);
-    if (!before.known) throw new AutomaticAdmissionRejected("Extension callback ownership is unknown or active");
+    if (before.owners.some(owner => owner.kind === "active") || !advisory && !before.known)
+        throw new AutomaticAdmissionRejected("An active extension callback must finish or be cancelled");
     for (const owner of before.owners) {
         if (owner.kind !== "safe-to-drop") continue;
         const extension = loaded.extensions.find(extension => extension.resolvedPath === owner.path);
@@ -45,11 +46,11 @@ export async function prepareCallbackDrops(loaded, guard = () => {}) {
         guard();
         const after = callbackInventory(loaded);
         const settled = after.owners.find(item => item.path === owner.path);
-        if (receipt?.droppedRevision !== owner.revision || !after.known || settled?.kind !== "none")
+        if (receipt?.droppedRevision !== owner.revision || !advisory && !after.known || settled?.kind !== "none")
             throw new AutomaticAdmissionRejected("Extension callback cancellation receipt is unconfirmed");
     }
     const after = callbackInventory(loaded);
-    if (!after.known || after.owners.some(owner => owner.kind !== "none"))
+    if (!advisory && !after.known || after.owners.some(owner => owner.kind === "active" || owner.kind === "safe-to-drop" || !advisory && owner.kind !== "none"))
         throw new AutomaticAdmissionRejected("Extension callback ownership changed during cancellation");
     return after;
 }

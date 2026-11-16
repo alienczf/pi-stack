@@ -11,7 +11,7 @@ from pathlib import Path
 
 from engine import StreamsError, artifacts, clock, piweb, sessionlog
 
-STATES = {"prepared", "sending", "transport_accepted", "consumed", "applied", "blocked", "uncertain"}
+STATES = {"prepared", "sending", "transport_accepted", "consumed", "applied", "blocked", "uncertain", "abandoned"}
 
 
 @dataclass
@@ -168,7 +168,7 @@ def _attach_handoff(stream_dir: Path, record: Delivery) -> None:
         return
     previous = [item for item in _records(artifacts._read_tick_data(stream_dir)).values() if item.session == record.session and item.handoff is not None]
     if any(item.state in {"prepared", "sending", "uncertain"} or item.control is not None and item.control.state in {"sending", "uncertain"} for item in previous):
-        raise StreamsError("first capacity handoff delivery must settle before another continuation")
+        return
     if any(item.state in {"consumed", "applied"} or item.control is not None and item.control.state == "ended" for item in previous):
         return
     record.handoff = proof
@@ -267,6 +267,8 @@ def _require_destination(stream_dir: Path, record: Delivery, session: str) -> di
     row = designated_coordinator(eligible)
     if session != record.session or row is None or row.session != session or row.status is not Status.active:
         raise StreamsError(f"delivery {record.id} destination is stale or does not match")
+    if record.control is not None:
+        return {}
     if record.origin in {"tick", "drive"}:
         resolved = inspect_coordinator(stream_dir, eligible).coordinator
     else:
@@ -291,7 +293,7 @@ def send_locked(stream_dir: Path, identity: str) -> dict:
             record.state, record.detail = "blocked", "Explicit drive-off prevents automatic dispatch."
             return _save(stream_dir, record)
     status = _require_destination(stream_dir, record, record.session)
-    if record.origin in ("tick", "drive"):
+    if record.origin in ("tick", "drive") and record.control is None:
         artifacts._read_stream_state_locked(stream_dir)
         if record.automatic is None:
             record.state = "blocked"
