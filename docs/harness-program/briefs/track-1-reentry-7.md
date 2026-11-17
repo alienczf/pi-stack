@@ -1,0 +1,9 @@
+# Track 1 re-entry 7 (Grok Bot, 2026-10-24 23:00 SGT)
+
+You went idle at 22:55 at 72.3% context right after your poteto-agent subagent run a02b0705 reported "failed", and you were compacted at that idle boundary. Your brief is `docs/harness-program/briefs/track-1.md` with `track-1-go.md` (Z13-Z15 amendments, implement S1-S6, merge approved). Your progress file is `docs/harness-program/12-track-1-progress.md` in `/home/alphalab/Projects/worktrees/pi-stack-harness-program`; code is on `feat/streams-must-fix` in `/home/alphalab/Projects/worktrees/pi-stack-streams-must-fix` (plus the same-named pi-web branch).
+
+Current phase, from your progress file: S1-S5 pass. S6 head is main 129415e (revalidate marker ownership after the final receiving await), after 1656799 (generated failure instructions and integrated safety preflight, full main 396 pass). The subagent reported failure but 129415e is committed, so first confirm 129415e's red/green evidence and the full suite on that commit yourself (resume the subagent's persisted child session only if something is actually unfinished). The worktree has untracked PLAN.md and TODO.md; leave them unless they are yours.
+
+Next action: close any remaining S6 units, then run the after-stack disposable-stream verification including a real authenticated F-DCR round trip. If that round trip is genuinely blocked on something outside your control, say exactly what in the status line rather than looping. Keep scratch out of /tmp (use `~/.cache/`). Update the progress file at each commit. Don't push, merge or touch the live install; Grok Bot does that after you report done. Keep turns lean on context: send bulky logs to files and summarize.
+
+End each reply with your `TRACK 1 STATUS:` line; the final one is `TRACK 1 STATUS: done | ...` only when S1-S6, the full suites and the disposable F-DCR check all pass.
