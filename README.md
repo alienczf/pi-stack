@@ -126,6 +126,12 @@ The timer runs without a login session only when systemd lingering is on for you
 
 The installer also applies the [version-guarded native healing overlay](native/README.md) to existing and fresh supported packages. Unsupported or changed native bytes refuse patching. The overlay does not restart a running daemon. Its isolated native checks require a disposable pinned package fixture and never prove production rollout.
 
+### Retire a stream
+
+Run `pi-streams drive <stream> off`, then stop its sessions with `pi-web-cli stop <session>`. Run `pi-streams close <stream>` from the project directory after the worker handovers are complete. Archive each remaining session with `pi-web-cli archive <session>`, then delete every archived session with `pi-web-cli delete <session>`.
+
+Run `pi-streams remove <stream>` from the project directory to remove its registration. The command requires paused drive, closed threads, and no native sessions in the stream or enrolled worktree directories. It retains the stream's artifacts. Repeating removal succeeds without further changes. The native daemon refuses deletion of a session that is not archived.
+
 ## Verify the repository
 
 Run these commands from the pi-stack Git root. None starts a nested Pi process.

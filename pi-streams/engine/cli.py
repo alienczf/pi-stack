@@ -16,6 +16,8 @@ from engine.project import (
     init_project,
     load_projects,
     load_stream_config,
+    load_stream_rows,
+    save_stream_rows,
     read_homes,
     require_stream,
     resolve_index,
@@ -167,6 +169,10 @@ def _parser() -> argparse.ArgumentParser:
     close = sub.add_parser("close")
     close.add_argument("stream")
     close.add_argument("--home")
+
+    remove = sub.add_parser("remove", help="unregister a closed stream after its native sessions are deleted; retain artifacts")
+    remove.add_argument("stream")
+    remove.add_argument("--home")
 
     tick = sub.add_parser("tick")
     tick.add_argument("--home")
@@ -321,6 +327,38 @@ def cmd_close(args: argparse.Namespace) -> int:
             result = close_stream(index, project, args.stream)
             commit_repo(stream_dir, f"pi-streams close {args.stream}", paths=result.handovers)
     sys.stdout.write("".join(f"{line}\n" for line in result.report))
+    return 0
+
+
+def cmd_remove(args: argparse.Namespace) -> int:
+    index = resolve_index(args.home)
+    with index_lock(index):
+        project = resolve_project(index)
+        registered = load_stream_rows(index)
+        selected = [row for row in registered if row.project == project.info.name and row.id == args.stream]
+        if not selected:
+            print(json.dumps({"stream": args.stream, "registered": False}))
+            return 0
+        stream_dir = require_stream(index, project.info.name, args.stream)
+        with stream_lock(stream_dir):
+            if not drive.is_paused(stream_dir):
+                raise StreamsError("turn drive off before removing the stream")
+            threads = load_threads(stream_dir / "threads.tsv")
+            if any(row.status not in {Status.done, Status.archived} for row in threads):
+                raise StreamsError("close every thread before removing the stream")
+            for row in threads:
+                try:
+                    piweb.session_status(row.session)
+                except piweb.TerminalSession as exc:
+                    if exc.state == "missing":
+                        continue
+                raise StreamsError(f"delete native session {row.session} before removing the stream")
+            directories = {str(stream_dir.resolve()), *(str(Path(row.worktree).resolve()) for row in threads)}
+            for cwd in sorted(directories):
+                if piweb.list_sessions(cwd):
+                    raise StreamsError(f"delete native sessions in {cwd} before removing the stream")
+            save_stream_rows(index, [row for row in registered if row not in selected])
+    print(json.dumps({"stream": args.stream, "registered": False, "artifacts": str(stream_dir)}))
     return 0
 
 
@@ -557,6 +595,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_replace(args)
         if args.cmd == "close":
             return cmd_close(args)
+        if args.cmd == "remove":
+            return cmd_remove(args)
         if args.cmd == "tick":
             return cmd_tick(args)
         if args.cmd == "state":

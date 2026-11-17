@@ -221,6 +221,7 @@ VERBS: dict[str, tuple[str, str, tuple[str, ...], VerbBuilder]] = {
     "abort": ("POST", "abort", (), lambda _args: {}),
     "queue-clear": ("POST", "queue/clear", (), lambda _args: {}),
     "archive": ("POST", "archive", (), _archive_body),
+    "delete": ("DELETE", "", (), lambda _args: None),
     "retirement": ("GET", "retirement", (), lambda _args: None),
     "messages": ("GET", "messages", (), lambda _args: None),
     "model": ("POST", "model", ("model",), _model_body),
@@ -410,7 +411,8 @@ def main(argv: list[str]) -> int:
         body = build(args)
     except UsageError as exc:
         return out({"ok": False, "error": str(exc)}, False)
-    code, data = req(method, f"/api/sessions/{args.sid}/{suffix}", body)
+    path = f"/api/sessions/{args.sid}" + (f"/{suffix}" if suffix else "")
+    code, data = req(method, path, body)
     ok = code == 200 and not (isinstance(data, dict) and data.get("error"))
     return out({"ok": ok, "status": code, "result": data}, ok)
 
