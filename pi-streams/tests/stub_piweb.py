@@ -29,6 +29,7 @@ class StubPiWeb:
         self.simulate_conditional_controls = False
         self.control_goals: dict[str, dict] = {}
         self.simulate_session_lifecycle = False
+        self.required_session_cwds: dict[str, str] = {}
         self.created_sessions: dict[str, dict] = {}
         self.archived_sessions: set[str] = set()
         self.automatic_admissions: dict[str, dict] = {}
@@ -178,6 +179,17 @@ class StubPiWeb:
                 else:
                     status, payload = 409, {"error": "Control goal is absent or superseded"}
         cwd = urllib.parse.parse_qs(parsed.query).get("cwd", [None])[0]
+        target = re.fullmatch(r"/api/sessions/([^/]+)(?:/(.+))?", parsed.path)
+        if target and target[2] != "location" and target[1] in self.required_session_cwds:
+            expected_cwd = self.required_session_cwds[target[1]]
+            if handler.command == "POST":
+                supplied = body.get("cwd") if isinstance(body, dict) else None
+                missing = "cwd field must be a string"
+            else:
+                supplied = cwd
+                missing = "cwd query parameter is required"
+            if supplied != expected_cwd:
+                status, payload = (400, {"error": missing}) if supplied is None else (404, {"error": "Session not found"})
         if handler.command == "GET" and parsed.path == "/api/sessions" and isinstance(payload, list) and cwd:
             payload = [item for item in payload if not isinstance(item, dict) or item.get("cwd", cwd) == cwd]
         encoded = json.dumps(payload).encode("utf-8")

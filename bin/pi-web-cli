@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
+import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
 
 from collections.abc import Callable
+from dataclasses import dataclass
+from pathlib import Path
 
 BASE = os.environ.get("PI_WEB_URL", "http://127.0.0.1:8504").rstrip("/")
 
@@ -39,6 +43,78 @@ def req(method: str, path: str, body: dict | None = None, timeout: float = 20) -
     return code, parsed
 
 
+def _cwd_hint_path(sid: str) -> Path:
+    cache = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
+    key = hashlib.sha256(f"{BASE}\0{sid}".encode()).hexdigest()
+    return cache / "pi-web-cli" / "session-cwds" / key
+
+
+def _remember_cwd(sid: object, cwd: object) -> None:
+    if not isinstance(sid, str) or not isinstance(cwd, str) or not os.path.isabs(cwd):
+        return
+    path = _cwd_hint_path(sid)
+    try:
+        if path.is_file() and path.read_text(encoding="utf-8") == cwd:
+            return
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as temporary:
+            try:
+                temporary.write(cwd.encode("utf-8"))
+                temporary.close()
+                os.replace(temporary.name, path)
+            finally:
+                Path(temporary.name).unlink(missing_ok=True)
+    except (OSError, UnicodeError):
+        pass
+
+
+def _resolve_cwd(sid: str, session_path: str) -> str | None:
+    try:
+        cwd = _cwd_hint_path(sid).read_text(encoding="utf-8")
+        if os.path.isabs(cwd):
+            return cwd
+    except (OSError, UnicodeError):
+        pass
+    code, location = req("GET", f"{session_path}/location")
+    if code != 200 or not isinstance(location, dict) or location.get("sessionId") != sid:
+        return None
+    project_id, workspace_id = location.get("projectId"), location.get("workspaceId")
+    if not isinstance(project_id, str) or not isinstance(workspace_id, str):
+        return None
+    project = urllib.parse.quote(project_id, safe="")
+    code, catalog = req("GET", f"/api/projects/{project}/workspaces")
+    rows = catalog.get("workspaces") if code == 200 and isinstance(catalog, dict) else None
+    if not isinstance(rows, list):
+        return None
+    paths = {row["path"] for row in rows if isinstance(row, dict) and row.get("id") == workspace_id
+             and isinstance(row.get("path"), str) and os.path.isabs(row["path"])}
+    return next(iter(paths)) if len(paths) == 1 else None
+
+
+@dataclass
+class SessionRef:
+    sid: str
+    cwd: str | None = None
+
+    def request(self, method: str, suffix: str, body: dict | None = None, timeout: float = 20) -> tuple[int, object]:
+        session_path = "/api/sessions/" + urllib.parse.quote(self.sid, safe="")
+        path = session_path + (f"/{suffix}" if suffix else "")
+        if self.cwd is None:
+            code, data = req(method, path, body, timeout)
+            missing = "cwd field must be a string" if method == "POST" else "cwd query parameter is required"
+            # These errors are returned before dispatch. Never retry a failed or uncertain operation.
+            if code != 400 or not isinstance(data, dict) or data.get("error") != missing:
+                return code, data
+            self.cwd = _resolve_cwd(self.sid, session_path)
+            if self.cwd is None:
+                return code, {**data, "hint": "Session cwd could not be resolved. Pass --cwd for the session."}
+        if method == "POST":
+            body = {**(body or {}), "cwd": self.cwd}
+        else:
+            path += "?" + urllib.parse.urlencode({"cwd": self.cwd})
+        return req(method, path, body, timeout)
+
+
 def out(obj: object, ok: bool) -> int:
     print(json.dumps(obj, indent=2))
     return 0 if ok else 1
@@ -50,6 +126,10 @@ def cmd_list(cwd: str | None) -> int:
         path += "?" + urllib.parse.urlencode({"cwd": cwd})
     code, data = req("GET", path)
     ok = code == 200 and not (isinstance(data, dict) and data.get("error"))
+    if ok and isinstance(data, list):
+        for row in data:
+            if isinstance(row, dict):
+                _remember_cwd(row.get("id"), row.get("cwd"))
     return out({"ok": ok, "status": code, "sessions": data}, ok)
 
 
@@ -59,10 +139,12 @@ def cmd_spawn(cwd: str, creation_token: str | None = None) -> int:
         body["startupToken"] = creation_token
     code, data = req("POST", "/api/sessions", body)
     ok = code in (200, 201) and isinstance(data, dict) and "id" in data
+    if ok:
+        _remember_cwd(data["id"], data.get("cwd") or os.path.abspath(cwd))
     return out({"ok": ok, "status": code, "session": data}, ok)
 
 
-def cmd_prompt(sid: str, text: str, streaming: str | None = None, delivery_id: str | None = None, automatic: dict | None = None, poteto_goal: str | None = None, replacement: dict | None = None) -> int:
+def cmd_prompt(session: SessionRef, text: str, streaming: str | None = None, delivery_id: str | None = None, automatic: dict | None = None, poteto_goal: str | None = None, replacement: dict | None = None) -> int:
     body = {"text": text} if streaming is None else {"text": text, "streamingBehavior": streaming}
     if poteto_goal is not None:
         body["potetoGoal"] = poteto_goal
@@ -74,20 +156,20 @@ def cmd_prompt(sid: str, text: str, streaming: str | None = None, delivery_id: s
         if delivery_id is None:
             return out({"ok": False, "error": "automatic admission requires a caller-persisted delivery id"}, False)
         body["automaticAdmission"] = automatic
-    code, data = req("POST", f"/api/sessions/{sid}/prompt", body)
+    code, data = session.request("POST", "prompt", body)
     accepted = code == 200 and isinstance(data, dict) and data.get("accepted") is True
     ok = accepted and (delivery_id is None or data.get("deliveryId") == delivery_id)
     return out({"ok": ok, "transportAccepted": accepted, "status": code, "result": data}, ok)
 
 
-def cmd_status(sid: str) -> int:
-    code, data = req("GET", f"/api/sessions/{sid}/status")
+def cmd_status(session: SessionRef) -> int:
+    code, data = session.request("GET", "status")
     ok = code == 200 and isinstance(data, dict) and not data.get("error")
     return out({"ok": ok, "status": code, "session": data}, ok)
 
 
-def cmd_commands(sid: str) -> int:
-    code, data = req("GET", f"/api/sessions/{sid}/commands")
+def cmd_commands(session: SessionRef) -> int:
+    code, data = session.request("GET", "commands")
     ok = code == 200 and isinstance(data, list)
     return out({"ok": ok, "status": code, "commands": data}, ok)
 
@@ -143,14 +225,13 @@ def _fork_unrestored(status: int, session_id: str, entry_id: str) -> int:
     }, False)
 
 
-def cmd_fork(sid: str, at: str | None) -> int:
-    quoted = urllib.parse.quote(sid, safe="")
-    code, data = req("GET", f"/api/sessions/{quoted}/status")
+def cmd_fork(session: SessionRef, at: str | None) -> int:
+    code, data = session.request("GET", "status")
     source = _status_settings(data) if code == 200 else None
     if source is None:
         return out({"ok": False, "status": code, "error": "session status has no model and thinking level"}, False)
     provider, model_id, thinking = source
-    code, data = req("POST", f"/api/sessions/{quoted}/commands/run", {"text": "/fork"})
+    code, data = session.request("POST", "commands/run", {"text": "/fork"})
     if isinstance(data, dict) and data.get("type") == "unsupported":
         message = data.get("message")
         if not isinstance(message, str) or message == "":
@@ -166,23 +247,24 @@ def cmd_fork(sid: str, at: str | None) -> int:
         entry = at
     else:
         return out({"ok": False, "status": code, "error": "entry is not a fork option"}, False)
-    code, data = req("POST", f"/api/sessions/{quoted}/commands/respond", {"requestId": request_id, "value": entry}, timeout=120)
+    code, data = session.request("POST", "commands/respond", {"requestId": request_id, "value": entry}, timeout=120)
     new_id = _done_session_id(data) if code == 200 else None
-    if new_id is None or new_id == sid:
-        error = "fork returned the source session" if new_id == sid else "fork did not create a session"
+    if new_id is None or new_id == session.sid:
+        error = "fork returned the source session" if new_id == session.sid else "fork did not create a session"
         return out({"ok": False, "status": code, "error": error}, False)
-    forked = urllib.parse.quote(new_id, safe="")
-    code, data = req("GET", f"/api/sessions/{forked}/status")
+    forked = SessionRef(new_id, session.cwd)
+    _remember_cwd(new_id, forked.cwd)
+    code, data = forked.request("GET", "status")
     current = _status_settings(data) if code == 200 else None
     if current is None:
         return _fork_unrestored(code, new_id, entry)
     if (current[0], current[1]) != (provider, model_id):
-        code, data = req("POST", f"/api/sessions/{forked}/model", {"provider": provider, "modelId": model_id})
+        code, data = forked.request("POST", "model", {"provider": provider, "modelId": model_id})
         current = _status_settings(data) if code == 200 else None
         if current is None or (current[0], current[1]) != (provider, model_id):
             return _fork_unrestored(code, new_id, entry)
     if current[2] != thinking:
-        code, data = req("POST", f"/api/sessions/{forked}/thinking-level", {"level": thinking})
+        code, data = forked.request("POST", "thinking-level", {"level": thinking})
         current = _status_settings(data) if code == 200 else None
         if current is None:
             return _fork_unrestored(code, new_id, entry)
@@ -258,7 +340,7 @@ def cmd_control_goal(args: argparse.Namespace) -> int:
 def cmd_maintenance(args: argparse.Namespace) -> int:
     sid = urllib.parse.quote(args.sid, safe="")
     if args.cmd == "command-run":
-        code, data = req("POST", f"/api/sessions/{sid}/commands/run", {"text": _text_input(args.text)})
+        code, data = SessionRef(args.sid, args.cwd).request("POST", "commands/run", {"text": _text_input(args.text)})
         accepted = code == 200 and isinstance(data, dict) and data.get("type") in ("done", "select")
         return out({"ok": accepted, "commandAccepted": accepted, "status": code, "result": data}, accepted)
     if args.cmd == "compact":
@@ -343,7 +425,7 @@ def main(argv: list[str]) -> int:
     p = argparse.ArgumentParser(description="PI WEB control plane (127.0.0.1:8504)")
     sub = p.add_subparsers(dest="cmd", required=True)
     ls = sub.add_parser("list")
-    ls.add_argument("--cwd", required=True, help="PI WEB requires cwd; global roster is pi-intercom-cli list")
+    ls.add_argument("--cwd", required=True, help="workspace directory")
     sp = sub.add_parser("spawn")
     sp.add_argument("cwd")
     sp.add_argument("--creation-token")
@@ -432,6 +514,8 @@ def main(argv: list[str]) -> int:
             verb.add_argument(positional)
         if name == "archive":
             verb.add_argument("--expected-idle", help="exact session/cwd/logical entry/generation JSON; refuse stale or busy replacement")
+    for verb in (pr, st, cm, fork, control, command, *(sub.choices[name] for name in VERBS)):
+        verb.add_argument("--cwd", help="exact session workspace, if it cannot be resolved by ID")
     args = p.parse_args(argv)
     if args.cmd in ("runtime", "capabilities"):
         code, data = req("GET", "/api/sessiond/runtime")
@@ -482,6 +566,7 @@ def main(argv: list[str]) -> int:
         return cmd_list(args.cwd)
     if args.cmd == "spawn":
         return cmd_spawn(args.cwd, args.creation_token)
+    session = SessionRef(args.sid, args.cwd)
     if args.cmd == "prompt":
         try:
             text, poteto_goal = _invocation_input(args)
@@ -502,13 +587,13 @@ def main(argv: list[str]) -> int:
             replacement = None if args.replacement_admission is None else _json_object(args.replacement_admission, "replacement admission")
         except UsageError as exc:
             return out({"ok": False, "error": str(exc)}, False)
-        return cmd_prompt(args.sid, text, streaming, args.delivery_id, automatic, poteto_goal, replacement)
+        return cmd_prompt(session, text, streaming, args.delivery_id, automatic, poteto_goal, replacement)
     if args.cmd == "status":
-        return cmd_status(args.sid)
+        return cmd_status(session)
     if args.cmd == "commands":
-        return cmd_commands(args.sid)
+        return cmd_commands(session)
     if args.cmd == "fork":
-        return cmd_fork(args.sid, args.at)
+        return cmd_fork(session, args.at)
     if args.cmd == "automatic-admission":
         if args.initialize_if_absent and args.mode != "on":
             return out({"ok": False, "error": "initial admission requires on"}, False)
@@ -518,7 +603,7 @@ def main(argv: list[str]) -> int:
         if args.expected_generation is not None:
             body["expectedGeneration"] = args.expected_generation
         suffix = "/initialize" if args.initialize_if_absent else ""
-        code, data = req("POST", f"/api/sessions/{args.sid}/automatic-admission{suffix}", body)
+        code, data = session.request("POST", f"automatic-admission{suffix}", body)
         ok = code == 200 and isinstance(data, dict) and not data.get("error")
         return out({"ok": ok, "status": code, "result": data}, ok)
     method, suffix, _positionals, build = VERBS[args.cmd]
@@ -526,8 +611,7 @@ def main(argv: list[str]) -> int:
         body = build(args)
     except UsageError as exc:
         return out({"ok": False, "error": str(exc)}, False)
-    path = f"/api/sessions/{args.sid}" + (f"/{suffix}" if suffix else "")
-    code, data = req(method, path, body)
+    code, data = session.request(method, suffix, body)
     ok = code == 200 and not (isinstance(data, dict) and data.get("error"))
     return out({"ok": ok, "status": code, "result": data}, ok)
 

@@ -231,6 +231,58 @@ class PiWebCliTests(unittest.TestCase):
         self.assert_completed(proc, 0, SPAWN_STDOUT)
         self.assert_request("POST", "/api/sessions", {"cwd": "/work"})
 
+    def test_spawned_session_uses_its_cwd_across_invocations(self) -> None:
+        cwd = "/stream + #1"
+        path = "/api/sessions/sess-1"
+        self.stub.required_session_cwds["sess-1"] = cwd
+        self.stub.set_routes([
+            ("POST", "/api/sessions", 200, {"id": "sess-1", "cwd": cwd}),
+            ("GET", f"{path}/location", 404, {"error": "Session not found"}),
+            ("GET", f"{path}/status", 200, {"sessionId": "sess-1", "isStreaming": False}),
+            ("POST", f"{path}/prompt", 200, {"accepted": True}),
+        ])
+        self.assertEqual(self.run_cli("spawn", cwd).returncode, 0)
+        for argv, stdout, request in (
+            (("model", "acme/org/model-1"), OK_STDOUT, ("POST", f"{path}/model", "", {"cwd": cwd, "provider": "acme", "modelId": "org/model-1"})),
+            (("thinking-level", "xhigh"), OK_STDOUT, ("POST", f"{path}/thinking-level", "", {"cwd": cwd, "level": "xhigh"})),
+            (("status",), STATUS_STDOUT, ("GET", f"{path}/status", "cwd=%2Fstream+%2B+%231", None)),
+            (("prompt", "hi", "--steer"), PROMPT_STDOUT, ("POST", f"{path}/prompt", "", {"cwd": cwd, "text": "hi", "streamingBehavior": "steer"})),
+            (("messages",), OK_STDOUT, ("GET", f"{path}/messages", "cwd=%2Fstream+%2B+%231", None)),
+            (("archive",), OK_STDOUT, ("POST", f"{path}/archive", "", {"cwd": cwd})),
+        ):
+            with self.subTest(command=argv[0]):
+                proc = self.run_cli(argv[0], "sess-1", *argv[1:])
+                self.assertEqual(proc.returncode, 0, proc.stdout)
+                self.assert_completed(proc, 0, stdout)
+                self.assertIn(request, self.stub.requests)
+
+    def test_existing_session_resolves_the_exact_workspace(self) -> None:
+        self.stub.required_session_cwds["sess-1"] = "/repo/worktree"
+        self.stub.set_routes([
+            ("GET", "/api/sessions/sess-1/location", 200, {"sessionId": "sess-1", "projectId": "p1", "workspaceId": "w2"}),
+            ("GET", "/api/projects/p1/workspaces", 200, {"workspaces": [
+                {"id": "w1", "path": "/repo"}, {"id": "w2", "path": "/repo/worktree"},
+            ]}),
+        ])
+        self.assert_completed(self.run_cli("queue-clear", "sess-1"), 0, OK_STDOUT)
+        self.assertEqual(self.stub.requests[-1], ("POST", "/api/sessions/sess-1/queue/clear", "", {"cwd": "/repo/worktree"}))
+
+    def test_explicit_cwd_skips_lookup(self) -> None:
+        self.stub.required_session_cwds["sess-1"] = "/repo/worktree"
+        self.assert_completed(self.run_cli("abort", "sess-1", "--cwd", "/repo/worktree"), 0, OK_STDOUT)
+        self.assert_request("POST", "/api/sessions/sess-1/abort", {"cwd": "/repo/worktree"})
+
+    def test_unknown_workspace_does_not_guess_cwd(self) -> None:
+        self.stub.required_session_cwds["sess-1"] = "/unknown"
+        self.stub.set_routes([("GET", "/api/sessions/sess-1/location", 404, {"error": "Session not found"})])
+        proc = self.run_cli("abort", "sess-1")
+        self.assertEqual(proc.returncode, 1, proc.stdout)
+        self.assertIn("Pass --cwd for the session.", proc.stdout)
+        self.assertEqual(self.stub.requests, [
+            ("POST", "/api/sessions/sess-1/abort", "", {}),
+            ("GET", "/api/sessions/sess-1/location", "", None),
+        ])
+
     def test_prompt(self) -> None:
         self.stub.set_routes([("POST", "/api/sessions/sess-1/prompt", 200, {"accepted": True})])
         proc = self.run_cli("prompt", "sess-1", "hi")
