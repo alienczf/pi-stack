@@ -3,9 +3,20 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import hashlib
 import json
+import math
 import os
+import queue
+import socket
+import ssl
+import struct
 import sys
+import threading
+import time
+from dataclasses import dataclass, field
+from typing import Literal
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -339,6 +350,468 @@ VERBS: dict[str, tuple[str, str, tuple[str, ...], VerbBuilder]] = {
 }
 
 
+WATCH_BODY_LIMIT = 4 * 1024 * 1024
+WATCH_OUTPUT_LIMIT = 1024 * 1024
+WATCH_FRAME_LIMIT = 1024 * 1024
+WatchKind = Literal["completed", "needs_input", "failed", "interrupted", "unknown", "timeout"]
+
+
+class WatchProblem(Exception):
+    pass
+
+
+def watch_digest(value: object) -> str:
+    raw = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
+def watch_remaining(deadline: float) -> float:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError()
+    return remaining
+
+
+def watch_json(raw: bytes) -> object:
+    def invalid_constant(_value: str) -> None:
+        raise ValueError("nonfinite JSON")
+    return json.loads(raw, parse_constant=invalid_constant)
+
+
+class WatchNoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise WatchProblem("http_redirect")
+
+
+def watch_get(path: str, deadline: float) -> object:
+    request = urllib.request.Request(BASE + path, method="GET")
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), WatchNoRedirect())
+    with opener.open(request, timeout=min(2.0, watch_remaining(deadline))) as response:
+        if response.status != 200:
+            raise WatchProblem("http_status_" + str(response.status))
+        raw = response.read(WATCH_BODY_LIMIT + 1)
+    if len(raw) > WATCH_BODY_LIMIT:
+        raise WatchProblem("http_body_limit")
+    return watch_json(raw)
+
+
+def watch_id(value: object) -> str:
+    if not isinstance(value, str) or not value or len(value) > 1024:
+        raise WatchProblem("invalid_identifier")
+    return value
+
+
+def watch_status(value: object, sid: str) -> dict:
+    if not isinstance(value, dict) or value.get("sessionId") != sid:
+        raise WatchProblem("invalid_status_identity")
+    for key in ("isStreaming", "isCompacting", "isBashRunning", "persisted"):
+        if type(value.get(key)) is not bool:
+            raise WatchProblem("invalid_status")
+    for key in ("messageCount", "pendingMessageCount"):
+        if type(value.get(key)) is not int or value[key] < 0:
+            raise WatchProblem("invalid_status")
+    for key in ("sessionFileDiagnostics", "queuedMessages"):
+        if not isinstance(value.get(key), list):
+            raise WatchProblem("invalid_status")
+    if len(value["queuedMessages"]) != value["pendingMessageCount"]:
+        raise WatchProblem("contradictory_queue")
+    ask = value.get("pendingAsk")
+    if ask is not None:
+        if not isinstance(ask, dict) or not isinstance(ask.get("questions"), list) or len(ask["questions"]) > 256:
+            raise WatchProblem("invalid_questions")
+        watch_id(ask.get("askId"))
+        for question in ask["questions"]:
+            watch_id(question.get("id") if isinstance(question, dict) else None)
+    dialogs = value.get("pendingDialogs", [])
+    if not isinstance(dialogs, list) or len(dialogs) > 256:
+        raise WatchProblem("invalid_questions")
+    for dialog in dialogs:
+        watch_id(dialog.get("dialogId") if isinstance(dialog, dict) else None)
+    return value
+
+
+def watch_questions(status: dict) -> dict:
+    ask = status.get("pendingAsk") or {}
+    return {"askId": ask.get("askId"), "questionIds": [question["id"] for question in ask.get("questions", [])],
+            "dialogIds": [dialog["dialogId"] for dialog in status.get("pendingDialogs", [])]}
+
+
+def watch_busy(status: dict) -> bool:
+    return any(status[key] for key in ("isStreaming", "isCompacting", "isBashRunning", "pendingMessageCount"))
+
+
+def watch_has_questions(status: dict) -> bool:
+    return status.get("pendingAsk") is not None or bool(status.get("pendingDialogs"))
+
+
+@dataclass
+class HistoryView:
+    messages: list[dict]
+    digests: list[str]
+
+    @classmethod
+    def parse(cls, value: object) -> HistoryView:
+        if isinstance(value, dict):
+            messages = value.get("messages")
+            if type(value.get("start")) is not int or type(value.get("total")) is not int or value["start"] != 0 or not isinstance(messages, list) or value["total"] != len(messages):
+                raise WatchProblem("incomplete_history")
+            value = messages
+        if not isinstance(value, list) or len(value) > 10000:
+            raise WatchProblem("invalid_history")
+        for message in value:
+            if not isinstance(message, dict) or message.get("role") not in ("user", "assistant", "toolResult", "system", "custom"):
+                raise WatchProblem("invalid_history")
+            content = message.get("content")
+            if message["role"] == "user" and not isinstance(content, (str, list)):
+                raise WatchProblem("invalid_history")
+            if message["role"] == "assistant" and isinstance(content, list):
+                for part in content:
+                    if not isinstance(part, dict) or not isinstance(part.get("type"), str) or (part["type"] == "text" and not isinstance(part.get("text"), str)):
+                        raise WatchProblem("invalid_history")
+        return cls(value, [watch_digest(message) for message in value])
+
+
+@dataclass
+class EventEvidence:
+    connected: bool = False
+    last_seq: int | None = None
+    settled_seq: int | None = None
+    gaps: int = 0
+    error: str | None = None
+    session_error_seq: int | None = None
+    errors: list[dict] = field(default_factory=list)
+
+    def drain(self, events: queue.Queue, first: tuple | None = None) -> None:
+        while True:
+            if first is not None:
+                kind, payload = first
+                first = None
+            else:
+                try:
+                    kind, payload = events.get_nowait()
+                except queue.Empty:
+                    return
+            if kind == "open":
+                self.connected = True
+            elif kind == "gap":
+                self.connected = False
+                self.gaps += 1
+                self.error = payload
+                self.settled_seq = None
+            else:
+                seq, event_type, native_type, is_error, message, truncated = payload
+                if event_type == "session.error":
+                    self.session_error_seq = seq
+                if event_type == "session.error" or is_error:
+                    self.errors = (self.errors + [{"seq": seq, "type": event_type, "message": message, "messageTruncated": truncated}])[-8:]
+                if self.last_seq is not None and seq != self.last_seq + 1:
+                    self.gaps += 1
+                    self.error = "event_sequence_gap"
+                    self.settled_seq = None
+                self.last_seq = seq
+                if event_type == "agent.start":
+                    self.settled_seq = None
+                elif event_type == "pi.event" and native_type == "agent_settled":
+                    self.settled_seq = seq
+
+    def settlement(self) -> int | None:
+        return self.settled_seq if self.connected and not self.gaps else None
+
+
+@dataclass
+class WatchState:
+    sid: str
+    events: EventEvidence = field(default_factory=EventEvidence)
+    history: HistoryView = field(default_factory=lambda: HistoryView([], []))
+    before: dict | None = None
+    after: dict | None = None
+
+    def candidate(self) -> dict | None:
+        messages = self.history.messages
+        index = len(messages) - 1
+        while index >= 0 and messages[index]["role"] == "system" and messages[index].get("source") == "compaction":
+            index -= 1
+        if index < 0 or messages[index]["role"] != "assistant":
+            return None
+        message = messages[index]
+        content = message.get("content")
+        text = ""
+        if isinstance(content, str):
+            text = content
+        elif isinstance(content, list):
+            text = "\n".join(part["text"] for part in content
+                             if isinstance(part, dict) and part.get("type") == "text" and isinstance(part.get("text"), str))
+        reference = {"sessionId": self.sid, "historyIndex": index, "sha256": self.history.digests[index]}
+        if isinstance(message.get("responseId"), str):
+            reference["responseId"] = message["responseId"]
+        result = {"text": text, "stopReason": message.get("stopReason"), "reference": reference}
+        if isinstance(message.get("errorMessage"), str):
+            result["errorMessage"] = message["errorMessage"]
+        return result
+
+    def outcome(self, kind: WatchKind, reason: str) -> dict:
+        status = None if self.after is None else {key: self.after[key] for key in ("isStreaming", "isCompacting", "isBashRunning", "pendingMessageCount", "messageCount", "persisted")}
+        candidate = self.candidate()
+        return {"schemaVersion": 1, "kind": "watch", "ok": kind == "completed", "sessionId": self.sid,
+                "outcome": kind, "reason": reason, "finalAssistant": candidate if kind == "completed" else None,
+                "candidateAssistant": candidate if kind != "completed" else None,
+                "questions": watch_questions(self.after or {}),
+                "evidence": {"status": status, "historyCount": len(self.history.messages),
+                             "events": dict(vars(self.events))}}
+
+    def deadline_outcome(self) -> dict:
+        if self.candidate() is not None and self.before is not None and self.after is not None and not watch_busy(self.before) and not watch_busy(self.after):
+            return self.outcome("unknown", "settlement_unproven")
+        return self.outcome("timeout", "deadline")
+
+    def reconcile(self, history: HistoryView, settled_before: int | None) -> dict | None:
+        if history.digests[:len(self.history.digests)] != self.history.digests:
+            raise WatchProblem("history_boundary_changed")
+        if history.messages and (history.messages[0]["role"] != "user" or sum(message["role"] == "user" for message in history.messages) != 1):
+            raise WatchProblem("initial_prompt_attribution_lost")
+        self.history = history
+        if watch_has_questions(self.after):
+            return self.outcome("needs_input", "pending_questions")
+        if self.before["sessionFileDiagnostics"] or self.after["sessionFileDiagnostics"]:
+            raise WatchProblem("session_file_diagnostics")
+        if watch_busy(self.before) or watch_busy(self.after):
+            if settled_before == self.events.settlement():
+                self.events.settled_seq = None
+            return None
+        if not history.messages:
+            return None
+        # Idle precedes settlement hooks. A settlement read after this history cannot prove it final.
+        if settled_before is None or settled_before != self.events.settlement():
+            return None
+        candidate = self.candidate()
+        if candidate is None:
+            return self.outcome("unknown", "no_terminal_assistant")
+        stop = candidate["stopReason"]
+        if stop == "error":
+            return self.outcome("failed", "assistant_error")
+        if stop == "aborted":
+            return self.outcome("interrupted", "assistant_aborted")
+        if stop != "stop":
+            return self.outcome("unknown", "ambiguous_stop_reason")
+        if not candidate["text"].strip():
+            return self.outcome("unknown", "no_final_text")
+        if not self.before["persisted"] or not self.after["persisted"]:
+            return self.outcome("unknown", "history_persistence_unproven")
+        if self.events.session_error_seq is not None:
+            return self.outcome("unknown", "session_error_observed")
+        return self.outcome("completed", "native_settled_and_reconciled")
+
+
+def watch_socket(path: str, deadline: float, events: queue.Queue) -> None:
+    connection = None
+    try:
+        origin = urllib.parse.urlsplit(BASE)
+        port = origin.port or (443 if origin.scheme == "https" else 80)
+        connection = socket.create_connection((origin.hostname, port), timeout=watch_remaining(deadline))
+        if origin.scheme == "https":
+            connection = ssl.create_default_context().wrap_socket(connection, server_hostname=origin.hostname)
+        connection.settimeout(watch_remaining(deadline))
+        key = base64.b64encode(os.urandom(16)).decode("ascii")
+        target = (origin.path.rstrip("/") + path) or "/"
+        request = f"GET {target} HTTP/1.1\r\nHost: {origin.netloc}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n"
+        connection.sendall(request.encode("ascii"))
+
+        def read_exact(size: int) -> bytes:
+            data = bytearray()
+            while len(data) < size:
+                watch_remaining(deadline)
+                chunk = connection.recv(size - len(data))
+                if not chunk:
+                    raise WatchProblem("websocket_disconnected")
+                data.extend(chunk)
+            return bytes(data)
+
+        headers = bytearray()
+        while not headers.endswith(b"\r\n\r\n"):
+            if len(headers) >= 16384:
+                raise WatchProblem("websocket_header_limit")
+            headers.extend(read_exact(1))
+        lines = headers.decode("iso-8859-1").split("\r\n")
+        fields = {key.lower(): value.strip() for line in lines[1:] if ":" in line for key, value in [line.split(":", 1)]}
+        expected = base64.b64encode(hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode("ascii")).digest()).decode("ascii")
+        if lines[0].split()[1:2] != ["101"] or fields.get("sec-websocket-accept") != expected or fields.get("upgrade", "").lower() != "websocket" or "upgrade" not in fields.get("connection", "").lower():
+            raise WatchProblem("websocket_handshake")
+        events.put_nowait(("open", None))
+        fragments = bytearray()
+        fragmented = False
+        while True:
+            first, second = read_exact(2)
+            opcode, final = first & 15, bool(first & 128)
+            if first & 112 or second & 128:
+                raise WatchProblem("websocket_protocol")
+            size = second & 127
+            if size == 126:
+                size = struct.unpack("!H", read_exact(2))[0]
+            elif size == 127:
+                size = struct.unpack("!Q", read_exact(8))[0]
+            if size > WATCH_FRAME_LIMIT or len(fragments) + size > WATCH_FRAME_LIMIT:
+                raise WatchProblem("websocket_frame_limit")
+            if opcode >= 8 and (not final or size > 125):
+                raise WatchProblem("websocket_protocol")
+            payload = read_exact(size)
+            if opcode == 8:
+                raise WatchProblem("websocket_disconnected")
+            if opcode == 9:
+                mask = os.urandom(4)
+                connection.sendall(bytes((138, 128 | size)) + mask + bytes(byte ^ mask[index % 4] for index, byte in enumerate(payload)))
+                continue
+            if opcode == 10:
+                continue
+            if opcode not in (0, 1, 2) or (opcode == 0) != fragmented:
+                raise WatchProblem("websocket_protocol")
+            fragments.extend(payload)
+            fragmented = not final
+            if not final:
+                continue
+            event = watch_json(bytes(fragments))
+            fragments.clear()
+            if not isinstance(event, dict) or type(event.get("seq")) is not int or not 1 <= event["seq"] <= 2**53 - 1:
+                raise WatchProblem("invalid_event")
+            event_type, native_type = event.get("type"), event.get("eventType")
+            if not isinstance(event_type, str) or len(event_type) > 128 or (native_type is not None and (not isinstance(native_type, str) or len(native_type) > 128)):
+                raise WatchProblem("invalid_event")
+            message = event.get("message") if isinstance(event.get("message"), str) else ""
+            events.put_nowait(("event", (event["seq"], event_type, native_type, event.get("isError") is True, message[:1024], len(message) > 1024)))
+    except Exception as exc:
+        reason = str(exc) if isinstance(exc, WatchProblem) else "websocket_unavailable"
+        try:
+            events.put_nowait(("gap", reason))
+        except queue.Full:
+            try:
+                events.get_nowait()
+            except queue.Empty:
+                pass
+            events.put_nowait(("gap", "event_buffer_limit"))
+    finally:
+        if connection is not None:
+            connection.close()
+
+
+def watch_publish(results: queue.Queue, kind: str, result: dict) -> None:
+    try:
+        results.put_nowait((kind, result))
+    except queue.Full:
+        try:
+            results.get_nowait()
+        except queue.Empty:
+            pass
+        results.put_nowait((kind, result))
+
+
+def watch_worker(args: argparse.Namespace, deadline: float, results: queue.Queue) -> None:
+    state = WatchState(args.sid[:1024])
+    try:
+        origin = urllib.parse.urlsplit(BASE)
+        if len(BASE) > 4096 or origin.scheme not in ("http", "https") or not origin.hostname or origin.username is not None or origin.password is not None or origin.query or origin.fragment:
+            raise WatchProblem("invalid_api_origin")
+        watch_id(args.sid)
+        path = "/api/sessions/" + urllib.parse.quote(args.sid, safe="")
+        if args.baseline:
+            state.before = watch_status(watch_get(path + "/status", deadline), args.sid)
+            state.history = HistoryView.parse(watch_get(path + "/messages", deadline))
+            state.after = watch_status(watch_get(path + "/status", deadline), args.sid)
+            if state.history.messages or any(status["messageCount"] or watch_busy(status) or watch_has_questions(status) or status["sessionFileDiagnostics"] for status in (state.before, state.after)):
+                raise WatchProblem("baseline_requires_fresh_idle_session")
+            status = {key: state.after[key] for key in ("sessionId", "isStreaming", "isCompacting", "isBashRunning", "pendingMessageCount", "messageCount", "persisted", "sessionFileDiagnostics", "queuedMessages")}
+            result = {"schemaVersion": 1, "kind": "baseline", "ok": True, "apiOrigin": BASE, "sessionId": args.sid,
+                      "history": {"count": 0, "sha256": watch_digest([])}, "status": status, "capturedAt": time.time()}
+            watch_publish(results, "done", result)
+            return
+        with open(args.since, "rb") as source:
+            raw = source.read(65537)
+        if len(raw) > 65536:
+            raise WatchProblem("baseline_file_limit")
+        baseline = watch_json(raw)
+        if not isinstance(baseline, dict) or type(baseline.get("schemaVersion")) is not int or baseline["schemaVersion"] != 1 or baseline.get("kind") != "baseline" or baseline.get("ok") is not True or baseline.get("apiOrigin") != BASE or baseline.get("sessionId") != args.sid or baseline.get("history") != {"count": 0, "sha256": watch_digest([])}:
+            raise WatchProblem("invalid_baseline")
+        if type(baseline["history"]["count"]) is not int:
+            raise WatchProblem("invalid_baseline")
+        status = watch_status(baseline.get("status"), args.sid)
+        if status["messageCount"] or watch_busy(status) or watch_has_questions(status) or status["sessionFileDiagnostics"]:
+            raise WatchProblem("invalid_baseline")
+        events = queue.Queue(maxsize=256)
+        threading.Thread(target=watch_socket, args=(path + "/events", deadline, events), daemon=True).start()
+        # Attempt subscription first, but never let a stalled upgrade prevent HTTP reconciliation.
+        try:
+            state.events.drain(events, events.get(timeout=min(0.1, watch_remaining(deadline))))
+        except queue.Empty:
+            pass
+        while True:
+            state.events.drain(events)
+            settled_before = state.events.settlement()
+            state.before = watch_status(watch_get(path + "/status", deadline), args.sid)
+            history = HistoryView.parse(watch_get(path + "/messages", deadline))
+            state.after = watch_status(watch_get(path + "/status", deadline), args.sid)
+            state.events.drain(events)
+            result = state.reconcile(history, settled_before)
+            if result is not None:
+                watch_publish(results, "done", result)
+                return
+            watch_publish(results, "progress", state.deadline_outcome())
+            time.sleep(min(0.1, watch_remaining(deadline)))
+    except (TimeoutError, socket.timeout):
+        watch_publish(results, "done", state.outcome("timeout", "io_deadline"))
+    except Exception as exc:
+        if isinstance(exc, WatchProblem):
+            reason = str(exc)
+        elif isinstance(exc, urllib.error.HTTPError):
+            reason = "http_status_" + str(exc.code)
+        elif isinstance(exc, (ValueError, UnicodeError)):
+            reason = "invalid_json"
+        else:
+            reason = "io_error"
+        watch_publish(results, "done", state.outcome("unknown", reason))
+
+
+def cmd_watch(args: argparse.Namespace) -> int:
+    started = time.monotonic()
+    valid_timeout = math.isfinite(args.timeout) and 0.1 <= args.timeout <= 86400
+    deadline = started + (args.timeout if valid_timeout else 1.0)
+    work_deadline = deadline - min(0.1, (deadline - started) / 10)
+    latest = WatchState(args.sid[:1024]).outcome("timeout", "deadline")
+    if valid_timeout:
+        results = queue.Queue(maxsize=1)
+        threading.Thread(target=watch_worker, args=(args, work_deadline, results), daemon=True).start()
+        while True:
+            try:
+                kind, latest = results.get(timeout=watch_remaining(work_deadline))
+            except (queue.Empty, TimeoutError):
+                break
+            if kind == "done":
+                break
+    else:
+        latest["outcome"], latest["reason"] = "unknown", "timeout_must_be_between_0.1_and_86400"
+    raw = (json.dumps(latest, separators=(",", ":"), allow_nan=False) + "\n").encode("utf-8")
+    if len(raw) > WATCH_OUTPUT_LIMIT:
+        latest = WatchState(args.sid[:1024]).outcome("unknown", "output_limit")
+        raw = (json.dumps(latest, separators=(",", ":")) + "\n").encode("utf-8")
+    written = threading.Event()
+
+    def write_result() -> None:
+        try:
+            fd = sys.stdout.fileno()
+            remaining = memoryview(raw)
+            while remaining:
+                watch_remaining(deadline)
+                count = os.write(fd, remaining)
+                if not count:
+                    return
+                remaining = remaining[count:]
+            written.set()
+        except (OSError, TimeoutError):
+            return
+
+    # One selected JSON result, one writer. The owner never joins stalled file, network, or output I/O.
+    threading.Thread(target=write_result, daemon=True).start()
+    written.wait(max(0, deadline - time.monotonic()))
+    return 0 if written.is_set() and latest["ok"] else 1
+
+
 def main(argv: list[str]) -> int:
     p = argparse.ArgumentParser(description="PI WEB control plane (127.0.0.1:8504)")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -365,6 +838,12 @@ def main(argv: list[str]) -> int:
     fork = sub.add_parser("fork", help=fork_help, description=fork_help)
     fork.add_argument("sid")
     fork.add_argument("--at", help="User-message entry to fork before. The default is the newest user message.")
+    watch = sub.add_parser("watch", help="observe one caller-owned initial prompt in a fresh session")
+    watch.add_argument("sid")
+    boundary = watch.add_mutually_exclusive_group(required=True)
+    boundary.add_argument("--baseline", action="store_true", help="capture an empty, idle pre-prompt baseline as JSON")
+    boundary.add_argument("--since", metavar="FILE", help="observe the run after an earlier baseline")
+    watch.add_argument("--timeout", type=float, required=True, help="whole-command deadline in seconds, including I/O")
     control = sub.add_parser("automatic-admission")
     control.add_argument("sid")
     control.add_argument("mode", choices=("on", "off"))
@@ -433,6 +912,9 @@ def main(argv: list[str]) -> int:
         if name == "archive":
             verb.add_argument("--expected-idle", help="exact session/cwd/logical entry/generation JSON; refuse stale or busy replacement")
     args = p.parse_args(argv)
+    if args.cmd == "watch":
+        # Watch writes directly to stdout. Skip finalization of its daemon I/O threads.
+        os._exit(cmd_watch(args))
     if args.cmd in ("runtime", "capabilities"):
         code, data = req("GET", "/api/sessiond/runtime")
         ok = code == 200 and isinstance(data, dict) and data.get("component") == "sessiond" and isinstance(data.get("capabilities"), list) and all(isinstance(capability, str) for capability in data["capabilities"])
