@@ -808,6 +808,11 @@ def watch_collect(results: queue.Queue, work_deadline: float, latest: dict) -> d
         try:
             kind, latest = results.get(timeout=watch_remaining(work_deadline))
         except (queue.Empty, TimeoutError):
+            # A result published in the last window must not be reported as a timeout.
+            try:
+                latest = results.get_nowait()[1]
+            except queue.Empty:
+                pass
             return latest
         if kind == "done":
             return latest
@@ -855,7 +860,6 @@ def cmd_watch(args: argparse.Namespace) -> int:
     return watch_emit(latest, lambda: WatchState(args.sid[:1024]).outcome("unknown", "output_limit"), deadline)
 
 
-RUN_SETUP_STEPS = ("spawn", "model", "thinking", "settings_check", "baseline", "subscribe", "prompt")
 RUN_ERROR_LIMIT = 500
 RUN_SUBSCRIBE_LIMIT = 10.0
 RUN_PROMPT_LIMIT = 30.0
