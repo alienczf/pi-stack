@@ -386,7 +386,7 @@ class WatchNoRedirect(urllib.request.HTTPRedirectHandler):
 def watch_get(path: str, deadline: float) -> object:
     request = urllib.request.Request(BASE + path, method="GET")
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), WatchNoRedirect())
-    with opener.open(request, timeout=min(2.0, watch_remaining(deadline))) as response:
+    with opener.open(request, timeout=watch_remaining(deadline)) as response:
         if response.status != 200:
             raise WatchProblem("http_status_" + str(response.status))
         raw = response.read(WATCH_BODY_LIMIT + 1)
@@ -703,6 +703,29 @@ def watch_publish(results: queue.Queue, kind: str, result: dict) -> None:
         results.put_nowait((kind, result))
 
 
+def watch_timed_out(exc: BaseException) -> bool:
+    if isinstance(exc, urllib.error.URLError) and not isinstance(exc, urllib.error.HTTPError):
+        exc = exc.reason
+    return isinstance(exc, (TimeoutError, socket.timeout))
+
+
+def watch_failure(state: WatchState, exc: Exception, deadline: float) -> dict:
+    if watch_timed_out(exc):
+        # Every read is bounded only by the command deadline. A timeout that fires earlier is an I/O fault, not the deadline.
+        if time.monotonic() >= deadline - 0.05:
+            return state.outcome("timeout", "io_deadline")
+        return state.outcome("unknown", "io_timeout")
+    if isinstance(exc, WatchProblem):
+        reason = str(exc)
+    elif isinstance(exc, urllib.error.HTTPError):
+        reason = "http_status_" + str(exc.code)
+    elif isinstance(exc, (ValueError, UnicodeError)):
+        reason = "invalid_json"
+    else:
+        reason = "io_error"
+    return state.outcome("unknown", reason)
+
+
 def watch_worker(args: argparse.Namespace, deadline: float, results: queue.Queue) -> None:
     state = WatchState(args.sid[:1024])
     try:
@@ -754,18 +777,8 @@ def watch_worker(args: argparse.Namespace, deadline: float, results: queue.Queue
                 return
             watch_publish(results, "progress", state.deadline_outcome())
             time.sleep(min(0.1, watch_remaining(deadline)))
-    except (TimeoutError, socket.timeout):
-        watch_publish(results, "done", state.outcome("timeout", "io_deadline"))
     except Exception as exc:
-        if isinstance(exc, WatchProblem):
-            reason = str(exc)
-        elif isinstance(exc, urllib.error.HTTPError):
-            reason = "http_status_" + str(exc.code)
-        elif isinstance(exc, (ValueError, UnicodeError)):
-            reason = "invalid_json"
-        else:
-            reason = "io_error"
-        watch_publish(results, "done", state.outcome("unknown", reason))
+        watch_publish(results, "done", watch_failure(state, exc, deadline))
 
 
 def cmd_watch(args: argparse.Namespace) -> int:

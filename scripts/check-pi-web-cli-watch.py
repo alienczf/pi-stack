@@ -47,6 +47,7 @@ class Fixture:
         self.seq = 100
         self.ws = None
         self.watch_status_count = 0
+        self.slow_paths = {}
         fixture = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -114,9 +115,17 @@ class Fixture:
                     self.close_connection = True
                     return
                 with fixture.lock:
+                    started = fixture.started
+                    slow = False
+                    if started and fixture.scenario in ("slow_status", "slow_messages") and path.endswith("/" + fixture.scenario.split("_")[1]):
+                        fixture.slow_paths[path] = fixture.slow_paths.get(path, 0) + 1
+                        slow = fixture.slow_paths[path] == 1
+                if slow:
+                    # Mirrors a live backend that answers a read after about 2.5 s while a run is active.
+                    fixture.stop.wait(2.5)
+                with fixture.lock:
                     status = dict(fixture.status)
                     messages = list(fixture.messages)
-                    started = fixture.started
                 if started and fixture.scenario == "stalled_headers" and path.endswith("/status"):
                     fixture.stop.wait(10)
                     return
@@ -293,19 +302,19 @@ class WatchTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(value, {"ok": True, "transportAccepted": True, "status": 200, "result": {"accepted": True, "deliveryId": "receipt-only"}})
 
-    def run_watch(self, scenario, expected, seconds=0.75, send_prompt=True):
+    def run_watch(self, scenario, expected, seconds=0.75, send_prompt=True, timeout=4, bound=None):
         with Fixture(scenario) as fixture, tempfile.TemporaryDirectory() as directory:
             baseline = self.baseline(fixture, directory)
             if send_prompt:
                 self.prompt(fixture)
             mark = len(fixture.requests)
-            code, value, elapsed = self.invoke(fixture, "watch", SID, "--since", str(baseline), "--timeout", str(seconds))
+            code, value, elapsed = self.invoke(fixture, "watch", SID, "--since", str(baseline), "--timeout", str(seconds), timeout=timeout)
             self.assertEqual(code, 0 if expected == "completed" else 1, value)
             self.assertEqual(value["outcome"], expected, value)
             self.assertEqual(value["ok"], expected == "completed")
             self.assertEqual(value["sessionId"], SID)
             self.assertEqual(set(value), {"schemaVersion", "kind", "ok", "sessionId", "outcome", "reason", "finalAssistant", "candidateAssistant", "questions", "evidence"})
-            self.assertLess(elapsed, seconds + 0.65, (scenario, elapsed))
+            self.assertLess(elapsed, bound or seconds + 0.65, (scenario, elapsed))
             observed = fixture.requests[mark:]
             self.assertTrue(observed)
             self.assertTrue(all(method == "GET" and path in (PREFIX + "/status", PREFIX + "/messages", PREFIX + "/events") for method, path, _body in observed), observed)
@@ -338,6 +347,13 @@ class WatchTests(unittest.TestCase):
         for scenario in ("binary", "fragmented_binary"):
             with self.subTest(scenario=scenario):
                 self.run_watch(scenario, "completed", seconds=1.5)
+
+    def test_slow_read_below_the_command_deadline_is_not_a_timeout(self):
+        for scenario in ("slow_status", "slow_messages"):
+            with self.subTest(scenario=scenario):
+                value, elapsed = self.run_watch(scenario, "completed", seconds=10, timeout=15, bound=10.65)
+                self.assertGreater(elapsed, 2.4)
+                self.assertEqual(value["reason"], "native_settled_and_reconciled")
 
     def test_trailing_compaction_preserves_final_assistant_reference(self):
         value, _ = self.run_watch("trailing_compaction", "completed", seconds=1.5)

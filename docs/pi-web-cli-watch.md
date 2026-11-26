@@ -64,7 +64,7 @@ The messages endpoint projects branch history. `persisted` reports session-file 
 
 ## Bounds and verification
 
-`SECONDS` is finite and between `0.1` and `86400`. One monotonic deadline covers baseline files, connection setup, HTTP, WebSocket reads, waiting, and output. Up to 100 milliseconds of that budget is reserved for output. HTTP operations also have an inactivity timeout of at most two seconds. Daemon I/O workers cannot keep the deadline-owning process waiting on stalled I/O.
+`SECONDS` is finite and between `0.1` and `86400`. One monotonic deadline covers baseline files, connection setup, HTTP, WebSocket reads, waiting, and output. Up to 100 milliseconds of that budget is reserved for output. Each HTTP read is bounded only by the remaining deadline, so a slow backend response is never reported as a timeout before the deadline. `io_deadline` therefore always means the command deadline expired; a timeout that fires earlier returns `unknown` with `reason: "io_timeout"`. Daemon I/O workers cannot keep the deadline-owning process waiting on stalled I/O.
 
 Limits are 64 KiB per baseline file, 4 MiB per HTTP body, 10,000 history messages, 16 KiB of WebSocket handshake headers, 1 MiB per WebSocket message or frame, 256 buffered event summaries, and 1 MiB of output. At most eight event errors are retained, with 1,024 characters per error excerpt. Identifiers are limited to 1,024 characters. Each pending question or dialog list is limited to 256 items. Oversized output returns `unknown` with `reason: "output_limit"` instead of truncating final text.
 
