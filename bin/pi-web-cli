@@ -473,6 +473,7 @@ class HistoryView:
 
 @dataclass
 class EventEvidence:
+    """Event facts folded in by the socket thread as each event arrives, read as snapshots by the follow loop."""
     connected: bool = False
     last_seq: int | None = None
     settled_seq: int | None = None
@@ -480,42 +481,55 @@ class EventEvidence:
     error: str | None = None
     session_error_seq: int | None = None
     errors: list[dict] = field(default_factory=list)
+    changed: threading.Condition = field(default_factory=threading.Condition, repr=False, compare=False)
 
-    def drain(self, events: queue.Queue, first: tuple | None = None) -> None:
-        while True:
-            if first is not None:
-                kind, payload = first
-                first = None
-            else:
-                try:
-                    kind, payload = events.get_nowait()
-                except queue.Empty:
-                    return
-            if kind == "open":
-                self.connected = True
-            elif kind == "gap":
-                self.connected = False
+    def open(self) -> None:
+        with self.changed:
+            self.connected = True
+            self.changed.notify_all()
+
+    def gap(self, reason: str) -> None:
+        with self.changed:
+            self.connected = False
+            self.gaps += 1
+            self.error = reason
+            self.settled_seq = None
+            self.changed.notify_all()
+
+    def record(self, seq: int, event_type: str, native_type: str | None, is_error: bool, message: str, truncated: bool) -> None:
+        with self.changed:
+            if event_type == "session.error":
+                self.session_error_seq = seq
+            if event_type == "session.error" or is_error:
+                self.errors = (self.errors + [{"seq": seq, "type": event_type, "message": message, "messageTruncated": truncated}])[-8:]
+            if self.last_seq is not None and seq != self.last_seq + 1:
                 self.gaps += 1
-                self.error = payload
+                self.error = "event_sequence_gap"
                 self.settled_seq = None
-            else:
-                seq, event_type, native_type, is_error, message, truncated = payload
-                if event_type == "session.error":
-                    self.session_error_seq = seq
-                if event_type == "session.error" or is_error:
-                    self.errors = (self.errors + [{"seq": seq, "type": event_type, "message": message, "messageTruncated": truncated}])[-8:]
-                if self.last_seq is not None and seq != self.last_seq + 1:
-                    self.gaps += 1
-                    self.error = "event_sequence_gap"
-                    self.settled_seq = None
-                self.last_seq = seq
-                if event_type == "agent.start":
-                    self.settled_seq = None
-                elif event_type == "pi.event" and native_type == "agent_settled":
-                    self.settled_seq = seq
+            self.last_seq = seq
+            if event_type == "agent.start":
+                self.settled_seq = None
+            elif event_type == "pi.event" and native_type == "agent_settled":
+                self.settled_seq = seq
+
+    def wait_subscribed(self, timeout: float) -> bool:
+        """True once the socket is open, or has failed. The gap state is read from `gaps`."""
+        with self.changed:
+            return self.changed.wait_for(lambda: self.connected or self.gaps > 0, timeout)
 
     def settlement(self) -> int | None:
-        return self.settled_seq if self.connected and not self.gaps else None
+        with self.changed:
+            return self.settled_seq if self.connected and not self.gaps else None
+
+    def retire(self, settled: int | None) -> None:
+        """Forget `settled` if it is still the current settlement. A newer one stays."""
+        with self.changed:
+            if settled is not None and self.settlement() == settled:
+                self.settled_seq = None
+
+    def snapshot(self) -> dict:
+        with self.changed:
+            return {key: (list(value) if key == "errors" else value) for key, value in vars(self).items() if key != "changed"}
 
 
 @dataclass
@@ -557,7 +571,7 @@ class WatchState:
                 "candidateAssistant": candidate if kind != "completed" else None,
                 "questions": watch_questions(self.after or {}),
                 "evidence": {"status": status, "historyCount": len(self.history.messages),
-                             "events": dict(vars(self.events))}}
+                             "events": self.events.snapshot()}}
 
     def deadline_outcome(self) -> dict:
         if self.candidate() is not None and self.before is not None and self.after is not None and not watch_busy(self.before) and not watch_busy(self.after):
@@ -575,8 +589,7 @@ class WatchState:
         if self.before["sessionFileDiagnostics"] or self.after["sessionFileDiagnostics"]:
             raise WatchProblem("session_file_diagnostics")
         if watch_busy(self.before) or watch_busy(self.after):
-            if settled_before == self.events.settlement():
-                self.events.settled_seq = None
+            self.events.retire(settled_before)
             return None
         if not history.messages:
             return None
@@ -602,7 +615,7 @@ class WatchState:
         return self.outcome("completed", "native_settled_and_reconciled")
 
 
-def watch_socket(path: str, deadline: float, events: queue.Queue) -> None:
+def watch_socket(path: str, deadline: float, events: EventEvidence) -> None:
     connection = None
     try:
         origin = urllib.parse.urlsplit(BASE)
@@ -636,7 +649,7 @@ def watch_socket(path: str, deadline: float, events: queue.Queue) -> None:
         expected = base64.b64encode(hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode("ascii")).digest()).decode("ascii")
         if lines[0].split()[1:2] != ["101"] or fields.get("sec-websocket-accept") != expected or fields.get("upgrade", "").lower() != "websocket" or "upgrade" not in fields.get("connection", "").lower():
             raise WatchProblem("websocket_handshake")
-        events.put_nowait(("open", None))
+        events.open()
         fragments = bytearray()
         fragmented = False
         while True:
@@ -676,17 +689,10 @@ def watch_socket(path: str, deadline: float, events: queue.Queue) -> None:
             if not isinstance(event_type, str) or len(event_type) > 128 or (native_type is not None and (not isinstance(native_type, str) or len(native_type) > 128)):
                 raise WatchProblem("invalid_event")
             message = event.get("message") if isinstance(event.get("message"), str) else ""
-            events.put_nowait(("event", (event["seq"], event_type, native_type, event.get("isError") is True, message[:1024], len(message) > 1024)))
+            events.record(event["seq"], event_type, native_type, event.get("isError") is True, message[:1024], len(message) > 1024)
     except Exception as exc:
         reason = str(exc) if isinstance(exc, WatchProblem) else "websocket_unavailable"
-        try:
-            events.put_nowait(("gap", reason))
-        except queue.Full:
-            try:
-                events.get_nowait()
-            except queue.Empty:
-                pass
-            events.put_nowait(("gap", "event_buffer_limit"))
+        events.gap(reason)
     finally:
         if connection is not None:
             connection.close()
@@ -755,28 +761,22 @@ def watch_check_baseline(baseline: object, sid: str) -> None:
 
 
 def watch_follow(state: WatchState, path: str, baseline: object, deadline: float, publish: Callable[[str, dict], None],
-                 subscribed: Callable[[queue.Queue], None] | None = None, gate: Callable[[], None] | None = None) -> None:
+                 subscribed: Callable[[], None] | None = None, gate: Callable[[], None] | None = None) -> None:
     """Observe one run after a validated baseline. `subscribed` replaces the best-effort wait for the socket and `gate` runs once per poll."""
     watch_check_baseline(baseline, state.sid)
-    events = queue.Queue(maxsize=256)
-    threading.Thread(target=watch_socket, args=(path + "/events", deadline, events), daemon=True).start()
+    threading.Thread(target=watch_socket, args=(path + "/events", deadline, state.events), daemon=True).start()
     if subscribed is not None:
-        subscribed(events)
+        subscribed()
     else:
         # Attempt subscription first, but never let a stalled upgrade prevent HTTP reconciliation.
-        try:
-            state.events.drain(events, events.get(timeout=min(0.1, watch_remaining(deadline))))
-        except queue.Empty:
-            pass
+        state.events.wait_subscribed(min(0.1, watch_remaining(deadline)))
     while True:
         if gate is not None:
             gate()
-        state.events.drain(events)
         settled_before = state.events.settlement()
         state.before = watch_status(watch_get(path + "/status", deadline), state.sid)
         history = HistoryView.parse(watch_get(path + "/messages", deadline))
         state.after = watch_status(watch_get(path + "/status", deadline), state.sid)
-        state.events.drain(events)
         result = state.reconcile(history, settled_before)
         if result is not None:
             publish("done", result)
@@ -988,22 +988,19 @@ def run_worker(args: argparse.Namespace, deadline: float, budget: float, results
         context.step = "baseline"
         context.baseline = watch_capture_baseline(context.state, path, deadline)
 
-        def subscribed(events: queue.Queue) -> None:
+        def subscribed() -> None:
             context.step = "subscribe"
             limit = min(deadline, time.monotonic() + RUN_SUBSCRIBE_LIMIT)
             while True:
                 watch_remaining(deadline)
                 if time.monotonic() >= limit:
                     raise RunFailure("subscribe", "websocket_open_timeout", None, "event socket did not open")
-                try:
-                    item = events.get(timeout=0.05)
-                except queue.Empty:
+                if not context.state.events.wait_subscribed(0.05):
                     continue
-                context.state.events.drain(events, item)
-                if context.state.events.connected:
+                evidence = context.state.events.snapshot()
+                if evidence["connected"]:
                     break
-                if context.state.events.gaps:
-                    raise RunFailure("subscribe", "websocket_unavailable", None, context.state.events.error)
+                raise RunFailure("subscribe", "websocket_unavailable", None, evidence["error"])
             context.state.before = context.state.after = None
             threading.Thread(target=run_send_prompt, args=(context, path, text, deadline, budget), daemon=True).start()
             context.step = "watch"

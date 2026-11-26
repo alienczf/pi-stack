@@ -142,6 +142,9 @@ class Fixture:
                     if started and fixture.scenario in ("slow_status", "slow_messages") and path.endswith("/" + fixture.scenario.split("_")[1]):
                         fixture.slow_paths[path] = fixture.slow_paths.get(path, 0) + 1
                         slow = fixture.slow_paths[path] == 1
+                if started and fixture.scenario == "event_flood" and path.endswith("/status"):
+                    # Mirrors a busy backend: every status read takes about 1 s while the run streams.
+                    fixture.stop.wait(1.0)
                 if slow:
                     # Mirrors a live backend that answers a read after about 2.5 s while a run is active.
                     fixture.stop.wait(2.5)
@@ -284,6 +287,9 @@ class Fixture:
                 else:
                     if self.scenario == "sequence_gap":
                         self.seq += 1
+                    if self.scenario == "event_flood":
+                        for _ in range(2000):
+                            self.emit(connection, {"type": "pi.event", "eventType": "message_update"})
                     final = dict(FINAL)
                     if self.scenario == "blocked_output":
                         final["content"] = "x" * 200000
@@ -378,6 +384,10 @@ class WatchTests(unittest.TestCase):
                 value, elapsed = self.run_watch(scenario, "completed", seconds=10, timeout=15, bound=10.65)
                 self.assertGreater(elapsed, 2.4)
                 self.assertEqual(value["reason"], "native_settled_and_reconciled")
+
+    def test_event_flood_during_slow_reads_still_proves_settlement(self):
+        value, _ = self.run_watch("event_flood", "completed", seconds=12, timeout=16, bound=12.65)
+        self.assertEqual(value["evidence"]["events"]["gaps"], 0, value)
 
     def test_trailing_compaction_preserves_final_assistant_reference(self):
         value, _ = self.run_watch("trailing_compaction", "completed", seconds=1.5)
@@ -648,6 +658,11 @@ class WatchTests(unittest.TestCase):
                 value, _, _, elapsed = self.run_cli(scenario, seconds=10, bound=10.65)
                 self.assertEqual(value["outcome"], "completed", value)
                 self.assertGreater(elapsed, 2.4)
+
+    def test_run_event_flood_during_slow_reads_completes(self):
+        value, _, _, _ = self.run_cli("event_flood", seconds=12, bound=12.65)
+        self.assertEqual(value["outcome"], "completed", value)
+        self.assertEqual(value["evidence"]["events"]["gaps"], 0, value)
 
     def test_run_deadline_keeps_session_and_baseline(self):
         value, _, _, elapsed = self.run_cli("bash", seconds=1.5)

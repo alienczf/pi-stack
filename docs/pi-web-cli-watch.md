@@ -58,7 +58,7 @@ Native `agent_settled` arrives as `pi.event` on `/api/sessions/:id/events`. Subs
 
 Settlement must precede the history read used for completion. `agent.end`, tool errors, retries, compaction, queued work, activity labels, and disconnects are not completion evidence. Streaming includes retry and post-run continuation. Observed streaming, compaction, bash, or queued work prevents completion. An observed `session.error` prevents a successful result, even if candidate assistant text exists.
 
-Watch polls independently of WebSocket traffic. It makes one subscription attempt and does not reconnect. A disconnect, sequence gap, invalid frame, or event overflow removes settlement proof for this invocation. Sequence numbers are process-local observations, not durable identities.
+Watch polls independently of WebSocket traffic. It makes one subscription attempt and does not reconnect. A disconnect, sequence gap, or invalid frame removes settlement proof for this invocation. Sequence numbers are process-local observations, not durable identities.
 
 The messages endpoint projects branch history. `persisted` reports session-file existence, not successful per-message disk writes or fsync. Watch cannot prove crash durability, exclusive ownership, invisible mutations between reads, or future work scheduled outside the observed run. Both array history and complete `{messages,start,total}` history are accepted. Partial history returns `unknown`.
 
@@ -66,7 +66,7 @@ The messages endpoint projects branch history. `persisted` reports session-file 
 
 `SECONDS` is finite and between `0.1` and `86400`. One monotonic deadline covers baseline files, connection setup, HTTP, WebSocket reads, waiting, and output. Up to 100 milliseconds of that budget is reserved for output. Each HTTP read is bounded only by the remaining deadline, so a slow backend response is never reported as a timeout before the deadline. `io_deadline` therefore always means the command deadline expired; a timeout that fires earlier returns `unknown` with `reason: "io_timeout"`. Daemon I/O workers cannot keep the deadline-owning process waiting on stalled I/O.
 
-Limits are 64 KiB per baseline file, 4 MiB per HTTP body, 10,000 history messages, 16 KiB of WebSocket handshake headers, 1 MiB per WebSocket message or frame, 256 buffered event summaries, and 1 MiB of output. At most eight event errors are retained, with 1,024 characters per error excerpt. Identifiers are limited to 1,024 characters. Each pending question or dialog list is limited to 256 items. Oversized output returns `unknown` with `reason: "output_limit"` instead of truncating final text.
+Limits are 64 KiB per baseline file, 4 MiB per HTTP body, 10,000 history messages, 16 KiB of WebSocket handshake headers, 1 MiB per WebSocket message or frame and 1 MiB of output. Events are folded into the evidence as they arrive, with no event buffer, so the evidence does not depend on the poll cadence. At most eight event errors are retained, with 1,024 characters per error excerpt. Identifiers are limited to 1,024 characters. Each pending question or dialog list is limited to 256 items. Oversized output returns `unknown` with `reason: "output_limit"` instead of truncating final text.
 
 A blocked or closed stdout reader can prevent delivery of the JSON object. Watch still exits within its deadline and returns nonzero. No command can guarantee delivery to a reader that does not accept bytes.
 
