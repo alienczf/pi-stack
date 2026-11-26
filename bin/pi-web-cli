@@ -386,7 +386,7 @@ class WatchNoRedirect(urllib.request.HTTPRedirectHandler):
 def watch_get(path: str, deadline: float) -> object:
     request = urllib.request.Request(BASE + path, method="GET")
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), WatchNoRedirect())
-    with opener.open(request, timeout=min(2.0, watch_remaining(deadline))) as response:
+    with opener.open(request, timeout=watch_remaining(deadline)) as response:
         if response.status != 200:
             raise WatchProblem("http_status_" + str(response.status))
         raw = response.read(WATCH_BODY_LIMIT + 1)
@@ -473,6 +473,7 @@ class HistoryView:
 
 @dataclass
 class EventEvidence:
+    """Event facts folded in by the socket thread as each event arrives, read as snapshots by the follow loop."""
     connected: bool = False
     last_seq: int | None = None
     settled_seq: int | None = None
@@ -480,42 +481,55 @@ class EventEvidence:
     error: str | None = None
     session_error_seq: int | None = None
     errors: list[dict] = field(default_factory=list)
+    changed: threading.Condition = field(default_factory=threading.Condition, repr=False, compare=False)
 
-    def drain(self, events: queue.Queue, first: tuple | None = None) -> None:
-        while True:
-            if first is not None:
-                kind, payload = first
-                first = None
-            else:
-                try:
-                    kind, payload = events.get_nowait()
-                except queue.Empty:
-                    return
-            if kind == "open":
-                self.connected = True
-            elif kind == "gap":
-                self.connected = False
+    def open(self) -> None:
+        with self.changed:
+            self.connected = True
+            self.changed.notify_all()
+
+    def gap(self, reason: str) -> None:
+        with self.changed:
+            self.connected = False
+            self.gaps += 1
+            self.error = reason
+            self.settled_seq = None
+            self.changed.notify_all()
+
+    def record(self, seq: int, event_type: str, native_type: str | None, is_error: bool, message: str, truncated: bool) -> None:
+        with self.changed:
+            if event_type == "session.error":
+                self.session_error_seq = seq
+            if event_type == "session.error" or is_error:
+                self.errors = (self.errors + [{"seq": seq, "type": event_type, "message": message, "messageTruncated": truncated}])[-8:]
+            if self.last_seq is not None and seq != self.last_seq + 1:
                 self.gaps += 1
-                self.error = payload
+                self.error = "event_sequence_gap"
                 self.settled_seq = None
-            else:
-                seq, event_type, native_type, is_error, message, truncated = payload
-                if event_type == "session.error":
-                    self.session_error_seq = seq
-                if event_type == "session.error" or is_error:
-                    self.errors = (self.errors + [{"seq": seq, "type": event_type, "message": message, "messageTruncated": truncated}])[-8:]
-                if self.last_seq is not None and seq != self.last_seq + 1:
-                    self.gaps += 1
-                    self.error = "event_sequence_gap"
-                    self.settled_seq = None
-                self.last_seq = seq
-                if event_type == "agent.start":
-                    self.settled_seq = None
-                elif event_type == "pi.event" and native_type == "agent_settled":
-                    self.settled_seq = seq
+            self.last_seq = seq
+            if event_type == "agent.start":
+                self.settled_seq = None
+            elif event_type == "pi.event" and native_type == "agent_settled":
+                self.settled_seq = seq
+
+    def wait_subscribed(self, timeout: float) -> bool:
+        """True once the socket is open, or has failed. The gap state is read from `gaps`."""
+        with self.changed:
+            return self.changed.wait_for(lambda: self.connected or self.gaps > 0, timeout)
 
     def settlement(self) -> int | None:
-        return self.settled_seq if self.connected and not self.gaps else None
+        with self.changed:
+            return self.settled_seq if self.connected and not self.gaps else None
+
+    def retire(self, settled: int | None) -> None:
+        """Forget `settled` if it is still the current settlement. A newer one stays."""
+        with self.changed:
+            if settled is not None and self.settlement() == settled:
+                self.settled_seq = None
+
+    def snapshot(self) -> dict:
+        with self.changed:
+            return {key: (list(value) if key == "errors" else value) for key, value in vars(self).items() if key != "changed"}
 
 
 @dataclass
@@ -557,7 +571,7 @@ class WatchState:
                 "candidateAssistant": candidate if kind != "completed" else None,
                 "questions": watch_questions(self.after or {}),
                 "evidence": {"status": status, "historyCount": len(self.history.messages),
-                             "events": dict(vars(self.events))}}
+                             "events": self.events.snapshot()}}
 
     def deadline_outcome(self) -> dict:
         if self.candidate() is not None and self.before is not None and self.after is not None and not watch_busy(self.before) and not watch_busy(self.after):
@@ -575,8 +589,7 @@ class WatchState:
         if self.before["sessionFileDiagnostics"] or self.after["sessionFileDiagnostics"]:
             raise WatchProblem("session_file_diagnostics")
         if watch_busy(self.before) or watch_busy(self.after):
-            if settled_before == self.events.settlement():
-                self.events.settled_seq = None
+            self.events.retire(settled_before)
             return None
         if not history.messages:
             return None
@@ -602,7 +615,7 @@ class WatchState:
         return self.outcome("completed", "native_settled_and_reconciled")
 
 
-def watch_socket(path: str, deadline: float, events: queue.Queue) -> None:
+def watch_socket(path: str, deadline: float, events: EventEvidence) -> None:
     connection = None
     try:
         origin = urllib.parse.urlsplit(BASE)
@@ -636,7 +649,7 @@ def watch_socket(path: str, deadline: float, events: queue.Queue) -> None:
         expected = base64.b64encode(hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode("ascii")).digest()).decode("ascii")
         if lines[0].split()[1:2] != ["101"] or fields.get("sec-websocket-accept") != expected or fields.get("upgrade", "").lower() != "websocket" or "upgrade" not in fields.get("connection", "").lower():
             raise WatchProblem("websocket_handshake")
-        events.put_nowait(("open", None))
+        events.open()
         fragments = bytearray()
         fragmented = False
         while True:
@@ -676,17 +689,10 @@ def watch_socket(path: str, deadline: float, events: queue.Queue) -> None:
             if not isinstance(event_type, str) or len(event_type) > 128 or (native_type is not None and (not isinstance(native_type, str) or len(native_type) > 128)):
                 raise WatchProblem("invalid_event")
             message = event.get("message") if isinstance(event.get("message"), str) else ""
-            events.put_nowait(("event", (event["seq"], event_type, native_type, event.get("isError") is True, message[:1024], len(message) > 1024)))
+            events.record(event["seq"], event_type, native_type, event.get("isError") is True, message[:1024], len(message) > 1024)
     except Exception as exc:
         reason = str(exc) if isinstance(exc, WatchProblem) else "websocket_unavailable"
-        try:
-            events.put_nowait(("gap", reason))
-        except queue.Full:
-            try:
-                events.get_nowait()
-            except queue.Empty:
-                pass
-            events.put_nowait(("gap", "event_buffer_limit"))
+        events.gap(reason)
     finally:
         if connection is not None:
             connection.close()
@@ -703,92 +709,119 @@ def watch_publish(results: queue.Queue, kind: str, result: dict) -> None:
         results.put_nowait((kind, result))
 
 
+def watch_timed_out(exc: BaseException) -> bool:
+    if isinstance(exc, urllib.error.URLError) and not isinstance(exc, urllib.error.HTTPError):
+        exc = exc.reason
+    return isinstance(exc, (TimeoutError, socket.timeout))
+
+
+def watch_failure(state: WatchState, exc: Exception, deadline: float) -> dict:
+    if watch_timed_out(exc):
+        # Every read is bounded only by the command deadline. A timeout that fires earlier is an I/O fault, not the deadline.
+        if time.monotonic() >= deadline - 0.05:
+            return state.outcome("timeout", "io_deadline")
+        return state.outcome("unknown", "io_timeout")
+    if isinstance(exc, WatchProblem):
+        reason = str(exc)
+    elif isinstance(exc, urllib.error.HTTPError):
+        reason = "http_status_" + str(exc.code)
+    elif isinstance(exc, (ValueError, UnicodeError)):
+        reason = "invalid_json"
+    else:
+        reason = "io_error"
+    return state.outcome("unknown", reason)
+
+
+def watch_origin() -> None:
+    origin = urllib.parse.urlsplit(BASE)
+    if len(BASE) > 4096 or origin.scheme not in ("http", "https") or not origin.hostname or origin.username is not None or origin.password is not None or origin.query or origin.fragment:
+        raise WatchProblem("invalid_api_origin")
+
+
+def watch_capture_baseline(state: WatchState, path: str, deadline: float) -> dict:
+    sid = state.sid
+    state.before = watch_status(watch_get(path + "/status", deadline), sid)
+    state.history = HistoryView.parse(watch_get(path + "/messages", deadline))
+    state.after = watch_status(watch_get(path + "/status", deadline), sid)
+    if state.history.messages or any(status["messageCount"] or watch_busy(status) or watch_has_questions(status) or status["sessionFileDiagnostics"] for status in (state.before, state.after)):
+        raise WatchProblem("baseline_requires_fresh_idle_session")
+    status = {key: state.after[key] for key in ("sessionId", "isStreaming", "isCompacting", "isBashRunning", "pendingMessageCount", "messageCount", "persisted", "sessionFileDiagnostics", "queuedMessages")}
+    return {"schemaVersion": 1, "kind": "baseline", "ok": True, "apiOrigin": BASE, "sessionId": sid,
+            "history": {"count": 0, "sha256": watch_digest([])}, "status": status, "capturedAt": time.time()}
+
+
+def watch_check_baseline(baseline: object, sid: str) -> None:
+    if not isinstance(baseline, dict) or type(baseline.get("schemaVersion")) is not int or baseline["schemaVersion"] != 1 or baseline.get("kind") != "baseline" or baseline.get("ok") is not True or baseline.get("apiOrigin") != BASE or baseline.get("sessionId") != sid or baseline.get("history") != {"count": 0, "sha256": watch_digest([])}:
+        raise WatchProblem("invalid_baseline")
+    if type(baseline["history"]["count"]) is not int:
+        raise WatchProblem("invalid_baseline")
+    status = watch_status(baseline.get("status"), sid)
+    if status["messageCount"] or watch_busy(status) or watch_has_questions(status) or status["sessionFileDiagnostics"]:
+        raise WatchProblem("invalid_baseline")
+
+
+def watch_follow(state: WatchState, path: str, baseline: object, deadline: float, publish: Callable[[str, dict], None],
+                 subscribed: Callable[[], None] | None = None, gate: Callable[[], None] | None = None) -> None:
+    """Observe one run after a validated baseline. `subscribed` replaces the best-effort wait for the socket and `gate` runs once per poll."""
+    watch_check_baseline(baseline, state.sid)
+    threading.Thread(target=watch_socket, args=(path + "/events", deadline, state.events), daemon=True).start()
+    if subscribed is not None:
+        subscribed()
+    else:
+        # Attempt subscription first, but never let a stalled upgrade prevent HTTP reconciliation.
+        state.events.wait_subscribed(min(0.1, watch_remaining(deadline)))
+    while True:
+        if gate is not None:
+            gate()
+        settled_before = state.events.settlement()
+        state.before = watch_status(watch_get(path + "/status", deadline), state.sid)
+        history = HistoryView.parse(watch_get(path + "/messages", deadline))
+        state.after = watch_status(watch_get(path + "/status", deadline), state.sid)
+        result = state.reconcile(history, settled_before)
+        if result is not None:
+            publish("done", result)
+            return
+        publish("progress", state.deadline_outcome())
+        time.sleep(min(0.1, watch_remaining(deadline)))
+
+
 def watch_worker(args: argparse.Namespace, deadline: float, results: queue.Queue) -> None:
     state = WatchState(args.sid[:1024])
     try:
-        origin = urllib.parse.urlsplit(BASE)
-        if len(BASE) > 4096 or origin.scheme not in ("http", "https") or not origin.hostname or origin.username is not None or origin.password is not None or origin.query or origin.fragment:
-            raise WatchProblem("invalid_api_origin")
+        watch_origin()
         watch_id(args.sid)
         path = "/api/sessions/" + urllib.parse.quote(args.sid, safe="")
         if args.baseline:
-            state.before = watch_status(watch_get(path + "/status", deadline), args.sid)
-            state.history = HistoryView.parse(watch_get(path + "/messages", deadline))
-            state.after = watch_status(watch_get(path + "/status", deadline), args.sid)
-            if state.history.messages or any(status["messageCount"] or watch_busy(status) or watch_has_questions(status) or status["sessionFileDiagnostics"] for status in (state.before, state.after)):
-                raise WatchProblem("baseline_requires_fresh_idle_session")
-            status = {key: state.after[key] for key in ("sessionId", "isStreaming", "isCompacting", "isBashRunning", "pendingMessageCount", "messageCount", "persisted", "sessionFileDiagnostics", "queuedMessages")}
-            result = {"schemaVersion": 1, "kind": "baseline", "ok": True, "apiOrigin": BASE, "sessionId": args.sid,
-                      "history": {"count": 0, "sha256": watch_digest([])}, "status": status, "capturedAt": time.time()}
-            watch_publish(results, "done", result)
+            watch_publish(results, "done", watch_capture_baseline(state, path, deadline))
             return
         with open(args.since, "rb") as source:
             raw = source.read(65537)
         if len(raw) > 65536:
             raise WatchProblem("baseline_file_limit")
-        baseline = watch_json(raw)
-        if not isinstance(baseline, dict) or type(baseline.get("schemaVersion")) is not int or baseline["schemaVersion"] != 1 or baseline.get("kind") != "baseline" or baseline.get("ok") is not True or baseline.get("apiOrigin") != BASE or baseline.get("sessionId") != args.sid or baseline.get("history") != {"count": 0, "sha256": watch_digest([])}:
-            raise WatchProblem("invalid_baseline")
-        if type(baseline["history"]["count"]) is not int:
-            raise WatchProblem("invalid_baseline")
-        status = watch_status(baseline.get("status"), args.sid)
-        if status["messageCount"] or watch_busy(status) or watch_has_questions(status) or status["sessionFileDiagnostics"]:
-            raise WatchProblem("invalid_baseline")
-        events = queue.Queue(maxsize=256)
-        threading.Thread(target=watch_socket, args=(path + "/events", deadline, events), daemon=True).start()
-        # Attempt subscription first, but never let a stalled upgrade prevent HTTP reconciliation.
-        try:
-            state.events.drain(events, events.get(timeout=min(0.1, watch_remaining(deadline))))
-        except queue.Empty:
-            pass
-        while True:
-            state.events.drain(events)
-            settled_before = state.events.settlement()
-            state.before = watch_status(watch_get(path + "/status", deadline), args.sid)
-            history = HistoryView.parse(watch_get(path + "/messages", deadline))
-            state.after = watch_status(watch_get(path + "/status", deadline), args.sid)
-            state.events.drain(events)
-            result = state.reconcile(history, settled_before)
-            if result is not None:
-                watch_publish(results, "done", result)
-                return
-            watch_publish(results, "progress", state.deadline_outcome())
-            time.sleep(min(0.1, watch_remaining(deadline)))
-    except (TimeoutError, socket.timeout):
-        watch_publish(results, "done", state.outcome("timeout", "io_deadline"))
+        watch_follow(state, path, watch_json(raw), deadline, lambda kind, result: watch_publish(results, kind, result))
     except Exception as exc:
-        if isinstance(exc, WatchProblem):
-            reason = str(exc)
-        elif isinstance(exc, urllib.error.HTTPError):
-            reason = "http_status_" + str(exc.code)
-        elif isinstance(exc, (ValueError, UnicodeError)):
-            reason = "invalid_json"
-        else:
-            reason = "io_error"
-        watch_publish(results, "done", state.outcome("unknown", reason))
+        watch_publish(results, "done", watch_failure(state, exc, deadline))
 
 
-def cmd_watch(args: argparse.Namespace) -> int:
-    started = time.monotonic()
-    valid_timeout = math.isfinite(args.timeout) and 0.1 <= args.timeout <= 86400
-    deadline = started + (args.timeout if valid_timeout else 1.0)
-    work_deadline = deadline - min(0.1, (deadline - started) / 10)
-    latest = WatchState(args.sid[:1024]).outcome("timeout", "deadline")
-    if valid_timeout:
-        results = queue.Queue(maxsize=1)
-        threading.Thread(target=watch_worker, args=(args, work_deadline, results), daemon=True).start()
-        while True:
+def watch_collect(results: queue.Queue, work_deadline: float, latest: dict) -> dict:
+    while True:
+        try:
+            kind, latest = results.get(timeout=watch_remaining(work_deadline))
+        except (queue.Empty, TimeoutError):
+            # A result published in the last window must not be reported as a timeout.
             try:
-                kind, latest = results.get(timeout=watch_remaining(work_deadline))
-            except (queue.Empty, TimeoutError):
-                break
-            if kind == "done":
-                break
-    else:
-        latest["outcome"], latest["reason"] = "unknown", "timeout_must_be_between_0.1_and_86400"
+                latest = results.get_nowait()[1]
+            except queue.Empty:
+                pass
+            return latest
+        if kind == "done":
+            return latest
+
+
+def watch_emit(latest: dict, fallback: Callable[[], dict], deadline: float) -> int:
     raw = (json.dumps(latest, separators=(",", ":"), allow_nan=False) + "\n").encode("utf-8")
     if len(raw) > WATCH_OUTPUT_LIMIT:
-        latest = WatchState(args.sid[:1024]).outcome("unknown", "output_limit")
+        latest = fallback()
         raw = (json.dumps(latest, separators=(",", ":")) + "\n").encode("utf-8")
     written = threading.Event()
 
@@ -810,6 +843,205 @@ def cmd_watch(args: argparse.Namespace) -> int:
     threading.Thread(target=write_result, daemon=True).start()
     written.wait(max(0, deadline - time.monotonic()))
     return 0 if written.is_set() and latest["ok"] else 1
+
+
+def cmd_watch(args: argparse.Namespace) -> int:
+    started = time.monotonic()
+    valid_timeout = math.isfinite(args.timeout) and 0.1 <= args.timeout <= 86400
+    deadline = started + (args.timeout if valid_timeout else 1.0)
+    work_deadline = deadline - min(0.1, (deadline - started) / 10)
+    latest = WatchState(args.sid[:1024]).outcome("timeout", "deadline")
+    if valid_timeout:
+        results = queue.Queue(maxsize=1)
+        threading.Thread(target=watch_worker, args=(args, work_deadline, results), daemon=True).start()
+        latest = watch_collect(results, work_deadline, latest)
+    else:
+        latest["outcome"], latest["reason"] = "unknown", "timeout_must_be_between_0.1_and_86400"
+    return watch_emit(latest, lambda: WatchState(args.sid[:1024]).outcome("unknown", "output_limit"), deadline)
+
+
+RUN_ERROR_LIMIT = 500
+RUN_SUBSCRIBE_LIMIT = 10.0
+RUN_PROMPT_LIMIT = 30.0
+RUN_PROMPT_SHARE = 0.5
+
+
+class RunFailure(Exception):
+    def __init__(self, step: str | None, reason: str, status: int | None = None, detail: object = None):
+        super().__init__(reason)
+        self.step, self.reason, self.status, self.detail = step, reason, status, detail
+
+
+def run_detail(value: object) -> str:
+    text = value if isinstance(value, str) else json.dumps(value, default=str, ensure_ascii=False)
+    return text[:RUN_ERROR_LIMIT]
+
+
+@dataclass
+class RunContext:
+    cwd: str
+    sid: str | None = None
+    settings: dict | None = None
+    baseline: dict | None = None
+    step: str | None = None
+    state: WatchState | None = None
+    prompt_error: dict | None = None
+    prompt_rejected: RunFailure | None = None
+
+    def result(self, watch: dict, failed_step: str | None = None, error: dict | None = None) -> dict:
+        return {"schemaVersion": 1, "kind": "run", "ok": watch["ok"], "outcome": watch["outcome"], "reason": watch["reason"],
+                "sessionId": self.sid, "cwd": self.cwd, "settings": self.settings, "failedStep": failed_step,
+                "error": error if error is not None else self.prompt_error, "finalAssistant": watch["finalAssistant"],
+                "candidateAssistant": watch["candidateAssistant"], "questions": watch["questions"],
+                "evidence": watch["evidence"], "baseline": self.baseline}
+
+    def watched(self, watch: dict) -> dict:
+        return self.result(watch)
+
+    def setup_failed(self, step: str | None, reason: str, status: int | None = None, detail: object = None) -> dict:
+        watch = (self.state or WatchState(self.sid or "")).outcome("unknown", reason)
+        watch.update(ok=False, outcome="setup_failed")
+        return self.result(watch, step, {"status": status, "detail": run_detail(reason if detail is None else detail)})
+
+    def deadline(self) -> dict:
+        if self.step == "watch" and self.state is not None:
+            return self.watched(self.state.deadline_outcome())
+        return self.setup_failed(self.step, "deadline")
+
+    def failure(self, exc: Exception, deadline: float) -> dict:
+        if isinstance(exc, RunFailure):
+            return self.setup_failed(exc.step, exc.reason, exc.status, exc.detail)
+        if self.step == "watch" and self.state is not None:
+            return self.watched(watch_failure(self.state, exc, deadline))
+        outcome = watch_failure(WatchState(self.sid or ""), exc, deadline)
+        reason = "deadline" if outcome["reason"] == "io_deadline" else outcome["reason"]
+        detail = None if isinstance(exc, WatchProblem) else f"{type(exc).__name__}: {exc}"
+        return self.setup_failed(self.step, reason, exc.code if isinstance(exc, urllib.error.HTTPError) else None, detail)
+
+
+def run_call(step: str, method: str, path: str, body: dict | None, deadline: float) -> tuple[int, object]:
+    try:
+        code, data = req(method, path, body, timeout=watch_remaining(deadline))
+    except Exception as exc:
+        if watch_timed_out(exc):
+            raise
+        raise RunFailure(step, "transport_error", None, f"{type(exc).__name__}: {exc}") from exc
+    return code, data
+
+
+def run_step(step: str, method: str, path: str, body: dict | None, deadline: float, accepted: Callable[[int, object], bool]) -> object:
+    code, data = run_call(step, method, path, body, deadline)
+    if not accepted(code, data):
+        raise RunFailure(step, "rejected" if code in (200, 201) else "http_status_" + str(code), code, data)
+    return data
+
+
+def run_read_prompt(deadline: float) -> str:
+    raw = sys.stdin.buffer.read(WATCH_BODY_LIMIT + 1)
+    watch_remaining(deadline)
+    if len(raw) > WATCH_BODY_LIMIT:
+        raise RunFailure(None, "prompt_too_large", None, "prompt exceeds 4 MiB")
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise RunFailure(None, "invalid_prompt", None, "prompt is not UTF-8") from exc
+    if not text.strip():
+        raise RunFailure(None, "empty_prompt", None, "prompt is empty")
+    return text
+
+
+def run_send_prompt(context: RunContext, path: str, text: str, deadline: float, budget: float) -> None:
+    limit = min(RUN_PROMPT_LIMIT, budget * RUN_PROMPT_SHARE)
+    try:
+        code, data = req("POST", path + "/prompt", {"text": text}, timeout=max(0.05, min(limit, deadline - time.monotonic())))
+    except Exception as exc:
+        # Receipt is unknown. The watch outcome is the truth.
+        context.prompt_error = {"status": None, "detail": run_detail(f"{type(exc).__name__}: {exc}")}
+        return
+    if not (code == 200 and isinstance(data, dict) and data.get("accepted") is True):
+        context.prompt_rejected = RunFailure("prompt", "prompt_rejected", code, data)
+
+
+def run_worker(args: argparse.Namespace, deadline: float, budget: float, results: queue.Queue, context: RunContext) -> None:
+    publish = lambda kind, result: watch_publish(results, kind, result)
+    try:
+        context.step = None
+        text = run_read_prompt(deadline)
+        watch_origin()
+        context.step = "spawn"
+        data = run_step("spawn", "POST", "/api/sessions", {"cwd": args.cwd}, deadline, lambda code, data: code in (200, 201) and isinstance(data, dict) and "id" in data)
+        try:
+            context.sid = watch_id(data["id"])
+        except WatchProblem as exc:
+            raise RunFailure("spawn", "invalid_session_id", 200, run_detail(data)) from exc
+        context.state = WatchState(context.sid)
+        path = "/api/sessions/" + urllib.parse.quote(context.sid, safe="")
+        ok = lambda code, data: code == 200 and not (isinstance(data, dict) and data.get("error"))
+        context.step = "model"
+        run_step("model", "POST", path + "/model", _model_body(args), deadline, ok)
+        context.step = "thinking"
+        run_step("thinking", "POST", path + "/thinking-level", {"level": args.thinking}, deadline, ok)
+        context.step = "settings_check"
+        code, data = run_call("settings_check", "GET", path + "/status", None, deadline)
+        observed = _status_settings(data) if code == 200 else None
+        provider, _slash, model_id = args.model.partition("/")
+        if observed != (provider, model_id, args.thinking):
+            raise RunFailure("settings_check", "settings_mismatch" if observed else "settings_unreadable", code,
+                             {"expected": [provider, model_id, args.thinking], "observed": observed, "response": data if observed is None else None})
+        context.settings = {"model": args.model, "thinkingLevel": args.thinking}
+        context.step = "baseline"
+        context.baseline = watch_capture_baseline(context.state, path, deadline)
+
+        def subscribed() -> None:
+            context.step = "subscribe"
+            limit = min(deadline, time.monotonic() + RUN_SUBSCRIBE_LIMIT)
+            while True:
+                watch_remaining(deadline)
+                if time.monotonic() >= limit:
+                    raise RunFailure("subscribe", "websocket_open_timeout", None, "event socket did not open")
+                if not context.state.events.wait_subscribed(0.05):
+                    continue
+                evidence = context.state.events.snapshot()
+                if evidence["connected"]:
+                    break
+                raise RunFailure("subscribe", "websocket_unavailable", None, evidence["error"])
+            context.state.before = context.state.after = None
+            threading.Thread(target=run_send_prompt, args=(context, path, text, deadline, budget), daemon=True).start()
+            context.step = "watch"
+
+        def gate() -> None:
+            if context.prompt_rejected is not None:
+                raise context.prompt_rejected
+
+        watch_follow(context.state, path, context.baseline, deadline, lambda kind, result: publish(kind, context.watched(result)), subscribed, gate)
+    except Exception as exc:
+        publish("done", context.failure(exc, deadline))
+
+
+def cmd_run(args: argparse.Namespace) -> int:
+    started = time.monotonic()
+    valid_timeout = math.isfinite(args.timeout) and 0.1 <= args.timeout <= 86400
+    budget = args.timeout if valid_timeout else 1.0
+    deadline = started + budget
+    work_deadline = deadline - min(0.1, budget / 10)
+    context = RunContext(args.cwd)
+    problem = None
+    if not valid_timeout:
+        problem = "timeout_must_be_between_0.1_and_86400"
+    elif not args.cwd.strip() or not args.thinking.strip():
+        problem = "cwd_and_thinking_must_not_be_empty"
+    else:
+        try:
+            _model_body(args)
+        except UsageError as exc:
+            problem = str(exc)
+    if problem is not None:
+        latest = context.setup_failed(None, "invalid_input", None, problem)
+    else:
+        results = queue.Queue(maxsize=1)
+        threading.Thread(target=run_worker, args=(args, work_deadline, budget, results, context), daemon=True).start()
+        latest = watch_collect(results, work_deadline, None) or context.deadline()
+    return watch_emit(latest, lambda: context.result(WatchState(context.sid or "").outcome("unknown", "output_limit")), deadline)
 
 
 def main(argv: list[str]) -> int:
@@ -872,6 +1104,11 @@ def main(argv: list[str]) -> int:
     goal_control.add_argument("--cwd")
     goal_control.add_argument("--status", action="store_true")
     goal_control.set_defaults(poteto=True, text=None)
+    run = sub.add_parser("run", help="spawn, configure, prompt from stdin, and watch one session; prints one JSON result")
+    run.add_argument("cwd")
+    run.add_argument("--model", required=True, help="PROVIDER/ID")
+    run.add_argument("--thinking", required=True, help="thinking level")
+    run.add_argument("--timeout", type=float, required=True, help="whole-command deadline in seconds, including every step")
     sub.add_parser("runtime")
     sub.add_parser("capabilities")
     command = sub.add_parser("command-run")
@@ -912,9 +1149,9 @@ def main(argv: list[str]) -> int:
         if name == "archive":
             verb.add_argument("--expected-idle", help="exact session/cwd/logical entry/generation JSON; refuse stale or busy replacement")
     args = p.parse_args(argv)
-    if args.cmd == "watch":
-        # Watch writes directly to stdout. Skip finalization of its daemon I/O threads.
-        os._exit(cmd_watch(args))
+    if args.cmd in ("watch", "run"):
+        # These commands write directly to stdout. Skip finalization of their daemon I/O threads.
+        os._exit(cmd_watch(args) if args.cmd == "watch" else cmd_run(args))
     if args.cmd in ("runtime", "capabilities"):
         code, data = req("GET", "/api/sessiond/runtime")
         ok = code == 200 and isinstance(data, dict) and data.get("component") == "sessiond" and isinstance(data.get("capabilities"), list) and all(isinstance(capability, str) for capability in data["capabilities"])

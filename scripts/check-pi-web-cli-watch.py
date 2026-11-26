@@ -34,12 +34,14 @@ class Server(ThreadingHTTPServer):
 
 
 class Fixture:
-    def __init__(self, scenario="complete"):
+    def __init__(self, scenario="complete", **options):
         self.scenario = scenario
+        self.options = options
         self.messages = []
         self.status = {"sessionId": SID, "isStreaming": False, "isCompacting": False, "isBashRunning": False,
                        "pendingMessageCount": 0, "messageCount": 0, "queuedMessages": [],
-                       "sessionFileDiagnostics": [], "persisted": False}
+                       "sessionFileDiagnostics": [], "persisted": False,
+                       "model": {"provider": "prov", "id": "mod"}, "thinkingLevel": "off"}
         self.requests = []
         self.started = False
         self.stop = threading.Event()
@@ -47,6 +49,7 @@ class Fixture:
         self.seq = 100
         self.ws = None
         self.watch_status_count = 0
+        self.slow_paths = {}
         fixture = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -55,9 +58,9 @@ class Fixture:
             def log_message(self, *_args):
                 pass
 
-            def send_json(self, value):
+            def send_json(self, value, code=200):
                 raw = json.dumps(value).encode()
-                self.send_response(200)
+                self.send_response(code)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(raw)))
                 self.end_headers()
@@ -67,6 +70,21 @@ class Fixture:
                 body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
                 with fixture.lock:
                     fixture.requests.append(("POST", self.path, body))
+                options = fixture.options
+                if self.path == "/api/sessions":
+                    return self.send_json({"error": "spawn refused"}, 500) if options.get("spawn_fail") else self.send_json({"id": SID, "cwd": body["cwd"]})
+                if self.path == PREFIX + "/model":
+                    if options.get("model_fail"):
+                        return self.send_json({"error": "unknown model"}, 400)
+                    if not options.get("model_ignored"):
+                        fixture.status["model"] = {"provider": body["provider"], "id": body["modelId"]}
+                    return self.send_json({"ok": True})
+                if self.path == PREFIX + "/thinking-level":
+                    fixture.status["thinkingLevel"] = body["level"]
+                    return self.send_json({"ok": True})
+                if options.get("prompt_reject"):
+                    return self.send_json({"accepted": False, "error": "busy"}, options["prompt_reject"])
+                with fixture.lock:
                     fixture.started = True
                     fixture.messages = [USER]
                     fixture.status.update(isStreaming=True, persisted=True, messageCount=1)
@@ -90,6 +108,11 @@ class Fixture:
                         fixture.status["pendingDialogs"] = [{"dialogId": "dialog-1"}, {"dialogId": "dialog-2"}]
                         if fixture.scenario == "questions":
                             fixture.status["pendingAsk"] = {"askId": "ask-1", "questions": [{"id": "q-1"}, {"id": "q-2"}]}
+                if options.get("prompt_drop"):
+                    self.close_connection = True
+                    return
+                if options.get("prompt_hang"):
+                    fixture.stop.wait(options["prompt_hang"])
                 result = {"accepted": True}
                 if "deliveryId" in body:
                     result["deliveryId"] = body["deliveryId"]
@@ -114,9 +137,20 @@ class Fixture:
                     self.close_connection = True
                     return
                 with fixture.lock:
+                    started = fixture.started
+                    slow = False
+                    if started and fixture.scenario in ("slow_status", "slow_messages") and path.endswith("/" + fixture.scenario.split("_")[1]):
+                        fixture.slow_paths[path] = fixture.slow_paths.get(path, 0) + 1
+                        slow = fixture.slow_paths[path] == 1
+                if started and fixture.scenario == "event_flood" and path.endswith("/status"):
+                    # Mirrors a busy backend: every status read takes about 1 s while the run streams.
+                    fixture.stop.wait(1.0)
+                if slow:
+                    # Mirrors a live backend that answers a read after about 2.5 s while a run is active.
+                    fixture.stop.wait(2.5)
+                with fixture.lock:
                     status = dict(fixture.status)
                     messages = list(fixture.messages)
-                    started = fixture.started
                 if started and fixture.scenario == "stalled_headers" and path.endswith("/status"):
                     fixture.stop.wait(10)
                     return
@@ -190,6 +224,8 @@ class Fixture:
     def events(self, connection):
         self.ws = connection
         try:
+            while self.options and not self.started and not self.stop.wait(0.01):
+                pass
             if self.scenario == "frame_limit":
                 with self.lock:
                     self.messages = [USER, FINAL]
@@ -209,7 +245,7 @@ class Fixture:
                 self.emit(connection, {"type": "agent.end"})
             else:
                 self.emit(connection, {"type": "agent.start"})
-                if self.stop.wait(0.16):
+                if self.stop.wait(self.options.get("settle_after", 0.16)):
                     return
                 if self.scenario == "retry":
                     with self.lock:
@@ -251,6 +287,9 @@ class Fixture:
                 else:
                     if self.scenario == "sequence_gap":
                         self.seq += 1
+                    if self.scenario == "event_flood":
+                        for _ in range(2000):
+                            self.emit(connection, {"type": "pi.event", "eventType": "message_update"})
                     final = dict(FINAL)
                     if self.scenario == "blocked_output":
                         final["content"] = "x" * 200000
@@ -264,9 +303,9 @@ class Fixture:
 
 
 class WatchTests(unittest.TestCase):
-    def invoke(self, fixture, *args, timeout=4):
+    def invoke(self, fixture, *args, timeout=4, stdin=None):
         started = time.monotonic()
-        process = subprocess.run([str(CLI), *args], env=fixture.env, capture_output=True, timeout=timeout)
+        process = subprocess.run([str(CLI), *args], env=fixture.env, capture_output=True, timeout=timeout, input=stdin)
         elapsed = time.monotonic() - started
         self.assertEqual(process.stderr, b"")
         decoder = json.JSONDecoder()
@@ -293,19 +332,19 @@ class WatchTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(value, {"ok": True, "transportAccepted": True, "status": 200, "result": {"accepted": True, "deliveryId": "receipt-only"}})
 
-    def run_watch(self, scenario, expected, seconds=0.75, send_prompt=True):
+    def run_watch(self, scenario, expected, seconds=0.75, send_prompt=True, timeout=4, bound=None):
         with Fixture(scenario) as fixture, tempfile.TemporaryDirectory() as directory:
             baseline = self.baseline(fixture, directory)
             if send_prompt:
                 self.prompt(fixture)
             mark = len(fixture.requests)
-            code, value, elapsed = self.invoke(fixture, "watch", SID, "--since", str(baseline), "--timeout", str(seconds))
+            code, value, elapsed = self.invoke(fixture, "watch", SID, "--since", str(baseline), "--timeout", str(seconds), timeout=timeout)
             self.assertEqual(code, 0 if expected == "completed" else 1, value)
             self.assertEqual(value["outcome"], expected, value)
             self.assertEqual(value["ok"], expected == "completed")
             self.assertEqual(value["sessionId"], SID)
             self.assertEqual(set(value), {"schemaVersion", "kind", "ok", "sessionId", "outcome", "reason", "finalAssistant", "candidateAssistant", "questions", "evidence"})
-            self.assertLess(elapsed, seconds + 0.65, (scenario, elapsed))
+            self.assertLess(elapsed, bound or seconds + 0.65, (scenario, elapsed))
             observed = fixture.requests[mark:]
             self.assertTrue(observed)
             self.assertTrue(all(method == "GET" and path in (PREFIX + "/status", PREFIX + "/messages", PREFIX + "/events") for method, path, _body in observed), observed)
@@ -338,6 +377,17 @@ class WatchTests(unittest.TestCase):
         for scenario in ("binary", "fragmented_binary"):
             with self.subTest(scenario=scenario):
                 self.run_watch(scenario, "completed", seconds=1.5)
+
+    def test_slow_read_below_the_command_deadline_is_not_a_timeout(self):
+        for scenario in ("slow_status", "slow_messages"):
+            with self.subTest(scenario=scenario):
+                value, elapsed = self.run_watch(scenario, "completed", seconds=10, timeout=15, bound=10.65)
+                self.assertGreater(elapsed, 2.4)
+                self.assertEqual(value["reason"], "native_settled_and_reconciled")
+
+    def test_event_flood_during_slow_reads_still_proves_settlement(self):
+        value, _ = self.run_watch("event_flood", "completed", seconds=12, timeout=16, bound=12.65)
+        self.assertEqual(value["evidence"]["events"]["gaps"], 0, value)
 
     def test_trailing_compaction_preserves_final_assistant_reference(self):
         value, _ = self.run_watch("trailing_compaction", "completed", seconds=1.5)
@@ -518,6 +568,135 @@ class WatchTests(unittest.TestCase):
                 if process.poll() is None:
                     process.kill()
                     process.communicate()
+
+    RUN_KEYS = {"schemaVersion", "kind", "ok", "outcome", "reason", "sessionId", "cwd", "settings", "failedStep", "error",
+                "finalAssistant", "candidateAssistant", "questions", "evidence", "baseline"}
+    PROMPT = "Run the task \u2014 d\u00e9j\u00e0 vu \u2713"
+
+    def run_cli(self, scenario="complete", seconds=5, stdin=None, model="prov/mod", thinking="high", bound=None, **options):
+        fixture = Fixture(scenario, run_mode=True, **options)
+        with fixture:
+            code, value, elapsed = self.invoke(fixture, "run", "/work", "--model", model, "--thinking", thinking, "--timeout", str(seconds),
+                                               timeout=seconds + 8, stdin=(self.PROMPT if stdin is None else stdin).encode())
+            self.assertEqual(set(value), self.RUN_KEYS)
+            self.assertEqual((value["schemaVersion"], value["kind"], value["cwd"]), (1, "run", "/work"))
+            self.assertEqual(code, 0 if value["outcome"] == "completed" else 1, value)
+            self.assertEqual(value["ok"], value["outcome"] == "completed")
+            self.assertLess(elapsed, bound or seconds + 0.65, elapsed)
+            posts = [request for request in fixture.requests if request[0] == "POST"]
+            self.assertFalse([request for request in fixture.requests if request[0] in ("DELETE",) or request[1].endswith(("/stop", "/archive", "/abort"))])
+            return value, fixture, posts, elapsed
+
+    def test_run_completes_end_to_end(self):
+        value, fixture, posts, _ = self.run_cli()
+        self.assertEqual((value["outcome"], value["reason"], value["failedStep"], value["error"]), ("completed", "native_settled_and_reconciled", None, None))
+        self.assertEqual((value["sessionId"], value["settings"]), (SID, {"model": "prov/mod", "thinkingLevel": "high"}))
+        self.assertEqual(value["finalAssistant"]["text"], "Final answer")
+        self.assertEqual(value["baseline"]["kind"], "baseline")
+        self.assertEqual((value["baseline"]["sessionId"], value["baseline"]["history"]["count"]), (SID, 0))
+        self.assertEqual(posts, [("POST", "/api/sessions", {"cwd": "/work"}),
+                                 ("POST", PREFIX + "/model", {"provider": "prov", "modelId": "mod"}),
+                                 ("POST", PREFIX + "/thinking-level", {"level": "high"}),
+                                 ("POST", PREFIX + "/prompt", {"text": self.PROMPT})])
+        order = [(method, path) for method, path, _body in fixture.requests]
+        self.assertLess(order.index(("GET", PREFIX + "/events")), order.index(("POST", PREFIX + "/prompt")))
+        self.assertLess(max(index for index, request in enumerate(order) if request == ("POST", PREFIX + "/thinking-level")), order.index(("GET", PREFIX + "/events")))
+        # The returned baseline is accepted by a later watch --since of the same session.
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "baseline.json"
+            path.write_text(json.dumps(value["baseline"]))
+            fixture.messages, fixture.status["messageCount"] = [], 0
+            code, again, _ = self.invoke(fixture, "watch", SID, "--since", str(path), "--timeout", "0.5")
+            self.assertNotEqual(again["reason"], "invalid_baseline")
+
+    def test_run_setup_failures_report_the_step_and_send_no_prompt(self):
+        cases = [({"spawn_fail": True}, "spawn", None, 500, 1), ({"model_fail": True}, "model", SID, 400, 2), ({"model_ignored": True, "model": "prov/other"}, "settings_check", SID, 200, 3)]
+        for options, step, sid, status, posted in cases:
+            with self.subTest(step=step):
+                value, _, posts, _ = self.run_cli(**options)
+                self.assertEqual((value["outcome"], value["failedStep"], value["sessionId"], value["error"]["status"]), ("setup_failed", step, sid, status))
+                self.assertIsNone(value["baseline"] if step != "settings_check" else value["settings"])
+                self.assertIsNone(value["finalAssistant"])
+                self.assertLessEqual(len(value["error"]["detail"]), 500)
+                self.assertEqual(len(posts), posted)
+                self.assertFalse([post for post in posts if post[1].endswith("/prompt")])
+
+    def test_run_invalid_input_never_touches_the_backend(self):
+        for kwargs, reason in (({"stdin": "  \n"}, "empty_prompt"), ({"model": "nomodel"}, "invalid_input"), ({"thinking": " "}, "invalid_input")):
+            with self.subTest(**kwargs):
+                value, fixture, posts, _ = self.run_cli(**kwargs)
+                self.assertEqual((value["outcome"], value["failedStep"], value["reason"]), ("setup_failed", None, reason))
+                self.assertEqual(fixture.requests, [])
+        fixture = Fixture()
+        with fixture:
+            code, value, _ = self.invoke(fixture, "run", "/work", "--model", "prov/mod", "--thinking", "high", "--timeout", "0", stdin=b"x")
+            self.assertEqual((code, value["outcome"], value["reason"]), (1, "setup_failed", "invalid_input"))
+            code, value, _ = self.invoke(fixture, "run", "/work", "--model", "prov/mod", "--thinking", "high", "--timeout", "2", stdin=b"\xff\xfe")
+            self.assertEqual((code, value["outcome"], value["reason"], value["failedStep"]), (1, "setup_failed", "invalid_prompt", None))
+            self.assertEqual(fixture.requests, [])
+
+    def test_run_prompt_transport_errors_keep_watching(self):
+        value, _, posts, _ = self.run_cli(prompt_drop=True)
+        self.assertEqual(value["outcome"], "completed")
+        self.assertIsNone(value["error"]["status"])
+        self.assertEqual(len([post for post in posts if post[1].endswith("/prompt")]), 1)
+        value, _, _, elapsed = self.run_cli(seconds=4, prompt_hang=6, settle_after=2.8, bound=4.65)
+        self.assertEqual(value["outcome"], "completed")
+        self.assertIsNone(value["error"]["status"])
+        self.assertIn("timed out", value["error"]["detail"])
+        self.assertGreater(elapsed, 2.7)
+
+    def test_run_definite_prompt_rejection_is_setup_failed(self):
+        value, _, _, _ = self.run_cli(prompt_reject=409)
+        self.assertEqual((value["outcome"], value["failedStep"], value["sessionId"]), ("setup_failed", "prompt", SID))
+        self.assertEqual(value["error"]["status"], 409)
+        self.assertEqual(value["baseline"]["sessionId"], SID)
+
+    def test_run_survives_slow_status_and_messages(self):
+        for scenario in ("slow_status", "slow_messages"):
+            with self.subTest(scenario=scenario):
+                value, _, _, elapsed = self.run_cli(scenario, seconds=10, bound=10.65)
+                self.assertEqual(value["outcome"], "completed", value)
+                self.assertGreater(elapsed, 2.4)
+
+    def test_run_event_flood_during_slow_reads_completes(self):
+        value, _, _, _ = self.run_cli("event_flood", seconds=12, bound=12.65)
+        self.assertEqual(value["outcome"], "completed", value)
+        self.assertEqual(value["evidence"]["events"]["gaps"], 0, value)
+
+    def test_run_deadline_keeps_session_and_baseline(self):
+        value, _, _, elapsed = self.run_cli("bash", seconds=1.5)
+        self.assertEqual((value["outcome"], value["reason"], value["failedStep"]), ("timeout", "deadline", None))
+        self.assertEqual((value["sessionId"], value["settings"]["model"], value["baseline"]["sessionId"]), (SID, "prov/mod", SID))
+        self.assertGreater(elapsed, 1.3)
+
+    def test_run_deadline_before_the_socket_opens_is_a_subscribe_failure(self):
+        value, _, posts, _ = self.run_cli("stalled_upgrade", seconds=1.5)
+        self.assertEqual((value["outcome"], value["failedStep"], value["reason"], value["sessionId"]), ("setup_failed", "subscribe", "deadline", SID))
+        self.assertFalse([post for post in posts if post[1].endswith("/prompt")])
+
+    def test_run_oversized_output_keeps_identity(self):
+        value, _, _, _ = self.run_cli("output_limit", seconds=2)
+        self.assertEqual((value["outcome"], value["reason"], value["sessionId"]), ("unknown", "output_limit", SID))
+        self.assertIsNone(value["candidateAssistant"])
+        self.assertEqual(value["baseline"]["sessionId"], SID)
+
+    def test_run_stalled_output_reader_cannot_keep_process_alive(self):
+        with Fixture("blocked_output", run_mode=True) as fixture:
+            started = time.monotonic()
+            process = subprocess.Popen([str(CLI), "run", "/work", "--model", "prov/mod", "--thinking", "high", "--timeout", "1.5"], env=fixture.env,
+                                       stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            try:
+                process.stdin.write(b"go")
+                process.stdin.close()
+                self.assertEqual(process.wait(timeout=3), 1)
+                self.assertLess(time.monotonic() - started, 2.2)
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                process.wait()
+                process.stdout.close()
+                process.stderr.close()
 
     def test_existing_read_commands_keep_wrappers(self):
         with Fixture() as fixture:
