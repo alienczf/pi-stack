@@ -75,3 +75,28 @@ The dependency-free fixture invokes the actual executable against controlled HTT
 ```bash
 python3 scripts/check-pi-web-cli-watch.py
 ```
+
+## One-shot run
+
+```text
+printf '%s' "$PROMPT" | pi-web-cli run CWD --model PROVIDER/ID --thinking LEVEL --timeout SECONDS
+```
+
+`run` performs the whole delegation in one process and prints exactly one compact JSON line. The prompt is read from standard input as UTF-8 (at most 4 MiB, refused when empty). Model and thinking level have no defaults. One monotonic deadline covers every step, including reading stdin and output.
+
+Steps, in order: spawn (`POST /api/sessions`), set model, set thinking level, read status and confirm provider, id, and thinking level match the request (`settings_check`), capture an in-memory baseline with the same validation as `watch --baseline`, start the watcher on that baseline, wait until the event WebSocket is open (at most 10 s, `subscribe`), then send the prompt once and wait for the watch result. The prompt is never sent unless the socket is open. The command never stops, archives, or deletes the session. The caller owns cleanup, using the returned `sessionId`.
+
+Result:
+
+```json
+{"schemaVersion":1,"kind":"run","ok":true,"outcome":"completed","reason":"native_settled_and_reconciled","sessionId":"...","cwd":"...","settings":{"model":"provider/id","thinkingLevel":"high"},"failedStep":null,"error":null,"finalAssistant":{},"candidateAssistant":null,"questions":{},"evidence":{},"baseline":{}}
+```
+
+`outcome` is a watch outcome (`completed`, `needs_input`, `failed`, `interrupted`, `unknown`, `timeout`) or `setup_failed`. The shared fields (`reason`, `finalAssistant`, `candidateAssistant`, `questions`, `evidence`) keep the watch meaning. `ok` is true, and the exit status is zero, only for `completed`. Other results exit one. Argument syntax errors retain argparse's exit status of two.
+
+- `sessionId` is null only when spawn failed or input was refused. `settings` is non-null once the settings check passed. `baseline` is the baseline object, usable later with `watch --since`, and is null before capture.
+- `setup_failed` means the prompt was not sent, except `failedStep: "prompt"`. `failedStep` is one of `spawn`, `model`, `thinking`, `settings_check`, `baseline`, `subscribe`, `prompt`, or null for refused input (`reason` `empty_prompt`, `invalid_prompt`, `prompt_too_large`, `invalid_input`). `error` is `{"status": int|null, "detail": string}`, with `detail` cut at 500 characters. A deadline during a setup step is `setup_failed` with `reason: "deadline"` and that step.
+- A prompt POST that fails at transport level or times out (receipt unknown) does not fail the run. The watcher keeps running, the watch outcome is the truth, and the prompt error is recorded in `error` with `status: null`. The prompt POST is bounded by half of the deadline, at most 30 s. A definite rejection (HTTP status other than 200, or `accepted` not true) returns `setup_failed` with `failedStep: "prompt"`.
+- `timeout` and `unknown` results keep `sessionId`, `settings`, and `baseline`, so the caller can resume with `watch --since`.
+
+Output size and stalled-stdout guarantees match `watch`: oversized output returns `unknown` with `reason: "output_limit"` and keeps the identity fields, and a stalled stdout reader cannot keep the process past its deadline.
